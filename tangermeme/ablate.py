@@ -1,6 +1,7 @@
 # ablate.py
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import numba
 import numpy
 import torch
 import pandas
@@ -145,9 +146,110 @@ def randomize(X, start, end, probs=[0.25, 0.25, 0.25, 0.25], same=True,
 	'''
 
 		
+params = 'void(int64, int64, int64[:], int32[:, :], int32[:,], '
+params += 'int32[:, :], float32[:, :, :], int32)'
+@numba.jit(params, nopython=False)
+def _fast_shuffle(n_shuffles, n_chars, idxs, next_idxs, next_idxs_counts, 
+	counters, shuffled_sequences, random_state):
+	"""An internal function for fast dinucleotide shuffling using numba."""
+
+	numpy.random.seed(random_state)
+
+	for i in range(n_shuffles):
+		for char in range(n_chars):
+			n = next_idxs_counts[char]
+
+			next_idxs_ = numpy.arange(n)
+			next_idxs_[:-1] = numpy.random.permutation(n-1)  # Keep last index
+			next_idxs[char, :n] = next_idxs[char, :n][next_idxs_]
+
+		idx = 0
+		shuffled_sequences[i, idxs[idx], 0] = 1
+		for j in range(1, len(idxs)):
+			char = idxs[idx]
+			count = counters[i, char]
+			idx = next_idxs[char, count]
+
+			counters[i, char] += 1
+			shuffled_sequences[i, idxs[idx], j] = 1
 
 
+def dinucleotide_shuffle(X, n_shuffles=10, random_state=None, verbose=False):
+	"""Given a one-hot encoded sequence, dinucleotide shuffle it.
 
-	#seq = random_state.choice(range(len(probs)), probs=probs, shape=(, end-start))
-	#insertion = numpy.zeros()
+	This function takes in a one-hot encoded sequence (not a string) and
+	returns a set of one-hot encoded sequences that are dinucleotide
+	shuffled. The approach constructs a transition matrix between
+	nucleotides, keeps the first and last nucleotide constant, and then
+	randomly at uniform selects transitions until all nucleotides have
+	been observed. This is a Eulerian path. Because each nucleotide has
+	the same number of transitions into it as out of it (except for the
+	first and last nucleotides) the greedy algorithm does not need to
+	check at each step to make sure there is still a path.
 
+	This function has been adapted to work on PyTorch tensors instead of
+	numpy arrays. Code has been adapted from
+	https://github.com/kundajelab/deeplift/blob/master/deeplift/dinuc_shuffle.py
+
+	Parameters
+	----------
+	X: torch.tensor, shape=(k, -1)
+		The one-hot encoded sequence. k is usually 4 for nucleotide sequences
+		but can be anything in practice.
+
+	n_shuffles: int, optional
+		The number of dinucleotide shuffles to return. Default is 10.
+
+	random_state: int or None or numpy.random.RandomState, optional
+		The random seed to use to ensure determinism. If None, the
+		process is not deterministic. Default is None.
+
+	verbose: bool, optional
+		Whether to print a warning if too sequence similarity is too high.
+
+
+	Returns
+	-------
+	shuffled_sequences: torch.tensor, shape=(n_shuffles, k, -1)
+		The shuffled sequences.
+	"""
+
+	_validate_input(X, "X", shape=(-1, -1), ohe=True, ohe_dim=0)
+
+	if random_state is None:
+		random_state = numpy.random.randint(0, 9999999)
+
+	n_chars, seq_len = X.shape
+	idxs = X.argmax(axis=0).numpy()
+
+	next_idxs = numpy.zeros((n_chars, seq_len), dtype=numpy.int32)
+	next_idxs_counts = numpy.zeros(n_chars, dtype=numpy.int32)
+
+	for char in range(n_chars):
+		next_idxs_ = numpy.where(idxs[:-1] == char)[0]
+		n = len(next_idxs_)
+
+		next_idxs[char][:n] = next_idxs_ + 1
+		next_idxs_counts[char] = n
+
+	shuffled_sequences = numpy.zeros((n_shuffles, *X.shape), 
+		dtype=numpy.float32)
+	counters = numpy.zeros((n_shuffles, n_chars), dtype=numpy.int32)
+
+	_fast_shuffle(n_shuffles, n_chars, idxs, next_idxs, next_idxs_counts, 
+		counters, shuffled_sequences, random_state)
+	
+	shuffled_sequences = torch.from_numpy(shuffled_sequences)
+
+	conserved = shuffled_sequences[:, :, 1:-1].sum(dim=0)
+	if conserved.max() == n_shuffles:
+		if verbose:
+			print("Warning: At least one position in dinucleotide shuffle " +
+				"is identical across all positions.")
+	if conserved.max(dim=0).values.min() == n_shuffles:
+		raise ValueError("All dinucleotide shuffles yield identical " +
+			"sequences, potentially due to a lack of diversity in sequence.")
+
+	print(conserved.max(dim=0).values.min(), conserved.max())
+
+	return shuffled_sequences

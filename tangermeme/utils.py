@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 
 def _validate_input(X, name, shape=None, dtype=None, min_value=None, 
-	max_value=None, ohe=False):
+	max_value=None, ohe=False, ohe_dim=1):
 	"""An internal function for validating properties of the input.
 
 	This function will take in an object and verify characteristics of it, such
@@ -77,8 +77,9 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 		if not all(values == torch.tensor([0, 1])):
 			raise ValueError("{} must be one-hot encoded.".format(name))
 
-		if not (X.sum(axis=1) == 1).all():
-			raise ValueError("{} must be one-hot encoded.".format(name))
+		if not (X.sum(axis=ohe_dim) == 1).all():
+			raise ValueError("{} must be one-hot encoded ".format(name) +
+				"and cannot have unknown characters.")
 
 
 def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False):

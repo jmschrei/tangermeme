@@ -356,6 +356,9 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 
 		seqs.append(seq)
 
+	if not isinstance(sequences, dict):
+		sequences.close()
+
 	seqs = torch.from_numpy(numpy.stack(seqs))
 	if signals is not None:
 		signals_ = torch.from_numpy(numpy.stack(signals_))

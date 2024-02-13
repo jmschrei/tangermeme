@@ -4,11 +4,14 @@
 import numpy
 import torch
 import pytest
+import collections
 
 from tangermeme.utils import one_hot_encode
+from tangermeme.utils import characters
 from tangermeme.utils import random_one_hot
 
 from tangermeme.ablate import insert
+from tangermeme.ablate import dinucleotide_shuffle
 
 import pandas
 import pyfaidx
@@ -70,7 +73,6 @@ def test_insert_ohe(X):
 def test_insert_str_multi_seqs_one_motif():
 	X = random_one_hot((4, 4, 8), random_state=0)
 	X_insert = insert(X, 'ACGT')
-	print(X_insert)
 
 	assert_raises(AssertionError, assert_array_almost_equal, X, X_insert)
 	assert_array_almost_equal(X_insert, [
@@ -99,7 +101,6 @@ def test_insert_str_multi_seqs_multi_motifs():
 	X = random_one_hot((4, 4, 8), random_state=0)
 	motif = random_one_hot((4, 4, 4), random_state=1)
 	X_insert = insert(X, motif)
-	print(X_insert)
 
 	assert_raises(AssertionError, assert_array_almost_equal, X, X_insert)
 	assert_array_almost_equal(X_insert, [
@@ -212,3 +213,102 @@ def test_insert_raises_ohe(X):
 	motif[0, 1, 0] = 2
 	assert_raises(ValueError, insert, X, motif)
 	assert_raises(ValueError, insert, X, torch.randn(1, 4, 8))
+
+
+###
+
+
+def test_dinucleotide_shuffle():
+	motif = one_hot_encode('CATCACGCATACG')
+	dimotif = dinucleotide_shuffle(motif, random_state=0)
+
+	assert dimotif.shape == (10, 4, 13)
+	assert dimotif.dtype == torch.float32
+	assert characters(dimotif[0]) == 'CGCATCACATACG'
+	assert characters(dimotif[1]) == 'CATCGCATACACG'
+
+
+def test_dinucleotide_shuffle_composition():
+	seq = 'CATCACGCATACGACTACGCACTATACCATGCATGAA'
+	motif = one_hot_encode(seq)
+	dimotif = dinucleotide_shuffle(motif, random_state=0)
+
+	dinucs = collections.defaultdict(int)
+	for i in range(len(seq)-1):
+		dinucs[seq[i:i+2]] += 1
+
+	for j in range(10):
+		dinucs_shuffled = collections.defaultdict(int)
+		dinucs_seq = characters(dimotif[j])
+
+		for i in range(len(seq)-1):
+			dinucs_shuffled[dinucs_seq[i:i+2]] += 1
+
+		for key, value in dinucs_shuffled.items():
+			assert dinucs[key] == value 
+
+
+def test_dinucleotide_shuffle_large_alphabet():
+	alpha = ['A', 'C', 'G', 'T', 'N']
+	seq = 'CGATCAGCANNCACATCAGCATANNAAT'
+	motif = one_hot_encode(seq, alphabet=alpha, ignore=[])
+	dimotif = dinucleotide_shuffle(motif, random_state=0)
+
+	dinucs = collections.defaultdict(int)
+	for i in range(len(seq)-1):
+		dinucs[seq[i:i+2]] += 1
+
+	for j in range(10):
+		dinucs_shuffled = collections.defaultdict(int)
+		dinucs_seq = characters(dimotif[j], alphabet=alpha)
+
+		for i in range(len(seq)-1):
+			dinucs_shuffled[dinucs_seq[i:i+2]] += 1
+
+		for key, value in dinucs_shuffled.items():
+			assert dinucs[key] == value 
+
+
+def test_dinucleotide_shuffle_missing_alphabet():
+	seq = 'ATATATTAAAATTATTATATATTTATATATTTAAAAATTTTTAATA'
+	motif = one_hot_encode(seq)
+	dimotif = dinucleotide_shuffle(motif, random_state=0)
+
+	dinucs = collections.defaultdict(int)
+	for i in range(len(seq)-1):
+		dinucs[seq[i:i+2]] += 1
+
+	for j in range(10):
+		dinucs_shuffled = collections.defaultdict(int)
+		dinucs_seq = characters(dimotif[j])
+
+		for i in range(len(dinucs_seq)-1):
+			dinucs_shuffled[dinucs_seq[i:i+2]] += 1
+
+		for key, value in dinucs_shuffled.items():
+			assert dinucs[key] == value 
+
+
+def test_dinucleotide_shuffle_raises_short():
+	motif = one_hot_encode('AATA')
+	assert_raises(ValueError, dinucleotide_shuffle, motif)
+
+def test_dinucleotide_shuffle_raises_ohe():
+	seq = 'ATATATTAAAATTATTATATATTTATATATTTAAAAATTTTTAATA'
+	motif = one_hot_encode(seq) 
+
+	assert_raises(ValueError, dinucleotide_shuffle, motif + 1)
+	assert_raises(ValueError, dinucleotide_shuffle, motif.unsqueeze(0))
+	assert_raises(ValueError, dinucleotide_shuffle, motif[0])
+	assert_raises(ValueError, dinucleotide_shuffle, "ACGTCACGATC")
+
+
+def test_dinucleotide_shuffle_raises_N():
+	seq = 'ATATATTAAAATNNNATTTAAANNNTTTTTAATA'
+	motif = one_hot_encode(seq) 
+	assert_raises(ValueError, dinucleotide_shuffle, motif)
+
+
+def test_dinucleotide_shuffle_homopolymer():
+	seq_ohe = one_hot_encode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')
+	assert_raises(ValueError, dinucleotide_shuffle, seq_ohe)

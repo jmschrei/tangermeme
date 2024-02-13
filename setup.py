@@ -6,7 +6,7 @@ setup(
     author='Jacob Schreiber',
     author_email='jmschreiber91@gmail.com',
     packages=['tangermeme'],
-    scripts=['bpnet', 'chrombpnet'],
+    scripts=[],
     url='https://github.com/jmschrei/tangermeme',
     license='LICENSE.txt',
     description='Biological sequence analysis for the modern age.',
