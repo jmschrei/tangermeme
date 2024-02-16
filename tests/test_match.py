@@ -16,7 +16,7 @@ from tangermeme.match import _calculate_char_perc
 from tangermeme.match import _extract_and_filter_chrom
 from tangermeme.match import extract_matching_loci
 
-from nose.tools import assert_raises
+from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
 
 

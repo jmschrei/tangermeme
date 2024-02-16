@@ -17,7 +17,7 @@ from .toy_models import Conv
 from .toy_models import Scatter
 from .toy_models import ConvDense
 
-from nose.tools import assert_raises
+from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
 
 

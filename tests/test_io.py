@@ -15,7 +15,7 @@ from tangermeme.io import _extract_locus_signal
 from tangermeme.io import read_meme
 from tangermeme.io import extract_loci
 
-from nose.tools import assert_raises
+from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
 
 

@@ -7,7 +7,7 @@ from tangermeme.utils import characters
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
 
-from nose.tools import assert_raises
+from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
 
 

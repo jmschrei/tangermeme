@@ -13,7 +13,7 @@ from tangermeme.predict import predict
 from tangermeme.tools.fimo import _pwm_to_mapping
 from tangermeme.tools.fimo import FIMO
 
-from nose.tools import assert_raises
+from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
 
 
