@@ -301,7 +301,7 @@ class FIMO(torch.nn.Module):
 		hit_idxs = torch.where(scores > score_thresh)        
 		for idxs in tqdm(zip(*hit_idxs)):
 			example_idx, motif_idx, strand_idx, pos_idx = idxs
-			score = scores[*idxs].item()
+			score = scores[(example_idx, motif_idx, strand_idx, pos_idx)].item()
 			
 			l = self.motif_lengths[motif_idx]
 			start = pos_idx.item()
