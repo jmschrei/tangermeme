@@ -443,11 +443,11 @@ def test_extract_loci_seq_jitter(loci_seqs):
 	loci = "tests/data/test.bed"
 	fasta = "tests/data/test.fa"
 
-	X = extract_loci(loci, fasta, in_window=10, max_jitter=10)
+	X = extract_loci(loci, fasta, in_window=10, max_jitter=20)
 
-	assert X.shape == (4, 4, 30)
+	assert X.shape == (4, 4, 50)
 	assert X.dtype == torch.int8
-	assert X.sum() == 120
+	assert X.sum() == 200
 
 	X_true = [
 		[[0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 
@@ -487,10 +487,8 @@ def test_extract_loci_seq_jitter(loci_seqs):
 		  1, 0, 0, 1, 0, 0, 1, 0]]
 		]
 
-	assert_array_almost_equal(X, X_true)
-
-	X = numpy.stack(X)
-	assert_array_almost_equal(X[:, :, 10:-10], loci_seqs[1:])
+	assert_array_almost_equal(X[:, :, 10:-10], X_true)
+	assert_array_almost_equal(X[:, :, 20:-20], loci_seqs[1:])
 
 
 def test_extract_loci_seq_alphabet(loci_seqs):
@@ -609,15 +607,15 @@ def test_extract_loci_out_off(loci_signal):
 	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
 	fasta = "tests/data/test.fa"
 
-	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=26)
+	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=42)
 
 	assert X.shape == (4, 4, 8)
 	assert X.dtype == torch.int8
 	assert X.sum() == 32
 
-	assert y.shape == (4, 2, 26)
+	assert y.shape == (4, 2, 42)
 	assert y.dtype == torch.float32
-	assert_array_almost_equal([abs(y).sum()], [174.3686], 4)
+	assert_array_almost_equal([abs(y).sum()], [276.9355], 4)
 
 
 def test_extract_loci_min_counts(loci_signal):

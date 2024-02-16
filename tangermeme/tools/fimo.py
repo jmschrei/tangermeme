@@ -8,6 +8,9 @@ import torch
 import pandas
 
 from ..io import read_meme
+from ..predict import predict
+
+from tqdm import tqdm
 
 
 @numba.njit('float32(float32, float32)')
@@ -165,8 +168,13 @@ class FIMO(torch.nn.Module):
 		filepath to a MEME file. If a dictionary, the keys are interpreted as 
 		the motif names and the values are interpreted as the PWMs.
 	
-	batch_size: int, optional
-		The number of examples to process in parallel. Default is 256.
+	alphabet : set or tuple or list, optional
+		A pre-defined alphabet where the ordering of the symbols is the same
+		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
+		the returned tensor will have a 1 at index 0 if the character was 'A'.
+		Characters outside the alphabet are ignored and none of the indexes are
+		set to 1. This is not necessary or used if a one-hot encoded tensor is
+		provided for the motif. Default is ['A', 'C', 'G', 'T'].
 
 	bin_size: float, optional
 		The bin size to use for the dynamic programming step when calculating 
@@ -177,12 +185,12 @@ class FIMO(torch.nn.Module):
 		1e-4.
 	"""
 
-	def __init__(self, motifs, batch_size=256, bin_size=0.1, eps=0.00005):
+	def __init__(self, motifs, alphabet=['A', 'C', 'G', 'T'], batch_size=256, 
+		bin_size=0.1, eps=0.00005):
 		super().__init__()
-		
-		self.batch_size = batch_size
 		self.bin_size = bin_size
-		
+		self.alphabet = numpy.array(alphabet)
+
 		if isinstance(motifs, str):
 			motifs = read_meme(motifs)
 			
@@ -193,21 +201,19 @@ class FIMO(torch.nn.Module):
 		
 		motif_pwms = numpy.zeros((len(motifs), 4, max(self.motif_lengths)), 
 			dtype=numpy.float32)
-
 		bg = math.log(0.25)
 
 		self._score_to_pval = []
 		self._smallest = []
 		for i, (name, motif) in enumerate(motifs.items()):
 			motif_pwms[i, :, :len(motif)] = numpy.log(motif.T + eps) - bg
-
 			smallest, mapping = _pwm_to_mapping(motif_pwms[i], bin_size)
+
 			self._smallest.append(smallest)
 			self._score_to_pval.append(mapping)
 
 		self.motif_pwms = torch.nn.Parameter(torch.from_numpy(motif_pwms))
 		self._smallest = numpy.array(self._smallest)
-
 
 	def forward(self, X):
 		"""Score a set of sequences.
@@ -224,36 +230,13 @@ class FIMO(torch.nn.Module):
 		"""
 		
 		y_fwd = torch.nn.functional.conv1d(X, self.motif_pwms)
-		y_bwd = torch.nn.functional.conv1d(X, torch.flip(self.motif_pwms, (1, 2)))
+		y_bwd = torch.nn.functional.conv1d(X, torch.flip(self.motif_pwms, (1, 
+			2)))
 		return torch.stack([y_fwd, y_bwd]).permute(1, 2, 0, 3)
 	
 	@torch.no_grad()
-	def predict(self, X):
-		"""Score a potentially large number of sequences in batches.
-		
-		This method will apply the forward function to batches of sequences and
-		handle moving the batches to the appropriate device and the results
-		back to the CPU to not run out of memory.
-		
-		
-		Parameters
-		----------
-		X: torch.tensor, shape=(n, 4, length)
-			A tensor containing one-hot encoded sequences.
-		"""
-
-		scores = []
-		
-		for start in range(0, len(X), self.batch_size):
-			X_ = X[start:start+self.batch_size].to(self.motif_pwms.device)
-			
-			scores_ = self(X_).cpu().float()
-			scores.append(scores_)
-
-		return torch.cat(scores)
-	
-	@torch.no_grad()
-	def hits(self, X, X_attr=None, threshold=0.0001, dim=0):
+	def hits(self, X, X_attr=None, threshold=0.0001, batch_size=256, dim=0, 
+		device='cuda', verbose=False):
 		"""Find motif hits that pass the given threshold.
 		
 		This method will first scan the PWMs over all sequences, identify where
@@ -277,12 +260,24 @@ class FIMO(torch.nn.Module):
 		threshold: float, optional
 			The p-value threshold to use when calling hits. Default is 0.0001.
 
+		batch_size: int, optional
+			The number of examples to process in parallel. Default is 256.
+
 		dim: 0 or 1, optional
 			The dimension to provide hits over. Similar to other APIs, one can
 			view this as the dimension to remove from the returned results. If
 			0, provide one DataFrame per motif that shows all hits for that
 			motif across examples. If 1, provide one DataFrame per motif that
 			shows all motif hits within each example.
+
+		device: str or torch.device, optional
+			The device to move the model and batches to when making predictions. 
+			If set to 'cuda' without a GPU, this function will crash and must be 
+			set to 'cpu'. Default is 'cuda'.
+
+		verbose: bool, optional
+			Whether to display a progress bar as examples are being processed.
+			Default is False.
 
 
 		Returns
@@ -294,19 +289,19 @@ class FIMO(torch.nn.Module):
 
 		n = self.n_motifs if dim == 0 else len(X)
 		hits = [[] for i in range(n)]
-		letters = numpy.array(['A', 'C', 'G', 'T'])
 		
 		log_threshold = numpy.log(threshold)
 		
-		scores = self.predict(X)        
+		scores = predict(self, X, batch_size=batch_size, device=device)   
 		score_thresh = torch.empty(1, scores.shape[1], 1, 1)
 		for i in range(scores.shape[1]):
 			idx = numpy.where(self._score_to_pval[i] < log_threshold)[0][0]
 			score_thresh[0, i] = (idx + self._smallest[i]) * self.bin_size                               
 		
 		hit_idxs = torch.where(scores > score_thresh)        
-		for example_idx, motif_idx, strand_idx, pos_idx in zip(*hit_idxs):
-			score = scores[example_idx, motif_idx, strand_idx, pos_idx].item()
+		for idxs in tqdm(zip(*hit_idxs)):
+			example_idx, motif_idx, strand_idx, pos_idx = idxs
+			score = scores[*idxs].item()
 			
 			l = self.motif_lengths[motif_idx]
 			start = pos_idx.item()
@@ -316,8 +311,9 @@ class FIMO(torch.nn.Module):
 			else:
 				end = start + l
 
-			idxs = X[example_idx, :, start:end].argmax(axis=0).numpy(force=True)
-			seq = ''.join(letters[idxs])
+			char_idxs = X[example_idx, :, start:end].argmax(axis=0).numpy(
+				force=True)
+			seq = ''.join(self.alphabet[char_idxs])
 			strand = '+-'[strand_idx]
 
 			if X_attr is not None:
@@ -341,13 +337,36 @@ class FIMO(torch.nn.Module):
 		return hits
 	
 	@torch.no_grad()
-	def hit_matrix(self, X):
+	def hit_matrix(self, X, threshold=None, batch_size=256, device='cuda'):
 		"""Return the maximum score per motif for each example.
 
 		Parameters
 		----------
 		X: torch.tensor, shape=(n, 4, length)
 			A tensor containing one-hot encoded sequences.
+
+		X_attr: torch.tensor, shape=(n, 4, length), optional
+			A tensor containing the per-position attributions. The values in
+			this tensor will be summed across all four channels in the positions
+			found by the hits, so make sure that the four channels are encoding
+			something summable. You may want to multiply X_attr by X before
+			passing it in. If None, do not sum attributions.
+
+		batch_size: int, optional
+			The number of examples to process in parallel. Default is 256.
+
+		device: str or torch.device, optional
+			The device to move the model and batches to when making predictions. 
+			If set to 'cuda' without a GPU, this function will crash and must be 
+			set to 'cpu'. Default is 'cuda'.
+
+
+		Returns
+		-------
+		y_hat: torch.Tensor, shape=(X.shape[0], n_motifs)
+			The score of the strongest motif hit in each sequence. Note that
+			this is the raw score, not a p-value.
 		"""
 
-		return self.predict(X).max(dim=-1).values.max(dim=-1).values
+		y_hat = predict(self, X, batch_size=batch_size, device=device)
+		return y_hat.max(dim=-1).values.max(dim=-1).values

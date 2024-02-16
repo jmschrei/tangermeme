@@ -314,11 +314,10 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 	max_width = max(in_width, out_width)
 	for chrom, start, end in tqdm(loci.values, disable=d, desc=desc):
 		mid = start + (end - start) // 2
+		start = mid - max(out_width, in_width) - max_jitter
+		end = mid + max(out_width, in_width) + max_jitter
 
-		if start - max_width - max_jitter < 0:
-			continue
-
-		if end + max_width + max_jitter >= len(sequences[chrom]):
+		if start < 0 or end >= len(sequences[chrom]): 
 			continue
 
 		if n_loci is not None and len(seqs) == n_loci:
@@ -326,7 +325,7 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 
 		# Extract a window of signal using the output size
 		start = mid - out_width - max_jitter
-		end = mid + out_width + max_jitter
+		end = mid + out_width + max_jitter + (out_window % 2)
 
 		if signals is not None:
 			signal = _extract_locus_signal(signals, chrom, start, end)
@@ -341,7 +340,7 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 
 		# Extract a window of signal using the input size
 		start = mid - in_width - max_jitter
-		end = mid + in_width + max_jitter
+		end = mid + in_width + max_jitter + (in_window % 2)
 
 		if in_signals is not None:
 			in_signal = _extract_locus_signal(in_signals, chrom, start, end)

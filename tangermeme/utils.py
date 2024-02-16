@@ -262,9 +262,9 @@ def random_one_hot(shape, probs=None, dtype='int8', random_state=None):
 		elif probs.shape[0] == 1:
 			probs_ = probs[0]
 		else:
-			probs = probs[i] 
+			probs_ = probs[i] 
 
-		choices = random_state.choice(n, size=shape[2], p=probs)
+		choices = random_state.choice(n, size=shape[2], p=probs_)
 		ohe[i, choices, numpy.arange(shape[2])] = 1 
 
 	return torch.from_numpy(ohe)

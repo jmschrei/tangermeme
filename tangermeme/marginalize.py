@@ -5,7 +5,7 @@ import numpy
 import torch
 
 from .utils import one_hot_encode
-from .ablate import insert
+from .ersatz import substitute
 from .predict import predict
 from .predict import predict_cross
 
@@ -80,7 +80,7 @@ def marginalize(model, X, motif, args=None, start=None, alphabet=['A', 'C', 'G',
 		those.
 	"""
 
-	X_perturb = insert(X, motif, start=start, alphabet=alphabet)
+	X_perturb = substitute(X, motif, start=start, alphabet=alphabet)
 	y_before = predict(model, X, args=args, batch_size=batch_size, 
 		device=device, verbose=verbose)
 	y_after = predict(model, X_perturb, args=args, batch_size=batch_size, 
@@ -163,7 +163,7 @@ def marginalize_cross(model, X, motif, args, start=None, alphabet=['A', 'C',
 		those.
 	"""
 
-	X_perturb = insert(X, motif, start=start, alphabet=alphabet)
+	X_perturb = substitute(X, motif, start=start, alphabet=alphabet)
 	y_before = predict_cross(model, X, args=args, batch_size=batch_size,
 		device=device, verbose=verbose)
 	y_after = predict_cross(model, X_perturb, args=args, batch_size=batch_size, 
