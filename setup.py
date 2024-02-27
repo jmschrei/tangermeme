@@ -5,7 +5,7 @@ setup(
     version='0.0.1',
     author='Jacob Schreiber',
     author_email='jmschreiber91@gmail.com',
-    packages=['tangermeme'],
+    packages=['tangermeme', 'tangermeme/tools'],
     scripts=[],
     url='https://github.com/jmschrei/tangermeme',
     license='LICENSE.txt',

@@ -370,3 +370,26 @@ class FIMO(torch.nn.Module):
 
 		y_hat = predict(self, X, batch_size=batch_size, device=device)
 		return y_hat.max(dim=-1).values.max(dim=-1).values
+
+
+	def motif_hits(self, X, device='cuda'):
+		"""..."""
+
+		length = max(self.motif_lengths)
+		if X.shape[-1] < length:
+			flank = torch.zeros(*X.shape[:2], length, dtype=X.dtype, 
+				device=X.device)
+			X = torch.cat([flank, X, flank], dim=-1)
+
+		y = predict(self, X.float(), device=device)
+
+		score, offset = y.max(dim=-1)
+		score, strand = score.max(dim=-1)
+
+		int_score = numpy.round(score.numpy(force=True) / self.bin_size).astype(numpy.int32).T
+		int_score -= self._smallest[:, None]
+
+		pvals = [self._score_to_pval[i][int_score[i]] for i in range(int_score.shape[0])]
+		pvals = numpy.stack(pvals)
+		return pvals, offset, strand
+		

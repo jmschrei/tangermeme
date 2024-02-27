@@ -12,6 +12,7 @@ from tangermeme.utils import random_one_hot
 
 from tangermeme.ersatz import insert
 from tangermeme.ersatz import substitute
+from tangermeme.ersatz import delete
 from tangermeme.ersatz import randomize
 from tangermeme.ersatz import shuffle
 from tangermeme.ersatz import dinucleotide_shuffle
@@ -332,6 +333,44 @@ def test_substitute_raises_ohe(X):
 	motif[0, 1, 0] = 2
 	assert_raises(ValueError, substitute, X, motif)
 	assert_raises(ValueError, substitute, X, torch.randn(1, 4, 8))
+
+
+###
+
+
+def test_delete(X):
+	X_delete = delete(X, start=0, end=5)
+
+	assert X_delete.shape != X.shape
+	assert X_delete.shape[-1] == X.shape[-1] - 5
+	assert X_delete.sum() == X[:, :, 5:].sum()
+	assert_raises(AssertionError, assert_array_almost_equal, 
+		X_delete.sum(dim=-1), X.sum(dim=-1))
+	assert_raises(AssertionError, assert_array_almost_equal, X_delete, X)
+
+	X_delete = delete(X, start=10, end=17)
+
+	assert X_delete.shape != X.shape
+	assert X_delete.shape[-1] == X.shape[-1] - 7
+	assert_array_almost_equal(X_delete[:, :, :10], X[:, :, :10])
+	assert_array_almost_equal(X_delete[:, :, 10:], X[:, :, 17:])
+
+	assert_raises(AssertionError, assert_array_almost_equal, 
+		X_delete.sum(dim=-1), X.sum(dim=-1))
+	assert_raises(AssertionError, assert_array_almost_equal, X_delete, X)
+
+
+
+def test_substitute_raise_ends(X):
+	assert_raises(ValueError, delete, X, start=-1, end=5)
+	assert_raises(ValueError, delete, X, start=100, end=5)
+	assert_raises(ValueError, delete, X, start=10, end=5)
+
+	assert_raises(ValueError, delete, X, start=0, end=-1)
+	assert_raises(ValueError, delete, X, start=-5, end=-10)
+	assert_raises(ValueError, delete, X, start=5, end=5)
+	assert_raises(ValueError, delete, X, start=5, end=3)
+	assert_raises(ValueError, delete, X, start=5, end=100)
 
 
 ###

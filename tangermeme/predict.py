@@ -65,11 +65,14 @@ def predict(model, X, args=None, batch_size=32, device='cuda', verbose=False):
 	y = []
 
 	with torch.no_grad():
-		# Make batched predictions
-		f = X.shape[0] + batch_size
-		for start in trange(0, f, batch_size, disable=not verbose):
+		batch_size = min(batch_size, X.shape[0])
+
+		for start in trange(0, X.shape[0], batch_size, disable=not verbose):
 			end = start + batch_size
 			X_ = X[start:end].to(device)
+
+			if X_.shape[0] == 0:
+				continue
 
 			if args is not None:
 				args_ = [a[start:end].to(device) for a in args]
@@ -152,10 +155,13 @@ def predict_cross(model, X, args, batch_size=32, device='cuda', verbose=False):
 	model = model.to(device).eval()
 
 	with torch.no_grad():
-		f = len(seq_idxs) + batch_size
-		for start in trange(0, f, batch_size, disable=not verbose):
+		batch_size = min(batch_size, len(seq_idxs))
+		for start in trange(0, len(seq_idxs), batch_size, disable=not verbose):
 			end = start + batch_size
 			sidxs, aidxs = list(seq_idxs[start:end]), list(arg_idxs[start:end])
+
+			if len(sidxs) == 0:
+				continue
 
 			X_ = X[sidxs].to(device)
 			args_ = [a[aidxs].to(device) for a in args]

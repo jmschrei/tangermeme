@@ -165,6 +165,49 @@ def substitute(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
 	return X
 
 
+def delete(X, start, end):
+	"""Delete a portion of a sequence.
+
+	This function will take in a tensor of one-hot encoded sequences and a pair
+	of numbers representing the start and the end of the portion to remove, and
+	will return a tensor that is missing those positions. Essentially, those
+	positions get snipped out from the tensor.
+
+	The sequence returned from this function will be shorter than the original
+	sequence. Simply, it will be as if X[:, :, start:end] were removed from the
+	sequence.
+
+
+	Parameters
+	----------
+	X: torch.tensor, shape=(-1, len(alphabet), length)
+		A one-hot encoded set of sequences to have a motif substituted into.
+
+	start: int
+		The starting position to remove, inclusive.
+
+	end: int
+		The final position to remove, not inclusive.
+
+
+	Returns
+	-------
+	Y: torch.tensor, shape=(-1, len(alphabet), length-(end-start))
+		A one-hot encoded set of sequences that each have a portion deleted.
+	"""
+
+	if start < 0 or start > X.shape[-1]:
+		raise ValueError("Start cannot be below zero or greater than " + 
+			"the length of the sequence.")
+
+	if end < 0 or end > X.shape[-1] or end <= start:
+		raise ValueError("End must come after start, must be greater " +
+			"than zero, and cannot be greater than the length of the sequence.")
+
+	_validate_input(X, "X", ohe=True, ohe_dim=1)	
+	return torch.cat([X[:, :, :start], X[:, :, end:]], dim=-1)
+
+
 def randomize(X, start, end, probs=[[0.25, 0.25, 0.25, 0.25]], n=1,
 	random_state=None):
 	"""Replace a region of the provided loci with randomly drawn sequence.
