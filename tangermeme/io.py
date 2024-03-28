@@ -317,7 +317,12 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		start = mid - max(out_width, in_width) - max_jitter
 		end = mid + max(out_width, in_width) + max_jitter
 
-		if start < 0 or end >= len(sequences[chrom]): 
+		if isinstance(sequences, dict):
+			chrom_length = sequences[chrom].shape[-1]
+		else:
+			chrom_length = len(sequences[chrom])
+
+		if start < 0 or end >= chrom_length: 
 			continue
 
 		if n_loci is not None and len(seqs) == n_loci:
@@ -348,7 +353,7 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 
 		# Extract a window of sequence using the input size
 		if isinstance(sequences, dict):
-			seq = sequences[chrom][start:end].T
+			seq = sequences[chrom][:, start:end]
 		else:
 			seq = one_hot_encode(sequences[chrom][start:end].seq.upper(),
 				alphabet=alphabet)
@@ -420,3 +425,32 @@ def read_meme(filename, n_motifs=None):
 					break
 
 	return motifs
+
+
+def read_vcf(filename):
+	"""Read a VCF file into a pandas DataFrame
+
+	This function takes in the name of a file that is VCF formatted and returns
+	a pandas DataFrame with the comments filtered out. This will only return the
+	columns that are most commonly provided in VCF files.
+
+
+	Parameters
+	----------
+	filename: str
+
+
+	Returns
+	-------
+	vcf: pandas.DataFrame
+		A pandas DataFrame containing the rows.
+	"""
+
+	names = ["CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", 
+		"FORMAT"]
+	dtypes = {name: str for name in names}
+	dtypes['POS'] = int
+
+	vcf = pandas.read_csv(filename, delimiter='\t', comment='#', names=names, 
+		dtype=dtypes, usecols=range(9))
+	return vcf

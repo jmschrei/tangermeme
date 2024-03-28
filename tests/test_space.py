@@ -8,6 +8,9 @@ import pytest
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
 
+from tangermeme.space import space
+from tangermeme.space import space_cross
+
 from tangermeme.marginalize import marginalize
 from tangermeme.marginalize import marginalize_cross
 
@@ -43,11 +46,11 @@ def beta():
 
 ##
 
-def test_marginalize_summodel(X):
+def test_space_summodel(X):
 	torch.manual_seed(0)
 	model = SumModel()
-	y_before, y_after = marginalize(model, X, "ACGTC", batch_size=5, 
-		device='cpu')
+	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], 1, 
+		batch_size=5, device='cpu')
 
 	assert y_before.shape == (64, 4)
 	assert y_before.dtype == torch.float32
@@ -66,26 +69,26 @@ def test_marginalize_summodel(X):
 	assert y_after.dtype == torch.float32
 	assert y_after.sum() == X.sum()
 	assert_array_almost_equal(y_after[:8], [
-		[25., 24., 19., 32.],
-        [26., 19., 28., 27.],
-        [27., 26., 22., 25.],
-        [22., 33., 18., 27.],
-        [25., 23., 24., 28.],
-        [30., 28., 21., 21.],
-        [27., 18., 22., 33.],
-        [20., 30., 30., 20.]])
+		[28., 22., 21., 29.],
+        [28., 18., 29., 25.],
+        [28., 24., 23., 25.],
+        [21., 34., 19., 26.],
+        [27., 22., 25., 26.],
+        [28., 29., 22., 21.],
+        [28., 17., 23., 32.],
+        [22., 28., 32., 18.]])
 
-	y_before2, y_after2 = marginalize(model, X, "ACGTC", batch_size=64, 
-		device='cpu')
+	y_before2, y_after2 = space(model, X, ["ACGTC", "GAGA"], 1, 
+		batch_size=64, device='cpu')
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)	
 
 
-def test_marginalize_flattendense(X):
+def test_space_flattendense(X):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	y_before, y_after = marginalize(model, X, "ACGTC", batch_size=8, 
-		device='cpu')
+	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], 1, 
+		batch_size=5, device='cpu')
 
 	assert y_before.shape == (64, 3)
 	assert y_before.dtype == torch.float32
@@ -102,26 +105,26 @@ def test_marginalize_flattendense(X):
 	assert y_after.shape == (64, 3)
 	assert y_after.dtype == torch.float32
 	assert_array_almost_equal(y_after[:8], [
-		[ 0.1402,  0.4193, -0.0668],
-        [-0.1778,  0.1163, -0.2797],
-        [-0.1861,  0.1720, -0.0038],
-        [-0.2052,  0.1570,  0.0039],
-        [-0.0779,  0.0310, -0.2355],
-        [-0.3882,  0.0477, -0.3510],
-        [-0.2861,  0.0217, -0.3942],
-        [-0.4546,  0.6714, -0.4246]], 4)
+		[ 0.1087,  0.3662,  0.0668],
+        [-0.1331,  0.0071, -0.0907],
+        [-0.3239,  0.0593,  0.1154],
+        [-0.3762,  0.0659,  0.0011],
+        [-0.1361, -0.0605, -0.0853],
+        [-0.4873, -0.1080, -0.3462],
+        [-0.3656, -0.0071, -0.1459],
+        [-0.4935,  0.6714, -0.3008]], 4)
 
-	y_before2, y_after2 = marginalize(model, X, "ACGTC", batch_size=64, 
-		device='cpu')
+	y_before2, y_after2 = space(model, X, ["ACGTC", "GAGA"], 1, 
+		batch_size=64, device='cpu')
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)
 
 
-def test_marginalize_conv(X):
+def test_space_conv(X):
 	torch.manual_seed(0)
 	model = Conv()
-	y_before, y_after = marginalize(model, X, "ACGTC", start=0, batch_size=8, 
-		device='cpu')
+	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], 1, 
+		start=0, batch_size=5, device='cpu')
 
 	assert y_before.shape == (64, 12, 98)
 	assert y_before.dtype == torch.float32
@@ -147,35 +150,35 @@ def test_marginalize_conv(X):
 	assert y_after.shape == (64, 12, 98)
 	assert y_after.dtype == torch.float32
 	assert_array_almost_equal(y_after[:2, :4, :10], [
-		[[-0.3983, -0.2996, -0.2749, -0.3509, -0.6158, -0.3269, -0.1928,
-          -0.3509, -0.4816, -0.3197],
-         [-0.1937, -0.0358, -0.2188,  0.4330,  0.0304,  0.2595,  0.2167,
-           0.4330, -0.0124,  0.3218],
-         [-0.2188, -0.0922, -0.1907, -0.3884, -0.5433, -0.4084, -0.2111,
-          -0.3884, -0.3460, -0.3052],
-         [-0.3638,  0.0378,  0.0811,  0.0337,  0.4894,  0.2007, -0.1166,
-           0.0337,  0.1722, -0.3441]],
+		[[-0.3983, -0.2996, -0.2749, -0.3509, -0.5846, -0.1916, -0.1358,
+          -0.2702, -0.0328, -0.3983],
+         [-0.1937, -0.0358, -0.2188,  0.4330, -0.0807, -0.1418, -0.4189,
+          -0.6573, -0.3505, -0.1937],
+         [-0.2188, -0.0922, -0.1907, -0.3884, -0.4600,  0.5745, -0.0725,
+           0.6608,  0.0415, -0.2188],
+         [-0.3638,  0.0378,  0.0811,  0.0337,  0.1116, -0.2914,  0.0865,
+          -0.3111,  0.1471, -0.3638]],
 
-        [[-0.3983, -0.2996, -0.2749, -0.3197, -0.4805, -0.1669, -0.4055,
-          -0.5078, -0.0848, -0.5863],
-         [-0.1937, -0.0358, -0.2188,  0.3218, -0.3709, -0.3077, -0.2560,
-          -0.0755,  0.1277, -0.5910],
-         [-0.2188, -0.0922, -0.1907, -0.3052,  0.4396, -0.1558, -0.3220,
-           0.1234, -0.1761,  0.2097],
-         [-0.3638,  0.0378,  0.0811, -0.3441, -0.0027,  0.4644,  0.1810,
-           0.1603,  0.2667,  0.1406]]], 4)
+        [[-0.3983, -0.2996, -0.2749, -0.3197, -0.2685, -0.2737, -0.1358,
+          -0.2702, -0.1669, -0.5863],
+         [-0.1937, -0.0358, -0.2188,  0.3218, -0.1470, -0.5773, -0.4189,
+          -0.6573, -0.3077, -0.5910],
+         [-0.2188, -0.0922, -0.1907, -0.3052, -0.0089,  0.5948, -0.0725,
+           0.6608, -0.1558,  0.2097],
+         [-0.3638,  0.0378,  0.0811, -0.3441, -0.3401, -0.0938,  0.0865,
+          -0.3111,  0.4644,  0.1406]]], 4)
 
-	y_before2, y_after2 = marginalize(model, X, "ACGTC", start=0, batch_size=64, 
-		device='cpu')
+	y_before2, y_after2 = space(model, X, ["ACGTC", "GAGA"], 1, 
+		start=0, batch_size=64, device='cpu')
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)
 
 
-def test_marginalize_scatter(X):
+def test_space_scatter(X):
 	torch.manual_seed(0)
 	model = Scatter()
-	y_before, y_after = marginalize(model, X, "ACGTC", start=0, batch_size=8, 
-		device='cpu')
+	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], 1, 
+		start=0, batch_size=8, device='cpu')
 
 	assert y_before.shape == (64, 100, 4)
 	assert y_before.dtype == torch.float32
@@ -235,17 +238,17 @@ def test_marginalize_scatter(X):
          [0., 0., 0., 1.],
          [0., 1., 0., 0.]]], 4)
 
-	y_before2, y_after2 = marginalize(model, X, "ACGTC", start=0, batch_size=64, 
-		device='cpu')
+	y_before2, y_after2 = space(model, X, ["ACGTC", "GAGA"], 1, 
+		start=0, batch_size=64, device='cpu')
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)
 
 
-def test_marginalize_convdense(X):
+def test_space_convdense(X):
 	torch.manual_seed(0)
 	model = ConvDense()
-	y_before, y_after = marginalize(model, X, "ACGTC", start=0, batch_size=2, 
-		device='cpu')
+	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], 1, 
+		start=0, batch_size=2, device='cpu')
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 12, 98)
@@ -271,7 +274,6 @@ def test_marginalize_convdense(X):
         [-0.1408,  0.0105,  0.0673],
         [-0.2375, -0.0069,  0.0835]], 4)
 
-
 	assert len(y_after) == 2
 	assert y_after[0].shape == (64, 12, 98)
 	assert y_after[1].shape == (64, 3)
@@ -291,17 +293,17 @@ def test_marginalize_convdense(X):
          [-7.7912e-01, -6.6461e-02, -6.1201e-01, -2.8948e-01]]], 4)
 
 	assert_array_almost_equal(y_after[1][:4], [
-		[ 0.1924,  0.2767,  0.0543],
-        [-0.1214,  0.1609, -0.1117],
-        [-0.1714,  0.1811,  0.2204],
-        [-0.2601,  0.1425,  0.2126]], 4)
+		[ 0.2248,  0.2780,  0.0710],
+        [-0.1218,  0.1338, -0.2101],
+        [-0.1292,  0.1851,  0.2033],
+        [-0.2042,  0.1904,  0.2121]], 4)
 
 
-def test_marginalize_convdense_batch_size(X):
+def test_space_convdense_batch_size(X):
 	torch.manual_seed(0)
 	model = ConvDense()
-	y_before, y_after = marginalize(model, X, "ACGTC", batch_size=68, 
-		device='cpu')
+	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], 1, 
+		batch_size=68, device='cpu')
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 12, 98)
@@ -312,50 +314,63 @@ def test_marginalize_convdense_batch_size(X):
 	assert y_after[1].shape == (64, 3)
 
 
-def test_marginalize_scatter_batch_size(X):
+def test_space_scatter_batch_size(X):
 	torch.manual_seed(0)
 	model = Scatter()
-	y_before, y_after = marginalize(model, X, "ACGTC", batch_size=68, 
-		device='cpu')
+	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], 1, 
+		batch_size=68, device='cpu')
 
 	assert y_before.shape == (64, 100, 4)
 	assert y_after.shape == (64, 100, 4)
 
 
-def test_marginalize_raises_shape(X):
+def test_space_raises_shape(X):
 	torch.manual_seed(0)
 	model = Scatter()
-	assert_raises(ValueError, marginalize, model, X[0], "ACGTC", device='cpu')
-	assert_raises(ValueError, marginalize, model, X[:, 0], "ACGTC", 
+	assert_raises(ValueError, space, model, X[0], ["ACGTC", "ACC"], 0, 
 		device='cpu')
-	assert_raises(ValueError, marginalize, model, X.unsqueeze(0), "ACGTC", 
+	assert_raises(ValueError, space, model, X[:, 0], ["ACGTC", "ACC"], 0,
 		device='cpu')
+	assert_raises(ValueError, space, model, X.unsqueeze(0), ["ACGTC", "ACC"], 
+		0, device='cpu')
 
 
-def test_marginalize_raises_args(X, alpha, beta):
+def test_space_raises_args(X, alpha, beta):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	assert_raises(TypeError, marginalize, model, X, "ACGTC", batch_size=2, 
-		args=5, device='cpu')
-	assert_raises(TypeError, marginalize, model, X, "ACGTC",  batch_size=2, 
-		args=(5,), device='cpu')
-	assert_raises(TypeError, marginalize, model, X, "ACGTC", batch_size=2, 
-		args=alpha, device='cpu')
-	assert_raises(RuntimeError, marginalize, model, X, "ACGTC", batch_size=2, 
-		args=(alpha[:5],), device='cpu')
-	assert_raises(RuntimeError, marginalize, model, X, "ACGTC", batch_size=2, 
-		args=(alpha, beta[:5]), device='cpu')
+	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], [0, 1], 
+		batch_size=2, device='cpu')
+	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], [-5], 
+		batch_size=2, device='cpu')
+	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], -3, 
+		batch_size=2, device='cpu')
+	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], [], 
+		batch_size=2, device='cpu')
+	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], [1500], 
+		batch_size=2, device='cpu')
+
+	assert_raises(TypeError, space, model, X, ["ACGTC", "ACC"], 0, 
+		batch_size=2, args=5, device='cpu')
+	assert_raises(TypeError, space, model, X, ["ACGTC", "ACC"], 0, 
+		batch_size=2, args=(5,), device='cpu')
+	assert_raises(TypeError, space, model, X, ["ACGTC", "ACC"], 0, 
+		batch_size=2, args=alpha, device='cpu')
+	assert_raises(RuntimeError, space, model, X, ["ACGTC", "ACC"], 0,
+		batch_size=2, args=(alpha[:5],), device='cpu')
+	assert_raises(RuntimeError, space, model, X, ["ACGTC", "ACC"], 0, 
+		batch_size=2, args=(alpha, beta[:5]), device='cpu')
 
 
 ###
 
 
-def test_marginalize_cross_flattendense_alpha(X, alpha, beta):
+def test_space_cross_flattendense_alpha(X, alpha, beta):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	y0_before, y0_after = marginalize(model, X, 'ACGTGC', device='cpu')
-	y_before, y_after = marginalize_cross(model, X, 'ACGTGC', (alpha[:5],), 
+	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], 3, 
 		device='cpu')
+	y_before, y_after = space_cross(model, X, ['ACGTGC', 'TGTT'], 3, 
+		(alpha[:5],), device='cpu')
 
 	assert y_before.shape == (64, 5, 3)
 	assert y_before.dtype == torch.float32
@@ -373,32 +388,34 @@ def test_marginalize_cross_flattendense_alpha(X, alpha, beta):
          [2.1904, 2.2583, 2.0658],
          [1.8171, 1.8849, 1.6924]]], 4)
 
+
 	assert y_after.shape == (64, 5, 3)
 	assert y_after.dtype == torch.float32
 	assert_array_almost_equal(y_after, y0_after[:, None] + alpha[:5][None, :])
 	assert_array_almost_equal(y_after[:2], [
-		[[1.9098, 2.0546, 1.9081],
-         [0.5459, 0.6907, 0.5442],
-         [1.1245, 1.2693, 1.1228],
-         [2.3867, 2.5314, 2.3850],
-         [2.0133, 2.1581, 2.0116]],
+		[[1.9143, 1.9713, 1.6641],
+         [0.5504, 0.6074, 0.3002],
+         [1.1290, 1.1860, 0.8788],
+         [2.3912, 2.4481, 2.1409],
+         [2.0178, 2.0748, 1.7676]],
 
-        [[1.6194, 1.7230, 1.7036],
-         [0.2555, 0.3591, 0.3397],
-         [0.8341, 0.9377, 0.9183],
-         [2.0962, 2.1999, 2.1805],
-         [1.7229, 1.8265, 1.8071]]], 4)
+        [[1.7369, 1.6794, 1.6200],
+         [0.3730, 0.3156, 0.2561],
+         [0.9516, 0.8941, 0.8347],
+         [2.2137, 2.1563, 2.0968],
+         [1.8404, 1.7830, 1.7235]]], 4)
 
 
 
-def test_marginalize_cross_flattendense_beta(X, alpha, beta):
+def test_space_cross_flattendense_beta(X, alpha, beta):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	alpha = torch.zeros(X.shape[0], 1)
 
-	y0_before, y0_after = marginalize(model, X, 'ACGTGC', device='cpu')
-	y_before, y_after = marginalize_cross(model, X, 'ACGTGC', (alpha[:5], 
-		beta[:5]), device='cpu')
+	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], 3, 
+		device='cpu')
+	y_before, y_after = space_cross(model, X, ['ACGTGC', 'TGTT'], 3, 
+		(alpha[:5], beta[:5]), device='cpu')
 
 	assert y_before.shape == (64, 5, 3)
 	assert y_before.dtype == torch.float32
@@ -420,25 +437,26 @@ def test_marginalize_cross_flattendense_beta(X, alpha, beta):
 	assert y_after.dtype == torch.float32
 	assert_array_almost_equal(y_after, y0_after[:, None] * beta[:5][None, :])
 	assert_array_almost_equal(y_after[:2], [
-		[[ 0.2368,  0.4720,  0.2340],
-         [-0.0892, -0.1777, -0.0881],
-         [-0.0770, -0.1535, -0.0761],
-         [-0.1564, -0.3118, -0.1546],
-         [ 0.1262,  0.2514,  0.1247]],
+		[[ 0.2441,  0.3366, -0.1624],
+         [-0.0919, -0.1268,  0.0612],
+         [-0.0794, -0.1095,  0.0528],
+         [-0.1613, -0.2224,  0.1073],
+         [ 0.1301,  0.1793, -0.0865]],
 
-        [[-0.2350, -0.0666, -0.0981],
-         [ 0.0885,  0.0251,  0.0370],
-         [ 0.0764,  0.0217,  0.0319],
-         [ 0.1552,  0.0440,  0.0648],
-         [-0.1252, -0.0355, -0.0523]]], 4)
+        [[-0.0441, -0.1374, -0.2340],
+         [ 0.0166,  0.0518,  0.0881],
+         [ 0.0143,  0.0447,  0.0761],
+         [ 0.0291,  0.0908,  0.1546],
+         [-0.0235, -0.0732, -0.1247]]], 4)
 
 
-def test_marginalize_cross_flattendense_alpha_beta(X, alpha, beta):
+def test_space_cross_flattendense_alpha_beta(X, alpha, beta):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	y0_before, y0_after = marginalize(model, X, 'ACGTGC', device='cpu')
-	y_before, y_after = marginalize_cross(model, X, 'ACGTGC', (alpha[:5], 
-		beta[:5]), device='cpu')
+	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], 3, 
+		device='cpu')
+	y_before, y_after = space_cross(model, X, ['ACGTGC', 'TGTT'], 3, 
+		(alpha[:5], beta[:5]), device='cpu')
 
 	assert y_before.shape == (64, 5, 3)
 	assert y_before.dtype == torch.float32
@@ -462,24 +480,24 @@ def test_marginalize_cross_flattendense_alpha_beta(X, alpha, beta):
 	assert_array_almost_equal(y_after, y0_after[:, None] * beta[:5][None, :]
 		+ alpha[:5][None, :])
 	assert_array_almost_equal(y_after[:2], [
-		[[2.0008, 2.2360, 1.9981],
-         [0.3110, 0.2224, 0.3120],
-         [0.9017, 0.8253, 0.9026],
-         [2.0845, 1.9291, 2.0863],
-         [1.9937, 2.1190, 1.9922]],
+		[[2.0082, 2.1007, 1.6017],
+         [0.3082, 0.2734, 0.4613],
+         [0.8994, 0.8693, 1.0315],
+         [2.0796, 2.0185, 2.3482],
+         [1.9976, 2.0469, 1.7810]],
 
-        [[1.5291, 1.6974, 1.6659],
-         [0.4887, 0.4252, 0.4371],
-         [1.0552, 1.0004, 1.0106],
-         [2.3961, 2.2849, 2.3057],
-         [1.7424, 1.8321, 1.8153]]], 4)
+        [[1.7199, 1.6266, 1.5301],
+         [0.4168, 0.4519, 0.4883],
+         [0.9931, 1.0234, 1.0548],
+         [2.2700, 2.3317, 2.3955],
+         [1.8441, 1.7943, 1.7429]]], 4)
 
 
-def test_marginalize_cross_convdense_alpha(X, alpha):
+def test_space_cross_convdense_alpha(X, alpha):
 	torch.manual_seed(0)
 	model = ConvDense()
-	y_before, y_after = marginalize_cross(model, X, "ACGTGC", start=0, 
-		args=(alpha[:5, :, None],), batch_size=2, device='cpu')
+	y_before, y_after = space_cross(model, X, ["ACGTGC", "TGGTT"], 3, 
+		start=0, args=(alpha[:5, :, None],), batch_size=2, device='cpu')
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 5, 12, 98)
@@ -557,26 +575,26 @@ def test_marginalize_cross_convdense_alpha(X, alpha):
           [ 0.8821,  1.2398,  0.4386,  0.8225]]]], 4)
 
 	assert_array_almost_equal(y_after[1][:4], [
-		[[ 0.2472,  0.1913, -0.0212],
-         [ 0.2472,  0.1913, -0.0212],
-         [ 0.2472,  0.1913, -0.0212],
-         [ 0.2472,  0.1913, -0.0212],
-         [ 0.2472,  0.1913, -0.0212]],
+		[[ 0.3324,  0.1149, -0.0712],
+         [ 0.3324,  0.1149, -0.0712],
+         [ 0.3324,  0.1149, -0.0712],
+         [ 0.3324,  0.1149, -0.0712],
+         [ 0.3324,  0.1149, -0.0712]],
 
-        [[-0.1387,  0.0929, -0.1931],
-         [-0.1387,  0.0929, -0.1931],
-         [-0.1387,  0.0929, -0.1931],
-         [-0.1387,  0.0929, -0.1931],
-         [-0.1387,  0.0929, -0.1931]],
+        [[-0.0377, -0.0666, -0.1223],
+         [-0.0377, -0.0666, -0.1223],
+         [-0.0377, -0.0666, -0.1223],
+         [-0.0377, -0.0666, -0.1223],
+         [-0.0377, -0.0666, -0.1223]],
 
-        [[-0.1165,  0.0957,  0.1448],
-         [-0.1165,  0.0957,  0.1448],
-         [-0.1165,  0.0957,  0.1448],
-         [-0.1165,  0.0957,  0.1448],
-         [-0.1165,  0.0957,  0.1448]],
+        [[-0.0393, -0.0238,  0.2462],
+         [-0.0393, -0.0238,  0.2462],
+         [-0.0393, -0.0238,  0.2462],
+         [-0.0393, -0.0238,  0.2462],
+         [-0.0393, -0.0238,  0.2462]],
 
-        [[-0.2053,  0.0571,  0.1370],
-         [-0.2053,  0.0571,  0.1370],
-         [-0.2053,  0.0571,  0.1370],
-         [-0.2053,  0.0571,  0.1370],
-         [-0.2053,  0.0571,  0.1370]]], 4)
+        [[-0.1770, -0.0393,  0.1683],
+         [-0.1770, -0.0393,  0.1683],
+         [-0.1770, -0.0393,  0.1683],
+         [-0.1770, -0.0393,  0.1683],
+         [-0.1770, -0.0393,  0.1683]]], 4)

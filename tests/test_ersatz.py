@@ -12,6 +12,7 @@ from tangermeme.utils import random_one_hot
 
 from tangermeme.ersatz import insert
 from tangermeme.ersatz import substitute
+from tangermeme.ersatz import multisubstitute
 from tangermeme.ersatz import delete
 from tangermeme.ersatz import randomize
 from tangermeme.ersatz import shuffle
@@ -371,6 +372,176 @@ def test_substitute_raise_ends(X):
 	assert_raises(ValueError, delete, X, start=5, end=5)
 	assert_raises(ValueError, delete, X, start=5, end=3)
 	assert_raises(ValueError, delete, X, start=5, end=100)
+
+
+###
+
+
+def test_multisubstitute_str(X):
+	motifs = ['CATCAG', 'CATCAG']
+	X_substitute = multisubstitute(X, motifs, spacing=0)
+
+	assert X_substitute.shape == X.shape
+	assert X_substitute.sum() == X.sum()
+	assert_raises(AssertionError, assert_array_almost_equal, 
+		X_substitute.sum(dim=-1), X.sum(dim=-1))
+	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
+
+	new_seq = ('CACATCATCTCATCATCTGCTGACTACTCATCAG' + 
+		'CATCAGCTGACTGACTGACTACTGACTGACTGAC')
+	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
+
+	assert X_substitute.shape == new_seq_ohe.shape
+	assert X_substitute.sum() == new_seq_ohe.sum()
+	assert_array_almost_equal(X_substitute.sum(dim=-1), new_seq_ohe.sum(dim=-1))
+	assert_array_almost_equal(X_substitute, new_seq_ohe)
+
+
+def test_multisubstitute_str_even(X):
+	motifs = ['CATCAG', 'CATCAG']
+	X_substitute = multisubstitute(X, motifs, spacing=4)
+
+	assert X_substitute.shape == X.shape
+	assert X_substitute.sum() == X.sum()
+	assert_raises(AssertionError, assert_array_almost_equal, 
+		X_substitute.sum(dim=-1), X.sum(dim=-1))
+	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
+
+	new_seq = ('CACATCATCTCATCATCTGCTGACTACATCAGTA' + 
+		'GTCATCAGGACTGACTGACTACTGACTGACTGAC')
+	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
+
+	assert X_substitute.shape == new_seq_ohe.shape
+	assert X_substitute.sum() == new_seq_ohe.sum()
+	assert_array_almost_equal(X_substitute.sum(dim=-1), new_seq_ohe.sum(dim=-1))
+	assert_array_almost_equal(X_substitute, new_seq_ohe)
+
+
+def test_multisubstitute_str_odd(X):
+	motifs = ['CATCAG', 'CATCAG']
+	X_substitute = multisubstitute(X, motifs, spacing=5)
+
+	assert X_substitute.shape == X.shape
+	assert X_substitute.sum() == X.sum()
+	assert_raises(AssertionError, assert_array_almost_equal, 
+		X_substitute.sum(dim=-1), X.sum(dim=-1))
+	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
+
+	new_seq = ('CACATCATCTCATCATCTGCTGACTACATCAGTA' + 
+		'GTCCATCAGACTGACTGACTACTGACTGACTGAC')
+	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
+
+	print(X.shape, X_substitute.shape, new_seq_ohe.shape)
+
+	assert X_substitute.shape == new_seq_ohe.shape
+	assert X_substitute.sum() == new_seq_ohe.sum()
+	assert_array_almost_equal(X_substitute.sum(dim=-1), new_seq_ohe.sum(dim=-1))
+	assert_array_almost_equal(X_substitute, new_seq_ohe)
+
+
+def test_multisubstitute_ohe(X):
+	motif = one_hot_encode('CATCAG').unsqueeze(0)
+	X_substitute = multisubstitute(X, [motif, motif], spacing=0)
+
+	assert X_substitute.shape == X.shape
+	assert X_substitute.sum() == X.sum()
+	assert_raises(AssertionError, assert_array_almost_equal, 
+		X_substitute.sum(dim=-1), X.sum(dim=-1))
+	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
+
+	new_seq = ('CACATCATCTCATCATCTGCTGACTACTCATCAG' + 
+		'CATCAGCTGACTGACTGACTACTGACTGACTGAC')
+	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
+
+	assert X_substitute.shape == new_seq_ohe.shape
+	assert X_substitute.sum() == new_seq_ohe.sum()
+	assert_array_almost_equal(X_substitute.sum(dim=-1), new_seq_ohe.sum(dim=-1))
+	assert_array_almost_equal(X_substitute, new_seq_ohe)
+
+
+def test_multisubstitute_str_multi_seqs_one_motif():
+	X = random_one_hot((4, 4, 8), random_state=0)
+	X_substitute = multisubstitute(X, ['A', 'C', 'GT'], spacing=[0, 0])
+
+	assert_raises(AssertionError, assert_array_almost_equal, X, X_substitute)
+	assert_array_almost_equal(X_substitute, [
+		[[1, 0, 1, 0, 0, 0, 0, 0],
+         [0, 0, 0, 1, 0, 0, 0, 0],
+         [0, 0, 0, 0, 1, 0, 0, 0],
+         [0, 1, 0, 0, 0, 1, 1, 1]],
+
+        [[0, 0, 1, 0, 0, 0, 0, 1],
+         [1, 0, 0, 1, 0, 0, 0, 0],
+         [0, 0, 0, 0, 1, 0, 1, 0],
+         [0, 1, 0, 0, 0, 1, 0, 0]],
+
+        [[1, 1, 1, 0, 0, 0, 0, 0],
+         [0, 0, 0, 1, 0, 0, 0, 0],
+         [0, 0, 0, 0, 1, 0, 0, 1],
+         [0, 0, 0, 0, 0, 1, 1, 0]],
+
+        [[1, 0, 1, 0, 0, 0, 0, 1],
+         [0, 1, 0, 1, 0, 0, 1, 0],
+         [0, 0, 0, 0, 1, 0, 0, 0],
+         [0, 0, 0, 0, 0, 1, 0, 0]]])
+
+
+
+def test_multisubstitute_start(X):
+	motifs = ['CATC', 'AGCCC']
+	X_substitute = multisubstitute(X, motifs, spacing=[0], start=10)
+
+	assert X_substitute.shape == X.shape
+	assert X_substitute.sum() == X.sum()
+	assert_raises(AssertionError, assert_array_almost_equal, 
+		X_substitute.sum(dim=-1), X.sum(dim=-1))
+	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
+
+	new_seq = ('CACATCATCTCATCAGCCCCTGACTACTGACGTA' +
+		'GTCTGACTGACTGACTGACTACTGACTGACTGAC')
+	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
+	assert_array_almost_equal(X_substitute, new_seq_ohe)
+
+	motifs = ['CATC', 'AGC', 'CC']
+	X_substitute = multisubstitute(X, motifs, spacing=[0, 0], start=10)
+	new_seq = ('CACATCATCTCATCAGCCCCTGACTACTGACGTA' +
+		'GTCTGACTGACTGACTGACTACTGACTGACTGAC')
+	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
+	assert_array_almost_equal(X_substitute, new_seq_ohe)
+
+
+	X_substitute = multisubstitute(X, motifs, spacing=[5, 4], start=10)
+	assert X_substitute.shape == X.shape
+	assert X_substitute.sum() == X.sum()
+	assert_raises(AssertionError, assert_array_almost_equal, 
+		X_substitute.sum(dim=-1), X.sum(dim=-1))
+	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
+
+	new_seq = ('CACATCATCTCATCATCTGAGCACTACCGACGTAG' + 
+		'TCTGACTGACTGACTGACTACTGACTGACTGAC')
+	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
+	assert_array_almost_equal(X_substitute, new_seq_ohe)	
+
+
+def test_multisubstitute_raises_alphabet(X):
+	motif = one_hot_encode('CACCAG', alphabet=['A', 'C', 'G'])
+	assert_raises(ValueError, multisubstitute, X, [motif, motif], [0])
+	assert_raises(ValueError, multisubstitute, X, [motif, motif], [0], 
+		['A', 'C', 'G'])
+
+
+def test_multisubstitute_raises_length(X):
+	assert_raises(ValueError, multisubstitute, X, ['C'*1000, 'C'], [0])
+	assert_raises(ValueError, multisubstitute, X, ['C', 
+		one_hot_encode('C'*1000)], [0])
+
+
+def test_multisubstitute_spacing(X):
+	motifs = ['CATGG', 'CAGGA']
+	assert_raises(ValueError, multisubstitute, X, motifs, [-1])
+	assert_raises(ValueError, multisubstitute, X, motifs, [0, 0])
+	assert_raises(ValueError, multisubstitute, X, motifs, [])
+	assert_raises(ValueError, multisubstitute, X, motifs, [10000])
 
 
 ###

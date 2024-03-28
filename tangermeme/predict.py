@@ -62,6 +62,12 @@ def predict(model, X, args=None, batch_size=32, device='cuda', verbose=False):
 	"""
 
 	model = model.to(device).eval()
+
+	try:
+		dtype = next(model.parameters()).dtype
+	except:
+		dtype = X.dtype
+
 	y = []
 
 	with torch.no_grad():
@@ -69,7 +75,7 @@ def predict(model, X, args=None, batch_size=32, device='cuda', verbose=False):
 
 		for start in trange(0, X.shape[0], batch_size, disable=not verbose):
 			end = start + batch_size
-			X_ = X[start:end].to(device)
+			X_ = X[start:end].to(device).type(dtype)
 
 			if X_.shape[0] == 0:
 				continue

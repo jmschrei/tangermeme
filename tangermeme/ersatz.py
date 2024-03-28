@@ -165,6 +165,96 @@ def substitute(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
 	return X
 
 
+def multisubstitute(X, motifs, spacing, start=None, 
+	alphabet=['A', 'C', 'G', 'T']):
+	"""Substitute a set of motif into sequences with provided spacings.
+
+	This function will take in a list of tensors of one-hot encoded sequences 
+	or of strings that can be one-hot encoded and will substitute the motifs 
+	into the sequences given the provided spacings. It will then return a copy 
+	of the data with the substitutions leaving the  original data unperturbed.
+
+	This function is largely just a wrapper around the substitute function,
+	calling it multiple times and figuring out the exact positioning internally.
+
+	If the motif is a string, it will be one-hot encoded according to the
+	alphabet that is provided. If a motif with batch size of 1 is provided, 
+	the same motifs will be substituted into all sequences. If a motif with a 
+	batch size equal to that of X is provided, there will be  1-1 correspondance 
+	between the motifs and the sequence, i.e., that motif at index 5 will be 
+	substituted into the sequence at index 5.
+
+
+	Parameters
+	----------
+	X: torch.tensor, shape=(-1, len(alphabet), length)
+		A one-hot encoded set of sequences to have a motif substituted into.
+
+	motifs: list of torch.tensor, shape=(-1, len(alphabet), motif_length)
+		A list of strings or of one-hot encoded version of a short motif to 
+		substitute into the set of sequences.
+
+	spacing: list or int
+		An integer specifying a constant spacing between all motifs or a list
+		of spacings of length equal to n-1 where n is the number of motifs. If
+		a list is provided, the $i$-th entry should be interpreted as the
+		distance after the $i$-th motif that the $i+1$-th motif begins.
+
+	start: int or None, optional
+		The starting position of where to substitute the motifs. If None,
+		substitute the motif into the middle of the sequence such that the 
+		middle of the motif occurs at the middle of the sequence. Default is 
+		None.
+
+	alphabet : set or tuple or list, optional
+		A pre-defined alphabet where the ordering of the symbols is the same
+		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
+		the returned tensor will have a 1 at index 0 if the character was 'A'.
+		Characters outside the alphabet are ignored and none of the indexes are
+		set to 1. This is not necessary or used if a one-hot encoded tensor is
+		provided for the motif. Default is ['A', 'C', 'G', 'T'].
+
+
+	Returns
+	-------
+	Y: torch.tensor, shape=(-1, len(alphabet), length)
+		A one-hot encoded set of sequences that each have the motifs substituted
+		at the correct positions.
+	"""
+
+	motif_lengths = [len(motif) if isinstance(motif, str) else motif.shape[-1] 
+		for motif in motifs]
+
+	if not isinstance(spacing, (int, list)):
+		raise ValueError("Spacings must be an integer or a list of integers.")
+
+	if isinstance(spacing, int):
+		spacing = [spacing for _ in range(len(motifs) - 1)]
+
+	if len(spacing) != (len(motifs) - 1):
+		raise ValueError("Must provide n-1 spacings for n motifs.")
+
+	for l in spacing:
+		if l < 0 or l >= X.shape[-1]:
+			raise ValueError("Spacing cannot be smaller than zero or " +
+				"larger than the sequence being inserted into.")
+
+	if start is None:
+		n = sum(spacing) + sum(motif_lengths)
+		start = X.shape[-1] // 2 - n // 2
+
+		if start < 0:
+			raise ValueError("Sum of motif lengths and spacing cannot be " + 
+				"larger than the sequence being inserted into.")
+
+	for i in range(len(spacing)):
+		X = substitute(X, motifs[i], start=start, alphabet=alphabet)
+		start += motif_lengths[i] + spacing[i]
+
+	X = substitute(X, motifs[-1], start=start, alphabet=alphabet)
+	return X
+
+
 def delete(X, start, end):
 	"""Delete a portion of a sequence.
 

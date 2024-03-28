@@ -15,13 +15,13 @@ class SumModel(torch.nn.Module):
 
 
 class FlattenDense(torch.nn.Module):
-	def __init__(self):
+	def __init__(self, seq_len=100):
 		super(FlattenDense, self).__init__()
-
-		self.dense = torch.nn.Linear(400, 3)
+		self.dense = torch.nn.Linear(seq_len*4, 3)
+		self.seq_len = seq_len
 
 	def forward(self, X, alpha=0, beta=1):
-		X = X.reshape(X.shape[0], 400)
+		X = X.reshape(X.shape[0], self.seq_len*4)
 		return self.dense(X) * beta + alpha
 
 

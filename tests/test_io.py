@@ -13,6 +13,7 @@ from tangermeme.io import _load_signals
 from tangermeme.io import _extract_locus_signal
 
 from tangermeme.io import read_meme
+from tangermeme.io import read_vcf
 from tangermeme.io import extract_loci
 
 from numpy.testing import assert_raises
@@ -757,4 +758,18 @@ def test_read_meme_n_motifs():
 	
 	assert all([key in motifs.keys() for key in keys])
 
+
+###
+
+
+def test_read_vcf():
+	vcf = read_vcf("tests/data/test.vcf")
+
+	assert vcf.shape == (5, 9) 
+	assert (vcf.columns.values == ("CHROM", "POS", "ID", "REF", "ALT", "QUAL", 
+		"FILTER", "INFO", "FORMAT")).all()
+	
+	assert (vcf['POS'].values == (14370, 17330, 1110696, 1230237, 
+		1234567)).all()
+	assert (vcf['ALT'].values == ('A', 'A', 'G,T', '.', 'G,GTCT')).all()
 

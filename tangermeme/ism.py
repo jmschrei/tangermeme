@@ -17,7 +17,7 @@ def _edit_distance_one(X, start, end):
 
 	Parameters
 	----------
-	X: torch.Tensor, shape=(4, sequence_length)
+	X: torch.Tensor, shape=(len(alphabet), sequence_length)
 		A single one-hot encoded sequence.
 
 	start: int
@@ -38,10 +38,10 @@ def _edit_distance_one(X, start, end):
 	end = end if end >= 0 else X.shape[-1] + 1 + end
 	X_ = X.repeat((end-start)*X.shape[0], 1, 1)
 
-	coords = itertools.product(range(start, end), range(X.shape[0]))
+	coords = itertools.product(range(X.shape[0]), range(start, end))
 	for i, (j, k) in enumerate(coords):
-		X_[i, :, j] = 0
-		X_[i, k, j] = 1
+		X_[i, :, k] = 0
+		X_[i, j, k] = 1
 
 	return X_
 
@@ -105,13 +105,25 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1, batch_size=32,
 	y_hat = []
 	for i in range(X.shape[0]):
 		X_ = _edit_distance_one(X[i], start, end)
-		
-		y_hat_ = predict(model, X_, args=args, batch_size=batch_size, 
+
+		if args is not None:
+			args_ = tuple(a[i].repeat(X_.shape[0], *(1 for _ in a[i].shape)) 
+				for a in args)
+		else:
+			args_ = None
+
+		y_hat_ = predict(model, X_, args=args_, batch_size=batch_size, 
 			device=device, verbose=verbose)
+
 		y_hat.append(y_hat_)
 
 	if isinstance(y_hat[0], torch.Tensor):
-		y_hat = torch.stack(y_hat).reshape(X.shape[0], X.shape[2], X.shape[1], 
-			*y_hat_.shape[1:]).permute(0, 2, 1, 3)
+		y_hat = torch.stack(y_hat).reshape(X.shape[0], X.shape[1], end-start, 
+			*y_hat_.shape[1:])#.transpose(2, 1)
+	else:
+		y_hat = [
+			torch.cat(y_).reshape(X.shape[0], X.shape[2], X.shape[1], 
+				*y_[0].shape[1:]).transpose(2, 1) for y_ in zip(*y_hat)
+		]
 
 	return y0, y_hat
