@@ -47,22 +47,13 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
 .. toctree::
    :maxdepth: 1
    :hidden:
-   :caption: Features
+   :caption: Operations
 
-   tutorials/C_Feature_Tutorial_1_GPU_Usage.ipynb
-   tutorials/C_Feature_Tutorial_2_Mixed_Precision_and_DataTypes.ipynb
-   tutorials/C_Feature_Tutorial_3_Out_Of_Core_Learning.ipynb
-   tutorials/C_Feature_Tutorial_4_Priors_and_Semi-supervised_Learning.ipynb
-
-.. toctree::
-   :maxdepth: 1
-   :hidden:
-   :caption: Models
-
-   tutorials/B_Model_Tutorial_1_Distributions.ipynb
-   tutorials/B_Model_Tutorial_2_General_Mixture_Models.ipynb
-   tutorials/B_Model_Tutorial_3_Bayes_Classifier.ipynb
-   tutorials/B_Model_Tutorial_4_Hidden_Markov_Models.ipynb
-   tutorials/B_Model_Tutorial_5_Markov_Chains.ipynb
-   tutorials/B_Model_Tutorial_6_Bayesian_Networks.ipynb
-   tutorials/B_Model_Tutorial_7_Factor_Graphs.ipynb
+   tutorials/Tutorial_1_Sequence_Manipulation.ipynb
+   tutorials/Tutorial_2_MEME_Suite_Tools.ipynb 
+   tutorials/Tutorial_3_IO_and_Data_Loading.ipynb
+   tutorials/Tutorial_4_Predictions.ipynb 
+   tutorials/Tutorial_5_Marginalization.ipynb
+   tutorials/Tutorial_6_Spacing.ipynb 
+   tutorials/Tutorial_7_In_silico_Saturation_Mutagenesis.ipynb
+   tutorials/Tutorial_8_Variant_Effect.ipynb
