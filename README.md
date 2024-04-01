@@ -18,6 +18,8 @@ In addition to a library of functions to help you apply predictive models to seq
 
 ## Usage
 
+tangermeme aims to be as low-level and simple as possible. This means that models can be any PyTorch model or any wrapper of a PyTorch model as long as the forward function is still exposed, i.e., `y = model(X)` still works. This also means that if you have a model that potentially takes in multiple inputs or outputs and you want to simplify it for the purpose of ISM or sequence design that you can take your model and wrap it however you would like and still use these functions. It also means that all data are PyTorch tensors and that broadcasting is supported wherever possible. Being this flexible sometimes results in bugs, however, so please report any anomalies when doing fancy broadcasting or model wrapping.
+
 #### Ersatz
 
 tangermeme implements atomic sequence operations to help you ask "what if?" questions of your data. These operations can be found in `tangermeme.ersatz`. For example, if you want to insert a subsequence or motif into the middle of a sequence you can use the `insert` function.
