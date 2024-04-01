@@ -68,8 +68,16 @@ def predict(model, X, args=None, batch_size=32, device='cuda', verbose=False):
 	except:
 		dtype = X.dtype
 
-	y = []
 
+	if args is not None:
+		for arg in args:
+			if arg.shape[0] != X.shape[0]:
+				raise ValueError("Arguments must have the same first " +
+					"dimension as X")
+
+	###
+
+	y = []
 	with torch.no_grad():
 		batch_size = min(batch_size, X.shape[0])
 

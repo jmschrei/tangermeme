@@ -12,13 +12,24 @@ from .predict import predict_cross
 
 def marginalize(model, X, motif, args=None, start=None, alphabet=['A', 'C', 'G', 
 	'T'], batch_size=32, device='cuda', verbose=False):
-	"""Runs a single marginalization experiment and returns predictions.
+	"""Make predictions before and after substituting a motif into sequences.
 
-	Given a predictive model, a motif to insert, and a set of background
-	sequences, evaluate the difference in predictions from the model when
-	using the background sequences and after inserting the motif into the
-	middle of the sequences.
+	A marginalization experiment is one where predictions are returned before
+	and after substituting something into a set of sequences. It is named as 
+	such because the sequences are meant to be background sequences and
+	difference in predictions before and after the substitution represent the
+	"marginal" effect of adding that something into the sequences. When you are
+	adding a motif to the sequence, the difference in predictions can be
+	interpreted as the effect that motif has on model predictions in isolation.
 
+	Naturally, most models being used with tangermeme will be non-linear and
+	so the marginal effect of each motif is only somewhat useful because motifs
+	do not occur in isolation in the genome. Other functions, such as `space`,
+	can be invaluable in seeing how motifs interact with each other. However,
+	looking at the marginal effect of each motif can still be invaluable
+	because it gives you a sense for what motifs yield an effect at all and
+	roughly how strong that effect is.
+	
 
 	Parameters
 	----------
