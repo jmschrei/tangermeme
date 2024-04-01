@@ -11,6 +11,8 @@ The [MEME Suite](https://meme-suite.org/meme/) is a collection of biological seq
 
 In addition to a library of functions to help you apply predictive models to sequences, future iterations of tangermeme will include PyTorch-based/GPU accelerated command-line tools that range from reimplementations of some of the tools in the MEME suite to new tools for sequence analysis that include attribution scores.
 
+Please see the documentation and tutorials linked at the top of this README for more extensive documentation.
+
 ## Installation
 
 `pip install tangermeme`
