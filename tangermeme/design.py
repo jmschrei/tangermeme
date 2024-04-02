@@ -8,8 +8,6 @@ import torch
 from .utils import one_hot_encode
 from .ersatz import substitute
 from .predict import predict
-from .predict import predict_cross
-
 
 
 def greedy_substitution(model, X, motifs, y, loss=torch.nn.MSELoss(

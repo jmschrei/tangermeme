@@ -112,6 +112,7 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 
 		ylim = ylim or max(abs(X_attr.min()), abs(X_attr.max()))
 		plt.ylim(-ylim, ylim)
+		r = ylim*2
 
 		motifs = numpy.zeros((end-start, annotations_.shape[0]))
 		for _, row in annotations_.iterrows():
@@ -130,9 +131,9 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 						xp = [motif_start, motif_end]
 						yp = [-ylim*y_offset, -ylim*y_offset]
 
-						plt.plot(xp, yp, color='0.7', linewidth=2)        
+						plt.plot(xp, yp, color='0.3', linewidth=2)        
 						plt.text(xp[0], -ylim*(y_offset+0.1), text, 
-							color='0.7', fontsize=9)
+							color='0.3', fontsize=9)
 						
 					elif show_extra:
 						s = motif_start
