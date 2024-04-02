@@ -1,4 +1,4 @@
-# test_marginalize.py
+# test_ablate.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import numpy

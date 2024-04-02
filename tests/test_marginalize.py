@@ -9,7 +9,6 @@ from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
 
 from tangermeme.marginalize import marginalize
-from tangermeme.marginalize import marginalize_cross
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense
@@ -337,11 +336,11 @@ def test_marginalize_raises_args(X, alpha, beta):
 	model = FlattenDense()
 	assert_raises(TypeError, marginalize, model, X, "ACGTC", batch_size=2, 
 		args=5, device='cpu')
-	assert_raises(TypeError, marginalize, model, X, "ACGTC",  batch_size=2, 
+	assert_raises(AttributeError, marginalize, model, X, "ACGTC",  batch_size=2, 
 		args=(5,), device='cpu')
-	assert_raises(TypeError, marginalize, model, X, "ACGTC", batch_size=2, 
+	assert_raises(ValueError, marginalize, model, X, "ACGTC", batch_size=2, 
 		args=alpha, device='cpu')
-	assert_raises(RuntimeError, marginalize, model, X, "ACGTC", batch_size=2, 
+	assert_raises(ValueError, marginalize, model, X, "ACGTC", batch_size=2, 
 		args=(alpha[:5],), device='cpu')
-	assert_raises(RuntimeError, marginalize, model, X, "ACGTC", batch_size=2, 
+	assert_raises(ValueError, marginalize, model, X, "ACGTC", batch_size=2, 
 		args=(alpha, beta[:5]), device='cpu')

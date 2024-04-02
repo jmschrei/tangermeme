@@ -9,7 +9,6 @@ from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
 
 from tangermeme.predict import predict
-from tangermeme.predict import predict_cross
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense
@@ -226,11 +225,11 @@ def test_predict_raises_args(X, alpha, beta):
 	model = FlattenDense()
 	assert_raises(TypeError, predict, model, X, batch_size=2, args=5, 
 		device='cpu')
-	assert_raises(TypeError, predict, model, X, batch_size=2, args=(5,), 
+	assert_raises(AttributeError, predict, model, X, batch_size=2, args=(5,), 
 		device='cpu')
-	assert_raises(TypeError, predict, model, X, batch_size=2, 
+	assert_raises(ValueError, predict, model, X, batch_size=2, 
 		args=alpha, device='cpu')
-	assert_raises(RuntimeError, predict, model, X, batch_size=2, 
+	assert_raises(ValueError, predict, model, X, batch_size=2, 
 		args=(alpha[:5],), device='cpu')
-	assert_raises(RuntimeError, predict, model, X, batch_size=2, 
+	assert_raises(ValueError, predict, model, X, batch_size=2, 
 		args=(alpha, beta[:5]), device='cpu')

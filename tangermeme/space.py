@@ -7,7 +7,6 @@ import torch
 from .utils import one_hot_encode
 from .ersatz import multisubstitute
 from .predict import predict
-from .predict import predict_cross
 
 
 def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'], 
