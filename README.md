@@ -144,6 +144,9 @@ This yields a tensor of a similar shape as the original sequence `X` where each 
 
 #### Variant Effect
 
+> [!WARNING] 
+> The API of variant effect scoring may change slightly in the next release to be more in line with the structure of the rest of the package.
+
 A common use case of these predictive models is evaluating the effect that individual mutations have on predictions. Basically, if you have a list of potentially-pathogenic variants, an easy way to screen them for likelihood of being causal is seeing the effect they have on predictions for potentially thousands of experimental readouts. These functions can be divided into those that evaluate the marginal effect of each individual variant or the joint effect of all variants. The second is a little more challenging than the first, and so only marginal effects are currently implemented.
 
 In these functions, one passes in the model, a dictionary or filename for an entire genome/set of sequences, the variants in pandas format (see the tutorial for more details), and the window to extract, and gets back the predictions before and after the variants are incorporated.
