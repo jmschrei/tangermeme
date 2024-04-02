@@ -54,6 +54,9 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    tutorials/Tutorial_3_IO_and_Data_Loading.ipynb
    tutorials/Tutorial_4_Predictions.ipynb 
    tutorials/Tutorial_5_Marginalization.ipynb
-   tutorials/Tutorial_6_Spacing.ipynb 
-   tutorials/Tutorial_7_In_silico_Saturation_Mutagenesis.ipynb
-   tutorials/Tutorial_8_Variant_Effect.ipynb
+   tutorials/Tutorial_6_Ablation.ipynb
+   tutorials/Tutorial_7_Spacing.ipynb 
+   tutorials/Tutorial_8_In_silico_Saturation_Mutagenesis.ipynb
+   tutorials/Tutorial_9_Variant_Effect.ipynb
+   tutorials/Tutorial_10_Design.ipynb
+   tutorials/Tutorial_11_Cartesian_Product.ipynb
