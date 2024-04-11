@@ -36,7 +36,7 @@ tangermeme aims to be as low-level and simple as possible. This means that model
 tangermeme implements atomic sequence operations to help you ask "what if?" questions of your data. These operations can be found in `tangermeme.ersatz`. For example, if you want to insert a subsequence or motif into the middle of a sequence you can use the `insert` function.
 
 ```python
-from tangermeme.erastz import insert
+from tangermeme.ersatz import insert
 from tangermeme.utils import one_hot_encode   # Convert a sequence into a one-hot encoding
 from tangermeme.utils import characters   # Convert a one-hot encoding back into a string
 
@@ -44,7 +44,21 @@ seq = one_hot_encode("AAAAAA").unsqueeze(0)
 merge = insert(seq, "GCGC")[0]
 
 print(characters(merge))
-# AAAGCGCGCAAA
+# AAAGCGCAAA
+```
+
+Sometimes, when people say "insert" what they really mean is "substitute", where a block of characters are changed without changing the length of the sequence. Most functions in tangermeme that involve adding a motif to a sequence use substitutions instead of insertions.
+
+```python
+from tangermeme.ersatz import substitute
+from tangermeme.utils import one_hot_encode   # Convert a sequence into a one-hot encoding
+from tangermeme.utils import characters   # Convert a one-hot encoding back into a string
+
+seq = one_hot_encode("AAAAAA").unsqueeze(0)
+merge = substitute(seq, "GCGC")[0]
+
+print(characters(merge))
+# AGCGCA
 ```
 
 If you want to dinucleotide shuffle a sequence, you can use the `dinucleotide_shuffle` command.
