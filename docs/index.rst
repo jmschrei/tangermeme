@@ -60,3 +60,20 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    tutorials/Tutorial_9_Variant_Effect.ipynb
    tutorials/Tutorial_10_Design.ipynb
    tutorials/Tutorial_11_Cartesian_Product.ipynb
+
+.. toctree::
+   :maxdepth: 1
+   :hidden:
+   :caption: API
+
+   api/ablate.rst
+   api/design.rst
+   api/ersatz.rst
+   api/io.rst
+   api/ism.rst
+   api/marginalize.rst
+   api/match.rst
+   api/predict.rst
+   api/product.rst
+   api/space.rst
+   api/variant_effect.rst

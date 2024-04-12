@@ -46,7 +46,6 @@ def _edit_distance_one(X, start, end):
 	return X_
 
 
-@torch.no_grad
 def saturation_mutagenesis(model, X, args=None, start=0, end=-1, batch_size=32,
 	device='cuda', verbose=False):
 	"""Performs in-silico saturation mutagenesis on a set of sequences.
