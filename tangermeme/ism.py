@@ -61,7 +61,8 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1, batch_size=32,
 		The PyTorch model to use to make predictions.
 
 	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to make predictions for.
+		A set of one-hot encoded sequences to calculate attribution values
+		for. 
 
 	args: tuple or None, optional
 		An optional set of additional arguments to pass into the model. If

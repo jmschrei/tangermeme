@@ -15,9 +15,9 @@ class SumModel(torch.nn.Module):
 
 
 class FlattenDense(torch.nn.Module):
-	def __init__(self, seq_len=100):
+	def __init__(self, seq_len=100, n_outputs=3):
 		super(FlattenDense, self).__init__()
-		self.dense = torch.nn.Linear(seq_len*4, 3)
+		self.dense = torch.nn.Linear(seq_len*4, n_outputs)
 		self.seq_len = seq_len
 
 	def forward(self, X, alpha=0, beta=1):
@@ -44,10 +44,10 @@ class Scatter(torch.nn.Module):
 
 
 class ConvDense(torch.nn.Module):
-	def __init__(self):
+	def __init__(self, n_outputs=3):
 		super(ConvDense, self).__init__()
 
-		self.dense = torch.nn.Linear(400, 3)
+		self.dense = torch.nn.Linear(400, n_outputs)
 		self.conv = torch.nn.Conv1d(4, 12, (3,))
 
 	def forward(self, X, alpha=0):

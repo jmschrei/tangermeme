@@ -1,14 +1,10 @@
 # ablate.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
-import numpy
 import torch
 
-from .utils import one_hot_encode
-from .ersatz import substitute
-from .predict import predict
-
 from .ersatz import shuffle
+from .predict import predict
 
 
 def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None, 
@@ -72,7 +68,7 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.
 
-	device: str or torch.device
+	device: str or torch.device, optional
 		The device to move the model and batches to when making predictions. If
 		set to 'cuda' without a GPU, this function will crash and must be set
 		to 'cpu'. Default is 'cuda'. 

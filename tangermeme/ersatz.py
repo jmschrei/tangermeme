@@ -1,4 +1,4 @@
-# ablate.py
+# ersatz.py
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import numba
