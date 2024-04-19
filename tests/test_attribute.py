@@ -1,7 +1,6 @@
-# test_ablate.py
+# test_attribute.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
-import numpy
 import torch
 import pytest
 
@@ -17,8 +16,6 @@ from tangermeme.attribute import _captum_deep_lift_shap
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense
-from .toy_models import Conv
-from .toy_models import Scatter
 from .toy_models import ConvDense
 
 from numpy.testing import assert_raises
