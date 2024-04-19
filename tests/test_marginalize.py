@@ -7,7 +7,9 @@ import pytest
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.ersatz import substitute
 
+from tangermeme.attribute import deep_lift_shap
 from tangermeme.marginalize import marginalize
 
 from .toy_models import SumModel
@@ -344,3 +346,239 @@ def test_marginalize_raises_args(X, alpha, beta):
 		args=(alpha[:5],), device='cpu')
 	assert_raises(ValueError, marginalize, model, X, "ACGTC", batch_size=2, 
 		args=(alpha, beta[:5]), device='cpu')
+
+
+###
+
+
+def test_marginalize_deep_lift_shap(X):
+	torch.manual_seed(0)
+	model = SumModel()
+	y_before, y_after = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		device='cpu')
+
+	assert y_before.shape == (64, 4, 100)
+	assert y_before.dtype == torch.float32
+	assert y_before.sum() == 0
+	assert_array_almost_equal(y_before, torch.zeros_like(y_before), 4)
+
+	assert y_after.shape == (64, 4, 100)
+	assert y_after.dtype == torch.float32
+	assert y_after.sum() == 0
+	assert_array_almost_equal(y_after, torch.zeros_like(y_after), 4)
+
+	y_before2, y_after2 = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		batch_size=64, device='cpu')
+	assert_array_almost_equal(y_before, y_before2, 4)
+	assert_array_almost_equal(y_after, y_after2, 4)
+
+
+def test_marginalize_deep_lift_shap_flattendense(X):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	y_before, y_after = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		device='cpu', random_state=0)
+
+	assert y_before.shape == (64, 4, 100)
+	assert y_before.dtype == torch.float32
+	assert_array_almost_equal(y_before[:4, :, 48:53], [
+		[[-0.0000,  0.0000,  0.0471,  0.0000,  0.0000],
+         [-0.0000, -0.0000, -0.0000, -0.0609, -0.0164],
+         [ 0.0215, -0.0000, -0.0000, -0.0000,  0.0000],
+         [-0.0000,  0.0176, -0.0000,  0.0000, -0.0000]],
+
+        [[-0.0000,  0.0000,  0.0515,  0.0000,  0.0000],
+         [-0.0057, -0.0000, -0.0000, -0.0000, -0.0000],
+         [ 0.0000, -0.0000, -0.0000, -0.0121,  0.0292],
+         [-0.0000,  0.0204,  0.0000,  0.0000, -0.0000]],
+
+        [[-0.0050,  0.0010,  0.0000,  0.0000,  0.0000],
+         [-0.0000, -0.0000, -0.0000, -0.0000, -0.0199],
+         [ 0.0000, -0.0000, -0.0000, -0.0000,  0.0000],
+         [-0.0000,  0.0000, -0.0029,  0.0304, -0.0000]],
+
+        [[-0.0000,  0.0000,  0.0000,  0.0000,  0.0000],
+         [-0.0000, -0.0000, -0.0193, -0.0000, -0.0141],
+         [ 0.0000, -0.0007,  0.0000, -0.0083,  0.0000],
+         [-0.0135,  0.0000,  0.0000,  0.0000, -0.0000]]], 4)
+
+	assert y_after.shape == (64, 4, 100)
+	assert y_after.dtype == torch.float32
+	assert_array_almost_equal(y_after[:4, :, 48:53], [
+		[[ 0.0006,  0.0000,  0.0000,  0.0000,  0.0000],
+         [-0.0000, -0.0274, -0.0000, -0.0000, -0.0166],
+         [ 0.0000,  0.0000, -0.0248, -0.0000,  0.0000],
+         [-0.0000,  0.0000, -0.0000,  0.0269, -0.0000]],
+
+        [[-0.0033,  0.0000,  0.0000,  0.0000,  0.0000],
+         [-0.0000, -0.0347, -0.0000, -0.0000, -0.0288],
+         [ 0.0000, -0.0000, -0.0201, -0.0000,  0.0000],
+         [-0.0000,  0.0000, -0.0000,  0.0131, -0.0000]],
+
+        [[-0.0039,  0.0000,  0.0000,  0.0000,  0.0000],
+         [-0.0000, -0.0225, -0.0000, -0.0000, -0.0243],
+         [ 0.0000,  0.0000, -0.0254,  0.0000,  0.0000],
+         [-0.0000,  0.0000, -0.0000,  0.0425, -0.0000]],
+
+        [[-0.0058,  0.0000,  0.0000,  0.0000,  0.0000],
+         [-0.0000, -0.0339, -0.0000, -0.0000, -0.0171],
+         [ 0.0000, -0.0000, -0.0057, -0.0000,  0.0000],
+         [-0.0000,  0.0000,  0.0000,  0.0247, -0.0000]]], 4)
+
+	y_before2, y_after2 = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		batch_size=64, device='cpu', random_state=0)
+	assert_array_almost_equal(y_before, y_before2)
+	assert_array_almost_equal(y_after, y_after2)
+
+
+def test_marginalize_deep_lift_shap_vs_attribute(X):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	y_before, y_after = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		device='cpu', random_state=0)
+
+	y_before0 = deep_lift_shap(model, X, device='cpu', random_state=0)
+	y_after0 = deep_lift_shap(model, substitute(X, "ACGTC"), 
+		device='cpu', random_state=0)
+
+	assert y_before.shape == (64, 4, 100)
+	assert y_before.dtype == torch.float32
+	assert_array_almost_equal(y_before, y_before0, 4)
+
+	assert y_after.shape == (64, 4, 100)
+	assert y_after.dtype == torch.float32
+	assert_array_almost_equal(y_after, y_after0, 4)
+
+
+def test_marginalize_deep_lift_shap_alpha(X, alpha):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	y_before0, y_after0 = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		device='cpu', random_state=0)
+	y_before1, y_after1 = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		device='cpu', random_state=0, args=(alpha,))
+
+	assert y_before0.shape == (64, 4, 100)
+	assert y_before0.dtype == torch.float32
+	assert_array_almost_equal(y_before0, y_before1, 4)
+
+	assert y_after0.shape == (64, 4, 100)
+	assert y_after0.dtype == torch.float32
+	assert_array_almost_equal(y_after0, y_after1, 4)
+
+
+def test_marginalize_deep_lift_shap_alpha_beta(X, alpha, beta):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	y_before0, y_after0 = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		device='cpu', random_state=0)
+	y_before1, y_after1 = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		device='cpu', random_state=0, args=(alpha, beta))
+
+	assert y_before0.shape == (64, 4, 100)
+	assert y_before0.dtype == torch.float32
+	assert_raises(AssertionError, assert_array_almost_equal, y_before0, 
+		y_before1, 4)
+
+	assert y_after0.shape == (64, 4, 100)
+	assert y_after0.dtype == torch.float32
+	assert_raises(AssertionError, assert_array_almost_equal, y_after0, 
+		y_after1, 4)
+
+
+def test_marginalize_deep_lift_shap_n_shuffles(X):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	y_before0, y_after0 = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		n_shuffles=2, device='cpu', random_state=0)
+	y_before1, y_after1 = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		n_shuffles=10, device='cpu', random_state=0)
+
+	assert y_before0.shape == (64, 4, 100)
+	assert y_before0.dtype == torch.float32
+	assert_array_almost_equal(y_before0[:2, :, :4], [
+		[[ 0.0000, -0.0000, -0.0000, -0.0025],
+         [ 0.0000,  0.0000,  0.0101,  0.0000],
+         [ 0.0000, -0.0000, -0.0000,  0.0000],
+         [-0.0000, -0.0247,  0.0000,  0.0000]],
+
+        [[-0.0000, -0.0000, -0.0093, -0.0000],
+         [ 0.0000,  0.0000,  0.0000,  0.0000],
+         [-0.0000,  0.0000, -0.0000,  0.0000],
+         [-0.0000, -0.0000,  0.0000,  0.0458]]], 4)
+
+	assert y_before1.shape == (64, 4, 100)
+	assert y_before1.dtype == torch.float32
+	assert_array_almost_equal(y_before1[:2, :, :4], [
+		[[ 0.0000, -0.0000, -0.0000, -0.0249],
+         [ 0.0000,  0.0000,  0.0099, -0.0000],
+         [ 0.0000,  0.0000, -0.0000, -0.0000],
+         [-0.0000, -0.0209,  0.0000,  0.0000]],
+
+        [[-0.0000,  0.0000, -0.0029, -0.0000],
+         [ 0.0000,  0.0000,  0.0000,  0.0000],
+         [-0.0000,  0.0056,  0.0000, -0.0000],
+         [-0.0000, -0.0000,  0.0000,  0.0403]]], 4)
+
+	assert y_after0.shape == (64, 4, 100)
+	assert y_after0.dtype == torch.float32
+	assert_array_almost_equal(y_after0[:2, :, :4], [
+		[[ 0.0000, -0.0000, -0.0000, -0.0025],
+         [ 0.0000,  0.0000,  0.0101,  0.0000],
+         [ 0.0000, -0.0000, -0.0000,  0.0000],
+         [-0.0000, -0.0247,  0.0000,  0.0000]],
+
+        [[-0.0000,  0.0000, -0.0034, -0.0000],
+         [ 0.0000,  0.0000,  0.0000,  0.0000],
+         [-0.0000,  0.0109,  0.0000, -0.0000],
+         [-0.0000, -0.0000,  0.0000,  0.0350]]], 4)
+
+	assert y_after1.shape == (64, 4, 100)
+	assert y_after1.dtype == torch.float32
+	assert_array_almost_equal(y_after1[:2, :, :4], [
+		[[ 0.0000, -0.0000, -0.0000, -0.0295],
+         [ 0.0000,  0.0000,  0.0115, -0.0000],
+         [ 0.0000,  0.0000, -0.0000, -0.0000],
+         [-0.0000, -0.0209,  0.0000,  0.0000]],
+
+        [[-0.0000,  0.0000, -0.0048, -0.0000],
+         [ 0.0000,  0.0000,  0.0000,  0.0000],
+         [-0.0000,  0.0108, -0.0000, -0.0000],
+         [-0.0000, -0.0000,  0.0000,  0.0323]]], 4)
+
+
+def test_marginalize_deep_lift_shap_hypothetical(X):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	y_before, y_after = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		hypothetical=True, device='cpu', random_state=0)
+
+	assert y_before.shape == (64, 4, 100)
+	assert y_before.dtype == torch.float32
+	assert_array_almost_equal(y_before[:2, :, :4], [
+		[[ 0.0000,  0.0006, -0.0075, -0.0225],
+         [ 0.0474,  0.0075,  0.0118,  0.0017],
+         [ 0.0025,  0.0060, -0.0042, -0.0200],
+         [-0.0237, -0.0172,  0.0076,  0.0258]],
+
+        [[-0.0474, -0.0009, -0.0051, -0.0128],
+         [ 0.0000,  0.0059,  0.0143,  0.0114],
+         [-0.0449,  0.0045, -0.0017, -0.0104],
+         [-0.0712, -0.0188,  0.0101,  0.0355]]], 4)
+
+	assert y_after.shape == (64, 4, 100)
+	assert y_after.dtype == torch.float32
+	assert_array_almost_equal(y_after[:2, :, :4], [
+		[[ 0.0000,  0.0006, -0.0075, -0.0273],
+         [ 0.0474,  0.0075,  0.0118, -0.0031],
+         [ 0.0025,  0.0060, -0.0042, -0.0249],
+         [-0.0237, -0.0172,  0.0076,  0.0210]],
+
+        [[-0.0474,  0.0030, -0.0067, -0.0206],
+         [ 0.0000,  0.0099,  0.0127,  0.0036],
+         [-0.0449,  0.0085, -0.0033, -0.0181],
+         [-0.0712, -0.0148,  0.0085,  0.0277]]], 4)

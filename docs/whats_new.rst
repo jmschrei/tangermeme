@@ -5,6 +5,16 @@
 Release History
 ===============
 
+Version 0.2.0
+==============
+
+Highlights
+----------
+
+	- Added in `attribute` for running `deep_lift_shap` in a flexible way across devices
+	- Added in `seqlet` for calling seqlets on attribution scores using the TF-MoDISco method
+
+
 
 Version 0.1.0
 ==============

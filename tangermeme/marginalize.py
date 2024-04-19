@@ -10,16 +10,26 @@ from .predict import predict
 
 
 def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'], 
-	args=None, batch_size=32, device='cuda', verbose=False):
-	"""Make predictions before and after substituting a motif into sequences.
+	func=predict, additional_func_kwargs={}, **kwargs):
+	"""Apply a function before and after substituting a motif into sequences.
 
-	A marginalization experiment is one where predictions are returned before
+	A marginalization experiment is one where a function is applied before
 	and after substituting something into a set of sequences. It is named as 
 	such because the sequences are meant to be background sequences and
-	difference in predictions before and after the substitution represent the
+	difference in output before and after the substitution represent the
 	"marginal" effect of adding that something into the sequences. When you are
-	adding a motif to the sequence, the difference in predictions can be
-	interpreted as the effect that motif has on model predictions in isolation.
+	adding a motif to the sequence, the difference in output can be interpreted 
+	as the effect that motif has on the function in isolation.
+
+	By default, `marginalize` will apply the `predict` function to `X` before
+	and after substituting in a one-hot encoded version of `motif`. However,
+	one can pass in any function, including `deep_lift_shap` or even custom
+	functions as long as they accept an `args` parameter that gets passed into
+	the model. These functions may have additional arguments, such as
+	`batch_size`, that can be passed in as a dictionary to `func_kwargs`. It is
+	true that `args` could be included in `func_kwargs`, but we separate it out
+	to clarify arguments being passed into `model` versus those that are just
+	going into the function. 
 
 	Naturally, most models being used with tangermeme will be non-linear and
 	so the marginal effect of each motif is only somewhat useful because motifs
@@ -57,43 +67,38 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 		set to 1. This is not necessary or used if a one-hot encoded tensor is
 		provided for the motif. Default is ['A', 'C', 'G', 'T'].
 
-	args: tuple or list or None
-		An optional set of additional arguments to pass into the model. If
-		provided, each element in the tuple or list is one input to the model
-		and the element must be formatted to be the same batch size as `X`. If
-		None, no additional arguments are passed into the forward function.
-		Default is None.
+	func: function, optional
+		A function to apply before and after making the substitution.  Default 
+		is `predict`.
 
-	batch_size: int, optional
-		The number of examples to make predictions for at a time. Default is 32.
+	additional_func_kwargs: dict, optional
+		Additional named arguments to pass into the function when it is called.
+		This is provided as an alternate path to route arguments into the 
+		function in case they overlap, name-wise, with those in this function,
+		or if you want to be absolutely sure that the arguments are making
+		their way into the function. Default is {}.
 
-	device: str or torch.device
-		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+	kwargs: optional
+		Additional named arguments that will get passed into the function when
+		it is called. Default is no arguments are passed in.
 
-	verbose: bool, optional
-		Whether to display a progress bar during predictions. Default is False.
 
 	Returns
 	-------
 	y_before: torch.Tensor or list of torch.Tensors
-		The predictions from the model before inserting the motif in. If the
-		output from the model's forward function is a single tensor, it will
-		return that. If the model outputs a list of tensors, it will return
-		those.
+		The output from the function before inserting the motif in. If the
+		output is a single tensor, it will return that. If the model outputs a 
+		list of tensors, it will return those.
 
 	y_after: torch.Tensor or list of torch.Tensors
-		The predictions from the model after inserting the motif in. If the
+		The output from the function after inserting the motif in. If the
 		output from the model's forward function is a single tensor, it will
 		return that. If the model outputs a list of tensors, it will return
 		those.
 	"""
 
 	X_perturb = substitute(X, motif, start=start, alphabet=alphabet)
-	y_before = predict(model, X, args=args, batch_size=batch_size, 
-		device=device, verbose=verbose)
-	y_after = predict(model, X_perturb, args=args, batch_size=batch_size, 
-		device=device, verbose=verbose)
+	y_before = func(model, X, **kwargs, **additional_func_kwargs)
+	y_after = func(model, X_perturb, **kwargs, **additional_func_kwargs)
 
 	return y_before, y_after
