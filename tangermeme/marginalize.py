@@ -23,13 +23,12 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 
 	By default, `marginalize` will apply the `predict` function to `X` before
 	and after substituting in a one-hot encoded version of `motif`. However,
-	one can pass in any function, including `deep_lift_shap` or even custom
-	functions as long as they accept an `args` parameter that gets passed into
-	the model. These functions may have additional arguments, such as
-	`batch_size`, that can be passed in as a dictionary to `func_kwargs`. It is
-	true that `args` could be included in `func_kwargs`, but we separate it out
-	to clarify arguments being passed into `model` versus those that are just
-	going into the function. 
+	one can pass in any function, including `deep_lift_shap` or even
+	`saturated_mutagenesis`. These functions may have additional arguments
+	and those can be passed into `marginalize` as-is and will be passed along
+	to the function. If any arguments would have had the same name as those
+	used by this function, you can use the `additional_func_kwargs` input to
+	ensure those values get to the function.
 
 	Naturally, most models being used with tangermeme will be non-linear and
 	so the marginal effect of each motif is only somewhat useful because motifs
@@ -96,6 +95,8 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 		return that. If the model outputs a list of tensors, it will return
 		those.
 	"""
+
+	additional_func_kwargs = additional_func_kwargs or {}
 
 	X_perturb = substitute(X, motif, start=start, alphabet=alphabet)
 	y_before = func(model, X, **kwargs, **additional_func_kwargs)

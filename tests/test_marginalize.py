@@ -582,3 +582,20 @@ def test_marginalize_deep_lift_shap_hypothetical(X):
          [ 0.0000,  0.0099,  0.0127,  0.0036],
          [-0.0449,  0.0085, -0.0033, -0.0181],
          [-0.0712, -0.0148,  0.0085,  0.0277]]], 4)
+
+	y_before1, y_after1 = marginalize(model, X, "ACGTC", func=deep_lift_shap, 
+		additional_func_kwargs={'hypothetical': True}, device='cpu', 
+		random_state=0)
+
+	assert_array_almost_equal(y_before, y_before1, 4)
+	assert_array_almost_equal(y_after, y_after1, 4)
+
+
+def test_marginalize_deep_lift_shap_raises(X):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	assert_raises(TypeError, marginalize, model, X, "ACGTC", func=deep_lift_shap,
+		device='cpu', additional_func_kwargs={'device': 'cpu'})
+	assert_raises(TypeError, marginalize, model, X, "ACGTC", 
+		func=deep_lift_shap, device='cpu', end=10)

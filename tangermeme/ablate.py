@@ -2,26 +2,43 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import torch
+import inspect
 
 from .ersatz import shuffle
 from .predict import predict
 
 
 def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None, 
-	batch_size=32, device='cuda', random_state=None, verbose=False):
+	random_state=None, func=predict, additional_func_kwargs=None, **kwargs):
 	"""Make predictions before and after shuffling a region of sequences.
 
 	An ablation experiment is one where a motif (or region of interest) is
-	shuffled to remove any potential signal that could be in it. Predictions
+	shuffled to remove any potential signal that could be in it. Outputs
 	are returned before and after the region is shuffled and for a given
 	number of shuffles.
 
 	Ablation experiments can be thought of as the conceptual opposite of
-	marginalization experiments. Both involve making predictions before and
+	marginalization experiments. Both involve applying a function before and
 	after some sequence modification, but marginalizations usually involve 
 	substituting a potentially-informative motif into a set of background
 	sequences, but an ablation usually involves removing drivers of signal
 	from a sequence.
+
+	By default, `ablate` will apply the `predict` function to `X` before
+	and after shuffling the given sequence. However, one can pass in any 
+	function, including `deep_lift_shap` or even `saturated_mutagenesis`. These 
+	functions may have additional arguments and those can be passed into 
+	`marginalize` as-is and will be passed along to the function. If any 
+	arguments would have had the same name as those used by this function, you 
+	can use the `additional_func_kwargs` input to ensure those values get to 
+	the function.
+
+	Note: if `random_state` is passed in, it will make the shuffling step
+	deterministic, but it will also be added to `additional_func_kwargs` if
+	there is not already a key called `random_state` in it. Essentially,
+	`random_state` makes shuffling deterministic and will also make the function
+	deterministic if the function accepts a random state, but if you'd like to
+	set your own separate state for the function it will not be overriden.
 
 
 	Parameters
@@ -53,33 +70,33 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 		coordinates on that sequence, and `random_state` is a seed to use to
 		ensure determinism. Default is `ersatz.shuffle`. 
 
-	args: tuple or list or None
+	args: tuple or None, optional
 		An optional set of additional arguments to pass into the model. If
 		provided, each element in the tuple or list is one input to the model
 		and the element must be formatted to be the same batch size as `X`. If
-		None, no additional arguments are passed into the forward function.
-		Default is None.
+		None, no additional arguments are passed into the forward function. This
+		argument is provided here because the args must be copied for each
+		shuffle that occurs. Default is None.
 
-	start: int or None, optional
-		The starting position of where to insert the motif. If None, insert the
-		motif into the middle of the sequence such that the middle of the motif
-		occurs at the middle of the sequence. Default is None.
+	random_state: int or None or numpy.random.RandomState, optional
+		The random seed to use to ensure determinism of both the shuffling
+		step and the function if the function also takes in a random state.
+		If None, the run will not be deterministic. Default is None.
 
-	batch_size: int, optional
-		The number of examples to make predictions for at a time. Default is 32.
+	func: function, optional
+		A function to apply before and after making the ablation.  Default 
+		is `predict`.
 
-	device: str or torch.device, optional
-		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+	additional_func_kwargs: dict, optional
+		Additional named arguments to pass into the function when it is called.
+		This is provided as an alternate path to route arguments into the 
+		function in case they overlap, name-wise, with those in this function,
+		or if you want to be absolutely sure that the arguments are making
+		their way into the function. Default is {}.
 
-	random_state: int, numpy.random.RandomState, or None, optional
-		Whether to use a specific random seed when generating the shuffle to
-		ensure reproducibility. If None, do not use a reproducible seed. Default 
-		is None.
-
-	verbose: bool, optional
-		Whether to display a progress bar during predictions. Default is False.
+	kwargs: optional
+		Additional named arguments that will get passed into the function when
+		it is called. Default is no arguments are passed in.
  
 
 	Returns
@@ -97,18 +114,21 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 		those.s
 	"""
 
+	additional_func_kwargs = additional_func_kwargs or {}
+	if 'random_state' in inspect.signature(func).parameters.keys():
+		if 'random_state' not in additional_func_kwargs:
+			additional_func_kwargs['random_state'] = random_state
+
+
 	X_perturb = shuffle_fn(X, start=start, end=end, n=n, 
 		random_state=random_state)
 
 	args_n = None if args is None else tuple(a.repeat_interleave(n, dim=0) 
 		for a in args)
 
-	y_before = predict(model, X, args=args, batch_size=batch_size, 
-		device=device, verbose=verbose)
-
-	y_after = predict(model, X_perturb.reshape(-1, *X_perturb.shape[2:]), 
-		args=args_n, batch_size=batch_size, device=device, 
-		verbose=verbose)
+	y_before = func(model, X, args=args, **kwargs, **additional_func_kwargs)
+	y_after = func(model, X_perturb.reshape(-1, *X_perturb.shape[2:]),
+		args=args_n, **kwargs, **additional_func_kwargs)
 
 	if isinstance(y_after, torch.Tensor):
 		y_after = y_after.reshape(*X_perturb.shape[:2], *y_after.shape[1:])
