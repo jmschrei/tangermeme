@@ -21,7 +21,7 @@ from numpy.testing import assert_array_almost_equal
 
 
 torch.manual_seed(0)
-torch.use_deterministic_algorithms(True)
+torch.use_deterministic_algorithms(True, warn_only=True)
 
 
 @pytest.fixture

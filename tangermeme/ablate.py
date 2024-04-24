@@ -84,7 +84,7 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 		If None, the run will not be deterministic. Default is None.
 
 	func: function, optional
-		A function to apply before and after making the ablation.  Default 
+		A function to apply before and after making the ablation. Default 
 		is `predict`.
 
 	additional_func_kwargs: dict, optional

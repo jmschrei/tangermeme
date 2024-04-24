@@ -2,8 +2,11 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import torch
+import torch.nn.functional as F
+
 import warnings
 
+from typing import cast
 from tqdm import trange
 from .ersatz import dinucleotide_shuffle
 
@@ -129,22 +132,31 @@ class DeepLiftShap():
 		Default is False.
 	"""
 
-	def __init__(self, model, ignore_layers=(torch.nn.ReLU,), eps=1e-6, 
-		warning_threshold=0.001, verbose=False):
-		for module in model.named_modules():
-			if isinstance(module[1], torch.nn.modules.pooling._MaxPoolNd):
-				raise ValueError("Cannot use this implementation of " + 
-					"DeepLiftShap with max pooling layers. Please use the " +
-					"implementation in Captum.")
-
+	def __init__(self, model, additional_nonlinear_ops = {}, eps=1e-10, 
+		warning_threshold=0.0001, verbose=False):
 		self.model = model
-		self.ignore_layers = ignore_layers
 		self.eps = eps
 		self.warning_threshold = warning_threshold
 		self.verbose = verbose
 
 		self.forward_handles = []
 		self.backward_handles = []
+
+		self._NON_LINEAR_OPS = {
+			torch.nn.ReLU: _nonlinear,
+			torch.nn.ELU: _nonlinear,
+			torch.nn.LeakyReLU: _nonlinear,
+			torch.nn.Sigmoid: _nonlinear,
+			torch.nn.Tanh: _nonlinear,
+			torch.nn.Softplus: _nonlinear,
+			torch.nn.MaxPool1d: _maxpool,
+			torch.nn.MaxPool2d: _maxpool,
+			torch.nn.Softmax: _softmax
+		}
+
+		for key, value in additional_nonlinear_ops.items():
+			self._NON_LINEAR_OPS[key] = value
+
 
 	def attribute(self, inputs, baselines, args=None):
 		"""Run the attribution algorithm on a set of inputs and baselines.
@@ -195,18 +207,18 @@ class DeepLiftShap():
 				else:
 					outputs = self.model(inputs_)
 
-				outputs_ = torch.chunk(outputs, 2)[0].sum()
-				gradients = torch.autograd.grad(outputs_, inputs)[0]
+				#outputs_ = torch.chunk(outputs, 2)[0].sum()
+				gradients = torch.autograd.grad(outputs.sum(), inputs)[0]
 
 			# Check that the prediction-difference-from-reference is equal to
 			# the sum of the attributions
-			output_diff = torch.sub(*torch.chunk(outputs[:,0], 2))
+			output_diff = torch.sub(*torch.chunk(outputs[:, 0], 2))
 			input_diff = torch.sum((inputs - baselines) * gradients, dim=(1, 2))
 			convergence_deltas = abs(output_diff - input_diff)
 
 			if any(convergence_deltas > self.warning_threshold):
 				warnings.warn("Convergence deltas too high: " +   
-					str(convergence_deltas))
+					str(convergence_deltas), RuntimeWarning)
 
 			if self.verbose:
 				print(convergence_deltas)
@@ -229,23 +241,13 @@ class DeepLiftShap():
 		module.output = outputs.clone().detach()
 
 	def _backward_hook(self, module, grad_input, grad_output):
-		delta_in_ = torch.sub(*module.input.chunk(2))
-		delta_out_ = torch.sub(*module.output.chunk(2))
-
-		delta_in = torch.cat([delta_in_, delta_in_])
-		delta_out = torch.cat([delta_out_, delta_out_])
-
-		delta = delta_out / delta_in
-
-		grad_input = (torch.where(
-			abs(delta_in) < self.eps, grad_input[0], grad_output[0] * delta),
-		)
-		return grad_input
+		return self._NON_LINEAR_OPS[type(module)](module, grad_input, 
+			grad_output, eps=self.eps)
 
 	def _can_register_hook(self, module):
 		if len(module._backward_hooks) > 0:
 			return False
-		if not isinstance(module, self.ignore_layers):
+		if not isinstance(module, tuple(self._NON_LINEAR_OPS.keys())):
 			return False
 		return True
 
@@ -267,9 +269,108 @@ class DeepLiftShap():
 		self.backward_handles.append(backward_handle)
 
 
+def _nonlinear(module, grad_input, grad_output, eps):
+	"""An internal function implementing a general-purpose nonlinear correction.
+
+	This function, copied and slightly modified from Captum, is meant to be
+	the `rescale` rule applied to general non-linear functions such as
+	activations.
+	"""
+
+	delta_in_ = torch.sub(*module.input.chunk(2))
+	delta_out_ = torch.sub(*module.output.chunk(2))
+
+	delta_in = torch.cat([delta_in_, delta_in_])
+	delta_out = torch.cat([delta_out_, delta_out_])
+
+	delta = delta_out / delta_in
+	idxs = abs(delta_in) < eps
+
+	return (torch.where(idxs, grad_input[0], grad_output[0] * delta),)
+
+
+def _softmax(module, grad_input, grad_output, eps):
+	"""An internal function implementing a correction for softmax activations.
+
+	This function, copied and slightly modified from Captum, is meant to be
+	the `rescale` rule applied specifically to softmax activations without
+	needing to remove them and operate on the underlying logits.
+	"""
+
+	delta_in_ = torch.sub(*module.input.chunk(2))
+	delta_out_ = torch.sub(*module.output.chunk(2))
+
+	delta_in = torch.cat([delta_in_, delta_in_])
+	delta_out = torch.cat([delta_out_, delta_out_])
+
+	delta = delta_out / delta_in
+
+	grad_input_unnorm = torch.where(
+		abs(delta_in) < eps, grad_input[0], grad_output[0] * delta
+	)
+
+	n = grad_input[0].numel()
+	new_grad_inp = grad_input_unnorm - grad_input_unnorm.sum() * 1 / n
+	return (new_grad_inp,)
+
+
+def _maxpool(module, grad_input, grad_output, eps):
+	"""An internal function implementing a 1D max-pooling correction.
+
+	This function, copied and slightly modified from Captum, is meant to be
+	the `rescale` rule applied to max pooling layers given their nature of
+	aggregating values across multiple positions.
+	"""
+
+	if isinstance(module, torch.nn.MaxPool1d):
+		pool_func, unpool_func = F.max_pool1d, F.max_unpool1d
+	elif isinstance(module, torch.nn.MaxPool2d):
+		pool_func, unpool_func = F.max_pool2d, F.max_unpool2d
+	else:
+		raise ValueError("module must be either MaxPool1d or MaxPool2d")
+
+
+	with torch.no_grad():
+		input, input_ref = module.input.chunk(2)
+		output, output_ref = module.output.chunk(2)
+
+		delta_in = input - input_ref
+		delta_in = torch.cat(2 * [delta_in])
+
+		#output, output_ref = module.output.chunk(2)
+		delta_out_xmax = torch.max(output, output_ref)
+		delta_out = torch.cat([delta_out_xmax - output_ref, output - delta_out_xmax])
+
+		_, indices = pool_func(module.input, module.kernel_size, 
+			module.stride, module.padding, module.dilation, module.ceil_mode, 
+			True)
+
+		grad_output_updated = grad_output[0]
+		unpool_grad_out_delta, unpool_grad_out_ref_delta = torch.chunk(
+			unpool_func(
+				grad_output_updated * delta_out, 
+				indices,
+				module.kernel_size, 
+				module.stride, 
+				module.padding,
+				list(cast(torch.Size, module.input.shape)),
+			),
+			2,
+		)
+
+	unpool_grad_out_delta = unpool_grad_out_delta + unpool_grad_out_ref_delta
+	unpool_grad_out_delta = torch.cat(2 * [unpool_grad_out_delta])
+
+	new_grad_inp = torch.where(
+		abs(delta_in) < eps, grad_input[0], unpool_grad_out_delta / delta_in
+	)
+
+	return (new_grad_inp,)
+
+
 def deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle, 
 	n_shuffles=20, batch_size=32, return_references=False, hypothetical=False,
-	warning_threshold=0.001, print_convergence_deltas=False, device='cuda', 
+	warning_threshold=0.0001, print_convergence_deltas=False, device='cuda', 
 	random_state=None, verbose=False):
 	"""Calculate attributions using DeepLift/Shap and a given model. 
 
@@ -439,7 +540,7 @@ def deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 
 def _captum_deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle, 
 	n_shuffles=20, batch_size=32, return_references=False, hypothetical=False,
-	device='cuda', random_state=None, verbose=False, ):
+	device='cuda', random_state=None, verbose=False):
 	"""Calculate attributions using DeepLift/Shap and a given model. 
 
 	This function will calculate DeepLift/Shap attributions on a set of
@@ -529,14 +630,12 @@ def _captum_deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 		`return_references = True`. 
 	"""
 
-	from captum.attr import DeepLiftShap
+	from captum.attr import DeepLiftShap as CaptumDeepLiftShap
 
 	attributions = []
 	references_ = []
 	with torch.no_grad():
 		for i in trange(len(X), disable=not verbose):
-			ig = DeepLiftShap(model)
-
 			_X = X[i:i+1].to(device)
 			_args = None if args is None else tuple([a[i:i+1].to(device) 
 				for a in args])
@@ -548,8 +647,8 @@ def _captum_deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 				_references = references(_X, n=n_shuffles, 
 					random_state=random_state)[0].to(device)
 						
-			attr = ig.attribute(_X, _references, target=0, 
-				additional_forward_args=_args, 
+			attr = CaptumDeepLiftShap(model).attribute(_X, _references, 
+				target=0, additional_forward_args=_args, 
 				custom_attribution_func=hypothetical_attributions)
 
 			if not hypothetical:
