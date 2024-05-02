@@ -17,6 +17,7 @@ from .toy_models import FlattenDense
 from .toy_models import Conv
 from .toy_models import Scatter
 from .toy_models import ConvDense
+from .toy_models import SmallDeepSEA
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -364,24 +365,41 @@ def test_space_raises_args(X, alpha, beta):
 
 def test_space_deep_lift_shap(X):
 	torch.manual_seed(0)
-	model = SumModel()
-	y_before, y_after = space(model, X[:8], ["ACGTC", "GAGA"], 1, batch_size=5, 
-		func=deep_lift_shap, device='cpu', n_shuffles=3)
+	model = SmallDeepSEA()
+	y_before, y_after = space(model, X[:2], ["ACGTC", "GAGA"], 1, batch_size=5, 
+		func=deep_lift_shap, device='cpu', n_shuffles=3, random_state=0)
 
-	assert y_before.shape == (8, 4, 100)
+	assert y_before.shape == (2, 4, 100)
 	assert y_before.dtype == torch.float32
-	assert y_before.sum() == 0
-	assert_array_almost_equal(y_before, torch.zeros_like(y_before), 4)
+	assert_array_almost_equal(y_before[:, :, 48:52], [
+		[[ 0.0000, -0.0000,  0.0005, -0.0000],
+         [ 0.0000, -0.0000,  0.0000,  0.0003],
+         [ 0.0014, -0.0000,  0.0000,  0.0000],
+         [ 0.0000, -0.0003,  0.0000,  0.0000]],
 
-	assert y_after.shape == (8, 4, 100)
+        [[-0.0000,  0.0000, -0.0002, -0.0000],
+         [-0.0027,  0.0000, -0.0000,  0.0000],
+         [ 0.0000,  0.0000, -0.0000, -0.0014],
+         [-0.0000, -0.0002,  0.0000,  0.0000]]], 4)
+
+	assert y_after.shape == (2, 4, 100)
 	assert y_after.dtype == torch.float32
-	assert y_after.sum() == 0
-	assert_array_almost_equal(y_after, torch.zeros_like(y_after), 4)
+	assert_array_almost_equal(y_after[:, :, 48:52], [
+		[[ 0.0000e+00,  0.0000e+00, -1.2874e-04,  0.0000e+00],
+         [ 0.0000e+00, -1.4222e-03, -0.0000e+00,  0.0000e+00],
+         [ 0.0000e+00, -0.0000e+00, -0.0000e+00,  1.6236e-03],
+         [-4.9196e-04, -0.0000e+00, -0.0000e+00,  0.0000e+00]],
+
+        [[ 0.0000e+00,  0.0000e+00, -8.6352e-04, -0.0000e+00],
+         [-0.0000e+00, -1.2321e-03, -0.0000e+00, -0.0000e+00],
+         [ 0.0000e+00, -0.0000e+00,  0.0000e+00,  1.1411e-03],
+         [-8.7749e-05,  0.0000e+00, -0.0000e+00,  0.0000e+00]]], 4)
 
 	y_before2, y_after2 = space(model, X[:8], ["ACGTC", "GAGA"], 1, 
-		batch_size=64, func=deep_lift_shap, device='cpu', n_shuffles=3)
-	assert_array_almost_equal(y_before, y_before2, 4)
-	assert_array_almost_equal(y_after, y_after2, 4)
+		batch_size=64, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		random_state=0)
+	assert_array_almost_equal(y_before, y_before2[:2], 4)
+	assert_array_almost_equal(y_after, y_after2[:2], 4)
 
 
 def test_space_deep_lift_shap_flattendense(X):

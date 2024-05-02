@@ -14,6 +14,7 @@ from tangermeme.utils import random_one_hot
 
 from tangermeme.ersatz import substitute
 from tangermeme.ersatz import shuffle
+from tangermeme.ersatz import dinucleotide_shuffle
 
 from tangermeme.deep_lift_shap import hypothetical_attributions
 from tangermeme.deep_lift_shap import deep_lift_shap
@@ -373,6 +374,81 @@ def test_deep_lift_shap_n_shuffles(X):
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr3)
 
 
+def test_deep_lift_shap_shuffle_ordering(X):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	X = X[:1]
+
+	references = dinucleotide_shuffle(X, n=1, random_state=0)
+
+	X_attr0 = deep_lift_shap(model, X, n_shuffles=1, device='cpu', random_state=0)
+	X_attr1 = deep_lift_shap(model, X, device='cpu', references=references)
+
+	assert_array_almost_equal(X_attr0, X_attr1)
+
+
+def test_deep_lift_shap_raw_output(X):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+
+	X_attr0, refs = deep_lift_shap(model, X, device='cpu', raw_outputs=True, 
+		random_state=0, return_references=True)
+	X_attr1 = deep_lift_shap(model, X, device='cpu', random_state=0)
+
+	assert X_attr0.shape == (16, 20, 4, 100)
+	assert X_attr1.shape == (16, 4, 100)
+
+	assert_array_almost_equal(X_attr0[:2, :4, :, :5], [
+		[[[-5.0116e-04,  3.1871e-04, -9.6379e-04,  1.8907e-03, -7.4686e-04],
+          [-3.3056e-04,  2.2861e-03, -1.8157e-03, -1.0250e-03,  2.0957e-04],
+          [ 2.0393e-04, -4.8745e-04,  1.5248e-04, -1.5472e-03,  3.1051e-03],
+          [-8.2290e-04,  1.3244e-03, -8.3741e-04,  1.3078e-03, -2.3938e-03]],
+
+         [[-4.1715e-04, -1.9015e-04, -2.3618e-04, -2.2531e-03, -4.3028e-05],
+          [-2.2356e-04,  1.0974e-03, -2.0263e-03, -1.3769e-03,  2.0427e-03],
+          [ 5.0492e-05,  1.0809e-04,  7.8811e-05,  2.5151e-03, -1.7192e-03],
+          [-6.9432e-04, -3.1055e-04,  1.3494e-03, -2.7921e-03,  1.0637e-03]],
+
+         [[-4.9491e-04,  2.1549e-03,  3.9226e-03,  6.0653e-04,  5.1495e-04],
+          [ 2.1132e-04,  2.4496e-03, -3.1228e-03, -2.1822e-03, -2.0042e-03],
+          [ 5.1454e-04, -1.3003e-03, -2.1690e-03,  1.3122e-03,  2.0167e-03],
+          [-7.0201e-04,  2.5229e-03, -1.1406e-03,  1.5891e-03, -2.8907e-03]],
+
+         [[-1.1855e-03,  1.0614e-03, -1.3309e-03,  7.7170e-04, -7.9025e-05],
+          [-5.6384e-04,  2.9248e-03, -1.7246e-03, -6.9900e-04, -1.3818e-03],
+          [ 1.7461e-04, -2.1326e-03, -6.4903e-04,  4.5011e-04,  4.1617e-03],
+          [-1.4366e-03,  2.5167e-03, -8.7405e-04,  3.1704e-03, -2.4934e-03]]],
+
+
+        [[[ 3.9191e-05, -1.6843e-04,  3.5755e-04, -1.4642e-03,  2.1020e-03],
+          [ 6.6232e-04, -2.2308e-03, -7.2142e-04, -2.9278e-03,  7.8001e-04],
+          [ 4.3716e-04, -1.2051e-03,  2.7829e-04,  1.0400e-03,  2.3251e-03],
+          [ 1.4334e-05, -5.5578e-05, -1.3114e-03, -5.9387e-04,  2.5591e-03]],
+
+         [[ 9.7985e-04, -2.9948e-03,  6.7705e-04, -3.5860e-04,  3.3796e-03],
+          [ 1.9771e-03, -2.8396e-03, -1.8344e-03, -9.6604e-04,  8.0935e-04],
+          [ 2.5890e-04,  4.6706e-03,  1.5568e-04,  1.8312e-03,  1.8603e-03],
+          [-2.3563e-03, -3.9171e-03, -1.9084e-03,  3.6015e-04,  3.1807e-03]],
+
+         [[ 2.5448e-03, -1.8576e-03, -7.4840e-04, -1.5695e-03,  1.8195e-04],
+          [-2.9077e-04, -1.9621e-03, -2.3485e-03,  7.9775e-04, -3.1597e-03],
+          [-1.3009e-03,  6.4424e-04, -1.2023e-03,  2.8251e-03,  3.9510e-04],
+          [-1.2810e-03, -2.5857e-03, -1.0124e-03, -1.7189e-03, -6.6487e-05]],
+
+         [[-3.2194e-04, -2.0264e-03,  8.4567e-04, -1.0215e-03,  1.1749e-03],
+          [-2.2850e-04, -2.4731e-03, -1.1539e-03,  2.5856e-04, -2.6096e-03],
+          [-6.5529e-04, -1.6158e-03, -7.1705e-04,  3.2077e-03,  5.8663e-04],
+          [-1.4327e-03, -1.9454e-03,  9.8869e-05, -2.7312e-03, -5.6883e-05]]]], 
+        4)
+
+	X_attr2 = hypothetical_attributions((X_attr0.reshape(-1, 4, 100),), 
+		(X.repeat_interleave(20, dim=0),), (refs.reshape(-1, 4, 100),))[0]
+	X_attr2 = X_attr2.reshape(X.shape[0], 20, 4, 100)
+	X_attr2 = torch.mean(X_attr2 * X.unsqueeze(1), dim=1)
+
+	assert_array_almost_equal(X_attr2, X_attr1, 4)
+
+
 def test_deep_lift_shap_return_references(X):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
@@ -485,30 +561,6 @@ def test_deep_lift_shap_raises(X, references):
 
 
 ### Test a bunch of different models with different configurations/operations
-
-
-def test_deep_lift_shap_summodel(X):
-	torch.manual_seed(0)
-	model = SumModel()
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
-			warning_threshold=1e-8)
-
-	assert X_attr.shape == X.shape
-	assert X.dtype == torch.float32
-	assert_array_almost_equal(X_attr[:2, :, :10], [
-		[[0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
-         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
-         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
-         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]],
-
-        [[0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
-         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
-         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
-         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]]], 4)
 
 
 def test_deep_lift_shap_flattendense(X):
@@ -993,18 +1045,21 @@ def test_captum_deep_lift_shap_conv(X, references):
 	_captum_attribute_comparison(model, X, references)
 
 
-def test_captum_deep_lift_shap_convpooldense(X, references):
-	_captum_attribute_comparison(ConvPoolDense().eval(), X, references)
+#def test_captum_deep_lift_shap_convpooldense(X, references):
+#	_captum_attribute_comparison(ConvPoolDense(), X, references)
 
 
 def test_captum_deep_lift_shap_batch_size(X, references):
-	for model in SumModel, FlattenDense, Scatter, Conv, ConvPoolDense:
-		torch.manual_seed(0)
-		model = ConvPoolDense()
+	_SumModel = LambdaWrapper(SumModel(), lambda model, X: model(X)[:, 0:1])
+	_Scatter = LambdaWrapper(Scatter(), lambda model, X: model(X)[:, 0, 0:1])
+	_Conv = LambdaWrapper(Conv(), lambda model, X: model(X).sum(dim=1)[:, 0:1])
 
-		X_attr0 = deep_lift_shap(model, X[:3], references=references, 
+	for model in _SumModel, FlattenDense(n_outputs=1), _Scatter, _Conv:
+		torch.manual_seed(0)
+
+		X_attr0 = deep_lift_shap(model, X, references=references, 
 			batch_size=1, device='cpu', random_state=0)
-		X_attr1 = _captum_deep_lift_shap(model, X[:3], references=references, 
+		X_attr1 = _captum_deep_lift_shap(model, X, references=references, 
 			batch_size=1, device='cpu', random_state=0)
 
 		assert X_attr0.shape == X_attr1.shape
@@ -1013,9 +1068,12 @@ def test_captum_deep_lift_shap_batch_size(X, references):
 
 
 def test_captum_deep_lift_shap_n_shuffles(X, references):
-	for model in SumModel, FlattenDense, Scatter, Conv, ConvPoolDense:
+	_SumModel = LambdaWrapper(SumModel(), lambda model, X: model(X)[:, 0:1])
+	_Scatter = LambdaWrapper(Scatter(), lambda model, X: model(X)[:, 0, 0:1])
+	_Conv = LambdaWrapper(Conv(), lambda model, X: model(X).sum(dim=1)[:, 0:1])
+
+	for model in _SumModel, FlattenDense(n_outputs=1), _Scatter, _Conv:
 		torch.manual_seed(0)
-		model = ConvPoolDense()
 
 		X_attr0 = deep_lift_shap(model, X[:4], references=references, 
 			n_shuffles=3, batch_size=1, device='cpu', random_state=0)

@@ -76,6 +76,7 @@ class ConvPoolDense(torch.nn.Module):
         self.conv2 = torch.nn.Conv1d(32, 16, (5,), padding='same')
         self.pool2 = torch.nn.MaxPool1d(3)
         
+        self.flatten = torch.nn.Flatten()
         self.dense = torch.nn.Linear(176, 1)
         
         self.relu1 = torch.nn.ReLU()
@@ -84,11 +85,12 @@ class ConvPoolDense(torch.nn.Module):
     def forward(self, X):
         X = self.pool1(self.relu1(self.conv1(X)))
         X = self.pool2(self.relu2(self.conv2(X)))
-        return X.sum(dim=(-1, -2)).unsqueeze(-1) #self.dense(X.reshape(X.shape[0], -1))
+        y = self.dense(self.flatten(X))
+        return y
 
 
 class SmallDeepSEA(torch.nn.Module):
-	def __init__(self):
+	def __init__(self, n_outputs=1):
 		super(SmallDeepSEA, self).__init__()
 
 		self.conv1 = torch.nn.Conv1d(4, 32, (3,), padding='same')
@@ -101,7 +103,7 @@ class SmallDeepSEA(torch.nn.Module):
 
 		self.linear1 = torch.nn.Linear(176, 20)
 		self.relu3 = torch.nn.ReLU()
-		self.linear2 = torch.nn.Linear(20, 1)
+		self.linear2 = torch.nn.Linear(20, n_outputs)
 
 	def forward(self, X):
 		X = self.relu1(self.pool1(self.conv1(X)))

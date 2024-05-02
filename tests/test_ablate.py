@@ -22,6 +22,7 @@ from .toy_models import FlattenDense
 from .toy_models import Conv
 from .toy_models import Scatter
 from .toy_models import ConvDense
+from .toy_models import SmallDeepSEA
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -537,24 +538,51 @@ def test_ablate_raises_args(X, alpha, beta):
 
 def test_ablate_deep_lift_shap(X):
 	torch.manual_seed(0)
-	model = SumModel()
-	y_before, y_after = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		batch_size=1, n=2, n_shuffles=3, device='cpu')
+	model = SmallDeepSEA()
+	y_before, y_after = ablate(model, X[:2], 45, 55, func=deep_lift_shap, 
+		batch_size=1, n=2, n_shuffles=3, device='cpu', random_state=0)
 
-	assert y_before.shape == (8, 4, 100)
+	assert y_before.shape == (2, 4, 100)
 	assert y_before.dtype == torch.float32
-	assert y_before.sum() == 0
-	assert_array_almost_equal(y_before, torch.zeros_like(y_before), 4)
+	assert_array_almost_equal(y_before[:, :, 48:52], [
+		[[ 0.0000, -0.0000, -0.0006, -0.0000],
+         [ 0.0000, -0.0000, -0.0000,  0.0006],
+         [ 0.0003, -0.0000, -0.0000,  0.0000],
+         [ 0.0000, -0.0011, -0.0000,  0.0000]],
 
-	assert y_after.shape == (8, 2, 4, 100)
+        [[ 0.0000,  0.0000, -0.0009, -0.0000],
+         [-0.0000, -0.0000, -0.0000, -0.0011],
+         [-0.0006,  0.0000,  0.0000, -0.0000],
+         [-0.0000, -0.0006, -0.0000,  0.0000]]], 4)
+
+	assert y_after.shape == (2, 2, 4, 100)
 	assert y_after.dtype == torch.float32
-	assert y_after.sum() == 0
-	assert_array_almost_equal(y_after, torch.zeros_like(y_after), 4)
+	assert_array_almost_equal(y_after[:, :, :, 48:52], [
+		[[[-0.0000e+00,  9.9341e-05,  0.0000e+00,  0.0000e+00],
+          [-0.0000e+00, -0.0000e+00,  8.3221e-04,  0.0000e+00],
+          [ 0.0000e+00,  0.0000e+00,  0.0000e+00, -2.1427e-04],
+          [-7.4447e-04,  0.0000e+00,  0.0000e+00,  0.0000e+00]],
+
+         [[-0.0000e+00, -0.0000e+00,  0.0000e+00,  0.0000e+00],
+          [-1.1958e-03, -0.0000e+00,  0.0000e+00, -5.1761e-03],
+          [-0.0000e+00,  0.0000e+00, -0.0000e+00, -0.0000e+00],
+          [-0.0000e+00,  6.0838e-04,  1.6405e-03, -0.0000e+00]]],
+
+
+        [[[-0.0000e+00,  4.1448e-04, -0.0000e+00,  0.0000e+00],
+          [ 0.0000e+00,  0.0000e+00, -9.8071e-05, -0.0000e+00],
+          [ 2.2772e-04,  0.0000e+00,  0.0000e+00,  4.8560e-04],
+          [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00]],
+
+         [[-0.0000e+00,  0.0000e+00, -0.0000e+00, -1.1059e-03],
+          [-2.4720e-03, -0.0000e+00, -0.0000e+00, -0.0000e+00],
+          [ 0.0000e+00,  5.0084e-04, -0.0000e+00, -0.0000e+00],
+          [ 0.0000e+00,  0.0000e+00,  1.2888e-04,  0.0000e+00]]]], 4)
 
 	y_before2, y_after2 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		batch_size=64, n=2, n_shuffles=3, device='cpu')
-	assert_array_almost_equal(y_before, y_before2, 4)
-	assert_array_almost_equal(y_after, y_after2, 4)
+		batch_size=64, n=2, n_shuffles=3, device='cpu', random_state=0)
+	assert_array_almost_equal(y_before, y_before2[:2], 4)
+	assert_array_almost_equal(y_after, y_after2[:2], 4)
 
 
 def test_ablate_deep_lift_shap_flattendense(X):

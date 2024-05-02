@@ -17,6 +17,7 @@ from .toy_models import FlattenDense
 from .toy_models import Conv
 from .toy_models import Scatter
 from .toy_models import ConvDense
+from .toy_models import SmallDeepSEA
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -353,24 +354,40 @@ def test_marginalize_raises_args(X, alpha, beta):
 
 def test_marginalize_deep_lift_shap(X):
 	torch.manual_seed(0)
-	model = SumModel()
-	y_before, y_after = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		device='cpu')
+	model = SmallDeepSEA()
+	y_before, y_after = marginalize(model, X[:2], "ACGTC", func=deep_lift_shap, 
+		device='cpu', random_state=0)
 
-	assert y_before.shape == (8, 4, 100)
+	assert y_before.shape == (2, 4, 100)
 	assert y_before.dtype == torch.float32
-	assert y_before.sum() == 0
-	assert_array_almost_equal(y_before, torch.zeros_like(y_before), 4)
+	assert_array_almost_equal(y_before[:, :, 48:52], [
+		[[ 0.0000,  0.0000, -0.0003,  0.0000],
+         [ 0.0000, -0.0000,  0.0000, -0.0010],
+         [ 0.0006, -0.0000,  0.0000,  0.0000],
+         [ 0.0000, -0.0006,  0.0000,  0.0000]],
 
-	assert y_after.shape == (8, 4, 100)
+        [[-0.0000,  0.0000, -0.0003, -0.0000],
+         [-0.0024, -0.0000, -0.0000,  0.0000],
+         [ 0.0000,  0.0000, -0.0000, -0.0023],
+         [-0.0000, -0.0005,  0.0000,  0.0000]]], 4)
+
+	assert y_after.shape == (2, 4, 100)
 	assert y_after.dtype == torch.float32
-	assert y_after.sum() == 0
-	assert_array_almost_equal(y_after, torch.zeros_like(y_after), 4)
+	assert_array_almost_equal(y_after[:, :, 48:52], [
+		[[-6.0630e-04,  0.0000e+00,  0.0000e+00, -0.0000e+00],
+         [ 0.0000e+00, -4.6675e-04, -0.0000e+00, -0.0000e+00],
+         [ 0.0000e+00, -0.0000e+00,  3.6663e-04,  0.0000e+00],
+         [-0.0000e+00, -0.0000e+00, -0.0000e+00, -1.1290e-04]],
 
-	y_before2, y_after2 = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		batch_size=64, device='cpu')
-	assert_array_almost_equal(y_before, y_before2, 4)
-	assert_array_almost_equal(y_after, y_after2, 4)
+        [[ 4.5699e-04,  0.0000e+00,  0.0000e+00, -0.0000e+00],
+         [-0.0000e+00,  3.8875e-05,  0.0000e+00,  0.0000e+00],
+         [ 0.0000e+00, -0.0000e+00, -2.6055e-04,  0.0000e+00],
+         [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  3.4543e-05]]], 4)
+
+	y_before2, y_after2 = marginalize(model, X[:8], "ACGTC", 
+		func=deep_lift_shap, batch_size=64, device='cpu', random_state=0)
+	assert_array_almost_equal(y_before, y_before2[:2], 4)
+	assert_array_almost_equal(y_after, y_after2[:2], 4)
 
 
 def test_marginalize_deep_lift_shap_flattendense(X):

@@ -64,10 +64,12 @@ def hypothetical_attributions(multipliers, X, references):
 			raise ValueError("Shape of all tensors must match.") 
 
 
-	projected_contribs = torch.zeros_like(references[0], dtype=X[0].dtype)
+	projected_contribs = torch.zeros_like(references[0], dtype=X[0].dtype, 
+		device=X[0].device)
 	
 	for i in range(X[0].shape[1]):
-		hypothetical_input = torch.zeros_like(X[0], dtype=X[0].dtype)
+		hypothetical_input = torch.zeros_like(X[0], dtype=X[0].dtype, 
+			device=X[0].device)
 		hypothetical_input[:, i] = 1.0
 		hypothetical_diffs = hypothetical_input - references[0]
 		hypothetical_contribs = hypothetical_diffs * multipliers[0]
@@ -110,6 +112,16 @@ class DeepLiftShap():
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
+	additional_nonlinear_ops: dict or None, optional
+		If additional nonlinear ops need to be added to the dictionary of
+		operations that can be handled by DeepLIFT/SHAP, pass a dictionary here
+		where the keys are class types and the values are the name of the
+		function that handle that sort of class. Make sure that the signature
+		matches those of `_nonlinear` and `_maxpool` above. This can also be
+		used to overwrite the hard-coded operations by passing in a dictionary
+		with overlapping key names. If None, do not add any additional 
+		operations. Default is None.
+
 	ignore_layers: tuple
 		A tuple of layer objects that should be ignored when assigning hooks.
 		This should be the activations used in the model. Default is
@@ -132,15 +144,14 @@ class DeepLiftShap():
 		Default is False.
 	"""
 
-	def __init__(self, model, additional_nonlinear_ops = {}, eps=1e-10, 
+	def __init__(self, model, additional_nonlinear_ops=None, eps=1e-10, 
 		warning_threshold=0.0001, verbose=False):
 		self.model = model
 		self.eps = eps
 		self.warning_threshold = warning_threshold
 		self.verbose = verbose
 
-		self.forward_handles = []
-		self.backward_handles = []
+		self.handles = []
 
 		self._NON_LINEAR_OPS = {
 			torch.nn.ReLU: _nonlinear,
@@ -154,11 +165,12 @@ class DeepLiftShap():
 			torch.nn.Softmax: _softmax
 		}
 
-		for key, value in additional_nonlinear_ops.items():
-			self._NON_LINEAR_OPS[key] = value
+		if additional_nonlinear_ops is not None:
+			for key, value in additional_nonlinear_ops.items():
+				self._NON_LINEAR_OPS[key] = value
 
 
-	def attribute(self, inputs, baselines, args=None):
+	def attribute(self, X, references, args=None, target=0):
 		"""Run the attribution algorithm on a set of inputs and baselines.
 
 		This method actually handles calculating the attribution values and
@@ -168,10 +180,10 @@ class DeepLiftShap():
 
 		Parameters
 		----------
-		inputs: torch.Tensor, shape=(n, len(alphabet), length)
+		X: torch.Tensor, shape=(n, len(alphabet), length)
 			A tensor of examples to calculate attribution values for.
 
-		baselines: torch.Tensor, shape=(n, n_baselines, len(alphabet), length)
+		references: torch.Tensor, shape=(n, n_baselines, len(alphabet), length)
 			A tensor of baselines/references to calculates attributions with
 			respect to. The first dimension corresponds to the sequences that
 			attributions are calculated for, the second dimension corresponds
@@ -183,6 +195,10 @@ class DeepLiftShap():
 			Even when there is only a single additional argument this must be
 			provided as a tuple.
 
+		target: int, optional
+			The output of the model to calculate gradients/attributions for. 
+			This will index the last dimension of the predictions. Default is 0.
+
 
 		Returns
 		-------
@@ -191,82 +207,61 @@ class DeepLiftShap():
 			provided.
 		"""
 
-		assert inputs.shape == baselines.shape
+		assert X.shape == references.shape
 
 		try:
 			# Apply hooks and set up inputs
 			self.model.apply(self._register_hooks)
-			inputs_ = torch.cat([inputs, baselines])
+			X_ = torch.cat([X, references])
 
 			# Calculate the gradients using the rescale rule
 			with torch.autograd.set_grad_enabled(True):
 				if args is not None:
-					args = (torch.cat([arg, arg]) for arg in 
-						args)
-					outputs = self.model(inputs_, *args)
+					args = (torch.cat([arg, arg]) for arg in args)
+					y = self.model(X_, *args)[:, target]
 				else:
-					outputs = self.model(inputs_)
+					y = self.model(X_)[:, target]
 
-				#outputs_ = torch.chunk(outputs, 2)[0].sum()
-				gradients = torch.autograd.grad(outputs.sum(), inputs)[0]
+				gradients = torch.autograd.grad(y.sum(), X)[0]
 
 			# Check that the prediction-difference-from-reference is equal to
 			# the sum of the attributions
-			output_diff = torch.sub(*torch.chunk(outputs[:, 0], 2))
-			input_diff = torch.sum((inputs - baselines) * gradients, dim=(1, 2))
+			output_diff = torch.sub(*torch.chunk(y, 2))
+			input_diff = torch.sum((X - references) * gradients, dim=(1, 2))
 			convergence_deltas = abs(output_diff - input_diff)
 
-			if any(convergence_deltas > self.warning_threshold):
+			if torch.any(convergence_deltas > self.warning_threshold):
 				warnings.warn("Convergence deltas too high: " +   
 					str(convergence_deltas), RuntimeWarning)
 
 			if self.verbose:
 				print(convergence_deltas)
 
-
 		finally:
-			for forward_handle in self.forward_handles:
-				forward_handle.remove()
-			for backward_handle in self.backward_handles:
-				backward_handle.remove()
-
-		###
+			for handle in self.handles:
+				handle.remove()
 
 		return gradients
 
-	def _forward_pre_hook(self, module, inputs):
+	def _fp_hook(self, module, inputs): 
 		module.input = inputs[0].clone().detach()
 
-	def _forward_hook(self, module, inputs, outputs):
+	def _f_hook(self, module, inputs, outputs):
 		module.output = outputs.clone().detach()
 
-	def _backward_hook(self, module, grad_input, grad_output):
+	def _b_hook(self, module, grad_input, grad_output):
 		return self._NON_LINEAR_OPS[type(module)](module, grad_input, 
 			grad_output, eps=self.eps)
 
-	def _can_register_hook(self, module):
+	def _register_hooks(self, module): 
 		if len(module._backward_hooks) > 0:
-			return False
+			return
 		if not isinstance(module, tuple(self._NON_LINEAR_OPS.keys())):
-			return False
-		return True
-
-	def _register_hooks(self, module, attribute_to_layer_input=True):
-		if not self._can_register_hook(module) or (
-			not attribute_to_layer_input and module is self.layer
-		):
 			return
 
-		# adds forward hook to leaf nodes that are non-linear
-		forward_handle = module.register_forward_hook(self._forward_hook)
-		pre_forward_handle = module.register_forward_pre_hook(
-			self._forward_pre_hook)
-		backward_handle = module.register_full_backward_hook(
-			self._backward_hook)
-
-		self.forward_handles.append(forward_handle)
-		self.forward_handles.append(pre_forward_handle)
-		self.backward_handles.append(backward_handle)
+		self.handles.append(module.register_forward_hook(self._f_hook))
+		self.handles.append(module.register_forward_pre_hook(self._fp_hook))
+		self.handles.append(module.register_full_backward_hook(self._b_hook))
 
 
 def _nonlinear(module, grad_input, grad_output, eps):
@@ -284,7 +279,7 @@ def _nonlinear(module, grad_input, grad_output, eps):
 	delta_out = torch.cat([delta_out_, delta_out_])
 
 	delta = delta_out / delta_in
-	idxs = abs(delta_in) < eps
+	idxs = torch.abs(delta_in) < eps
 
 	return (torch.where(idxs, grad_input[0], grad_output[0] * delta),)
 
@@ -304,10 +299,9 @@ def _softmax(module, grad_input, grad_output, eps):
 	delta_out = torch.cat([delta_out_, delta_out_])
 
 	delta = delta_out / delta_in
+	idxs = torch.abs(delta_in) < eps
 
-	grad_input_unnorm = torch.where(
-		abs(delta_in) < eps, grad_input[0], grad_output[0] * delta
-	)
+	grad_input_unnorm = torch.where(idxs, grad_input[0], grad_output[0] * delta)
 
 	n = grad_input[0].numel()
 	new_grad_inp = grad_input_unnorm - grad_input_unnorm.sum() * 1 / n
@@ -331,54 +325,62 @@ def _maxpool(module, grad_input, grad_output, eps):
 
 
 	with torch.no_grad():
-		input, input_ref = module.input.chunk(2)
+		delta_in_ = torch.sub(*module.input.chunk(2))
+		delta_in = torch.cat([delta_in_, delta_in_])
+
 		output, output_ref = module.output.chunk(2)
-
-		delta_in = input - input_ref
-		delta_in = torch.cat(2 * [delta_in])
-
-		#output, output_ref = module.output.chunk(2)
 		delta_out_xmax = torch.max(output, output_ref)
-		delta_out = torch.cat([delta_out_xmax - output_ref, output - delta_out_xmax])
+		delta_out = torch.cat([delta_out_xmax - output_ref, 
+			output - delta_out_xmax])
 
-		_, indices = pool_func(module.input, module.kernel_size, 
-			module.stride, module.padding, module.dilation, module.ceil_mode, 
-			True)
+		_, indices = pool_func(module.input, module.kernel_size, module.stride, 
+			module.padding, module.dilation, module.ceil_mode, True)
 
-		grad_output_updated = grad_output[0]
-		unpool_grad_out_delta, unpool_grad_out_ref_delta = torch.chunk(
-			unpool_func(
-				grad_output_updated * delta_out, 
-				indices,
-				module.kernel_size, 
-				module.stride, 
-				module.padding,
-				list(cast(torch.Size, module.input.shape)),
-			),
-			2,
-		)
+		unpool_ = unpool_func(grad_output[0] * delta_out, indices, 
+			module.kernel_size, module.stride, module.padding, 
+			list(module.input.shape))
+		unpool_delta, unpool_ref_delta = torch.chunk(unpool_, 2)
 
-	unpool_grad_out_delta = unpool_grad_out_delta + unpool_grad_out_ref_delta
-	unpool_grad_out_delta = torch.cat(2 * [unpool_grad_out_delta])
+	unpool_delta_ = unpool_delta + unpool_ref_delta
+	unpool_delta = torch.cat([unpool_delta_, unpool_delta_])
+	idxs = torch.abs(delta_in) < eps
 
-	new_grad_inp = torch.where(
-		abs(delta_in) < eps, grad_input[0], unpool_grad_out_delta / delta_in
-	)
-
+	new_grad_inp = torch.where(idxs, grad_input[0], unpool_delta / delta_in)
 	return (new_grad_inp,)
 
 
-def deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle, 
-	n_shuffles=20, batch_size=32, return_references=False, hypothetical=False,
-	warning_threshold=0.0001, print_convergence_deltas=False, device='cuda', 
+def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
+	references=dinucleotide_shuffle, n_shuffles=20, return_references=False, 
+	hypothetical=False, warning_threshold=0.0001, additional_nonlinear_ops=None,
+	print_convergence_deltas=False, raw_outputs=False, device='cuda', 
 	random_state=None, verbose=False):
-	"""Calculate attributions using DeepLift/Shap and a given model. 
+	"""Calculate attributions for a set of sequences using DeepLIFT/SHAP.
 
-	This function will calculate DeepLift/Shap attributions on a set of
-	sequences. It assumes that the model returns "logits" in the first output,
-	not softmax probabilities, and count predictions in the second output.
-	It will create GC-matched negatives to use as a reference and proceed
-	using the given batch size.
+	This function will calculate the DeepLIFT/SHAP attributions on a set of
+	sequences given a model. These attributions have the additive property that
+	the sum of the attributions is ~equal to the difference in prediction
+	between the original sequence and the reference sequences.
+
+	As an implementation note, the batch size refers to the number of
+	example-reference pairs that are being run simultaneously. When the batch
+	size is smaller than the number of references, multiple batches will be
+	run per example and the attributions will only be averaged only the
+	references after they have all been covered. You may want to do this if the
+	model or examples are so large that only a few can fit in memory at a time.
+	The result will be identical to if all examples could fit in memory and
+	each batch contained all the references.
+
+	Convergence deltas are calculated automatically for each example-reference
+	pair. Theoretically, these should be zero, but may in practice just be a
+	small number due to machine precision issues with non-linear models. If
+	these deltas exceed a warning threshold, a non-terminating warning will be 
+	issued to let you know that the deltas have been exceeded.
+
+	NOTE: predictions MUST yield a `(batch_size, n_targets)` tensor, even if
+	n_targets is 1. If your model yields something more complicated you must
+	wrap the model in a small class that operates on the outputs in a manner
+	that yields such a tensor, e.g., by slicing the output or summing along
+	a relevant axis.
 
 
 	Parameters
@@ -399,6 +401,20 @@ def deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 		None, no additional arguments are passed into the forward function.
 		Default is None.
 
+	target: int, optional
+		The output of the model to calculate gradients/attributions for. This
+		will index the last dimension of the predictions. Default is 0.
+
+	batch_size: int, optional
+		The number of sequence-reference pairs to pass through DeepLiftShap at
+		a time. Importantly, this is not the number of elements in `X` that
+		are processed simultaneously (alongside ALL their references) but the
+		total number of `X`-`reference` pairs that are processed. This means
+		that if you are in a memory-limited setting where you cannot process
+		all references for even a single sequence simultaneously that the
+		work is broken down into doing only a few references at a time. Default
+		is 32.
+
 	references: func or torch.Tensor, optional
 		If a function is passed in, this function is applied to each sequence
 		with the provided random state and number of shuffles. This function
@@ -411,16 +427,6 @@ def deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 	n_shuffles: int, optional
 		The number of shuffles to use if a function is given for `references`.
 		If a torch.Tensor is provided, this number is ignored. Default is 20.
-
-	batch_size: int, optional
-		The number of sequence-reference pairs to pass through DeepLiftShap at
-		a time. Importantly, this is not the number of elements in `X` that
-		are processed simultaneously (alongside ALL their references) but the
-		total number of `X`-`reference` pairs that are processed. This means
-		that if you are in a memory-limited setting where you cannot process
-		all references for even a single sequence simultaneously that the
-		work is broken down into doing only a few references at a time. Default
-		is 32.
 
 	return_references: bool, optional
 		Whether to return the references that were generated during this
@@ -440,10 +446,24 @@ def deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 		gradients prior to the aggr_func being applied to them. Default 
 		is 0.001. 
 
+	additional_nonlinear_ops: dict or None, optional
+		If additional nonlinear ops need to be added to the dictionary of
+		operations that can be handled by DeepLIFT/SHAP, pass a dictionary here
+		where the keys are class types and the values are the name of the
+		function that handle that sort of class. Make sure that the signature
+		matches those of `_nonlinear` and `_maxpool` above. This can also be
+		used to overwrite the hard-coded operations by passing in a dictionary
+		with overlapping key names. If None, do not add any additional 
+		operations. Default is None.
+
 	print_convergence_deltas: bool, optional
 		Whether to print the convergence deltas for each example when using
 		DeepLiftShap. Default is False.
 
+	raw_outputs: bool, optional
+		Whether to return the raw outputs from the method -- in this case,
+		the multipliers for each example-reference pair -- or the processed
+		attribution values. Default is False.
 
 	device: str or torch.device, optional
 		The device to move the model and batches to when making predictions. If
@@ -461,8 +481,10 @@ def deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 	Returns
 	-------
 	attributions: torch.tensor
-		The attributions calculated for each input sequence, with the same
-		shape as the input sequences.
+		If `raw_outputs=False` (default), the attribution values with shape
+		equal to `X`. If `raw_outputs=True`, the multipliers for each example-
+		reference pair with shape equal to `(X.shape[0], n_shuffles, X.shape[1],
+		X.shape[2])`. 
 
 	references: torch.tensor, optional
 		The references used for each input sequence, with the shape
@@ -471,7 +493,7 @@ def deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 	"""
 
 	attributions, references_ = [], []
-	model = model.to(device)
+	model = model.to(device).eval()
 
 	if isinstance(references, torch.Tensor):
 		n_shuffles = references.shape[1]
@@ -485,7 +507,7 @@ def deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 		rj.append(i % n_shuffles)
 
 		if len(Xi) == batch_size or i == (n-1):
-			_X = X[Xi].to(device).requires_grad_()
+			_X = X[Xi].cpu()
 			_args = None if args is None else tuple([a[Xi].to(device) 
 				for a in args])
 
@@ -502,24 +524,40 @@ def deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 						random_state=random_state+rj[j])[:, 0] 
 							for j in range(len(_X))])
 
-			_references = _references.requires_grad_().to(device)
+			_X = _X.to(device).float().requires_grad_()
+			_references = _references.to(device).float().requires_grad_()
 
 			# Run DeepLiftShap
-			gradients = DeepLiftShap(model, warning_threshold=warning_threshold, 
+			multipliers = DeepLiftShap(model, 
+				warning_threshold=warning_threshold, 
+				additional_nonlinear_ops=additional_nonlinear_ops, 
 				verbose=print_convergence_deltas).attribute(_X, _references, 
-				args=_args)
+				args=_args, target=target)
 			
-			attr = hypothetical_attributions((gradients,), (_X,), 
-				(_references,))[0]
-			attr_.extend(list(attr))
+			# If not returning the raw multipliers then apply the correction for
+			# character encodings
+			if raw_outputs == False:
+				multipliers = hypothetical_attributions((multipliers,), (_X,), 
+					(_references,))[0]
 
-			# Average across all references for each example
+			# attr_ is a list where each element is a tensor for the multipliers
+			# of one example so that we can chunk them together once all
+			# references for an example are 
+			attr_.extend(list(multipliers.cpu().detach()))
+
+			# When all references for a sequence have been calculated, remove
+			# that block from the list of example-reference attributions and
+			# add it to the final attribution list, averaging across references
+			# if providing the processed results.
 			while len(attr_) >= n_shuffles:
-				attr_avg = torch.stack(attr_[:n_shuffles]).mean(dim=0)
-				if not hypothetical:
-					attr_avg *= X[z].to(device)
+				attr_chunk = torch.stack(attr_[:n_shuffles])
 
-				attributions.append(attr_avg.cpu().detach())
+				if raw_outputs == False:
+					attr_chunk = attr_chunk.mean(dim=0)
+					if not hypothetical:
+						attr_chunk *= X[z].cpu()
+
+				attributions.append(attr_chunk)
 				attr_ = attr_[n_shuffles:]
 				z += 1
 
@@ -538,9 +576,9 @@ def deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 	return attributions
 
 
-def _captum_deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle, 
-	n_shuffles=20, batch_size=32, return_references=False, hypothetical=False,
-	device='cuda', random_state=None, verbose=False):
+def _captum_deep_lift_shap(model, X, args=None, target=0, batch_size=32,
+	references=dinucleotide_shuffle, n_shuffles=20,  return_references=False, 
+	hypothetical=False, device='cuda', random_state=None, verbose=False):
 	"""Calculate attributions using DeepLift/Shap and a given model. 
 
 	This function will calculate DeepLift/Shap attributions on a set of
@@ -571,6 +609,20 @@ def _captum_deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 		None, no additional arguments are passed into the forward function.
 		Default is None.
 
+	target: int, optional
+		The output of the model to calculate gradients/attributions for. This
+		will index the last dimension of the predictions. Default is 0.
+
+	batch_size: int, optional
+		The number of sequence-reference pairs to pass through DeepLiftShap at
+		a time. Importantly, this is not the number of elements in `X` that
+		are processed simultaneously (alongside ALL their references) but the
+		total number of `X`-`reference` pairs that are processed. This means
+		that if you are in a memory-limited setting where you cannot process
+		all references for even a single sequence simultaneously that the
+		work is broken down into doing only a few references at a time. Default
+		is 32.
+
 	references: func or torch.Tensor, optional
 		If a function is passed in, this function is applied to each sequence
 		with the provided random state and number of shuffles. This function
@@ -583,16 +635,6 @@ def _captum_deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 	n_shuffles: int, optional
 		The number of shuffles to use if a function is given for `references`.
 		If a torch.Tensor is provided, this number is ignored. Default is 20.
-
-	batch_size: int, optional
-		The number of sequence-reference pairs to pass through DeepLiftShap at
-		a time. Importantly, this is not the number of elements in `X` that
-		are processed simultaneously (alongside ALL their references) but the
-		total number of `X`-`reference` pairs that are processed. This means
-		that if you are in a memory-limited setting where you cannot process
-		all references for even a single sequence simultaneously that the
-		work is broken down into doing only a few references at a time. Default
-		is 32.
 
 	return_references: bool, optional
 		Whether to return the references that were generated during this
@@ -632,6 +674,8 @@ def _captum_deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 
 	from captum.attr import DeepLiftShap as CaptumDeepLiftShap
 
+	model = model.to(device).eval()
+
 	attributions = []
 	references_ = []
 	with torch.no_grad():
@@ -642,13 +686,13 @@ def _captum_deep_lift_shap(model, X, args=None, references=dinucleotide_shuffle,
 
 			# Calculate references
 			if isinstance(references, torch.Tensor):
-				_references = references[i:i+1].to(device)[0]
+				_references = references[i].to(device)
 			else:
 				_references = references(_X, n=n_shuffles, 
 					random_state=random_state)[0].to(device)
 						
 			attr = CaptumDeepLiftShap(model).attribute(_X, _references, 
-				target=0, additional_forward_args=_args, 
+				target=target, additional_forward_args=_args, 
 				custom_attribution_func=hypothetical_attributions)
 
 			if not hypothetical:
