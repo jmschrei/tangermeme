@@ -7,6 +7,38 @@ import itertools
 from .predict import predict
 
 
+def _attribution_score(y0, y_hat, target):
+	"""An internal function for calculating the ISM attributions.
+
+	This function, which is meant to be used for ISM, will take in the
+	predictions before and after substitutions and a target -- which can be
+	None -- and return the position-normalized differences. Specifically,
+	for each example, the differences in prediction will be normalized by
+	subtracting out the per-position average, and then averaged across
+	all tasks if target is None.
+
+
+	Parameters
+	----------
+	y0: torch.Tensor, shape=(-1, n_targets)
+		Model predictions for each example on the original predictions.
+
+	y_hat: torch.Tensor, shape=(-1, len(alphabet), length, n_targets)
+		Model predictions for each example for each substitution.
+
+	target: int or slice or None
+		If the user wants to subset to only some targets when calculating the
+		average attribution across targets. If None, use all.
+	"""
+
+	attr = y_hat[:, :, :, target] - y0[:, None, None, target]
+	attr -= torch.mean(attr, dim=1, keepdims=True)
+
+	if len(attr.shape) > 3:
+		attr = torch.mean(attr, dim=tuple(range(3, len(attr.shape))))
+	return attr
+
+
 def _edit_distance_one(X, start, end):
 	"""An internal function for generating all sequences of edit distance 1
 
@@ -47,12 +79,25 @@ def _edit_distance_one(X, start, end):
 
 
 def saturation_mutagenesis(model, X, args=None, start=0, end=-1, batch_size=32,
-	device='cuda', verbose=False):
+	target=None, hypothetical=False, raw_outputs=False, device='cuda', 
+	verbose=False):
 	"""Performs in-silico saturation mutagenesis on a set of sequences.
 
 	This function will perform in-silico saturation mutagenesis on a set of 
 	sequences and return the predictions on the original sequences and each
 	of the sequences with an edit distance of one on them.
+
+	By default, this function will aggregate these predictions into an
+	attribution value. This aggregation involves taking the Euclidean distance
+	between the predictions before and after the substitutions and Z-score
+	normalizing them across the entire example. However, this assumes that
+	the model returns only a single tensor. This tensor can have multiple
+	outputs, e.g., be of shape (batch_size, n_targets) where n_targets > 1,
+	but the model cannot return multiple tensors.
+
+	If you simply want the predictions before and after the substitutions
+	without the method turning those into attributions because, perhaps, you
+	want to define your own aggregation method, you can use `raw_outputs=True`.
 
 
 	Parameters
@@ -82,6 +127,21 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1, batch_size=32,
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.
 
+	target: int or slice or None, optional
+		Whether to focus on a single output/slice of outputs from the model
+		when calculating attributions rather than the entire set of outputs.
+		If None, use all targets when calculating distances. Default is None.  
+
+	hypothetical: bool, optional
+		Whether to return attributions for all possible characters at each
+		position or only for the character that is actually at the sequence.
+		Only matters when `raw_outputs=False`. Default is False.
+
+	raw_outputs: bool, optional
+		Whether to return the raw outputs from the method -- in this case,
+		the predictions from the reference sequence and from each of the
+		perturbations -- or the processed attribution values. Default is False.
+
 	device: str or torch.device, optional
 		The device to move the model and batches to when making predictions. If
 		set to 'cuda' without a GPU, this function will crash and must be set
@@ -93,6 +153,13 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1, batch_size=32,
 
 	Returns
 	-------
+	attr: torch.Tensor
+		Processed attribution values as the z-score normalized difference
+		between the difference in predictions for the original sequence and
+		the perturbed sequences.
+
+	-- or, if raw_outputs=True --
+
 	y0: torch.Tensor or list/tuple of torch.Tensors
 		The outputs from the model for the reference sequences.
 
@@ -119,11 +186,16 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1, batch_size=32,
 
 	if isinstance(y_hat[0], torch.Tensor):
 		y_hat = torch.stack(y_hat).reshape(X.shape[0], X.shape[1], end-start, 
-			*y_hat_.shape[1:])#.transpose(2, 1)
+			*y_hat_.shape[1:])
 	else:
 		y_hat = [
 			torch.cat(y_).reshape(X.shape[0], X.shape[2], X.shape[1], 
 				*y_[0].shape[1:]).transpose(2, 1) for y_ in zip(*y_hat)
 		]
 
+	if raw_outputs == False:
+		attr = _attribution_score(y0, y_hat, target)
+		if end <= 0:
+			return X * attr if hypothetical == False else attr
+		return X[:, :, start:end] * attr if hypothetical == False else attr
 	return y0, y_hat

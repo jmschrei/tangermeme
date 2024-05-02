@@ -10,7 +10,7 @@ from .predict import predict
 
 
 def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'], 
-	args=None, batch_size=32, device='cuda', verbose=False):
+	func=predict, additional_func_kwargs={}, **kwargs):
 	"""Runs a single spacing experiment and returns predictions.
 
 	Given a predictive model, a set of motifs to insert and the spacings
@@ -52,23 +52,21 @@ def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
 		set to 1. This is not necessary or used if a one-hot encoded tensor is
 		provided for the motif. Default is ['A', 'C', 'G', 'T'].
 
-	args: tuple or list or None
-		An optional set of additional arguments to pass into the model. If
-		provided, each element in the tuple or list is one input to the model
-		and the element must be formatted to be the same batch size as `X`. If
-		None, no additional arguments are passed into the forward function.
-		Default is None.
+	func: function, optional
+		A function to apply before and after making the substitutions. Default 
+		is `predict`.
 
-	batch_size: int, optional
-		The number of examples to make predictions for at a time. Default is 32.
+	additional_func_kwargs: dict, optional
+		Additional named arguments to pass into the function when it is called.
+		This is provided as an alternate path to route arguments into the 
+		function in case they overlap, name-wise, with those in this function,
+		or if you want to be absolutely sure that the arguments are making
+		their way into the function. Default is {}.
 
-	device: str or torch.device
-		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+	kwargs: optional
+		Additional named arguments that will get passed into the function when
+		it is called. Default is no arguments are passed in.
 
-	verbose: bool, optional
-		Whether to display a progress bar during predictions. Default is False.
 
 	Returns
 	-------
@@ -87,9 +85,7 @@ def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
 
 	X_perturb = multisubstitute(X, motifs, spacing, start=start, 
 		alphabet=alphabet)
-	y_before = predict(model, X, args=args, batch_size=batch_size, 
-		device=device, verbose=verbose)
-	y_after = predict(model, X_perturb, args=args, batch_size=batch_size, 
-		device=device, verbose=verbose)
+	y_before = func(model, X, **kwargs, **additional_func_kwargs)
+	y_after = func(model, X_perturb, **kwargs, **additional_func_kwargs)
 
 	return y_before, y_after

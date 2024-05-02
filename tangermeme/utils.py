@@ -74,7 +74,7 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 		if len(values) != 2:
 			raise ValueError("{} must be one-hot encoded.".format(name))
 
-		if not all(values == torch.tensor([0, 1])):
+		if not all(values == torch.tensor([0, 1], device=X.device)):
 			raise ValueError("{} must be one-hot encoded.".format(name))
 
 		if not (X.sum(axis=ohe_dim) == 1).all():

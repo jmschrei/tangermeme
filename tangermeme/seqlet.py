@@ -5,8 +5,10 @@
 import math
 import numpy
 import torch
+import pandas
 
 from .utils import _validate_input
+from .utils import characters
 
 from sklearn.isotonic import IsotonicRegression
 
@@ -220,14 +222,12 @@ def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2,
 
 	Parameters
 	----------
-	X_attr: torch.Tensor, shape=(-1, length)
+	X_attr: torch.Tensor, shape=(-1, len(alphabet), length)
 		A tensor of attribution values for each position in the sequence.
-		Importantly, this tensor does not have a dimension for the length of
-		the alphabet because only one value per position is used. If your
-		method provides attribution values for each character (observed or not)
-		at each position, you must condense those values down to one number per
-		position. For instance, if you have hypothetical contributions from
-		DeepLIFT/SHAP you should multiply them by the one-hot encodings.
+		The attributions here will be summed across the length of the alphabet
+		so the values must be amenable to that. This means that, most likely,
+		it should be attribution values multiplied by the one-hot encodings
+		so only the present characters have attributions.
 
 	window_size: int, optional
 		The size of the window of attribution values to sum over when
@@ -269,10 +269,10 @@ def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2,
 		has a negative attribution sum.
 	"""
 
-	_validate_input(X_attr, "X_attr", shape=(-1, -1)) 
+	_validate_input(X_attr, "X_attr", shape=(-1, -1, -1)) 
 	suppress = int(0.5*window_size) + flank
 
-	X_sum = X_attr.unfold(-1, window_size, 1).sum(dim=-1)
+	X_sum = X_attr.sum(axis=1).unfold(-1, window_size, 1).sum(dim=-1)
 	values = X_sum.flatten()
 	if len(values) > 1000000:
 		values = torch.from_numpy(numpy.random.RandomState(1234).choice(
@@ -328,13 +328,19 @@ def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2,
 	for example_id, start, end, in seqlets:
 		attr_flank = int(0.5 * ((end-start) - window_size))
 		attr_start, attr_end = start + attr_flank, end - attr_flank
-		attr = X_attr[example_id, attr_start:attr_end].sum(axis=-1)
 
-		seqlet = example_id, start, end, attr.item()
+		x = X_attr[example_id, :, attr_start:attr_end]
+		attr = x.sum(axis=(-1, -2)).item()
+		seq = characters(abs(x))
+
+		seqlet = example_id, start.item(), end.item(), '*', attr, attr, seq
 
 		if attr > threshold:
 			pos_seqlets.append(seqlet)
 		elif attr < -threshold:
 			neg_seqlets.append(seqlet)
 
-	return torch.tensor(pos_seqlets), torch.tensor(neg_seqlets)
+	names = 'example_idx', 'start', 'end', 'strand', 'score', 'attr', 'seq'
+	pos_seqlets = pandas.DataFrame(pos_seqlets, columns=names)
+	neg_seqlets = pandas.DataFrame(neg_seqlets, columns=names)
+	return pos_seqlets, neg_seqlets

@@ -67,7 +67,7 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 		provided for the motif. Default is ['A', 'C', 'G', 'T'].
 
 	func: function, optional
-		A function to apply before and after making the substitution.  Default 
+		A function to apply before and after making the substitution. Default 
 		is `predict`.
 
 	additional_func_kwargs: dict, optional
