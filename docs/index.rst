@@ -49,17 +49,20 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    :hidden:
    :caption: Operations
 
-   tutorials/Tutorial_1_Sequence_Manipulation.ipynb
-   tutorials/Tutorial_2_MEME_Suite_Tools.ipynb 
-   tutorials/Tutorial_3_IO_and_Data_Loading.ipynb
-   tutorials/Tutorial_4_Predictions.ipynb 
-   tutorials/Tutorial_5_Marginalization.ipynb
-   tutorials/Tutorial_6_Ablation.ipynb
-   tutorials/Tutorial_7_Spacing.ipynb 
-   tutorials/Tutorial_8_In_silico_Saturation_Mutagenesis.ipynb
-   tutorials/Tutorial_9_Variant_Effect.ipynb
-   tutorials/Tutorial_10_Design.ipynb
-   tutorials/Tutorial_11_Cartesian_Product.ipynb
+   tutorials/Tutorial_A1_Ersatz_Sequence_Manipulation.ipynb
+   tutorials/Tutorial_A2_Predictions.ipynb
+   tutorials/Tutorial_A3_Deep_LIFT_SHAP.ipynb
+   tutorials/Tutorial_B1_Marginalization.ipynb
+   tutorials/Tutorial_B2_Ablation.ipynb
+   tutorials/Tutorial_B3_Spacing.ipynb
+   tutorials/Tutorial_B4_In_silico_Saturation_Mutagenesis.ipynb
+   tutorials/Tutorial_B5_Variant_Effect.ipynb
+   tutorials/Tutorial_B6_Design.ipynb
+   tutorials/Tutorial_B7_Cartesian_Product.ipynb
+   tutorials/Tutorial_B8_Seqlets.ipynb
+   tutorials/Tutorial_C1_IO_and_Data_Loading.ipynb
+   tutorials/Tutorial_C2_Plotting.ipynb
+   tutorials/Tutorial_D1_FIMO.ipynb
 
 .. toctree::
    :maxdepth: 1

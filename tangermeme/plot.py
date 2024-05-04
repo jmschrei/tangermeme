@@ -116,7 +116,7 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 
 		motifs = numpy.zeros((end-start, annotations_.shape[0]))
 		for _, row in annotations_.iterrows():
-			(motif, motif_start, motif_end, _, score, _, _) = row
+			motif, motif_start, motif_end, _, score = row[:5]
 			motif_start -= start
 			motif_end -= start
 			
