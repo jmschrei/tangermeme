@@ -158,17 +158,14 @@ This yields a tensor of a similar shape as the original sequence `X` where each 
 
 #### Variant Effect
 
-> [!WARNING] 
-> The API of variant effect scoring may change slightly in the next release to be more in line with the structure of the rest of the package.
+A common use case of these predictive models is evaluating the effect that mutations in sequence have on predictions. There are many situations where this can occur but the most likely is that one has a list of variants that have been implicated by some sort of association study and one wants an easy way to screen them for some likelihood of being truly causal. In this case, given a model that predicts readouts of interest, one can see how the predictions change before and after variants are incorporated into the sequence. Presumably, the mutations that are actual drivers of the phenotype will cause changes in readouts like protein binding, gene expression, etc. 
 
-A common use case of these predictive models is evaluating the effect that individual mutations have on predictions. Basically, if you have a list of potentially-pathogenic variants, an easy way to screen them for likelihood of being causal is seeing the effect they have on predictions for potentially thousands of experimental readouts. These functions can be divided into those that evaluate the marginal effect of each individual variant or the joint effect of all variants. The second is a little more challenging than the first, and so only marginal effects are currently implemented.
-
-In these functions, one passes in the model, a dictionary or filename for an entire genome/set of sequences, the variants in pandas format (see the tutorial for more details), and the window to extract, and gets back the predictions before and after the variants are incorporated.
+The simplest of these is the substitution, where one or more characters in a sequence are changed to another character. 
 
 ```python
-from tangermeme.variant_effect import marginal_substitution_effect
+from tangermeme.variant_effect import substitution_effect
 
-y_orig, y_var = marginal_substitution_effect(model, X, variants, in_window=10)
+y, y_var = substitution_effect(model, X, substitutions)
 ````
 
 #### Design
