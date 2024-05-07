@@ -158,15 +158,33 @@ This yields a tensor of a similar shape as the original sequence `X` where each 
 
 #### Variant Effect
 
-A common use case of these predictive models is evaluating the effect that mutations in sequence have on predictions. There are many situations where this can occur but the most likely is that one has a list of variants that have been implicated by some sort of association study and one wants an easy way to screen them for some likelihood of being truly causal. In this case, given a model that predicts readouts of interest, one can see how the predictions change before and after variants are incorporated into the sequence. Presumably, the mutations that are actual drivers of the phenotype will cause changes in readouts like protein binding, gene expression, etc. 
+A common use case of these predictive models is evaluating the effect that mutations in sequence have on predictions. In practice, there are several situations where calculating variant effect is helpful but potentially the most clinically relevant one is having a list of variants that have been implicated by some sort of association study and wanting to screen them for some likelihood of being truly causal. In this case, given a model that predicts a readout of interest, e.g. protein binding and chromatin accessibility, one can see how the predictions change before and after variants are incorporated into the sequence. Presumably, the mutations that are actual drivers of phenotype will cause changes in predicted readout, and those that are passengers will not have as strong an effect.
 
-The simplest of these is the substitution, where one or more characters in a sequence are changed to another character. 
+The simplest form of variant is the substitution, where one or more characters in a sequence are changed to another character. We can easily get predictions before and after substitutions are included in the sequence. Importantly, more than one substitution can be encoded in each sequence.
 
 ```python
 from tangermeme.variant_effect import substitution_effect
 
+substitutions = torch.tensor([
+    [0, 1058, 0]
+])
+
 y, y_var = substitution_effect(model, X, substitutions)
 ````
+
+When using a BPNet model that predicts GATA2 binding, we can see that a single substitution encoded at this position in the example seems to knock out predicted signal in the middle of the window entirely. Quite a strong effect.
+
+![image](https://github.com/jmschrei/tangermeme/assets/3916816/9f241e09-3510-4c59-8694-4c6b5b77a16b)
+
+tangermeme can also handle deletions and insertions. These situations are a bit more complicated because the sequences before and after incorporating variants are different lengths and so trimming needs to be done. See the tutorials for more explanation for how to control this trimming.
+
+```python
+from tangermeme.variant_effect import deletion_effect
+from tangermeme.variant_effect import insertion_effect
+
+y, y_var = deletion_effect(model, X, deletions)
+y, y_var = insertion_effect(model, X, insertions)
+```
 
 #### Design
 
