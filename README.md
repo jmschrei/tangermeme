@@ -22,7 +22,7 @@ Please see the documentation and tutorials linked at the top of this README for 
 This first release focused on the core prediction-based functionality (e.g., marginalizations, ISM, etc..) that subsequent releases will build on. Although my focus will largely follow my research projects and the feedback I receive from the community, here is a roadmap for what I currently plan to focus on in the next few releases.
 
 - v0.1.0: Prediction-based functionality ✔️
-- v0.2.0: Attribution-based functionality (e.g., attribution marginalization, support for DeepLIFT, seqlet calling..)
+- v0.2.0: Attribution-based functionality (e.g., attribution marginalization, support for DeepLIFT, seqlet calling..) ✔️
 - v0.3.0: PyTorch ports for MEME and TOMTOM and command-line tools for the prediction- and attribution- based functionality
 - v0.4.0: Focus on interleaving tools and iterative approaches
 
@@ -103,6 +103,21 @@ from tangermeme.predict import predict
 y = predict(model, X, batch_size=2)
 ```
 
+#### DeepLIFT/SHAP Attributions
+
+A powerful form of analysis is to run your predictive model backwards to highlight the input characters driving predictions. If the model predictions are accurate one can interpret these highlights -- or attributions -- as the actual driver of experimental signal. One of these attribution methods is called DeepLIFT/SHAP (merging ideas from DeepLIFT and DeepSHAP). tangermeme has a built-in implementation that is simpler, more robust, and corrects a few issues with other implementations of DeepLIFT/SHAP.
+
+```python
+from tangermeme.deep_lift_shap import deep_lift_shap
+
+X_attr = deep_lift_shap(model, X, target=267, random_state=0)
+```
+
+Note that for multi-task models a target must be set to calculate attributions for one output at a time.
+
+![image](https://github.com/jmschrei/tangermeme/assets/3916816/db628856-182a-427a-be95-2dc33def11b0)
+
+
 #### Marginalization
 
 Given a predictive model and a set of known motifs, a common question is to ask what motifs affect the model's predictions. Rather than trying to scan these motifs against the genome and averaging predictions at all sites -- which is challenging and computationally costly -- you can simply substitute in the motif of interest into a background set of sequences and see what the difference in predictions is. Because `tangermeme` aims to be assumption-free, these functions take in a batch of examples that you specify, and return the predictions before and after adding the motif in for each example. If the model is multi-task, `y_before` and `y_after` will be a tuple of outputs. If the model is multi-input, additional inputs can be specified as a tuple passed into `args`. 
@@ -116,6 +131,14 @@ By default, these functions use the nucleotide alphabet, but you can pass in any
 Below, we can see how a BPNet model trained to predict GATA2 binding responds to marginalizing over a GATA motif.
 
 <img src="https://github.com/jmschrei/tangermeme/assets/3916816/66f776e1-b49b-4b31-9e1f-88bce0096400" width="600">
+
+Importantly, all methods that modify the sequence can take in an optional `func` parameter to change the function that gets applied before and after performing the sequence modification (in this case, substituting in a motif). By default, this function is just the `predict` function but it can just as easily be the `deep_lift_shap` method to give you attributions before and after.
+
+```python
+attr_before, attr_after = marginalize(model, X, "CTCAGTGATG", func=deep_lift_shap)
+```
+
+![image](https://github.com/jmschrei/tangermeme/assets/3916816/9d453d4c-aba8-449b-9911-c6e17ef4ab77)
 
 
 #### Ablation
@@ -144,12 +167,12 @@ By running this function across several spacings one can, for instance, measure 
 
 #### Saturation Mutagenesis
 
-Given an observed sequence a simple question is "what positions are driving model predictions?" One simple way to answer this question is through saturation mutagenesis, i.e., compare the predictions on the original sequence with that of sequences that comprehensively each contain one mutation with respect to that original sequence. This is conceptually similar to deep mutational scanning but using a predictive model instead of running an experiment. In a region with an AP-1 motif, we can run ISM on Beluga and look at AP-1 factor tasks to identify that the AP-1 motif is what is driving the predictions.
+Given an observed sequence a simple question is "what positions are driving model predictions?" One simple way to answer this question is through saturation mutagenesis, i.e., compare the predictions on the original sequence with that of sequences that comprehensively each contain one mutation with respect to that original sequence. This is another form of attribution method that is conceptually similar to deep mutational scanning but using a predictive model instead of running an experiment. In a region with an AP-1 motif, we can run ISM on Beluga and look at AP-1 factor tasks to identify that the AP-1 motif is what is driving the predictions.
 
 ```python
 from tangermeme.ism import saturation_mutagenesis
 
-y_ref, y_ism = saturation_mutagenesis(model, X)
+X_attr = saturation_mutagenesis(model, X)
 ```
 
 This yields a tensor of a similar shape as the original sequence `X` where each value contains the predicted value (or values) for making the associated substitution. There are numerous ways to combine the predictions of each variant with the predictions on the original sequence and tangermeme allows you to use whichever approach you would like. However, a common one is the Euclidean distance followed by mean-subtracting to get the influence that each <i>observed</i> nucleotide has on the prediction. See the tutorial for more details.
@@ -201,5 +224,18 @@ X_hat = greedy_substitution(model, X, motifs, y, mask=idxs, max_iter=3, verbose=
 When the model is the Beluga model and the goal is to design a sequence that yields strong AP-1 binding but ignore the effect on all other tasks, this function inserts three AP-1 binding sites close together. The predictions from the model are much higher for the AP-1 tasks on the designed sequence than the original sequence.
 
 <img src="https://github.com/jmschrei/tangermeme/assets/3916816/519d0648-af02-4e75-bef2-958b5a6629a4" width="600">
+
+#### Seqlet Calling
+
+In contrast to motif scanning, which usually relies solely on nucleotide sequence to determine whether a motif matches, seqlet calling is the identification of spans of nucleotides that have high attribution score. Seqlet calling methods usually do not rely on sequence at all because they are the first step in identifying repeating patterns based on having high attributions.
+
+```python
+from tangermeme.seqlet import tfmodisco_seqlets
+
+pos_seqlets, neg_seqlets = tfmodisco_seqlets(X_attr)
+```
+
+![image](https://github.com/jmschrei/tangermeme/assets/3916816/b89cfe41-a796-4dfe-bec9-0e7b429b7320)
+
 
 
