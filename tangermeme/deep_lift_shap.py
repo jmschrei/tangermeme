@@ -79,192 +79,40 @@ def hypothetical_attributions(multipliers, X, references):
 	return (projected_contribs,)
 
 
-class DeepLiftShap():
-	"""A vectorized version of the DeepLIFT/SHAP algorithm from Captum.
+def _register_hooks(module): 
+	if len(module._backward_hooks) > 0:
+		return
+	if not isinstance(module, tuple(module._NON_LINEAR_OPS.keys())):
+		return
 
-	DeepLIFT/SHAP is an approach for assigning importance to each input
-	feature in an example using principles from game theory. At a high level,
-	Shapley values are the average marginal contribution of each feature to
-	the prediction and DeepLIFT/SHAP approximates this value for neural
-	networks.
-
-	This algorithm is implemented as a class because it is based on the Captum 
-	approach of assigning hooks to layers in a PyTorch module object, where the
-	hooks modify the gradients to implement the rescale rule. This object 
-	implementation is much simpler than the one in Captum and adds in two 
-	features: first, the implementation is vectorized so one can accept multiple 
-	references for each example and these references can be different across 
-	examples and, second, it adds in automatic checks that the theoretical 
-	properties of the algorithm hold. 
-
-	IMPORTANT: This implementation is minimal and only supports linear
-	operations, convolutions, and dense layers. It does not support any form of
-	non-linear pooling operation and may not work on custom operations. I do 
-	not know whether it works with transformers. A warning will be raised if 
-	the layers are not supported or yield attributions that do not satisfy the
-	theoretical properties. Use the _captum_deep_lift_shap function when unsure.
+	module.handles = []
+	module.handles.append(module.register_forward_hook(_f_hook))
+	module.handles.append(module.register_forward_pre_hook(_fp_hook))
+	module.handles.append(module.register_full_backward_hook(_b_hook))
 
 
-	Parameters
-	----------
-	model: torch.nn.Module
-		A PyTorch model to use for making predictions. These models can take in
-		any number of inputs and make any number of outputs. The additional
-		inputs must be specified in the `args` parameter.
+def _clear_hooks(module):
+	if hasattr(module, "handles") and len(module.handles) > 0:
+		for handle in module.handles:
+			handle.remove()
 
-	additional_nonlinear_ops: dict or None, optional
-		If additional nonlinear ops need to be added to the dictionary of
-		operations that can be handled by DeepLIFT/SHAP, pass a dictionary here
-		where the keys are class types and the values are the name of the
-		function that handle that sort of class. Make sure that the signature
-		matches those of `_nonlinear` and `_maxpool` above. This can also be
-		used to overwrite the hard-coded operations by passing in a dictionary
-		with overlapping key names. If None, do not add any additional 
-		operations. Default is None.
-
-	ignore_layers: tuple
-		A tuple of layer objects that should be ignored when assigning hooks.
-		This should be the activations used in the model. Default is
-		(torch.nn.ReLU,).
-
-	eps: float, optional
-		An epsilon with which to threshold gradients to ensure that there
-		isn't an explosion. Default is 1e-6.
-
-	warning_threshold: float, optional
-		A threshold on the convergence delta that will always raise a warning
-		if the delta is larger than it. Normal deltas are in the range of
-		1e-6 to 1e-8. Note that convergence deltas are calculated on the
-		gradients prior to the attribution_func being applied to them. Default 
-		is 0.001. 
-
-	verbose: bool, optional
-		Whether to print the convergence delta for each example that is
-		explained, regardless of whether it surpasses the warning threshold.
-		Default is False.
-	"""
-
-	def __init__(self, model, additional_nonlinear_ops=None, eps=1e-10, 
-		warning_threshold=0.0001, verbose=False):
-		self.model = model
-		self.eps = eps
-		self.warning_threshold = warning_threshold
-		self.verbose = verbose
-
-		self.handles = []
-
-		self._NON_LINEAR_OPS = {
-			torch.nn.ReLU: _nonlinear,
-			torch.nn.ELU: _nonlinear,
-			torch.nn.LeakyReLU: _nonlinear,
-			torch.nn.Sigmoid: _nonlinear,
-			torch.nn.Tanh: _nonlinear,
-			torch.nn.Softplus: _nonlinear,
-			torch.nn.MaxPool1d: _maxpool,
-			torch.nn.MaxPool2d: _maxpool,
-			torch.nn.Softmax: _softmax
-		}
-
-		if additional_nonlinear_ops is not None:
-			for key, value in additional_nonlinear_ops.items():
-				self._NON_LINEAR_OPS[key] = value
+		del module.handles
 
 
-	def attribute(self, X, references, args=None, target=0):
-		"""Run the attribution algorithm on a set of inputs and baselines.
-
-		This method actually handles calculating the attribution values and
-		checking to make sure that they follow the theoretical properties of
-		attributions.
+def _fp_hook(module, inputs): 
+	module.input = inputs[0].clone().detach()
 
 
-		Parameters
-		----------
-		X: torch.Tensor, shape=(n, len(alphabet), length)
-			A tensor of examples to calculate attribution values for.
-
-		references: torch.Tensor, shape=(n, n_baselines, len(alphabet), length)
-			A tensor of baselines/references to calculates attributions with
-			respect to. The first dimension corresponds to the sequences that
-			attributions are calculated for, the second dimension corresponds
-			to the number of baselines that are being used for that example,
-			the the last two dimensions should match that of the inputs.
-
-		args: tuple, optional
-			A tuple of additional forward arguments to pass into the model.
-			Even when there is only a single additional argument this must be
-			provided as a tuple.
-
-		target: int, optional
-			The output of the model to calculate gradients/attributions for. 
-			This will index the last dimension of the predictions. Default is 0.
+def _f_hook(module, inputs, outputs):
+	module.output = outputs.clone().detach()
 
 
-		Returns
-		-------
-		attributions: torch.Tensor, shape=(n, len(alphabet), length)
-			Attributions for each example averaged over all of the baselines
-			provided.
-		"""
-
-		assert X.shape == references.shape
-
-		try:
-			# Apply hooks and set up inputs
-			self.model.apply(self._register_hooks)
-			X_ = torch.cat([X, references])
-
-			# Calculate the gradients using the rescale rule
-			with torch.autograd.set_grad_enabled(True):
-				if args is not None:
-					args = (torch.cat([arg, arg]) for arg in args)
-					y = self.model(X_, *args)[:, target]
-				else:
-					y = self.model(X_)[:, target]
-
-				gradients = torch.autograd.grad(y.sum(), X)[0]
-
-			# Check that the prediction-difference-from-reference is equal to
-			# the sum of the attributions
-			output_diff = torch.sub(*torch.chunk(y, 2))
-			input_diff = torch.sum((X - references) * gradients, dim=(1, 2))
-			convergence_deltas = abs(output_diff - input_diff)
-
-			if torch.any(convergence_deltas > self.warning_threshold):
-				warnings.warn("Convergence deltas too high: " +   
-					str(convergence_deltas), RuntimeWarning)
-
-			if self.verbose:
-				print(convergence_deltas)
-
-		finally:
-			for handle in self.handles:
-				handle.remove()
-
-		return gradients
-
-	def _fp_hook(self, module, inputs): 
-		module.input = inputs[0].clone().detach()
-
-	def _f_hook(self, module, inputs, outputs):
-		module.output = outputs.clone().detach()
-
-	def _b_hook(self, module, grad_input, grad_output):
-		return self._NON_LINEAR_OPS[type(module)](module, grad_input, 
-			grad_output, eps=self.eps)
-
-	def _register_hooks(self, module): 
-		if len(module._backward_hooks) > 0:
-			return
-		if not isinstance(module, tuple(self._NON_LINEAR_OPS.keys())):
-			return
-
-		self.handles.append(module.register_forward_hook(self._f_hook))
-		self.handles.append(module.register_forward_pre_hook(self._fp_hook))
-		self.handles.append(module.register_full_backward_hook(self._b_hook))
+def _b_hook(module, grad_input, grad_output):
+	return module._NON_LINEAR_OPS[type(module)](module, grad_input, 
+		grad_output)
 
 
-def _nonlinear(module, grad_input, grad_output, eps):
+def _nonlinear(module, grad_input, grad_output):
 	"""An internal function implementing a general-purpose nonlinear correction.
 
 	This function, copied and slightly modified from Captum, is meant to be
@@ -279,12 +127,12 @@ def _nonlinear(module, grad_input, grad_output, eps):
 	delta_out = torch.cat([delta_out_, delta_out_])
 
 	delta = delta_out / delta_in
-	idxs = torch.abs(delta_in) < eps
+	idxs = torch.abs(delta_in) < 1e-6
 
 	return (torch.where(idxs, grad_input[0], grad_output[0] * delta),)
 
 
-def _softmax(module, grad_input, grad_output, eps):
+def _softmax(module, grad_input, grad_output):
 	"""An internal function implementing a correction for softmax activations.
 
 	This function, copied and slightly modified from Captum, is meant to be
@@ -299,7 +147,7 @@ def _softmax(module, grad_input, grad_output, eps):
 	delta_out = torch.cat([delta_out_, delta_out_])
 
 	delta = delta_out / delta_in
-	idxs = torch.abs(delta_in) < eps
+	idxs = torch.abs(delta_in) < 1e-6
 
 	grad_input_unnorm = torch.where(idxs, grad_input[0], grad_output[0] * delta)
 
@@ -308,7 +156,7 @@ def _softmax(module, grad_input, grad_output, eps):
 	return (new_grad_inp,)
 
 
-def _maxpool(module, grad_input, grad_output, eps):
+def _maxpool(module, grad_input, grad_output):
 	"""An internal function implementing a 1D max-pooling correction.
 
 	This function, copied and slightly modified from Captum, is meant to be
@@ -343,7 +191,7 @@ def _maxpool(module, grad_input, grad_output, eps):
 
 	unpool_delta_ = unpool_delta + unpool_ref_delta
 	unpool_delta = torch.cat([unpool_delta_, unpool_delta_])
-	idxs = torch.abs(delta_in) < eps
+	idxs = torch.abs(delta_in) < 1e-7
 
 	new_grad_inp = torch.where(idxs, grad_input[0], unpool_delta / delta_in)
 	return (new_grad_inp,)
@@ -351,7 +199,7 @@ def _maxpool(module, grad_input, grad_output, eps):
 
 def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 	references=dinucleotide_shuffle, n_shuffles=20, return_references=False, 
-	hypothetical=False, warning_threshold=0.0001, additional_nonlinear_ops=None,
+	hypothetical=False, warning_threshold=0.001, additional_nonlinear_ops=None,
 	print_convergence_deltas=False, raw_outputs=False, device='cuda', 
 	random_state=None, verbose=False):
 	"""Calculate attributions for a set of sequences using DeepLIFT/SHAP.
@@ -492,15 +340,47 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 		`return_references = True`. 
 	"""
 
-	attributions, references_ = [], []
-	model = model.to(device).eval()
+	_NON_LINEAR_OPS = {
+		torch.nn.ReLU: _nonlinear,
+		torch.nn.ReLU6: _nonlinear,
+		torch.nn.RReLU: _nonlinear,
+		torch.nn.SELU: _nonlinear,
+		torch.nn.CELU: _nonlinear,
+		torch.nn.GELU: _nonlinear,
+		torch.nn.SiLU: _nonlinear,
+		torch.nn.Mish: _nonlinear,
+		torch.nn.GLU: _nonlinear,
+		torch.nn.ELU: _nonlinear,
+		torch.nn.LeakyReLU: _nonlinear,
+		torch.nn.Sigmoid: _nonlinear,
+		torch.nn.Tanh: _nonlinear,
+		torch.nn.Softplus: _nonlinear,
+		torch.nn.Softshrink: _nonlinear,
+		torch.nn.LogSigmoid: _nonlinear,
+		torch.nn.PReLU: _nonlinear,
+		torch.nn.MaxPool1d: _maxpool,
+		torch.nn.MaxPool2d: _maxpool,
+		torch.nn.Softmax: _softmax
+	}
 
+	if additional_nonlinear_ops is not None:
+		for key, value in additional_nonlinear_ops.items():
+			_NON_LINEAR_OPS[key] = value
+
+	model = model.to(device).eval()
+	for module in model.modules():
+		module._NON_LINEAR_OPS = _NON_LINEAR_OPS
+
+	attributions, references_, Xi, rj, attr_ = [], [], [], [], []
 	if isinstance(references, torch.Tensor):
 		n_shuffles = references.shape[1]
+	n, z = X.shape[0] * n_shuffles, 0
 
-	n = X.shape[0] * n_shuffles
-	Xi, rj, attr_ = [], [], []
-	z = 0
+	try:
+		model.apply(_register_hooks)
+	except Exception as e:
+		model.apply(_clear_hooks)
+		raise(e)
 
 	for i in trange(n, disable=not verbose):
 		Xi.append(i // n_shuffles)
@@ -524,16 +404,45 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 						random_state=random_state+rj[j])[:, 0] 
 							for j in range(len(_X))])
 
-			_X = _X.to(device).float().requires_grad_()
-			_references = _references.to(device).float().requires_grad_()
+			_X = _X.to(device).requires_grad_()
+			_references = _references.to(device).requires_grad_()
 
-			# Run DeepLiftShap
-			multipliers = DeepLiftShap(model, 
-				warning_threshold=warning_threshold, 
-				additional_nonlinear_ops=additional_nonlinear_ops, 
-				verbose=print_convergence_deltas).attribute(_X, _references, 
-				args=_args, target=target)
-			
+			# This next block is actually running DeepLIFT by concatenating the
+			# batch of examples and the batch of references and running the
+			# forward and backward passes that have been modified by the above
+			# hooks. In a try-except block to make sure we remove hooks if an
+			# error is raised. 
+			try:
+				X_ = torch.cat([_X, _references])
+
+				# Calculate the gradients using the rescale rule
+				with torch.autograd.set_grad_enabled(True):
+					if _args is not None:
+						_args = (torch.cat([arg, arg]) for arg in _args)
+						y = model(X_, *_args)[:, target]
+					else:
+						y = model(X_)[:, target]
+
+					multipliers = torch.autograd.grad(y.sum(), _X)[0]
+
+				# Check that the prediction-difference-from-reference is equal to
+				# the sum of the attributions
+				output_diff = torch.sub(*torch.chunk(y, 2))
+				input_diff = torch.sum((_X - _references) * multipliers, 
+					dim=(1, 2))
+				convergence_deltas = abs(output_diff - input_diff)
+
+				if torch.any(convergence_deltas > warning_threshold):
+					warnings.warn("Convergence deltas too high: " +   
+						str(convergence_deltas), RuntimeWarning)
+
+				if print_convergence_deltas:
+					print(convergence_deltas)
+
+			except Exception as e:
+				model.apply(_clear_hooks)
+				raise(e)
+
 			# If not returning the raw multipliers then apply the correction for
 			# character encodings
 			if raw_outputs == False:
@@ -566,13 +475,17 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 
 			Xi, rj = [], []
 
+
+	model.apply(_clear_hooks)
+	for module in model.modules():
+		del(module._NON_LINEAR_OPS)
+
 	attributions = torch.stack(attributions)
-	
+
 	if return_references:
 		references_ = torch.cat(references_).reshape(X.shape[0], n_shuffles, 
 			*X.shape[1:])
 		return attributions, references_
-	
 	return attributions
 
 

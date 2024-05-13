@@ -364,16 +364,15 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		sequences.close()
 
 	seqs = torch.from_numpy(numpy.stack(seqs))
-	if signals is not None:
-		signals_ = torch.from_numpy(numpy.stack(signals_))
-		
-		if in_signals is not None:
-			in_signals_ = torch.from_numpy(numpy.stack(in_signals_))
-			return seqs, signals_, in_signals_
+	y_return = [seqs]
 
-		return seqs, signals_
-	else:
-		return seqs			
+	if signals is not None:
+		y_return.append(torch.from_numpy(numpy.stack(signals_)))
+
+	if in_signals is not None:
+		y_return.append(torch.from_numpy(numpy.stack(in_signals_)))
+
+	return y_return[0] if len(y_return) == 1 else y_return
 
 
 def read_meme(filename, n_motifs=None):

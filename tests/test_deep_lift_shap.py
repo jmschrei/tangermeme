@@ -554,9 +554,9 @@ def test_deep_lift_shap_raises(X, references):
 	
 	assert_raises(IndexError, deep_lift_shap, model, X, 
 		references=references[:10], device='cpu')
-	assert_raises(AssertionError, deep_lift_shap, model, X, 
+	assert_raises(RuntimeError, deep_lift_shap, model, X, 
 		references=references[:, :, :2], device='cpu')
-	assert_raises(AssertionError, deep_lift_shap, model, X, 
+	assert_raises(RuntimeError, deep_lift_shap, model, X, 
 		references=references[:, :, :, :10], device='cpu')
 
 
