@@ -5,6 +5,16 @@
 Release History
 ===============
 
+
+Version 0.2.2
+==============
+
+plot
+----
+
+	- Fixed issue in `plot_logo` raised by @sandyfloren where passing in annotations without passing in `start` or `end` would raise an error. Now, `start` defaults to 0 and `end` defaults to the length of the sequence.
+
+
 Version 0.2.1
 ==============
 

@@ -106,6 +106,8 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 		logo.style_glyphs_in_sequence(sequence=seq, color=color)
 
 	if annotations is not None:
+		start, end = start or 0, end or X.shape[-1]
+
 		annotations_ = annotations[annotations['start'] > start]
 		annotations_ = annotations_[annotations_['end'] < end]
 		annotations_ = annotations_.sort_values(["score"], ascending=False)

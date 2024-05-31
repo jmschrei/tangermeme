@@ -52,4 +52,4 @@ class Beluga(nn.Module):
         )
 
     def forward(self, x):
-        return self.model(x.unsqueeze(2))
+        return self.model(x[:, [0, 2, 1, 3]].unsqueeze(2))
