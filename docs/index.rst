@@ -67,7 +67,7 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
 .. toctree::
    :maxdepth: 1
    :hidden:
-   :caption: API
+   :caption: Vignettes
 
    vignettes/Attribution_Trickiness_and_DeepLiftShap_Implementations.ipynb
 
