@@ -372,7 +372,7 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 				verbose=verbose)
 
 		# Extract reference GC bins
-		matched_gc = X_matched.mean(axis=-1)[:, [1, 2]].sum(axis=1).numpy()
+		matched_gc = X_matched.mean(axis=-1, dtype=torch.float)[:, [1, 2]].sum(axis=1).numpy()
 		matched_gc = ((matched_gc + gc_bin_width / 2.) // 
 			gc_bin_width).astype(int)
 
