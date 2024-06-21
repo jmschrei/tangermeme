@@ -110,6 +110,13 @@ def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
 		y_after = func(model, X_perturb, **kwargs, **additional_func_kwargs)
 		y_afters.append(y_after)
 
-	y_befores = torch.stack(y_befores).transpose(0, 1)
-	y_afters = torch.stack(y_afters).transpose(0, 1)
+	if isinstance(y_befores[0], torch.Tensor):
+		y_befores = torch.stack(y_befores).transpose(0, 1)
+		y_afters = torch.stack(y_afters).transpose(0, 1)
+	else:
+		y_befores = [torch.stack(y_).transpose(0, 1) for y_ in list(zip(
+			*y_befores))]
+		y_afters = [torch.stack(y_).transpose(0, 1) for y_ in list(zip(
+			*y_afters))]
+
 	return y_befores, y_afters

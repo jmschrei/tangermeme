@@ -523,15 +523,16 @@ def test_apply_product_marginalize_convdense_alpha(X, alpha):
 def test_apply_product_space_flattendense_alpha(X, alpha, beta):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], 3, 
+	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], [[3]], 
 		device='cpu')
-	y_before, y_after = apply_product(space, model, X, ['ACGTGC', 'TGTT'], 3, 
-		args=(alpha[:5],), device='cpu')
+	y_before, y_after = apply_product(space, model, X, ['ACGTGC', 'TGTT'], 
+		[[3]], args=(alpha[:5],), device='cpu')
 
-	assert y_before.shape == (64, 5, 3)
+	assert y_before.shape == (64, 5, 1, 3)
 	assert y_before.dtype == torch.float32
-	assert_array_almost_equal(y_before, y0_before[:, None] + alpha[:5][None, :])
-	assert_array_almost_equal(y_before[:2], [
+	assert_array_almost_equal(y_before, y0_before[:, None] + alpha[:5][None, :, 
+		None])
+	assert_array_almost_equal(y_before[:2, :, 0], [
 		[[1.9569, 2.0429, 1.6640],
 		 [0.5930, 0.6790, 0.3001],
 		 [1.1715, 1.2575, 0.8787],
@@ -545,10 +546,11 @@ def test_apply_product_space_flattendense_alpha(X, alpha, beta):
 		 [1.8171, 1.8849, 1.6924]]], 4)
 
 
-	assert y_after.shape == (64, 5, 3)
+	assert y_after.shape == (64, 5, 1, 3)
 	assert y_after.dtype == torch.float32
-	assert_array_almost_equal(y_after, y0_after[:, None] + alpha[:5][None, :])
-	assert_array_almost_equal(y_after[:2], [
+	assert_array_almost_equal(y_after, y0_after[:, None] + alpha[:5][None, :, 
+		None])
+	assert_array_almost_equal(y_after[:2, :, 0], [
 		[[1.9143, 1.9713, 1.6641],
 		 [0.5504, 0.6074, 0.3002],
 		 [1.1290, 1.1860, 0.8788],
@@ -567,16 +569,17 @@ def test_apply_product_space_flattendense_beta(X, alpha, beta):
 	model = FlattenDense()
 	alpha = torch.zeros(X.shape[0], 1)
 
-	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], 3, 
+	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], [[3]], 
 		device='cpu')
-	y_before, y_after = apply_product(space, model, X, ['ACGTGC', 'TGTT'], 3, 
-		args=(alpha[:1], beta[:5]), device='cpu')
+	y_before, y_after = apply_product(space, model, X, ['ACGTGC', 'TGTT'], 
+		[[3]], args=(alpha[:1], beta[:5]), device='cpu')
 	y_before, y_after = y_before[:, 0], y_after[:, 0]
 
-	assert y_before.shape == (64, 5, 3)
+	assert y_before.shape == (64, 5, 1, 3)
 	assert y_before.dtype == torch.float32
-	assert_array_almost_equal(y_before, y0_before[:, None] * beta[:5][None, :])
-	assert_array_almost_equal(y_before[:2], [
+	assert_array_almost_equal(y_before, y0_before[:, None] * beta[:5][None, :, 
+		None])
+	assert_array_almost_equal(y_before[:2, :, 0], [
 		[[ 0.3132,  0.4529, -0.1624],
 		 [-0.1179, -0.1706,  0.0612],
 		 [-0.1018, -0.1473,  0.0528],
@@ -589,10 +592,11 @@ def test_apply_product_space_flattendense_beta(X, alpha, beta):
 		 [ 0.0542, -0.0186,  0.1879],
 		 [-0.0437,  0.0150, -0.1516]]], 4)
 
-	assert y_after.shape == (64, 5, 3)
+	assert y_after.shape == (64, 5, 1, 3)
 	assert y_after.dtype == torch.float32
-	assert_array_almost_equal(y_after, y0_after[:, None] * beta[:5][None, :])
-	assert_array_almost_equal(y_after[:2], [
+	assert_array_almost_equal(y_after, y0_after[:, None] * beta[:5][None, :, 
+		None])
+	assert_array_almost_equal(y_after[:2, :, 0], [
 		[[ 0.2441,  0.3366, -0.1624],
 		 [-0.0919, -0.1268,  0.0612],
 		 [-0.0794, -0.1095,  0.0528],
@@ -609,16 +613,16 @@ def test_apply_product_space_flattendense_beta(X, alpha, beta):
 def test_apply_product_space_flattendense_alpha_beta(X, alpha, beta):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], 3, 
+	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], [[3]], 
 		device='cpu')
-	y_before, y_after = apply_product(space, model, X, ['ACGTGC', 'TGTT'], 3, 
-		args=(alpha[:4], beta[:5]), device='cpu')
+	y_before, y_after = apply_product(space, model, X, ['ACGTGC', 'TGTT'], 
+		[[3]], args=(alpha[:4], beta[:5]), device='cpu')
 
-	assert y_before.shape == (64, 4, 5, 3)
+	assert y_before.shape == (64, 4, 5, 1, 3)
 	assert y_before.dtype == torch.float32
 	assert_array_almost_equal(y_before, y0_before[:, None, None] * 
-		beta[:5][None, None :] + alpha[:4][None, :, None])
-	assert_array_almost_equal(y_before[:2, :2], [
+		beta[:5][None, None :, None] + alpha[:4][None, :, None, None])
+	assert_array_almost_equal(y_before[:2, :2, :, 0], [
 		[[[2.0772, 2.2169, 1.6016],
           [1.6461, 1.5935, 1.8252],
           [1.6622, 1.6168, 1.8169],
@@ -644,11 +648,11 @@ def test_apply_product_space_flattendense_alpha_beta(X, alpha, beta):
           [0.4543, 0.3815, 0.5881],
           [0.3565, 0.4152, 0.2486]]]], 4)
 
-	assert y_after.shape == (64, 4, 5, 3)
+	assert y_after.shape == (64, 4, 5, 1, 3)
 	assert y_after.dtype == torch.float32
 	assert_array_almost_equal(y_after, y0_after[:, None, None] * 
-		beta[:5][None, None, :] + alpha[:4][None, :, None])
-	assert_array_almost_equal(y_after[:2, :2], [
+		beta[:5][None, None, :, None] + alpha[:4][None, :, None, None])
+	assert_array_almost_equal(y_after[:2, :2, :, 0], [
 		[[[2.0082, 2.1007, 1.6017],
           [1.6721, 1.6373, 1.8252],
           [1.6847, 1.6546, 1.8169],
@@ -678,17 +682,17 @@ def test_apply_product_space_flattendense_alpha_beta(X, alpha, beta):
 def test_apply_product_space_convdense_alpha(X, alpha):
   torch.manual_seed(0)
   model = ConvDense()
-  y_before, y_after = apply_product(space, model, X, ["ACGTGC", "TGGTT"], 3, 
+  y_before, y_after = apply_product(space, model, X, ["ACGTGC", "TGGTT"], [[3]], 
 	0, args=(alpha[:5, :, None],), batch_size=2, device='cpu')
 
   assert len(y_before) == 2
-  assert y_before[0].shape == (64, 5, 12, 98)
-  assert y_before[1].shape == (64, 5, 3)
+  assert y_before[0].shape == (64, 5, 1, 12, 98)
+  assert y_before[1].shape == (64, 5, 1, 3)
 
   assert y_before[0].dtype == torch.float32
   assert y_before[1].dtype == torch.float32
 
-  assert_array_almost_equal(y_before[0][:2, :2, :3, :4], [
+  assert_array_almost_equal(y_before[0][:2, :2, 0, :3, :4], [
 	[[[ 0.9883,  1.8037,  0.8841,  0.7446],
 	  [ 1.8588,  1.9683,  1.5339,  1.4497],
 	  [ 2.1421,  2.2650,  2.6226,  2.4379]],
@@ -706,7 +710,7 @@ def test_apply_product_space_convdense_alpha(X, alpha):
 	  [ 0.3234,  0.3912,  0.4245,  0.5357],
 	  [ 0.8830,  0.9421,  0.7171,  0.7290]]]], 4)
 
-  assert_array_almost_equal(y_before[1][:4], [
+  assert_array_almost_equal(y_before[1][:4, :, 0], [
 	[[ 0.1928,  0.2788, -0.1000],
 	 [ 0.1928,  0.2788, -0.1000],
 	 [ 0.1928,  0.2788, -0.1000],
@@ -732,13 +736,13 @@ def test_apply_product_space_convdense_alpha(X, alpha):
 	 [-0.2375, -0.0069,  0.0835]]], 4)
 
   assert len(y_after) == 2
-  assert y_after[0].shape == (64, 5, 12, 98)
-  assert y_after[1].shape == (64, 5, 3)
+  assert y_after[0].shape == (64, 5, 1, 12, 98)
+  assert y_after[1].shape == (64, 5, 1, 3)
 
   assert y_after[0].dtype == torch.float32
   assert y_after[1].dtype == torch.float32
 
-  assert_array_almost_equal(y_after[0][:2, :2, :3, :4], [
+  assert_array_almost_equal(y_after[0][:2, :2, 0, :3, :4], [
 	[[[ 1.3831,  0.9466,  0.9256,  1.4921],
 	  [ 1.5933,  1.3485,  1.9935,  1.9060],
 	  [ 2.2460,  2.6037,  1.8025,  2.1864]],
@@ -756,7 +760,7 @@ def test_apply_product_space_convdense_alpha(X, alpha):
 	  [ 0.2294, -0.0154,  0.6296,  0.5421],
 	  [ 0.8821,  1.2398,  0.4386,  0.8225]]]], 4)
 
-  assert_array_almost_equal(y_after[1][:4], [
+  assert_array_almost_equal(y_after[1][:4, :, 0], [
 	[[ 0.3324,  0.1149, -0.0712],
 	 [ 0.3324,  0.1149, -0.0712],
 	 [ 0.3324,  0.1149, -0.0712],
