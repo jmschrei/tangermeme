@@ -4,13 +4,18 @@
 import numpy
 import torch
 
+from .utils import _validate_input
+from .utils import _cast_as_tensor
 from .utils import one_hot_encode
+
 from .ersatz import multisubstitute
 from .predict import predict
 
+from tqdm import tqdm
+
 
 def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'], 
-	func=predict, additional_func_kwargs={}, **kwargs):
+	func=predict, additional_func_kwargs={}, verbose=False, **kwargs):
 	"""Runs a single spacing experiment and returns predictions.
 
 	Given a predictive model, a set of motifs to insert and the spacings
@@ -33,11 +38,13 @@ def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
 		A list of strings or of one-hot encoded version of a short motif to 
 		substitute into the set of sequences.
 
-	spacing: list or int
-		An integer specifying a constant spacing between all motifs or a list
-		of spacings of length equal to n-1 where n is the number of motifs. If
-		a list is provided, the $i$-th entry should be interpreted as the
-		distance after the $i$-th motif that the $i+1$-th motif begins.
+	spacing: torch.Tensor, shape=(-1, len(motifs)-1)
+		A tensor specifying all spacings between motifs to consider. Each row
+		in this tensor is a different combination of spacings between motifs
+		and each column is the spacing between an adjacent pair of motifs.
+		Specifically, the 1st column corresponds to the spacing between the
+		first and second motif, the 2nd column corresponds to the spacing
+		between the second and third motif, etc. 
 
 	start: int or None, optional
 		The starting position of where to insert the motif. If None, insert the
@@ -63,6 +70,10 @@ def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
 		or if you want to be absolutely sure that the arguments are making
 		their way into the function. Default is {}.
 
+	verbose: bool, optional
+		Whether to display a progress bar as spacings are evaluated. Default
+		is False.
+
 	kwargs: optional
 		Additional named arguments that will get passed into the function when
 		it is called. Default is no arguments are passed in.
@@ -70,22 +81,35 @@ def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
 
 	Returns
 	-------
-	y_before: torch.Tensor or list of torch.Tensors
+	y_befores: torch.Tensor or list of torch.Tensors
 		The predictions from the model before inserting the motif in. If the
 		output from the model's forward function is a single tensor, it will
 		return that. If the model outputs a list of tensors, it will return
 		those.
 
-	y_after: torch.Tensor or list of torch.Tensors
+	y_afters: torch.Tensor or list of torch.Tensors
 		The predictions from the model after inserting the motif in. If the
 		output from the model's forward function is a single tensor, it will
 		return that. If the model outputs a list of tensors, it will return
 		those.
 	"""
 
-	X_perturb = multisubstitute(X, motifs, spacing, start=start, 
-		alphabet=alphabet)
-	y_before = func(model, X, **kwargs, **additional_func_kwargs)
-	y_after = func(model, X_perturb, **kwargs, **additional_func_kwargs)
+	spacing = _validate_input(_cast_as_tensor(spacing, dtype=torch.int32), 
+		"spacing", shape=(-1, len(motifs)-1))
 
-	return y_before, y_after
+	y_befores, y_afters = [], []
+
+	for _spacing in tqdm(spacing, disable=not verbose):
+		_spacing = [s.item() for s in _spacing]
+		X_perturb = multisubstitute(X, motifs, _spacing, start=start, 
+			alphabet=alphabet)
+
+		y_before = func(model, X, **kwargs, **additional_func_kwargs)
+		y_befores.append(y_before)
+
+		y_after = func(model, X_perturb, **kwargs, **additional_func_kwargs)
+		y_afters.append(y_after)
+
+	y_befores = torch.stack(y_befores).transpose(0, 1)
+	y_afters = torch.stack(y_afters).transpose(0, 1)
+	return y_befores, y_afters

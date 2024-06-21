@@ -81,6 +81,55 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 			raise ValueError("{} must be one-hot encoded ".format(name) +
 				"and cannot have unknown characters.")
 
+	return X
+
+
+def _cast_as_tensor(value, dtype=None):
+	"""Cast your input as a torch tensor.
+
+	This function will take some array-like input and cast it as a torch
+	tensor with optionally a desired dtype. If X is already a torch datatype,
+	ensure that the dtype matches.
+
+
+	Parameters
+	----------
+	value: array-like
+		An array-like object to be cast into a torch.tensor
+
+	dtype: torch.dtype
+		A torch dtype to cast the values in the torch.tensor to
+
+
+	Returns
+	-------
+	value: torch.tensor
+		A tensor that has been created from the array-like with the provided
+		dtype.
+	""" 
+
+	if value is None:
+		return None
+
+	_tdtype = (torch.nn.Parameter, torch.Tensor, torch.masked.MaskedTensor)
+	if isinstance(value, _tdtype):
+		if dtype is None:
+			return value
+		elif value.dtype == dtype:
+			return value
+		else:
+			return value.type(dtype)
+			
+	if isinstance(value, list):
+		if all(isinstance(v, numpy.ndarray) for v in value):
+			value = numpy.array(value)
+		
+	if isinstance(value, (float, int, list, tuple, numpy.ndarray)):
+		if dtype is None:
+			return torch.tensor(value)
+		else:
+			return torch.tensor(value, dtype=dtype)
+
 
 def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False):
 	"""Converts a PWM/one-hot encoding to a string sequence.

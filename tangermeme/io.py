@@ -175,7 +175,7 @@ def _extract_locus_signal(signals, chrom, start, end):
 def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None, 
 	in_window=2114, out_window=1000, max_jitter=0, min_counts=None,
 	max_counts=None, target_idx=0, n_loci=None, alphabet=['A', 'C', 'G', 'T'], 
-	verbose=False):
+	ignore=['N'], verbose=False):
 	"""Extract sequence and signal information for each provided locus.
 
 	This function will take in a set of loci, sequences, and optionally signals,
@@ -271,8 +271,22 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		loci may be filtered out for various reasons, and those are not
 		counted towards the total. If None, no cap. Default is None.
 
+	alphabet : set or tuple or list
+		A pre-defined alphabet where the ordering of the symbols is the same
+		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
+		the returned tensor will have a 1 at index 0 if the character was 'A'.
+		Characters outside the alphabet are ignored and none of the indexes are
+		set to 1. Default is ['A', 'C', 'G', 'T'].
+
+	ignore: list, optional
+		A list of characters to ignore in the sequence, meaning that no bits
+		are set to 1 in the returned one-hot encoding. Put another way, the
+		sum across characters is equal to 1 for all positions except those
+		where the original sequence is in this list. Default is ['N'].
+
 	verbose: bool, optional
 		Whether to display a progress bar while loading. Default is False.
+
 
 	Returns
 	-------
@@ -356,7 +370,7 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 			seq = sequences[chrom][:, start:end]
 		else:
 			seq = one_hot_encode(sequences[chrom][start:end].seq.upper(),
-				alphabet=alphabet)
+				alphabet=alphabet, ignore=ignore)
 
 		seqs.append(seq)
 

@@ -118,10 +118,8 @@ def greedy_substitution(model, X, motifs, y, loss=torch.nn.MSELoss(
 
 	y_orig = predict(model, X, args=args, batch_size=batch_size, device=device, 
 		verbose=verbose)
-	y = y.to(device)
 
 	mask = mask if mask is not None else torch.ones(y_orig.shape[1], dtype=bool)
-	mask = mask.to(device)
 
 	loss_prev = loss(y[:, mask], y_orig[:, mask]).mean()
 	loss_orig = loss_prev
