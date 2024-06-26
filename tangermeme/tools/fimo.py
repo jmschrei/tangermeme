@@ -299,7 +299,7 @@ class FIMO(torch.nn.Module):
 			score_thresh[0, i] = (idx + self._smallest[i]) * self.bin_size                               
 		
 		hit_idxs = torch.where(scores > score_thresh)        
-		for idxs in tqdm(zip(*hit_idxs)):
+		for idxs in tqdm(zip(*hit_idxs), disable=not verbose):
 			example_idx, motif_idx, strand_idx, pos_idx = idxs
 			score = scores[(example_idx, motif_idx, strand_idx, pos_idx)].item()
 			
