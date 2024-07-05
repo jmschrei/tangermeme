@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='tangermeme',
-    version='0.2.1',
+    version='0.2.2',
     author='Jacob Schreiber',
     author_email='jmschreiber91@gmail.com',
     packages=['tangermeme', 'tangermeme/tools'],
