@@ -9,6 +9,15 @@ Release History
 Version 0.2.2
 ==============
 
+match
+-----
+
+	- Expanded the `ignore` parameter to ignore all non-ACGT characters.
+
+
+Version 0.2.2
+==============
+
 plot
 ----
 

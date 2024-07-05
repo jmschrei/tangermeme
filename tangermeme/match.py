@@ -229,6 +229,8 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 		position in the original locus file.
 	"""
 
+	ignore = ['QWERYUIOPSDFHJKLZXVBNM']
+
 	if not isinstance(random_state, numpy.random.RandomState):
 		random_state = numpy.random.RandomState(random_state)
 
@@ -241,11 +243,12 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 
 	if bigwig:
 		X, y = extract_loci(loci, fasta, in_window=in_window, signals=[bigwig],
-			out_window=out_window, verbose=verbose)
+			out_window=out_window, ignore=ignore, verbose=verbose)
 		robust_min = torch.quantile(y.sum(dim=(1, 2)), 0.01).item()
 		threshold = robust_min * signal_beta
 	else:
-		X = extract_loci(loci, fasta, in_window=in_window, verbose=verbose)
+		X = extract_loci(loci, fasta, ignore=ignore, in_window=in_window, 
+			verbose=verbose)
 		threshold = None
 
 	X = X.type(torch.float32)
@@ -364,12 +367,12 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 
 	if verbose:
 		if bigwig is None:
-			X_matched = extract_loci(matched_loci, fasta, in_window=in_window, 
-				verbose=verbose)
+			X_matched = extract_loci(matched_loci, fasta, ignore=ignore, 
+				in_window=in_window, verbose=verbose)
 		else:
 			X_matched, y_matched = extract_loci(matched_loci, fasta, 
 				signals=[bigwig], in_window=in_window, out_window=out_window, 
-				verbose=verbose)
+				ignore=ignore, verbose=verbose)
 
 		# Extract reference GC bins
 		matched_gc = X_matched.mean(axis=-1, dtype=torch.float)[:, [1, 2]].sum(axis=1).numpy()
