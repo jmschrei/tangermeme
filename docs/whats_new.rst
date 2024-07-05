@@ -15,6 +15,26 @@ plot
 	- Fixed issue in `plot_logo` raised by @sandyfloren where passing in annotations without passing in `start` or `end` would raise an error. Now, `start` defaults to 0 and `end` defaults to the length of the sequence.
 
 
+tools
+-----
+
+	- FIMO is now base 2 instead of base e, to better match the MEME-suite tool. p-values should remain the same but scores will change.
+	- FIMO `hits` will now return p-values, and will longer return an uninformative `attr` column
+
+
+product
+-------
+
+	- `apply_pairwise` has been added along with documentation and unit tests 
+
+
+match
+-----
+
+	- Fixes an issue with trying to calculate the mean over an array of integers by changing the array to be dtype float. via @adamyhe
+
+
+
 Version 0.2.1
 ==============
 

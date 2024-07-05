@@ -136,7 +136,7 @@ def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 		values = values.reshape(-1, in_window)
 		values[:, :flank] = 0
 		values[:, -flank:] = 0
-		values = values.sum(axis=-1)
+		values = numpy.nansum(values, axis=-1)
 
 		v_idxs = values <= signal_threshold
 		idxs = idxs & v_idxs

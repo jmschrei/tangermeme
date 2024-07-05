@@ -11,6 +11,7 @@ from tangermeme.utils import random_one_hot
 from tangermeme.space import space
 from tangermeme.predict import predict
 from tangermeme.product import apply_product
+from tangermeme.product import apply_pairwise
 from tangermeme.marginalize import marginalize
 
 from .toy_models import SumModel
@@ -45,12 +46,12 @@ def beta():
 ###
 
 
-def test_apply_product_predict_flattendense_alpha(X, alpha, beta):
+def test_apply_pairwise_predict_flattendense_alpha(X, alpha, beta):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	y0 = predict(model, X, device='cpu').unsqueeze(1)
-	y = apply_product(predict, model, X, args=(alpha[:5],), device='cpu')
-	assert y.shape == (64, 5, 3)
+	y0 = predict(model, X[:5], device='cpu').unsqueeze(1)
+	y = apply_pairwise(predict, model, X[:5], args=(alpha[:5],), device='cpu')
+	assert y.shape == (5, 5, 3)
 	assert y.dtype == torch.float32
 	assert_array_almost_equal(y, y0 + alpha[:5][None, :])
 	assert_array_almost_equal(y[:2], [
@@ -67,8 +68,8 @@ def test_apply_product_predict_flattendense_alpha(X, alpha, beta):
 		 [1.8171, 1.8849, 1.6924]]], 4)
 
 
-	y = apply_product(predict, model, X, args=(alpha[5:10],), device='cpu')
-	assert y.shape == (64, 5, 3)
+	y = apply_pairwise(predict, model, X[:5], args=(alpha[5:10],), device='cpu')
+	assert y.shape == (5, 5, 3)
 	assert y.dtype == torch.float32
 	assert_array_almost_equal(y, y0 + alpha[5:10][None, :])
 	assert_array_almost_equal(y[:2], [
@@ -85,16 +86,16 @@ def test_apply_product_predict_flattendense_alpha(X, alpha, beta):
 		 [ 0.3601,  0.4280,  0.2355]]], 4)
 
 
-def test_apply_product_predict_flattendense_beta(X, alpha, beta):
+def test_apply_pairwise_predict_flattendense_beta(X, alpha, beta):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	alpha = torch.zeros(X.shape[0], 1)
 
-	y0 = predict(model, X, device='cpu').unsqueeze(1)
-	y = apply_product(predict, model, X, args=(alpha[:1], beta[:5]), 
-		device='cpu')[:, 0]
+	y0 = predict(model, X[:5], device='cpu').unsqueeze(1)
+	y = apply_pairwise(predict, model, X[:5], args=(alpha[:1].repeat(5, 1), 
+		beta[:5]), device='cpu')
 	
-	assert y.shape == (64, 5, 3)
+	assert y.shape == (5, 5, 3)
 	assert y.dtype == torch.float32
 	assert_array_almost_equal(y, y0 * beta[:5][None, :])
 	assert_array_almost_equal(y[:2], [
@@ -111,110 +112,60 @@ def test_apply_product_predict_flattendense_beta(X, alpha, beta):
 		 [-0.0437,  0.0150, -0.1516]]], 4)
 
 
-	y = apply_product(predict, model, X, args=(alpha[:2], beta[5:10]), 
-		device='cpu')
-	assert y.shape == (64, 2, 5, 3)
+	y = apply_pairwise(predict, model, X[:5], args=(alpha[:1].repeat(5, 1), 
+		beta[5:10]), device='cpu')
+
+	assert y.shape == (5, 5, 3)
 	assert y.dtype == torch.float32
-	assert_array_almost_equal(y[:, 0], y0 * beta[5:10][None, :])
-	assert_array_almost_equal(y[:2], [
+	assert_array_almost_equal(y, y0 * beta[5:10][None, :])
+	assert_array_almost_equal(y[:2], 
 		[[[-0.4437, -0.6417,  0.2302],
-		  [ 0.3364,  0.4865, -0.1745],
-		  [-0.1468, -0.2122,  0.0761],
-		  [ 0.0615,  0.0889, -0.0319],
-		  [-0.0481, -0.0695,  0.0249]],
-
-		 [[-0.4437, -0.6417,  0.2302],
-		  [ 0.3364,  0.4865, -0.1745],
-		  [-0.1468, -0.2122,  0.0761],
-		  [ 0.0615,  0.0889, -0.0319],
-		  [-0.0481, -0.0695,  0.0249]]],
-
-
-		[[[ 0.1162, -0.0400,  0.4030],
-		  [-0.0881,  0.0303, -0.3056],
-		  [ 0.0384, -0.0132,  0.1333],
-		  [-0.0161,  0.0055, -0.0559],
-		  [ 0.0126, -0.0043,  0.0437]],
-
-		 [[ 0.1162, -0.0400,  0.4030],
-		  [-0.0881,  0.0303, -0.3056],
-		  [ 0.0384, -0.0132,  0.1333],
-		  [-0.0161,  0.0055, -0.0559],
-		  [ 0.0126, -0.0043,  0.0437]]]], 4)
+          [ 0.3364,  0.4865, -0.1745],
+          [-0.1468, -0.2122,  0.0761],
+          [ 0.0615,  0.0889, -0.0319],
+          [-0.0481, -0.0695,  0.0249]],
+ 
+         [[ 0.1162, -0.0400,  0.4030],
+          [-0.0881,  0.0303, -0.3056],
+          [ 0.0384, -0.0132,  0.1333],
+          [-0.0161,  0.0055, -0.0559],
+          [ 0.0126, -0.0043,  0.0437]]], 4)
 
 
-def test_apply_product_predict_flattendense_alpha_beta(X, alpha, beta):
+def test_apply_pairwise_predict_flattendense_alpha_beta(X, alpha, beta):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	y0 = predict(model, X, device='cpu').unsqueeze(1).unsqueeze(1)
-	y = apply_product(predict, model, X, args=(alpha[:5], beta[:4]), 
+	y0 = predict(model, X[:5], device='cpu').unsqueeze(1)
+	y = apply_pairwise(predict, model, X[:5], args=(alpha[:5], beta[:5]), 
 		device='cpu')
 
-	assert y.shape == (64, 5, 4, 3)
+	assert y.shape == (5, 5, 3)
 	assert y.dtype == torch.float32
-	assert_array_almost_equal(y, y0 * beta[None, None, :4] + alpha[None, :5, None])
-	assert_array_almost_equal(y[:2], [[[[2.0772, 2.2169, 1.6016],
-		  [1.6461, 1.5935, 1.8252],
-		  [1.6622, 1.6168, 1.8169],
-		  [1.5572, 1.4649, 1.8714]],
 
-		 [[0.7133, 0.8530, 0.2377],
-		  [0.2822, 0.2296, 0.4613],
-		  [0.2983, 0.2529, 0.4530],
-		  [0.1933, 0.1010, 0.5075]],
+	assert_array_almost_equal(y, y0 * beta[:5] + alpha[:5])
+	assert_array_almost_equal(y[:2], [[[2.0772, 2.2169, 1.6016],
+         [0.2822, 0.2296, 0.4613],
+         [0.8769, 0.8315, 1.0316],
+         [2.0340, 1.9417, 2.3482],
+         [2.0344, 2.1088, 1.7810]],
 
-		 [[1.2919, 1.4316, 0.8163],
-		  [0.8608, 0.8082, 1.0399],
-		  [0.8769, 0.8315, 1.0316],
-		  [0.7719, 0.6796, 1.0860]],
-
-		 [[2.5541, 2.6938, 2.0784],
-		  [2.1229, 2.0703, 2.3021],
-		  [2.1391, 2.0936, 2.2937],
-		  [2.0340, 1.9417, 2.3482]],
-
-		 [[2.1807, 2.3204, 1.7051],
-		  [1.7496, 1.6970, 1.9287],
-		  [1.7657, 1.7203, 1.9204],
-		  [1.6607, 1.5684, 1.9749]]],
+        [[1.6821, 1.7923, 1.4796],
+         [0.4310, 0.3895, 0.5073],
+         [1.0054, 0.9696, 1.0712],
+         [2.2951, 2.2223, 2.4288],
+         [1.8239, 1.8826, 1.7160]]], 4)
 
 
-		[[[1.6821, 1.7923, 1.4796],
-		  [1.7949, 1.7534, 1.8712],
-		  [1.7907, 1.7549, 1.8565],
-		  [1.8182, 1.7454, 1.9520]],
-
-		 [[0.3182, 0.4284, 0.1157],
-		  [0.4310, 0.3895, 0.5073],
-		  [0.4268, 0.3910, 0.4927],
-		  [0.4543, 0.3815, 0.5881]],
-
-		 [[0.8968, 1.0069, 0.6943],
-		  [1.0096, 0.9681, 1.0859],
-		  [1.0054, 0.9696, 1.0712],
-		  [1.0329, 0.9601, 1.1666]],
-
-		 [[2.1589, 2.2691, 1.9564],
-		  [2.2718, 2.2303, 2.3480],
-		  [2.2676, 2.2317, 2.3334],
-		  [2.2951, 2.2223, 2.4288]],
-
-		 [[1.7856, 1.8958, 1.5831],
-		  [1.8984, 1.8569, 1.9747],
-		  [1.8942, 1.8584, 1.9601],
-		  [1.9217, 1.8489, 2.0555]]]], 4)
-
-
-def test_apply_product_predict_convdense_alpha(X, alpha):
+def test_apply_pairwise_predict_convdense_alpha(X, alpha):
 	torch.manual_seed(0)
 	model = ConvDense()
 
-	y = apply_product(predict, model, X, args=(alpha[:5, :, None],), 
+	y = apply_pairwise(predict, model, X[:5], args=(alpha[:5, :, None],), 
 		batch_size=2, device='cpu')
 
 	assert len(y) == 2
-	assert y[0].shape == (64, 5, 12, 98)
-	assert y[1].shape == (64, 5, 3)
+	assert y[0].shape == (5, 5, 12, 98)
+	assert y[1].shape == (5, 5, 3)
 
 	assert y[0].dtype == torch.float32
 	assert y[1].dtype == torch.float32

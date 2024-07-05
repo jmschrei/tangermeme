@@ -2,6 +2,7 @@
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import numpy
+import numba
 import torch
 
 from tqdm import tqdm
@@ -184,7 +185,23 @@ def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False):
 	return ''.join(alphabet[pwm.argmax(axis=0)])
 
 
-def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype='int8', 
+@numba.njit("void(int8[:, :], int8[:], int8[:])")
+def _fast_one_hot_encode(X_ohe, seq, mapping):
+	"""An internal function for quickly converting bytes to one-hot indexes."""
+
+	for i in range(len(seq)):
+		idx = mapping[seq[i]]
+		if idx == -1:
+			continue
+
+		if idx == -2:
+			raise ValueError("Encountered character that is not in " + 
+				"`alphabet` or in `ignore`.")
+
+		X_ohe[i, idx] = 1
+
+
+def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype=torch.int8, 
 	ignore=['N'], desc=None, verbose=False, **kwargs):
 	"""Converts a string or list of characters into a one-hot encoding.
 
@@ -209,11 +226,8 @@ def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype='int8',
 		Characters outside the alphabet are ignored and none of the indexes are
 		set to 1. Default is ['A', 'C', 'G', 'T'].
 
-	dtype : str or numpy.dtype, optional
+	dtype : str or torch.dtype, optional
 		The data type of the returned encoding. Default is int8.
-
-	desc : str or None, optional
-		The title to display in the progress bar.
 
 	ignore: list, optional
 		A list of characters to ignore in the sequence, meaning that no bits
@@ -221,12 +235,6 @@ def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype='int8',
 		sum across characters is equal to 1 for all positions except those
 		where the original sequence is in this list. Default is ['N'].
 
-	verbose : bool or str, optional
-		Whether to display a progress bar. If a string is passed in, use as the
-		name of the progressbar. Default is False.
-
-	kwargs : arguments
-		Arguments to be passed into tqdm. Default is None.
 
 	Returns
 	-------
@@ -236,27 +244,33 @@ def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype='int8',
 		sequence_length is the length of the input sequence.
 	"""
 
-	d = verbose is False
-	alphabet_lookup = {char: i for i, char in enumerate(alphabet)}
-	ignore_lookup = set(ignore)
-
-	for char in alphabet_lookup.keys():
-		if char in ignore_lookup:
+	for char in ignore:
+		if char in alphabet:
 			raise ValueError("Character {} in the alphabet ".format(char) + 
 				"and also in the list of ignored characters.")
 
-	ohe = numpy.zeros((len(sequence), len(alphabet)), dtype=dtype)
-	for i, char in tqdm(enumerate(sequence), disable=d, desc=desc, **kwargs):
-		idx = alphabet_lookup.get(char, -1)
+	if isinstance(alphabet, list):
+		alphabet = ''.join(alphabet)
 
-		if idx != -1:
-			ohe[i, idx] = 1
-		elif char not in ignore_lookup:
-			raise ValueError("Character {} not in the ".format(char) +
-				"alphabet or the set of ignored characters.")
+	ignore = ''.join(ignore)
 
-	
-	return torch.from_numpy(ohe.T)
+	seq_idxs = numpy.frombuffer(bytearray(sequence, "utf8"), dtype=numpy.int8)
+	alpha_idxs = numpy.frombuffer(bytearray(alphabet, "utf8"), dtype=numpy.int8)
+	ignore_idxs = numpy.frombuffer(bytearray(ignore, "utf8"), dtype=numpy.int8)
+
+	one_hot_mapping = numpy.zeros(256, dtype=numpy.int8) - 2
+	for i, idx in enumerate(alpha_idxs):
+		one_hot_mapping[idx] = i
+
+	for i, idx in enumerate(ignore_idxs):
+		one_hot_mapping[idx] = -1
+
+
+	n, m = len(sequence), len(alphabet)
+
+	one_hot_encoding = numpy.zeros((n, m), dtype=numpy.int8)
+	_fast_one_hot_encode(one_hot_encoding, seq_idxs, one_hot_mapping)
+	return torch.from_numpy(one_hot_encoding).type(dtype).T
 
 
 def random_one_hot(shape, probs=None, dtype='int8', random_state=None):

@@ -186,7 +186,7 @@ def test_one_hot_encode_dtype():
 		[0, 0, 1, 0, 0],
 		[0, 0, 0, 1, 0]
 	])
-	seq_ohe = one_hot_encode(seq, dtype='float32')
+	seq_ohe = one_hot_encode(seq, dtype=torch.float32)
 
 	assert seq_ohe.dtype == torch.float32
 	assert seq_ohe.shape == (4, 5)

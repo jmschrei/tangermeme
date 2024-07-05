@@ -13,13 +13,15 @@ from ..predict import predict
 from tqdm import tqdm
 
 
-@numba.njit('float32(float32, float32)')
-def logaddexp(x, y):
-	"""Calculate the logaddexp in a numerically stable manner.
+LOG_2 = math.log(2)
 
-	This function is a fast implementation of the logaddexp function that
+@numba.njit('float32(float32, float32)')
+def logaddexp2(x, y):
+	"""Calculate the logaddexp in a numerically stable manner in base 2.
+
+	This function is a fast implementation of the logaddexp2 function that
 	operates on two numbers and is numerically stable. It should mimic the
-	functionality of numpy.logaddexp except that it does not have the overhead
+	functionality of numpy.logaddexp2 except that it does not have the overhead
 	of working on numpy arrays.
 
 
@@ -35,12 +37,11 @@ def logaddexp(x, y):
 	Returns
 	-------
 	z: float32
-		The result of log(exp(x) + exp(y)) except in a numerically stable
-		format.
+		The result of log2(pow(2, x) + pow(2, y))
 	"""
 
 	vmax, vmin = max(x, y), min(x, y)
-	return vmax + math.log(math.exp(vmin - vmax) + 1)
+	return vmax + math.log(math.pow(2, vmin - vmax) + 1) / LOG_2
 
 
 @numba.njit('void(int32[:, :], float64[:], float64[:], int32, int32, float64)')
@@ -63,7 +64,7 @@ def _fast_pwm_to_cdf(int_log_pwm, old_logpdf, logpdf, alphabet_length,
 
 					v1 = logpdf[j + offset]
 					v2 = log_bg + x
-					logpdf[j + offset] = logaddexp(v1, v2)
+					logpdf[j + offset] = logaddexp2(v1, v2)
 
 		old_logpdf[:] = logpdf
 
@@ -105,7 +106,7 @@ def _pwm_to_mapping(log_pwm, bin_size):
 		associated with each score bin.
 	"""
 
-	log_bg = math.log(0.25)
+	log_bg = math.log2(0.25)
 	int_log_pwm = numpy.round(log_pwm / bin_size).astype(numpy.int32).T.copy()
 
 	smallest = int(numpy.min(numpy.cumsum(numpy.min(int_log_pwm, axis=-1), 
@@ -116,7 +117,7 @@ def _pwm_to_mapping(log_pwm, bin_size):
 	logpdf = -numpy.inf * numpy.ones(largest - smallest + 1)
 	for i in range(log_pwm.shape[0]):
 		idx = int_log_pwm[0, i] - smallest
-		logpdf[idx] = numpy.logaddexp(logpdf[idx], log_bg)
+		logpdf[idx] = numpy.logaddexp2(logpdf[idx], log_bg)
 	
 	old_logpdf = logpdf.copy()
 	logpdf[:] = 0
@@ -126,7 +127,7 @@ def _pwm_to_mapping(log_pwm, bin_size):
 
 	log1mcdf = logpdf.copy()
 	for i in range(len(logpdf) - 2, -1, -1):
-		log1mcdf[i] = numpy.logaddexp(log1mcdf[i], log1mcdf[i + 1])
+		log1mcdf[i] = numpy.logaddexp2(log1mcdf[i], log1mcdf[i + 1])
 
 	return smallest, log1mcdf
 
@@ -185,8 +186,8 @@ class FIMO(torch.nn.Module):
 		1e-4.
 	"""
 
-	def __init__(self, motifs, alphabet=['A', 'C', 'G', 'T'], batch_size=256, 
-		bin_size=0.1, eps=0.00005):
+	def __init__(self, motifs, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1, 
+		eps=0.0001):
 		super().__init__()
 		self.bin_size = bin_size
 		self.alphabet = numpy.array(alphabet)
@@ -201,12 +202,12 @@ class FIMO(torch.nn.Module):
 		
 		motif_pwms = numpy.zeros((len(motifs), 4, max(self.motif_lengths)), 
 			dtype=numpy.float32)
-		bg = math.log(0.25)
+		bg = math.log2(0.25)
 
 		self._score_to_pval = []
 		self._smallest = []
 		for i, (name, motif) in enumerate(motifs.items()):
-			motif_pwms[i, :, :len(motif)] = numpy.log(motif.T + eps) - bg
+			motif_pwms[i, :, :len(motif)] = numpy.log2(motif.T + eps) - bg
 			smallest, mapping = _pwm_to_mapping(motif_pwms[i], bin_size)
 
 			self._smallest.append(smallest)
@@ -290,19 +291,26 @@ class FIMO(torch.nn.Module):
 		n = self.n_motifs if dim == 0 else len(X)
 		hits = [[] for i in range(n)]
 		
-		log_threshold = numpy.log(threshold)
+		log_threshold = numpy.log2(threshold)
 		
 		scores = predict(self, X, batch_size=batch_size, device=device)   
 		score_thresh = torch.empty(1, scores.shape[1], 1, 1)
-		for i in range(scores.shape[1]):
-			idx = numpy.where(self._score_to_pval[i] < log_threshold)[0][0]
-			score_thresh[0, i] = (idx + self._smallest[i]) * self.bin_size                               
+		for i, smallest in enumerate(self._smallest):
+			idx = numpy.where(self._score_to_pval[i] < log_threshold)[0]
+
+			if len(idx) > 0:
+				score_thresh[0, i] = (idx[0] + smallest) * self.bin_size                               
+			else:
+				score_thresh[0, i] = float("inf")
+
 		
 		hit_idxs = torch.where(scores > score_thresh)        
 		for idxs in tqdm(zip(*hit_idxs), disable=not verbose):
 			example_idx, motif_idx, strand_idx, pos_idx = idxs
 			score = scores[(example_idx, motif_idx, strand_idx, pos_idx)].item()
-			
+			score_idx = int(score / self.bin_size) - self._smallest[motif_idx]
+			pval = math.pow(2, self._score_to_pval[motif_idx][score_idx])
+
 			l = self.motif_lengths[motif_idx]
 			start = pos_idx.item()
 			if strand_idx == 1:
@@ -322,13 +330,13 @@ class FIMO(torch.nn.Module):
 				attr = '.'
 			
 			entry_idx = example_idx.item() if dim == 0 else motif_idx.item()
-			entry = entry_idx, start, end, strand, score, attr, seq
+			entry = entry_idx, start, end, strand, score, pval, seq
 			
 			idx = motif_idx if dim == 0 else example_idx
 			hits[idx].append(entry)
 		
 		name = 'example_idx' if dim == 0 else 'motif'
-		names = name, 'start', 'end', 'strand', 'score', 'attr', 'seq'        
+		names = name, 'start', 'end', 'strand', 'score', 'p-value', 'seq'        
 		hits = [pandas.DataFrame(hits_, columns=names) for hits_ in hits]
 		if dim == 1:
 			for hits_ in hits:
