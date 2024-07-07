@@ -245,18 +245,19 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 			out_window=out_window, ignore=ignore, verbose=verbose)
 		robust_min = torch.quantile(y.sum(dim=(1, 2)), 0.01).item()
 		threshold = robust_min * signal_beta
+		del y
 	else:
 		X = extract_loci(loci, fasta, ignore=ignore, in_window=in_window, 
 			verbose=verbose)
 		threshold = None
 
-	X = X.type(torch.float32)
-	X = X[X.sum(axis=1).mean(axis=-1) >= (1.-max_n_perc)]
+	X = X.mean(axis=-1, dtype = torch.float32)
+	X = X[X.sum(axis=-1) >= (1.-max_n_perc)]
 
 	# Extract reference GC bins
-	loci_gc = X.mean(axis=-1)[:, [1, 2]].sum(axis=1).numpy()
+	loci_gc = X[:, [1, 2]].sum(axis=-1).numpy()
 	loci_gc = ((loci_gc + gc_bin_width / 2.) // gc_bin_width).astype(int)
-
+	del X
 
 	loci_bin_count = numpy.zeros(int(1./gc_bin_width)+1, dtype=int)
 	for gc_bin in loci_gc:
