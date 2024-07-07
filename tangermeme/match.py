@@ -115,8 +115,8 @@ def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 		not the true value and so corresponds to the real position integer
 		divided by in_window.
 	"""
-
-	sequence = pyfaidx.Fasta(fasta)[chrom][:].seq.upper()
+	with pyfaidx.Fasta(fasta) as f:
+		sequence = f[chrom][:].seq.upper()
 
 	gc_perc = _calculate_char_perc(sequence, in_window, ('G', 'C'))
 	n_perc = _calculate_char_perc(sequence, in_window, ('N',))
@@ -125,12 +125,11 @@ def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 
 	flank = (in_window - out_window) // 2
 	if bigwig is not None:
-		bw = pyBigWig.open(bigwig, "r")
-
-		try:
-			values = bw.values(chrom, 0, -1, numpy=True)
-		except RuntimeError:
-			return {}
+		with pyBigWig.open(bigwig, "r") as bw:
+			try:
+				values = numpy.nan_to_num(bw.values(chrom, 0, -1, numpy=True))
+			except RuntimeError:
+				return {}
 
 		values = values[:values.shape[0] // in_window * in_window]
 		values = values.reshape(-1, in_window)
@@ -153,7 +152,7 @@ def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 
 def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000, 
 	max_n_perc=0.1, gc_bin_width=0.02, bigwig=None, signal_beta=0.5, 
-	chroms=None, random_state=None, verbose=False):
+	chroms=None, random_state=None, n_jobs = -1, verbose=False):
 	"""Extract matching loci given a fasta file.
 
 	This function takes in a set of loci (a bed file or a pandas dataframe in 
@@ -282,7 +281,7 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 
 	# Get GC content of background regions
 	f = delayed(_extract_and_filter_chrom)
-	chrom_percs = Parallel(n_jobs=-1)(f(
+	chrom_percs = Parallel(n_jobs=n_jobs)(f(
 		fasta=fasta, 
 		chrom=chrom, 
 		in_window=in_window,
