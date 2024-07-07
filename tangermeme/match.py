@@ -265,15 +265,15 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 
 	# Extract mask of already-selected loci
 	mask = {chrom: [] for chrom in chroms}
-	for _, (chrom, start, end) in loci.iterrows():
-		if chrom not in mask:
+	for locus in loci.itertuples(index = False):
+		if locus.chrom not in mask:
 			continue
 
-		start = int(start // in_window)
-		end = int(end // in_window) + 1
+		start = locus.start // in_window
+		end = locus.end // in_window + 1
 
 		for idx in range(start, end):
-			mask[chrom].append(idx)
+			mask[locus.chrom].append(idx)
 
 	for chrom, values in mask.items():
 		mask[chrom] = set(values)
