@@ -130,7 +130,7 @@ def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 				values = numpy.nan_to_num(bw.values(chrom, 0, -1, numpy=True))
 			except RuntimeError:
 				return {}
-
+		values = numpy.nan_to_num(values)
 		values = values[:values.shape[0] // in_window * in_window]
 		values = values.reshape(-1, in_window)
 		values[:, :flank] = 0
