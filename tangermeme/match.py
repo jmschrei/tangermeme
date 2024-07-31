@@ -460,10 +460,11 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 		loci = pandas.read_csv(loci, sep='\t', usecols=[0, 1, 2], header=None, 
 			index_col=False, names=['chrom', 'start', 'end'])
 
+	loci_chroms = numpy.unique(loci['chrom'])
 	if chroms is None:
-		chroms = numpy.unique(loci['chrom'])
+		chroms = loci_chroms
 
-	chrom_sizes = _get_chrom_sizes_dict(fasta, chroms)
+	chrom_sizes = _get_chrom_sizes_dict(fasta, loci_chroms)
 
 	if verbose: print("Processing given loci.")
 	coords = _loci_coords_generator(loci, max(in_window, out_window))
