@@ -1,5 +1,6 @@
 # match.py
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
+# Contribution by: Bo Vagner Hansen <bvh@bmb.sdu.dk>
 
 """
 Provides functions for the calculation of GC-content genome-wide and the
@@ -392,11 +393,11 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 
 	Parameters
 	----------
+	loci: str or pandas dataframe
+		A filepath to a bed file, or a pandas dataframe in bed format.
+
 	fasta: str
 		The filepath to the FASTA file to extract sequences from.
-
-	chrom: str
-		The chromosome to extract from the FASTA file. Must be in the file.
 
 	in_window: int
 		The window to calculate the GC content over, corresponding to the input
