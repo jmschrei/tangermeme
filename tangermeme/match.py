@@ -104,7 +104,7 @@ def _extract_counts(chrom, start, end, bw_stream):
 	"""Extract the signal from the pyBigWig `bw_stream` in the provided locus and returns
 	the sum of the base pair values. If the signal cannot be extracted, returns nan."""
 	try:
-		return bw_stream.stats(chrom, start, end, type="sum")[0]
+		return bw_stream.stats(chrom, start, end, type="sum", exact=True)[0]
 	except:
 		return float('nan')
 
