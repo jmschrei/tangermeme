@@ -5,8 +5,22 @@
 Release History
 ===============
 
+Version 0.2.4
+==============
 
-Version 0.2.2
+match
+-----
+
+	- Implemented updates to substantially reduce memory use and runtime of extract_matching_loci. This was mainly achieved by
+	1) Avoid using io.extract_loci, which one hot encodes all loci into a single large tensor. Instead, the locus sequences are extracted one by one, keeping only one in memory at a time. The N and GC percentages are calculated directly from the sequence, and only those values are stored.
+	2) Calculate genome wide N and GC percentages by taking slices of the chromosomal DNA sequences and using the count method of python strings. This is significantly faster than the previous approach using numpy isin, and avoids keeping several copies of the sequence in memory at the same time.
+
+	- Various other changes:
+	1) Counts from regions that cannot be extracted from a provided bigwig file (such as for a missing chromosome) are now set to nan rather than 0. This will effect the threshold value used for filtering background regions.
+	2) Small change to the binning strategy for gc values, which could mean that matching loci generated in a previous version will not be reproduced exactly in all cases, even when using the same random seed.
+
+
+Version 0.2.3
 ==============
 
 match
