@@ -132,7 +132,7 @@ def _cast_as_tensor(value, dtype=None):
 			return torch.tensor(value, dtype=dtype)
 
 
-def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False):
+def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False, allow_N=False):
 	"""Converts a PWM/one-hot encoding to a string sequence.
 
 	This function takes in a PWM or one-hot encoding and converts it to the
@@ -156,6 +156,10 @@ def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False):
 		Whether to force a sequence to be produced even when there are ties.
 		At each position that there is a tight, the character earlier in the
 		sequence will be used. Default is False.
+  
+	allow_N: bool, optional
+		Whether to allow the return of the character 'N' in the sequence, i.e.
+  		if pwm at a position is all 0's return N. Default is False.
 
 
 	Returns
@@ -174,7 +178,7 @@ def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False):
 			"provided alphabet.")
 
 	pwm_ismax = pwm == pwm.max(dim=0, keepdims=True).values
-	if pwm_ismax.sum(axis=0).max() > 1 and force == False:
+	if pwm_ismax.sum(axis=0).max() > 1 and force == False and allow_N == False:
 		raise ValueError("At least one position in the PWM has multiple " +
 			"letters with the same probability.")
 
@@ -182,7 +186,14 @@ def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False):
 	if isinstance(pwm, torch.Tensor):
 		pwm = pwm.numpy(force=True)
 
-	return ''.join(alphabet[pwm.argmax(axis=0)])
+	if allow_N:
+		n_inds = np.where(pwm.sum(axis=0)==0)[0]
+		dna_chars = alphabet[pwm.argmax(axis=0)]
+		dna_chars[n_inds] = 'N'
+	else:
+		dna_chars = alphabet[pwm.argmax(axis=0)]
+    
+	return ''.join(dna_chars)
 
 
 @numba.njit("void(int8[:, :], int8[:], int8[:])")
