@@ -7,9 +7,8 @@ import torch
 
 from tqdm import tqdm
 
-
-def _validate_input(X, name, shape=None, dtype=None, min_value=None, 
-	max_value=None, ohe=False, ohe_dim=1):
+def _validate_input(X, name, shape=None, dtype=None, min_value=None,
+	max_value=None, ohe=False, ohe_dim=1,allow_N=False):
 	"""An internal function for validating properties of the input.
 
 	This function will take in an object and verify characteristics of it, such
@@ -33,7 +32,7 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 	dtype: torch.dtype or None, optional
 		The dtype the tensor must have. If not provided, no check is performed.
 		Default is None.
-	
+
 	min_value: float or None, optional
 		The minimum value that can be in the tensor, inclusive. If None, no
 		check is performed. Default is None.
@@ -45,6 +44,10 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 	ohe: bool, optional
 		Whether the input must be a one-hot encoding, i.e., only consist of
 		zeroes and ones. Default is False.
+
+	allow_N: bool, optional
+		Whether to allow the return of the character 'N' in the sequence, i.e.
+  		if pwm at a position is all 0's return N. Default is False.
 	"""
 
 	if not isinstance(X, torch.Tensor):
@@ -63,7 +66,7 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 		raise ValueError("{} must have dtype {}".format(name, dtype))
 
 	if min_value is not None and X.min() < min_value:
-		raise ValueError("{} cannot have a value below {}".format(name, 
+		raise ValueError("{} cannot have a value below {}".format(name,
 			min_value))
 
 	if max_value is not None and X.max() > max_value:
@@ -78,7 +81,8 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 		if not all(values == torch.tensor([0, 1], device=X.device)):
 			raise ValueError("{} must be one-hot encoded.".format(name))
 
-		if not (X.sum(axis=ohe_dim) == 1).all():
+		if ((not (X.sum(axis=1) == 1).all()) and (not allow_N)
+          ) or not ((allow_N and ((X.sum(axis=ohe_dim) == 1) | (X.sum(axis=ohe_dim) == 0)).all())):
 			raise ValueError("{} must be one-hot encoded ".format(name) +
 				"and cannot have unknown characters.")
 
