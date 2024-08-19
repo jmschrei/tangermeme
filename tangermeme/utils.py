@@ -82,7 +82,7 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 			raise ValueError("{} must be one-hot encoded.".format(name))
 
 		if ((not (X.sum(axis=1) == 1).all()) and (not allow_N)
-          ) or not ((allow_N and ((X.sum(axis=ohe_dim) == 1) | (X.sum(axis=ohe_dim) == 0)).all())):
+          ) or ((allow_N) and (not ((X.sum(axis=ohe_dim) == 1) | (X.sum(axis=ohe_dim) == 0)).all())):
 			raise ValueError("{} must be one-hot encoded ".format(name) +
 				"and cannot have unknown characters.")
 
