@@ -191,7 +191,7 @@ def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False, allow_N=False):
 		pwm = pwm.numpy(force=True)
 
 	if allow_N:
-		n_inds = np.where(pwm.sum(axis=0)==0)[0]
+		n_inds = numpy.where(pwm.sum(axis=0)==0)[0]
 		dna_chars = alphabet[pwm.argmax(axis=0)]
 		dna_chars[n_inds] = 'N'
 	else:
