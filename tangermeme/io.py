@@ -431,7 +431,7 @@ def read_meme(filename, n_motifs=None):
 				i += 1
 
 			else:
-				motifs[motif] = pwm
+				motifs[motif] = torch.from_numpy(pwm.T)
 				motif, width, i = None, None, 0
 
 				if n_motifs is not None and len(motifs) == n_motifs:

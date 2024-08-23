@@ -445,7 +445,7 @@ def shuffle(X, start=0, end=-1, n=1, random_state=None):
 		
 params = 'void(int64, int64, int32[:], int32[:, :], int32[:], '
 params += 'int32[:, :], float32[:, :, :], int32)'
-@numba.jit(params, nopython=False)
+@numba.jit(params, nopython=False, cache=True)
 def _fast_shuffle(n_shuffles, n_chars, idxs, next_idxs, next_idxs_counts, 
 	counters, shuffled_sequences, random_state):
 	"""An internal function for fast dinucleotide shuffling using numba."""

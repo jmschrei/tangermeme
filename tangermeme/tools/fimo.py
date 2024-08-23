@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 LOG_2 = math.log(2)
 
-@numba.njit('float32(float32, float32)')
+@numba.njit('float32(float32, float32)', cache=True)
 def logaddexp2(x, y):
 	"""Calculate the logaddexp in a numerically stable manner in base 2.
 
@@ -44,7 +44,8 @@ def logaddexp2(x, y):
 	return vmax + math.log(math.pow(2, vmin - vmax) + 1) / LOG_2
 
 
-@numba.njit('void(int32[:, :], float64[:], float64[:], int32, int32, float64)')
+@numba.njit('void(int32[:, :], float64[:], float64[:], int32, int32, float64)',
+	cache=True)
 def _fast_pwm_to_cdf(int_log_pwm, old_logpdf, logpdf, alphabet_length, 
 	seq_length, log_bg):
 	"""A fast internal function for running the dynamic programming algorithm.
@@ -196,7 +197,7 @@ class FIMO(torch.nn.Module):
 			motifs = read_meme(motifs)
 			
 		self.motif_names = numpy.array([name for name in motifs.keys()])
-		self.motif_lengths = numpy.array([len(motif) for motif in 
+		self.motif_lengths = numpy.array([motif.shape[-1] for motif in 
 			motifs.values()])
 		self.n_motifs = len(self.motif_names)
 		
@@ -207,7 +208,7 @@ class FIMO(torch.nn.Module):
 		self._score_to_pval = []
 		self._smallest = []
 		for i, (name, motif) in enumerate(motifs.items()):
-			motif_pwms[i, :, :len(motif)] = numpy.log2(motif.T + eps) - bg
+			motif_pwms[i, :, :len(motif.T)] = numpy.log2(motif + eps) - bg
 			smallest, mapping = _pwm_to_mapping(motif_pwms[i], bin_size)
 
 			self._smallest.append(smallest)

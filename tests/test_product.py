@@ -221,7 +221,7 @@ def test_apply_product_marginalize_flattendense_alpha(X, alpha, beta):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	y0_before, y0_after = marginalize(model, X, 'ACGTGC', device='cpu')
-	y_before, y_after = apply_product(marginalize, model, X, 'ACGTGC', 
+	y_before, y_after = apply_product(marginalize, model, X, motif='ACGTGC', 
 		args=(alpha[:5],), device='cpu')
 
 	assert y_before.shape == (64, 5, 3)
@@ -264,7 +264,7 @@ def test_apply_product_marginalize_flattendense_beta(X, beta):
 	alpha = torch.zeros(X.shape[0], 1)
 
 	y0_before, y0_after = marginalize(model, X, 'ACGTGC', device='cpu')
-	y_before, y_after = apply_product(marginalize, model, X, 'ACGTGC', 
+	y_before, y_after = apply_product(marginalize, model, X, motif='ACGTGC', 
 		args=(alpha[:1], beta[:5]), device='cpu')
 	y_before, y_after = y_before[:, 0], y_after[:, 0]
 
@@ -305,7 +305,7 @@ def test_apply_product_marginalize_flattendense_alpha_beta(X, alpha, beta):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	y0_before, y0_after = marginalize(model, X, 'ACGTGC', device='cpu')
-	y_before, y_after = apply_product(marginalize, model, X, 'ACGTGC', 
+	y_before, y_after = apply_product(marginalize, model, X, motif='ACGTGC', 
 		args=(alpha[:5], beta[:4]), device='cpu')
 
 	assert y_before.shape == (64, 5, 4, 3)
@@ -364,8 +364,8 @@ def test_apply_product_marginalize_flattendense_alpha_beta(X, alpha, beta):
 def test_apply_product_marginalize_convdense_alpha(X, alpha):
 	torch.manual_seed(0)
 	model = ConvDense()
-	y_before, y_after = apply_product(marginalize, model, X, "ACGTGC", 0, 
-		args=(alpha[:5, :, None],), batch_size=2, device='cpu')
+	y_before, y_after = apply_product(marginalize, model, X, motif="ACGTGC", 
+		start=0, args=(alpha[:5, :, None],), batch_size=2, device='cpu')
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 5, 12, 98)
@@ -476,8 +476,9 @@ def test_apply_product_space_flattendense_alpha(X, alpha, beta):
 	model = FlattenDense()
 	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], [[3]], 
 		device='cpu')
-	y_before, y_after = apply_product(space, model, X, ['ACGTGC', 'TGTT'], 
-		[[3]], args=(alpha[:5],), device='cpu')
+	y_before, y_after = apply_product(space, model, X, 
+		motifs=['ACGTGC', 'TGTT'], spacing=[[3]], args=(alpha[:5],), 
+		device='cpu')
 
 	assert y_before.shape == (64, 5, 1, 3)
 	assert y_before.dtype == torch.float32
@@ -522,8 +523,9 @@ def test_apply_product_space_flattendense_beta(X, alpha, beta):
 
 	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], [[3]], 
 		device='cpu')
-	y_before, y_after = apply_product(space, model, X, ['ACGTGC', 'TGTT'], 
-		[[3]], args=(alpha[:1], beta[:5]), device='cpu')
+	y_before, y_after = apply_product(space, model, X, 
+		motifs=['ACGTGC', 'TGTT'], spacing=[[3]], args=(alpha[:1], beta[:5]), 
+		device='cpu')
 	y_before, y_after = y_before[:, 0], y_after[:, 0]
 
 	assert y_before.shape == (64, 5, 1, 3)
@@ -566,8 +568,9 @@ def test_apply_product_space_flattendense_alpha_beta(X, alpha, beta):
 	model = FlattenDense()
 	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], [[3]], 
 		device='cpu')
-	y_before, y_after = apply_product(space, model, X, ['ACGTGC', 'TGTT'], 
-		[[3]], args=(alpha[:4], beta[:5]), device='cpu')
+	y_before, y_after = apply_product(space, model, X, 
+		motifs=['ACGTGC', 'TGTT'], spacing=[[3]], args=(alpha[:4], beta[:5]), 
+		device='cpu')
 
 	assert y_before.shape == (64, 4, 5, 1, 3)
 	assert y_before.dtype == torch.float32
@@ -633,8 +636,9 @@ def test_apply_product_space_flattendense_alpha_beta(X, alpha, beta):
 def test_apply_product_space_convdense_alpha(X, alpha):
   torch.manual_seed(0)
   model = ConvDense()
-  y_before, y_after = apply_product(space, model, X, ["ACGTGC", "TGGTT"], [[3]], 
-	0, args=(alpha[:5, :, None],), batch_size=2, device='cpu')
+  y_before, y_after = apply_product(space, model, X, motifs=["ACGTGC", "TGGTT"], 
+  	spacing=[[3]], start=0, args=(alpha[:5, :, None],), batch_size=2, 
+  	device='cpu')
 
   assert len(y_before) == 2
   assert y_before[0].shape == (64, 5, 1, 12, 98)

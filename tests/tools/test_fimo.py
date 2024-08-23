@@ -1,4 +1,4 @@
-# test_io.py
+# test_fimo.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import numpy

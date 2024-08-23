@@ -7,20 +7,21 @@ import itertools
 from tqdm import tqdm
 
 
-def _apply(func, model, X, func_args, args, batch_size, device, verbose):
+def _apply(func, model, X, args, batch_size, device, verbose, 
+	additional_func_kwargs, **kwargs):
 	"""An internal function for applying a function to a batch of data."""
 
 	X = torch.stack(X)
 	args = [torch.stack(a) for a in args]
 
-	y = func(model, X, *func_args, args=args, batch_size=batch_size, 
-		device=device, verbose=False)
+	y = func(model, X, args=args, batch_size=batch_size, device=device, 
+		verbose=False, **additional_func_kwargs, **kwargs)
 
 	return y
 
 
-def apply_pairwise(func, model, X, *func_args, args, batch_size=32, 
-	device='cuda', verbose=False):
+def apply_pairwise(func, model, X, args=None, batch_size=32, device='cuda', 
+	additional_func_kwargs={}, verbose=False, **kwargs):
 	"""Apply a function on the cartesian product between X and args.
 
 	This function will take the provided function and apply it in a batched
@@ -54,9 +55,6 @@ def apply_pairwise(func, model, X, *func_args, args, batch_size=32,
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences to make predictions for.
 
-	*func_args: positional arguments
-		Additional positional arguments to pass into the provided function.
-
 	args: tuple or list
 		A set of additional arguments to pass into the model. Each element in
 		`args` should be one tensor that is input to the model. The elements do
@@ -72,8 +70,20 @@ def apply_pairwise(func, model, X, *func_args, args, batch_size=32,
 		set to 'cuda' without a GPU, this function will crash and must be set
 		to 'cpu'. Default is 'cuda'. 
 
+	additional_func_kwargs: dict, optional
+		Additional named arguments to pass into the function when it is called.
+		This is provided as an alternate path to route arguments into the 
+		function in case they overlap, name-wise, with those in this function,
+		or if you want to be absolutely sure that the arguments are making
+		their way into the function. Default is {}.
+
 	verbose: bool, optional
-		Whether to display a progress bar during predictions. Default is False.
+		Whether to display a progress bar as spacings are evaluated. Default
+		is False.
+
+	kwargs: optional
+		Additional named arguments that will get passed into the function when
+		it is called. Default is no arguments are passed in.
 
 
 	Returns
@@ -96,15 +106,17 @@ def apply_pairwise(func, model, X, *func_args, args, batch_size=32,
 			args_[i].append(arg)
 
 		if len(X_) == batch_size:
-			y_ = _apply(func, model, X_, func_args=func_args, args=args_, 
-				batch_size=batch_size, device=device, verbose=verbose)
+			y_ = _apply(func, model, X_, args=args_, batch_size=batch_size, 
+				device=device, verbose=verbose, 
+				additional_func_kwargs=additional_func_kwargs, **kwargs)
 			y.append(y_)
 
 			X_, args_ = [], [[] for _ in args]
 	else:
 		if len(X_) > 0:
-			y_ = _apply(func, model, X_, func_args=func_args, args=args_, 
-				batch_size=batch_size, device=device, verbose=verbose)
+			y_ = _apply(func, model, X_, args=args_, batch_size=batch_size, 
+				device=device, verbose=verbose, 
+				additional_func_kwargs=additional_func_kwargs, **kwargs)
 			y.append(y_)
 
 	Xal = [len(X), len(args[0])]
@@ -139,8 +151,8 @@ def apply_pairwise(func, model, X, *func_args, args, batch_size=32,
 	return y
 
 
-def apply_product(func, model, X, *func_args, args, batch_size=32, 
-	device='cuda', verbose=False):
+def apply_product(func, model, X, args, batch_size=32, device='cuda', 
+	additional_func_kwargs={}, verbose=False, **kwargs):
 	"""Apply a function on the cartesian product between X and each args.
 
 	This function will take the provided function and apply it in a batched
@@ -169,9 +181,6 @@ def apply_product(func, model, X, *func_args, args, batch_size=32,
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences to make predictions for.
 
-	*func_args: positional arguments
-		Additional positional arguments to pass into the provided function.
-
 	args: tuple or list
 		A set of additional arguments to pass into the model. Each element in
 		`args` should be one tensor that is input to the model. The elements do
@@ -187,8 +196,20 @@ def apply_product(func, model, X, *func_args, args, batch_size=32,
 		set to 'cuda' without a GPU, this function will crash and must be set
 		to 'cpu'. Default is 'cuda'. 
 
+	additional_func_kwargs: dict, optional
+		Additional named arguments to pass into the function when it is called.
+		This is provided as an alternate path to route arguments into the 
+		function in case they overlap, name-wise, with those in this function,
+		or if you want to be absolutely sure that the arguments are making
+		their way into the function. Default is {}.
+
 	verbose: bool, optional
-		Whether to display a progress bar during predictions. Default is False.
+		Whether to display a progress bar as spacings are evaluated. Default
+		is False.
+
+	kwargs: optional
+		Additional named arguments that will get passed into the function when
+		it is called. Default is no arguments are passed in.
 
 
 	Returns
@@ -211,15 +232,17 @@ def apply_product(func, model, X, *func_args, args, batch_size=32,
 			args_[i].append(arg)
 
 		if len(X_) == batch_size:
-			y_ = _apply(func, model, X_, func_args=func_args, args=args_, 
-				batch_size=batch_size, device=device, verbose=verbose)
+			y_ = _apply(func, model, X_, args=args_, batch_size=batch_size, 
+				device=device, verbose=verbose, 
+				additional_func_kwargs=additional_func_kwargs, **kwargs)
 			y.append(y_)
 
 			X_, args_ = [], [[] for _ in args]
 	else:
 		if len(X_) > 0:
-			y_ = _apply(func, model, X_, func_args=func_args, args=args_, 
-				batch_size=batch_size, device=device, verbose=verbose)
+			y_ = _apply(func, model, X_, args=args_, batch_size=batch_size, 
+				device=device, verbose=verbose,
+				additional_func_kwargs=additional_func_kwargs, **kwargs)
 			y.append(y_)
 
 	Xal = [len(X)] + [len(a) for a in args]

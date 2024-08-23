@@ -185,7 +185,7 @@ def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False):
 	return ''.join(alphabet[pwm.argmax(axis=0)])
 
 
-@numba.njit("void(int8[:, :], int8[:], int8[:])")
+@numba.njit("void(int8[:, :], int8[:], int8[:])", cache=True)
 def _fast_one_hot_encode(X_ohe, seq, mapping):
 	"""An internal function for quickly converting bytes to one-hot indexes."""
 
