@@ -11,8 +11,7 @@ from numba import prange
 from numpy import uint64
 
 
-@njit("float64(float64[:], float64[:, :], float64, float64, int64[:])", 
-	cache=True)
+@njit("float64(float64[:], float64[:, :], float64, float64, int64[:])")
 def _binned_median(x, bins, x_min, x_max, counts):
 	"""An internal function for calculating medians quickly.
 
@@ -52,7 +51,7 @@ def _binned_median(x, bins, x_min, x_max, counts):
 
 @njit('''uint64(float64[:, :], float64[:, :], int32[:, :], float64[:, :], 
 	float64[:, :], float64[:], float64[:, :], float64[:], float64[:], int64[:], 
-	int64, int64, int64)''', cache=True)
+	int64, int64, int64)''')
 def _integer_distances_and_histogram(X, Y, gamma, f, Z, medians, median_bins, 
 	X_norm, Y_norm, Y_counts, nq_csum, nq, n_bins):
 	"""An internal function for integerized scores and the histogram.
@@ -114,7 +113,7 @@ def _integer_distances_and_histogram(X, Y, gamma, f, Z, medians, median_bins,
 	return uint64(-i_min * bin_scale)
 
 
-@njit('void(float64[:], float64[:], float64[:], float64[:], int64)', cache=True)
+@njit('void(float64[:], float64[:], float64[:], float64[:], int64)')
 def _pairwise_max(x, y, y_csum, z, n):
 	"""An internal function for the pdf of the maximum of two pdfs.
 
@@ -140,7 +139,7 @@ def _pairwise_max(x, y, y_csum, z, n):
 
  
 @njit('''void(float64[:, :], float64[:, :, :], float64[:, :], float64[:, :, :], 
-	int64, int64, int64, uint64)''', cache=True)
+	int64, int64, int64, uint64)''')
 def _p_value_backgrounds(f, A, B, A_csum, nq, n_bins, t_max, offset):
 	"""An internal function that calculates the backgrounds for p-values.
 
@@ -215,7 +214,7 @@ def _p_value_backgrounds(f, A, B, A_csum, nq, n_bins, t_max, offset):
 			
 
 @njit('''void(int32[:, :], float64[:, :], uint64[:], int64[:], int64, uint64, 
-	int64, float64[:, :])''', cache=True)
+	int64, float64[:, :])''')
 def _p_values(gamma, B_cdfs, rr_inv, T_lens, nq, offset, n_bins, results):
 	"""An internal function for calculating the best match and p-values.
 
@@ -262,7 +261,7 @@ def _p_values(gamma, B_cdfs, rr_inv, T_lens, nq, offset, n_bins, results):
 		total_offset += nt
 
 
-@njit('void(float64[:, :])', cache=True)
+@njit('void(float64[:, :])')
 def _merge_rc_results(results):
 	"""An internal method for taking the best across two strands."""
 
