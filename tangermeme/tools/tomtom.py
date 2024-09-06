@@ -236,13 +236,13 @@ def _p_values(gamma, B_cdfs, rr_inv, T_lens, nq, offset, n_bins, results):
 						break
 
 					j, t_idx = uint64(j), uint64(total_offset + j + k)
-					print(gamma.shape, type(gamma[j, rr_inv[t_idx]]))
+					print(gamma.shape, gamma[j, rr_inv[t_idx]])
 					score += gamma[j, rr_inv[t_idx]]
 					overlap += 1
 			else:
 				for j in range(min(nq, nt-k)):                    
 					j, t_idx = uint64(j), uint64(total_offset + j + k)
-					print(gamma.shape, type(gamma[j, rr_inv[t_idx]]))
+					print(gamma.shape, gamma[j, rr_inv[t_idx]])
 					score += gamma[j, rr_inv[t_idx]]
 					overlap += 1
 		
