@@ -18,6 +18,7 @@ match
 	- Various other changes:
 	1) Counts from regions that cannot be extracted from a provided bigwig file (such as for a missing chromosome) are now set to nan rather than 0. This will effect the threshold value used for filtering background regions.
 	2) Small change to the binning strategy for gc values, which could mean that matching loci generated in a previous version will not be reproduced exactly in all cases, even when using the same random seed.
+	3) Enable the handling of 'N' in sequences or [0,0,0,0], i.e. an ambiguous genomic positions. Updated the `characters()` and the `_validate_input()` in `utils` module to enable this.
 
 
 Version 0.2.3

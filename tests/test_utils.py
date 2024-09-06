@@ -81,15 +81,19 @@ def test_characters_raise_alphabet():
 
 def test_characters_raise_dimensions():
 	seq = 'GCTAC'
+	#this will work for shape (1,4,5) but not for (N,4,5) where N > 1
 	ohe = torch.tensor([[
 		[0.25, 0.00, 0.10, 0.95, 0.00],
 		[0.20, 1.00, 1.00, 0.05, 1.00],
 		[0.30, 0.00, 0.30, 0.00, 0.00],
 		[0.25, 0.00, 3.00, 0.00, 0.00]
 	]])
-
+	
+	assert characters(ohe) == seq
+	
+	ohe = torch.concat([ohe, ohe], dim=0)
 	assert_raises(ValueError, characters, ohe, ['A', 'C', 'G', 'T'])
-
+	
 	ohe = torch.tensor([0.25, 0.00, 0.10, 0.95, 0.00])
 	assert_raises(ValueError, characters, ohe, ['A', 'C', 'G', 'T'])
 
