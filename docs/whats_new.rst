@@ -5,8 +5,36 @@
 Release History
 ===============
 
-Version 0.2.4
+Version 0.3.0
 ==============
+
+Highlights
+----------
+
+	- Added in a new TOMTOM implementation and a revamped FIMO implementation
+	- TOMTOM and FIMO both have command-line tools in `tangermeme`
+
+
+FIMO
+----
+
+	- The PyTorch implementation has been exchanged for a numba based one.
+	- The new signature is a single function called `fimo`
+	- A command-line tool can be used with the signature `tangermeme fimo ...`
+
+
+TOMTOM
+------
+
+	- A numba-based implementation has been added in the function `tomtom`
+	- A command-line tool can be used with the signature `tangermeme tomtom ...`
+
+
+utils
+-----
+	
+	- `chunk` and `unchunk` have been added in to chunk long sequences into blocks that can be operated on by methods with fixed-window inputs, such as machine learning models, and for converting the predictions from these approaches back into a contiguous format.
+
 
 match
 -----
