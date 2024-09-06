@@ -11,7 +11,7 @@ from numba import prange
 from numpy import uint64
 
 
-@njit("float64(float64[:], float64[:, :], float64, float64, int64[:])")
+@njit
 def _binned_median(x, bins, x_min, x_max, counts):
 	"""An internal function for calculating medians quickly.
 
@@ -49,9 +49,7 @@ def _binned_median(x, bins, x_min, x_max, counts):
 	return -99999
 
 
-@njit('''uint64(float64[:, :], float64[:, :], int32[:, :], float64[:, :], 
-	float64[:, :], float64[:], float64[:, :], float64[:], float64[:], int64[:], 
-	int64, int64, int64)''')
+@njit
 def _integer_distances_and_histogram(X, Y, gamma, f, Z, medians, median_bins, 
 	X_norm, Y_norm, Y_counts, nq_csum, nq, n_bins):
 	"""An internal function for integerized scores and the histogram.
@@ -113,7 +111,7 @@ def _integer_distances_and_histogram(X, Y, gamma, f, Z, medians, median_bins,
 	return uint64(-i_min * bin_scale)
 
 
-@njit('void(float64[:], float64[:], float64[:], float64[:], int64)')
+@njit
 def _pairwise_max(x, y, y_csum, z, n):
 	"""An internal function for the pdf of the maximum of two pdfs.
 
@@ -138,8 +136,7 @@ def _pairwise_max(x, y, y_csum, z, n):
 			z[i] = x[i] * y_csum[i] + y[i] * x_csum - x[i] * y[i]
 
  
-@njit('''void(float64[:, :], float64[:, :, :], float64[:, :], float64[:, :, :], 
-	int64, int64, int64, uint64)''')
+@njit
 def _p_value_backgrounds(f, A, B, A_csum, nq, n_bins, t_max, offset):
 	"""An internal function that calculates the backgrounds for p-values.
 
@@ -213,8 +210,7 @@ def _p_value_backgrounds(f, A, B, A_csum, nq, n_bins, t_max, offset):
 			B[i, j] = 1 - B[i, j]
 			
 
-@njit('''void(int32[:, :], float64[:, :], uint64[:], int64[:], int64, uint64, 
-	int64, float64[:, :])''')
+@njit
 def _p_values(gamma, B_cdfs, rr_inv, T_lens, nq, offset, n_bins, results):
 	"""An internal function for calculating the best match and p-values.
 
@@ -261,7 +257,7 @@ def _p_values(gamma, B_cdfs, rr_inv, T_lens, nq, offset, n_bins, results):
 		total_offset += nt
 
 
-@njit('void(float64[:, :])')
+@njit
 def _merge_rc_results(results):
 	"""An internal method for taking the best across two strands."""
 
@@ -282,9 +278,7 @@ def _merge_rc_results(results):
 			results[i, 4] = 1
 			
 
-@njit('''float64[:, :, :](float64[:, :], float64[:, :], int64[:], int64[:],
-	float64[:], float64[:], uint64[:], int64[:], int64, int64, int64, int64, 
-	int64)''', parallel=True)
+@njit(parallel=True)
 def _tomtom(Q, T, Q_lens, T_lens, Q_norm, T_norm, rr_inv, rr_counts, n_nearest, 
 	n_score_bins, n_median_bins, n_cache, reverse_complement):
 	"""An internal function implementing the TOMTOM algorithm.
