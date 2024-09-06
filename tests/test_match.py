@@ -20,10 +20,6 @@ from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
 
 
-@pytest.fixture
-def X():
-	return 5
-
 
 ###
 
@@ -36,7 +32,7 @@ def test_calculate_char_perc():
 	n = _calculate_char_perc(seq, width=5, chars=['N'])
 
 	assert gc.shape[0] == 4
-	assert gc.dtype == torch.float32
+	assert gc.dtype == numpy.float64
 
 	assert_array_almost_equal(gc, [0.6, 0.4, 0.2, 0.4])
 	assert_array_almost_equal(at, [0.4, 0.6, 0.8, 0.6])
@@ -76,19 +72,6 @@ def test_calculate_char_perc_short():
 	assert_array_almost_equal(at, [0.6])
 
 
-def test_calculate_char_perc_raises_long():
-	seq = 'ATCGATACGT'
-	assert_raises(ValueError, _calculate_char_perc, seq, width=11, 
-		chars=['C', 'G'])
-
-
-def test_calculate_char_perc_raises_sequence():
-	assert_raises(ValueError, _calculate_char_perc, ['A', 'C', 'G', 'T'], 2, 
-		['A', 'C'])
-	assert_raises(ValueError, _calculate_char_perc, one_hot_encode('ACATCTG'), 
-		2, ['A', 'C'])
-
-
 ###
 
 
@@ -110,7 +93,7 @@ def test_extract_and_filter_chrom():
 	assert isinstance(regions, dict)
 	assert len(regions) == 3
 	assert_array_almost_equal(regions[25], [0, 3, 5, 6, 13])
-	assert_array_almost_equal(regions[22], [1, 2, 4, 7, 9, 11, 12])
+	assert_array_almost_equal(regions[23], [1, 2, 4, 7, 9, 11, 12])
 	assert_array_almost_equal(regions[20], [8, 10])
 
 

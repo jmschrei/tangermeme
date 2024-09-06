@@ -38,13 +38,14 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 		standard coloring. Default is None.
 
 	annotations: pandas.DataFrame, optional
-		A set of annotations with the following columns in order:
-			- motif: the name of the motif
+		A set of annotations with the following columns in any order except for
+		`motif_name`, which can be called anything but must come first:
+		
+			- motif_name: the name of the motif
 			- start: the start of the hit relative to the window provided
 			- end: the end of the hit relative to the window provided
 			- strand: the strand the hit is on (optional)
 			- score: the score of the hit
-			- two more optional columns
 
 		These will probably come from the output of the hit caller. Default is
 		None.
@@ -118,7 +119,11 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 
 		motifs = numpy.zeros((end-start, annotations_.shape[0]))
 		for _, row in annotations_.iterrows():
-			motif, motif_start, motif_end, _, score = row[:5]
+			motif = row.values[0]
+			motif_start = row['start']
+			motif_end = row['end']
+			score = row['score']
+
 			motif_start -= start
 			motif_end -= start
 			

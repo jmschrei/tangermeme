@@ -341,7 +341,7 @@ def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1,
 
 
 	# Convert the results to pandas DataFrames
-	names = ['sequence_name', 'start', 'stop', 'score', 'p-value']
+	names = ['sequence_name', 'start', 'end', 'score', 'p-value']
 	n_ = n_motifs // 2 if reverse_complement else n_motifs
 
 	for i in range(n_):
@@ -352,14 +352,13 @@ def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1,
 			hits_ = pandas.DataFrame(hits[i], columns=names)
 			hits_['strand'] = ['+'] * len(hits[i])
 
-		hits_['motif_id'] = [motif_names[i] for _ in range(len(hits_))]
-		hits_['motif_alt_id'] = [numpy.nan for _ in range(len(hits_))]
+		hits_['motif_name'] = [motif_names[i] for _ in range(len(hits_))]
 
 		if sequence_names is not None:
 			hits_['sequence_name'] = sequence_names[hits_['sequence_name']]
 			
-		hits[i] = hits_[['motif_id', 'motif_alt_id', 'sequence_name', 'start', 
-			'stop', 'strand', 'score', 'p-value']]
+		hits[i] = hits_[['motif_name', 'sequence_name', 'start', 
+			'end', 'strand', 'score', 'p-value']]
 
 	hits = hits[:n_]
 
