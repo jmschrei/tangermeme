@@ -227,7 +227,7 @@ def _p_values(gamma, B_cdfs, rr_inv, T_lens, nq, offset, n_bins, results):
 		results[i, 1] = 0
 		
 		for k in range(-nq + 1, nt):
-			score = 0.0
+			score = 0
 			overlap = 0
 			
 			if k < 0:
