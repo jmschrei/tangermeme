@@ -21,11 +21,24 @@ Please see the documentation and tutorials linked at the top of this README for 
 
 This first release focused on the core prediction-based functionality (e.g., marginalizations, ISM, etc..) that subsequent releases will build on. Although my focus will largely follow my research projects and the feedback I receive from the community, here is a roadmap for what I currently plan to focus on in the next few releases.
 
-- v0.1.0: Prediction-based functionality ✔️
-- v0.2.0: Attribution-based functionality (e.g., attribution marginalization, support for DeepLIFT, seqlet calling..) ✔️
-- v0.3.0: PyTorch ports for MEME and TOMTOM and command-line tools for the prediction- and attribution- based functionality
+- v0.1.0: ✔️ Prediction-based functionality
+- v0.2.0: ✔️ Attribution-based functionality (e.g., attribution marginalization, support for DeepLIFT, seqlet calling..)
+- v0.3.0: ✔️ PyTorch ports for MEME and TOMTOM and command-line tools for the prediction- and attribution- based functionality 
 - v0.4.0: Focus on interleaving tools and iterative approaches
 
+## Command-line Tools
+
+tangermeme implements command-line tools for the FIMO and TOMTOM algorithms. These can be called using
+
+`tangermeme fimo -m <motif_file> -s <sequencce_file> ...`
+
+and
+
+`tangermeme tomtom -q <motif_file_1> -t <motif_file_2>`
+
+Alternatively, TOMTOM can be called by just providing a hard sequence as a query. This can be valuable when you are manually analyzing data and want to check what motif best captures a specific area/seqlet you are looking at.
+
+`tangermeme tomtom -q ACGTTTG`
 
 ## Usage
 
