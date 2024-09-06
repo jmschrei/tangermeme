@@ -3,7 +3,6 @@ import numpy
 import pytest
 import pandas
 
-
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
 
@@ -28,7 +27,6 @@ def test_cmd_tomtom():
 	assert_array_almost_equal(tomtom_results['Score'], [594, 604, 722, 717])
 	assert_array_almost_equal(tomtom_results['Offset'], [2, 2, 0, 3])
 	assert_array_almost_equal(tomtom_results['Overlap'], [7, 7, 10, 10])
-
 
 	strands = ['-', '-', '+', '-']
 	for i, strand in enumerate(tomtom_results['Strand']):
@@ -55,7 +53,6 @@ def test_cmd_tomtom2():
 	assert_array_almost_equal(tomtom_results['Score'], [594, 604, 722, 717])
 	assert_array_almost_equal(tomtom_results['Offset'], [2, 2, 0, 3])
 	assert_array_almost_equal(tomtom_results['Overlap'], [7, 7, 10, 10])
-
 
 	strands = ['-', '-', '+', '-']
 	for i, strand in enumerate(tomtom_results['Strand']):

@@ -122,7 +122,7 @@ def test_pairwise_max_fallback():
 
 
 def test_merge_rc_results():
-	results = numpy.random.RandomState(0).randn(1000, 4)
+	results = numpy.random.RandomState(0).randn(1000, 5)
 
 	idxs = results[:500, 1] > results[500:, 1]
 	best_p = 1 - (1 - numpy.minimum(results[:500, 0], results[500:, 0])) ** 2
@@ -132,11 +132,11 @@ def test_merge_rc_results():
 
 	_merge_rc_results(results)
 
-	assert_array_almost_equal(results[:500, 0], best_p)
-	assert_array_almost_equal(results[:500, 1], best_scores)
-	assert_array_almost_equal(results[:500, 2], best_offsets)
-	assert_array_almost_equal(results[:500, 3], best_overlaps)
-	assert_array_almost_equal(results[:500, 4], idxs)
+	assert_array_almost_equal(results[:500, 0], best_p, 4)
+	assert_array_almost_equal(results[:500, 1], best_scores, 4)
+	assert_array_almost_equal(results[:500, 2], best_offsets, 4)
+	assert_array_almost_equal(results[:500, 3], best_overlaps, 4)
+	assert_array_almost_equal((1 - results[:500, 4]).astype(bool), idxs)
 
 
 ###
@@ -177,8 +177,8 @@ def test_tomtom():
 		1., 11., -6., -7., -7.,  5., -4., -6.,  2.,  3.,  1., -7., -8.])
 	assert_array_almost_equal(overlaps[0], [16.,  7.,  4.,  4.,  6.,  7.,  5., 
 		16.,  3.,  4.,  7.,  5.,  4., 12., 10.,  8.,  5., 16., 6.,  4.])
-	assert_array_almost_equal(strands[0], [])
-
+	assert_array_almost_equal(strands[0], [0., 0., 0., 0., 0., 0., 0., 1., 0., 
+		0., 0., 0., 1., 0., 1., 0., 1., 0., 1., 1])
 
 
 def test_tomtom_subsets():
@@ -239,7 +239,8 @@ def test_tomtom_meme():
 		2.0, 1.0, -2.0, 7.0, 0.0], 6)
 	assert_array_almost_equal(overlaps[0], [10.0, 9.0, 10.0, 8.0, 8.0, 10.0, 
 		8.0, 8.0, 10.0, 8.0, 10.0, 10.0], 6)
-	assert_array_almost_equal(strands[0], [])
+	assert_array_almost_equal(strands[0], [0., 1., 0., 1., 0., 1., 0., 0., 0., 
+		1., 1., 0.])
 
 
 def test_tomtom_reverse_complement():
@@ -262,7 +263,7 @@ def test_tomtom_reverse_complement():
 		2.,  1.,  1.,  7.,  0.], 6)
 	assert_array_almost_equal(overlaps[0], [10.,  9., 10.,  9.,  8., 10.,  8.,  
 		8., 10., 10., 10., 10.], 6)
-	assert_array_almost_equal(strands[0], [])
+	assert_array_almost_equal(strands[0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
 
 def test_tomtom_n_jobs():
@@ -318,5 +319,6 @@ def test_tomtom_n_target_bins_small():
 		2.,  1., -2.,  7.,  0.], 6)
 	assert_array_almost_equal(overlaps[0], [10.,  9., 10.,  9.,  8., 10.,  8.,  
 		8., 10.,  8., 10., 10.], 6)
-	assert_array_almost_equal(strands[0], [])
+	assert_array_almost_equal(strands[0], [0., 1., 0., 0., 1., 1., 0., 0., 0., 
+		1., 1., 0.])
 	

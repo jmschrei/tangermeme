@@ -2,8 +2,14 @@
 # tangermeme command-line toolkits
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import sys
+import pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
 import argparse
+
 from _tomtom import _run_tomtom
+from _fimo import _run_fimo
 
 desc = """tangermeme is a package for genomic sequence-based machine learning.
 	   This command-line tool contains many methods that are useful for
@@ -59,8 +65,25 @@ tomtom_parser.add_argument("-p", "--thresh", type=float, default=0.01,
 ###
 
 
-#
+fimo_help = """Scan a set of motifs from a MEME file against one or more
+	sequences in a FASTA file."""
 
+fimo_parser = subparsers.add_parser("fimo", help=fimo_help,
+	formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+fimo_parser.add_argument("-m", "--motif", type=str, required=True,
+	help="""The filename of a MEME-formatted file containing motifs.""")
+fimo_parser.add_argument("-s", "--sequence", type=str,
+	help="""The filename of a FASTA-formatted file containing the sequences to
+	scan against.""")
+fimo_parser.add_argument("-w", "--bin_size", type=float, default=0.1,
+	help="""The width of bins to use when discretizing scores.""")
+fimo_parser.add_argument("-e", "--epsilon", type=float, default=0.0001,
+	help="""A pseudocount to add to each PWM.""")
+fimo_parser.add_argument("-p", "--threshold", type=float, default=0.0001,
+	help="""The p-value threshold for returning matches.""")
+fimo_parser.add_argument("-r", "--norc", action='store_true', default=False,
+	help="""Whether to only do the positive strand.""")
 
 
 ##############

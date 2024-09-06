@@ -6,6 +6,8 @@ import torch
 from tangermeme.utils import characters
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import chunk
+from tangermeme.utils import unchunk
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -318,3 +320,93 @@ def test_random_one_hot_raises_type():
 def test_random_one_hot_raises_shape():
 	assert_raises(ValueError, random_one_hot, (2, 3))
 	assert_raises(ValueError, random_one_hot, (3,))
+
+
+###
+
+
+def test_chunk():
+	X0 = [torch.randn(4, 10), torch.randn(4, 14)]
+	X = chunk(X0, size=2)
+
+	assert X.dtype == X0[0].dtype
+	assert X.shape == (12, 4, 2)
+	assert_array_almost_equal(X, torch.stack([X0[0][:, :2], X0[0][:, 2:4], 
+		X0[0][:, 4:6], X0[0][:, 6:8], X0[0][:, 8:10], X0[1][:, :2], 
+		X0[1][:, 2:4], X0[1][:, 4:6], X0[1][:, 6:8], X0[1][:, 8:10],
+		X0[1][:, 10:12], X0[1][:, 12:14]]))
+
+	X0 = [torch.randn(4, 10), torch.randn(4, 14)]
+	X = chunk(X0, size=5)
+
+	assert X.dtype == X0[0].dtype
+	assert X.shape == (4, 4, 5)
+
+
+def test_chunk_overlap():
+	X0 = [torch.randn(4, 10), torch.randn(4, 14)]
+
+	X = chunk(X0, size=2, overlap=1)
+	assert X.shape == (22, 4, 2)
+	assert_array_almost_equal(X[:10], torch.stack([X0[0][:, :2], X0[0][:, 1:3], 
+		X0[0][:, 2:4], X0[0][:, 3:5], X0[0][:, 4:6], X0[0][:, 5:7], 
+		X0[0][:, 6:8], X0[0][:, 7:9], X0[0][:, 8:10], X0[1][:, :2]]))
+
+
+	X = chunk(X0, size=5, overlap=2)
+	assert X.shape == (6, 4, 5)
+	assert_array_almost_equal(X, torch.stack([X0[0][:, :5], X0[0][:, 3:8], 
+		X0[1][:, :5], X0[1][:, 3:8], X0[1][:, 6:11], X0[1][:, 9:]]))
+
+
+def test_chunk_raises():
+	assert_raises(ValueError, chunk, [torch.randn(4, 10)], -1)
+	assert_raises(ValueError, chunk, [torch.randn(4, 10)], 1.2)
+
+	assert_raises(ValueError, chunk, [torch.randn(4, 10)], 2, -1)
+	assert_raises(ValueError, chunk, [torch.randn(4, 10)], 2, 0.3)
+
+	assert_raises(ValueError, chunk, torch.randn(4, 10), 2)
+	assert_raises(ValueError, chunk, torch.randn(3, 4, 10), 2)
+
+
+###
+
+
+def test_unchunk():
+	lengths = [50, 67]
+	X0 = [torch.randn(4, lengths[0]), torch.randn(4, lengths[1])]
+
+	X = chunk(X0, size=4, overlap=3)
+	X1 = unchunk(X, lengths, overlap=3)
+	assert_array_almost_equal(X1[0], X0[0])
+	assert_array_almost_equal(X1[1], X0[1])
+
+	X = chunk(X0, size=4, overlap=2)
+	X1 = unchunk(X, lengths, overlap=2)
+	assert_array_almost_equal(X1[0], X0[0])
+	assert_array_almost_equal(X1[1], X0[1][:, :66])
+
+	X = chunk(X0, size=23, overlap=8)
+	X1 = unchunk(X, lengths, overlap=8)
+	assert_array_almost_equal(X1[0], X0[0][:, :38])
+	assert_array_almost_equal(X1[1], X0[1][:, :53])
+
+	X = chunk(X0, size=23, overlap=0)
+	X1 = unchunk(X, lengths, overlap=0)
+	assert_array_almost_equal(X1[0], X0[0][:, :46])
+	assert_array_almost_equal(X1[1], X0[1][:, :46])
+
+	X0 = X0[:1]
+	X = chunk(X0, size=23, overlap=6)
+	X1 = unchunk(X, lengths[:1], overlap=6)
+	assert_array_almost_equal(X1[0], X0[0][:, :40])
+
+
+def test_unchunk_raises():
+	lengths = [50, 67]
+	X0 = [torch.randn(4, lengths[0]), torch.randn(4, lengths[1])]
+	X = chunk(X0[:1], size=7, overlap=2)
+
+	assert_raises(IndexError, unchunk, X, lengths, overlap=2)
+	assert_raises(ValueError, unchunk, X[0], lengths[:1], overlap=2)

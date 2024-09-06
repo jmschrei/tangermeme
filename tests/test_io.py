@@ -739,7 +739,7 @@ def test_read_meme():
 	assert len(motifs) == 12
 	assert isinstance(motifs, dict)
 	assert all(isinstance(key, str) for key in motifs.keys())
-	assert all(isinstance(pwm, numpy.ndarray) for pwm in motifs.values())
+	assert all(isinstance(pwm, torch.Tensor) for pwm in motifs.values())
 	
 	assert all([key in motifs.keys() for key in keys])
 	assert_array_almost_equal(motifs['FOSL2+JUND_MA1145.1'], pwm) 
@@ -754,7 +754,7 @@ def test_read_meme_n_motifs():
 	assert len(motifs) == 6
 	assert isinstance(motifs, dict)
 	assert all(isinstance(key, str) for key in motifs.keys())
-	assert all(isinstance(pwm, numpy.ndarray) for pwm in motifs.values())
+	assert all(isinstance(pwm, torch.Tensor) for pwm in motifs.values())
 	
 	assert all([key in motifs.keys() for key in keys])
 

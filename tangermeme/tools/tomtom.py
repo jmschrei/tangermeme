@@ -4,6 +4,7 @@
 import math
 import numpy
 import numba
+import torch
 
 from numba import njit
 from numba import prange
@@ -346,6 +347,8 @@ def _tomtom(Q, T, Q_lens, T_lens, Q_norm, T_norm, rr_inv, rr_counts, n_nearest,
 
 		if reverse_complement == 1:
 			_merge_rc_results(_results[pid])
+		else:
+			_results[pid, :, 4] = 0
 
 		if n_nearest == -1:
 			results[i] = _results[pid, :n_in_targets]
@@ -461,6 +464,10 @@ def tomtom(Qs, Ts, n_nearest=None, n_score_bins=100, n_median_bins=1000,
 
 	if n_nearest is None:
 		n_nearest = -1
+
+	if isinstance(Ts[0], torch.Tensor):
+		Ts = [T.numpy(force=True) for T in Ts]
+
 	
 	Q_lens = numpy.array([Q.shape[-1] for Q in Qs], dtype='int64')
 	Q = numpy.concatenate(Qs, axis=-1)

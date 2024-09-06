@@ -6,16 +6,17 @@ import numba
 import numpy
 import torch
 import pandas
+import pyfaidx
+import time
 
 from ..io import read_meme
-from ..predict import predict
 
 from tqdm import tqdm
 
 
 LOG_2 = math.log(2)
 
-@numba.njit('float32(float32, float32)', cache=True)
+@numba.njit('float64(float64, float64)', cache=True)
 def logaddexp2(x, y):
 	"""Calculate the logaddexp in a numerically stable manner in base 2.
 
@@ -113,7 +114,7 @@ def _pwm_to_mapping(log_pwm, bin_size):
 	smallest = int(numpy.min(numpy.cumsum(numpy.min(int_log_pwm, axis=-1), 
 		axis=-1)))
 	largest = int(numpy.max(numpy.cumsum(numpy.max(int_log_pwm, axis=-1), 
-		axis=-1)))
+		axis=-1))) + log_pwm.shape[1]
 	
 	logpdf = -numpy.inf * numpy.ones(largest - smallest + 1)
 	for i in range(log_pwm.shape[0]):
@@ -133,272 +134,240 @@ def _pwm_to_mapping(log_pwm, bin_size):
 	return smallest, log1mcdf
 
 
-class FIMO(torch.nn.Module):
-	"""A motif hit caller that operates on sequences and attributions.
+@numba.njit(parallel=True, fastmath=True)
+def _fast_hits(X, chrom_lengths, pwm, pwm_lengths, score_threshold, bin_size, 
+	smallest, score_to_pvals, score_to_pval_lengths):
+	n_motifs = len(pwm_lengths) - 1
+	n_chroms = len(chrom_lengths) - 1
 
-	This is a method for calling motif hits by scanning PWMs across one-hot
-	encoded sequences as convolutions. One can get these scores directly, or
-	summaries based on hits -- positions where the score goes above a certain
-	p-value threshold, as calculated using dynamic programming a la FIMO.
+	hits = []
+	for i in range(n_motifs):
+		j = numpy.int64(1)
+		k = numpy.uint64(1)
+		l = numpy.float64(1.0)
+		hits.append([(j, k, k, l, l) for z in range(0)])
 
-	For efficiency, all PWMs are put in the same convolution operation 
-	regardless of size and so are simultaneously scanned across all of the
-	sequences, and p-values are only used to calculate thresholds on the score 
-	rather than calculated for each position. 
-	
-	Because this method is implemented in torch, you can easily use a GPU to
-	accelerate scanning and use half precision for additional speed ups (if
-	your GPU supports half precision).
+	for k in numba.prange(n_motifs):
+		n = pwm_lengths[k+1] - pwm_lengths[k]
+		k = numpy.uint64(k)
+		thresh = score_threshold[k]
+		
+		for l in range(n_chroms):        
+			start = numpy.uint64(chrom_lengths[l])
+			end = numpy.uint64(chrom_lengths[l+1])
+			
+			for i in range(end-start-n):
+				i = numpy.uint64(i)
+				
+				score = 0.0
+				for j in range(n):
+					j = numpy.uint64(j)
+					
+					idx = X[start+i+j]
+					if idx == -1:
+						continue
 
-	There are a few ways to use this method:
+					m_idx = numpy.uint64(j + pwm_lengths[k])
+					idx = numpy.uint64(idx)
+					score += pwm[idx, m_idx]
 
-		(1) Use the `.predict` method to get raw scores of each motif on each
-		example on both strands.
-		(2) Use the `.hits` method to get a pandas DataFrame in bed format
-		showing all locations where the score is higher than the score
-		threshold at the provided p-value threshold.
-		(3) Use the `.hits` method with `axis=1` to get a pandas DataFrame in
-		bed format showing all motif hits at each example.
-		(4) Use the `.hit_matrix` method to get a matrix of size (n_examples,
-		n_motifs) showing the maximum score for each motif in each example.
+				if score > thresh:
+					score_idx = int(score / bin_size) - smallest[k]                    
+					score_idx += score_to_pval_lengths[k]
+					hits[k].append((numpy.int64(l), i, i+n, score, 
+						2.0 ** score_to_pvals[score_idx]))
 
-	
+	return hits
+
+
+@numba.njit
+def _fast_convert(X, mapping):
+	for i in range(X.shape[0]):
+		X[i] = mapping[X[i]]
+
+
+def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1, 
+	eps=0.0001, threshold=0.0001, reverse_complement=True, dim=0):
+	"""An implementation of the FIMO algorithm from the MEME suite.
+
+	This function implements the "Finding Individual Motif Instances" (FIMO)
+	algorithm from the MEME suite. This algorithm takes a set of PWMs and
+	identifies where these PWMs have statistically significant hits against a
+	set of sequences. These sequences can either come from a FASTA file, such
+	as an entire genome or a set of peaks, or can be one-hot encoded sequences.
+
+	This implementation uses numba to accelerate the inner loop, and
+	parallelizes across the motif axis. No support exists for calculating
+	q-values as, in my opinion, q-values do not make sense here and are both
+	compute- and memory-inefficient.
+
+
 	Parameters
 	----------
 	motifs: str or dict
-		A set of motifs to scan with. If a string, this is interpreted as a 
-		filepath to a MEME file. If a dictionary, the keys are interpreted as 
-		the motif names and the values are interpreted as the PWMs.
-	
-	alphabet : set or tuple or list, optional
-		A pre-defined alphabet where the ordering of the symbols is the same
-		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
-		the returned tensor will have a 1 at index 0 if the character was 'A'.
-		Characters outside the alphabet are ignored and none of the indexes are
-		set to 1. This is not necessary or used if a one-hot encoded tensor is
-		provided for the motif. Default is ['A', 'C', 'G', 'T'].
+		A MEME file to load containing motifs to scan, or a dictionary where
+		the keys are names of motifs and the values are PWMs with shape
+		(len(alphabet), pwm_length).
+
+	sequences: str or numpy.ndarray or torch.Tensor
+		A set of sequences to scan the motifs against. If this is a string,
+		assumes it is a filepath to a FASTA-formatted file. If this is a numpy
+		array or PyTorch tensor, will use those instead.
+
+	alphabet: list, optional
+		A list of characters to use for the alphabet, defining the order that
+		characters should appear. Default is ['A', 'C', 'G', 'T'].
 
 	bin_size: float, optional
-		The bin size to use for the dynamic programming step when calculating 
-		p-values. Default is 0.1.
-	
+		The size of the bins discretizing the PWM scores. The smaller the bin
+		size the higher the resolution, but the less data may be available to
+		support it. Default is 0.1.
+
 	eps: float, optional
-		A small value to add to a PWM to stabilize taking the log. Default is 
-		1e-4.
+		A small pseudocount to add to the motif PWMs before taking the log.
+		Default is 0.0001.
+
+	threshold: float, optional
+		The p-value threshold to use for reporting matches. Default is 0.0001.
+
+	reverse_complement: bool, optional
+		Whether to scan each motif and also the reverse complements. Default
+		is True.
+
+	dim: 0 or 1, optional
+		Whether to return one dataframe for each motif containing all hits for
+		that motif across all examples (0, default) or one dataframe for each 
+		example containing all hits across all motifs to that example (1).
+		Default is 0.
+
+
+	Returns
+	-------
+	hits: list of pandas.DataFrames
+		A list of pandas.DataFrames containing motif hits, where the exact
+		semantics of each dataframe are determined by `dim`.
 	"""
 
-	def __init__(self, motifs, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1, 
-		eps=0.0001):
-		super().__init__()
-		self.bin_size = bin_size
-		self.alphabet = numpy.array(alphabet)
+	tic = time.time()
+	log_threshold = math.log2(threshold)
 
-		if isinstance(motifs, str):
-			motifs = read_meme(motifs)
+	# Extract the motifs and potentially the reverse complements
+	if isinstance(motifs, str):
+		motifs_ = read_meme(motifs)
+	elif isinstance(motifs, dict):
+		motifs_ = motifs
+	else:
+		raise ValueError("`motifs` must be a dict or a filename.")
+
+	motifs_ = list(motifs_.items())
+	motifs = [(name, pwm.numpy(force=True)) for name, pwm in motifs_]
+	if reverse_complement:
+		for name, pwm in motifs_:
+			motifs.append((name + '-rc', pwm.numpy(force=True)[::-1, ::-1]))
+
+	# Initialize arrays to store motif properties
+	n_motifs = len(motifs)
+	motif_pwms, motif_names, motif_lengths = [], [], [0]
+	_score_to_pvals, _score_to_pvals_lengths = [], [0]
+
+	_smallest = numpy.empty(n_motifs, dtype=numpy.int32)
+	_score_thresholds = numpy.empty(n_motifs, dtype=numpy.float32)
+
+	# Fill out these motif properties
+	for i, (name, motif) in enumerate(motifs):
+		motif_names.append(name)
+		motif_lengths.append(motif.shape[-1])
+		
+		motif_pwm = numpy.log2(motif + eps) - math.log2(0.25)
+		motif_pwms.append(motif_pwm)
+
+		smallest, mapping = _pwm_to_mapping(motif_pwm, bin_size)
+		_smallest[i] = smallest
+		_score_to_pvals.append(mapping)
+		_score_to_pvals_lengths.append(len(mapping))
+
+		idx = numpy.where(_score_to_pvals[i] < log_threshold)[0]
+		if len(idx) > 0:
+			_score_thresholds[i] = (idx[0] + smallest) * bin_size                              
+		else:
+			_score_thresholds[i] = float("inf")
+
+	# Convert these back to numpy arrays
+	motif_pwms = numpy.concatenate(motif_pwms, axis=-1)
+	motif_names = numpy.array(motif_names)
+	motif_lengths = numpy.cumsum(motif_lengths).astype(numpy.uint64)
+
+	_score_to_pvals = numpy.concatenate(_score_to_pvals)
+	_score_to_pvals_lengths = numpy.cumsum(_score_to_pvals_lengths)
+
+	# Extract the sequence from a FASTA or torch tensors
+	if isinstance(sequences, str):
+		fasta = pyfaidx.Fasta(sequences)
+		sequence_names = numpy.array(list(fasta.keys()))
+		X, lengths = [], [0]
+		
+		alphabet = ''.join(alphabet)
+		alpha_idxs = numpy.frombuffer(bytearray(alphabet, 'utf8'), dtype=numpy.int8)
+		one_hot_mapping = numpy.zeros(256, dtype=numpy.int8) - 1
+		for i, idx in enumerate(alpha_idxs):
+			one_hot_mapping[idx] = i
+		
+		for name, chrom in fasta.items():
+			chrom = chrom[:].seq.upper()
+			lengths.append(lengths[-1] + len(chrom))
 			
-		self.motif_names = numpy.array([name for name in motifs.keys()])
-		self.motif_lengths = numpy.array([motif.shape[-1] for motif in 
-			motifs.values()])
-		self.n_motifs = len(self.motif_names)
-		
-		motif_pwms = numpy.zeros((len(motifs), 4, max(self.motif_lengths)), 
-			dtype=numpy.float32)
-		bg = math.log2(0.25)
-
-		self._score_to_pval = []
-		self._smallest = []
-		for i, (name, motif) in enumerate(motifs.items()):
-			motif_pwms[i, :, :len(motif.T)] = numpy.log2(motif + eps) - bg
-			smallest, mapping = _pwm_to_mapping(motif_pwms[i], bin_size)
-
-			self._smallest.append(smallest)
-			self._score_to_pval.append(mapping)
-
-		self.motif_pwms = torch.nn.Parameter(torch.from_numpy(motif_pwms))
-		self._smallest = numpy.array(self._smallest)
-
-	def forward(self, X):
-		"""Score a set of sequences.
-		
-		This method will run the PWMs against the sequences, reverse-complement 
-		the sequences and run the PWMs against them again, and then return the 
-		maximum per-position score after correcting for the flipping.
-		
-		
-		Parameters
-		----------
-		X: torch.tensor, shape=(n, 4, length)
-			A tensor containing one-hot encoded sequences.
-		"""
-		
-		y_fwd = torch.nn.functional.conv1d(X, self.motif_pwms)
-		y_bwd = torch.nn.functional.conv1d(X, torch.flip(self.motif_pwms, (1, 
-			2)))
-		return torch.stack([y_fwd, y_bwd]).permute(1, 2, 0, 3)
-	
-	@torch.no_grad()
-	def hits(self, X, X_attr=None, threshold=0.0001, batch_size=256, dim=0, 
-		device='cuda', verbose=False):
-		"""Find motif hits that pass the given threshold.
-		
-		This method will first scan the PWMs over all sequences, identify where
-		those scores are above the per-motif score thresholds (by converting
-		the provided p-value thresholds to scores), extract those coordinates
-		and provide the hits in a convenient format.
-
-
-		Parameters
-		----------
-		X: torch.tensor, shape=(n, 4, length)
-			A tensor containing one-hot encoded sequences.
-
-		X_attr: torch.tensor, shape=(n, 4, length), optional
-			A tensor containing the per-position attributions. The values in
-			this tensor will be summed across all four channels in the positions
-			found by the hits, so make sure that the four channels are encoding
-			something summable. You may want to multiply X_attr by X before
-			passing it in. If None, do not sum attributions.
-
-		threshold: float, optional
-			The p-value threshold to use when calling hits. Default is 0.0001.
-
-		batch_size: int, optional
-			The number of examples to process in parallel. Default is 256.
-
-		dim: 0 or 1, optional
-			The dimension to provide hits over. Similar to other APIs, one can
-			view this as the dimension to remove from the returned results. If
-			0, provide one DataFrame per motif that shows all hits for that
-			motif across examples. If 1, provide one DataFrame per motif that
-			shows all motif hits within each example.
-
-		device: str or torch.device, optional
-			The device to move the model and batches to when making predictions. 
-			If set to 'cuda' without a GPU, this function will crash and must be 
-			set to 'cpu'. Default is 'cuda'.
-
-		verbose: bool, optional
-			Whether to display a progress bar as examples are being processed.
-			Default is False.
-
-
-		Returns
-		-------
-		dfs: list of pandas.DataFrame
-			A list of DataFrames containing hit calls, either with one per
-			example or one per motif.
-		"""
-
-		n = self.n_motifs if dim == 0 else len(X)
-		hits = [[] for i in range(n)]
-		
-		log_threshold = numpy.log2(threshold)
-		
-		scores = predict(self, X, batch_size=batch_size, device=device)   
-		score_thresh = torch.empty(1, scores.shape[1], 1, 1)
-		for i, smallest in enumerate(self._smallest):
-			idx = numpy.where(self._score_to_pval[i] < log_threshold)[0]
-
-			if len(idx) > 0:
-				score_thresh[0, i] = (idx[0] + smallest) * self.bin_size                               
-			else:
-				score_thresh[0, i] = float("inf")
-
-		
-		hit_idxs = torch.where(scores > score_thresh)        
-		for idxs in tqdm(zip(*hit_idxs), disable=not verbose):
-			example_idx, motif_idx, strand_idx, pos_idx = idxs
-			score = scores[(example_idx, motif_idx, strand_idx, pos_idx)].item()
-			score_idx = int(score / self.bin_size) - self._smallest[motif_idx]
-			pval = math.pow(2, self._score_to_pval[motif_idx][score_idx])
-
-			l = self.motif_lengths[motif_idx]
-			start = pos_idx.item()
-			if strand_idx == 1:
-				end = start + max(self.motif_lengths)
-				start = start + max(self.motif_lengths) - l
-			else:
-				end = start + l
-
-			char_idxs = X[example_idx, :, start:end].argmax(axis=0).numpy(
-				force=True)
-			seq = ''.join(self.alphabet[char_idxs])
-			strand = '+-'[strand_idx]
-
-			if X_attr is not None:
-				attr = X_attr[example_idx, :, start:end].sum(axis=1)
-			else:
-				attr = '.'
+			X_idxs = numpy.frombuffer(bytearray(chrom, "utf8"), dtype=numpy.int8)
+			_fast_convert(X_idxs, one_hot_mapping)
+			X.append(X_idxs)
 			
-			entry_idx = example_idx.item() if dim == 0 else motif_idx.item()
-			entry = entry_idx, start, end, strand, score, pval, seq
+		X = numpy.concatenate(X)
+		X_lengths = numpy.array(lengths, dtype=numpy.int64)
 			
-			idx = motif_idx if dim == 0 else example_idx
-			hits[idx].append(entry)
-		
-		name = 'example_idx' if dim == 0 else 'motif'
-		names = name, 'start', 'end', 'strand', 'score', 'p-value', 'seq'        
-		hits = [pandas.DataFrame(hits_, columns=names) for hits_ in hits]
-		if dim == 1:
-			for hits_ in hits:
-				hits_['motif'] = self.motif_names[hits_['motif']]
-		
-		return hits
-	
-	@torch.no_grad()
-	def hit_matrix(self, X, threshold=None, batch_size=256, device='cuda'):
-		"""Return the maximum score per motif for each example.
+	elif isinstance(sequences, (torch.Tensor, numpy.ndarray)):
+		sequence_names = None
+		X = ((sequences.argmax(axis=1) + 1) * sequences.sum(axis=1)) - 1
+		X_lengths = numpy.arange(X.shape[0]+1) * X.shape[-1]
 
-		Parameters
-		----------
-		X: torch.tensor, shape=(n, 4, length)
-			A tensor containing one-hot encoded sequences.
+		if isinstance(X, torch.Tensor):
+			X = X.numpy(force=True)
 
-		X_attr: torch.tensor, shape=(n, 4, length), optional
-			A tensor containing the per-position attributions. The values in
-			this tensor will be summed across all four channels in the positions
-			found by the hits, so make sure that the four channels are encoding
-			something summable. You may want to multiply X_attr by X before
-			passing it in. If None, do not sum attributions.
+		X = X.astype(numpy.int8).flatten()
+		X_lengths = X_lengths.astype(numpy.int64)
 
-		batch_size: int, optional
-			The number of examples to process in parallel. Default is 256.
-
-		device: str or torch.device, optional
-			The device to move the model and batches to when making predictions. 
-			If set to 'cuda' without a GPU, this function will crash and must be 
-			set to 'cpu'. Default is 'cuda'.
+	# Use a fast numba function to run the core algorithm
+	hits = _fast_hits(X, X_lengths, motif_pwms, motif_lengths, 
+		_score_thresholds, bin_size, _smallest, _score_to_pvals, 
+		_score_to_pvals_lengths)
 
 
-		Returns
-		-------
-		y_hat: torch.Tensor, shape=(X.shape[0], n_motifs)
-			The score of the strongest motif hit in each sequence. Note that
-			this is the raw score, not a p-value.
-		"""
+	# Convert the results to pandas DataFrames
+	names = ['sequence_name', 'start', 'stop', 'score', 'p-value']
+	n_ = n_motifs // 2 if reverse_complement else n_motifs
 
-		y_hat = predict(self, X, batch_size=batch_size, device=device)
-		return y_hat.max(dim=-1).values.max(dim=-1).values
+	for i in range(n_):
+		if reverse_complement:
+			hits_ = pandas.DataFrame(hits[i] + hits[i + n_], columns=names)
+			hits_['strand'] = ['+'] * len(hits[i]) + ['-'] * len(hits[i+n_])
+		else:
+			hits_ = pandas.DataFrame(hits[i], columns=names)
+			hits_['strand'] = ['+'] * len(hits[i])
 
+		hits_['motif_id'] = [motif_names[i] for _ in range(len(hits_))]
+		hits_['motif_alt_id'] = [numpy.nan for _ in range(len(hits_))]
 
-	def motif_hits(self, X, device='cuda'):
-		"""..."""
+		if sequence_names is not None:
+			hits_['sequence_name'] = sequence_names[hits_['sequence_name']]
+			
+		hits[i] = hits_[['motif_id', 'motif_alt_id', 'sequence_name', 'start', 
+			'stop', 'strand', 'score', 'p-value']]
 
-		length = max(self.motif_lengths)
-		if X.shape[-1] < length:
-			flank = torch.zeros(*X.shape[:2], length, dtype=X.dtype, 
-				device=X.device)
-			X = torch.cat([flank, X, flank], dim=-1)
+	hits = hits[:n_]
 
-		y = predict(self, X.float(), device=device)
+	if dim == 1:
+		hits = pandas.concat(hits)
+		_names = numpy.unique(hits['sequence_name'])
+		hits = [hits[hits['sequence_name'] == name].reset_index(drop=True) 
+			for name in _names]
 
-		score, offset = y.max(dim=-1)
-		score, strand = score.max(dim=-1)
+	return hits
 
-		int_score = numpy.round(score.numpy(force=True) / self.bin_size).astype(numpy.int32).T
-		int_score -= self._smallest[:, None]
-
-		pvals = [self._score_to_pval[i][int_score[i]] for i in range(int_score.shape[0])]
-		pvals = numpy.stack(pvals)
-		return pvals, offset, strand
-		

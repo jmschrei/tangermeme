@@ -197,7 +197,7 @@ def _fast_one_hot_encode(X_ohe, seq, mapping):
 		if idx == -2:
 			raise ValueError("Encountered character that is not in " + 
 				"`alphabet` or in `ignore`.")
-
+			
 		X_ohe[i, idx] = 1
 
 
@@ -254,9 +254,10 @@ def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype=torch.int8,
 
 	ignore = ''.join(ignore)
 
-	seq_idxs = numpy.frombuffer(bytearray(sequence, "utf8"), dtype=numpy.int8)
-	alpha_idxs = numpy.frombuffer(bytearray(alphabet, "utf8"), dtype=numpy.int8)
-	ignore_idxs = numpy.frombuffer(bytearray(ignore, "utf8"), dtype=numpy.int8)
+	e = "utf8"
+	seq_idxs = numpy.frombuffer(bytearray(sequence, e), dtype=numpy.int8)
+	alpha_idxs = numpy.frombuffer(bytearray(alphabet, e), dtype=numpy.int8)
+	ignore_idxs = numpy.frombuffer(bytearray(ignore, e), dtype=numpy.int8)
 
 	one_hot_mapping = numpy.zeros(256, dtype=numpy.int8) - 2
 	for i, idx in enumerate(alpha_idxs):
@@ -331,3 +332,134 @@ def random_one_hot(shape, probs=None, dtype='int8', random_state=None):
 		ohe[i, choices, numpy.arange(shape[2])] = 1 
 
 	return torch.from_numpy(ohe)
+
+
+def chunk(X, size=1024, overlap=0):
+	"""Chunk a set of sequences into overlapping blocks.
+
+	This function will take a set of sequences of variable length and will
+	return a set of fixed-length blocks that tile the sequence with a fixed
+	amount of overlap. This is useful when applying a method, such as FIMO or
+	even a larger predictive model, to variable length sequences such as
+	chromosomes.
+
+	Unless the total sequence length is a multiple of the size, the final chunk
+	produced from a sequence will be shorter than the size. In this case, the
+	final chunk is excluded because it would not be an accurate representation
+	of that sequence regardless.
+
+
+	Parameters
+	----------
+	X: list of torch.Tensors
+		A list of one-hot encoded sequences that each are of shape (4, -1).
+
+	size: int, optional
+		The size of the chunks to produce from the sequence. Default is 1024.
+
+	overlap: int, optional
+		The overlap between adjacent chunks. This is, essentially, the stride
+		of the unrolling process. Default is 0.
+
+
+	Returns
+	-------
+	y: torch.Tensor, shape=(-1, len(alphabet), size)
+		A single tensor containing strides across the sequences. The chunks
+		are concatenated together across examples such that the final chunk
+		from the first item is followed by first chunk from the second item.
+	"""
+
+	if not isinstance(X, list):
+		raise ValueError("X must be a list of tensors.")
+
+	if not isinstance(size, int) or size <= 0:
+		raise ValueError("size must be a positive integer.")
+
+	if not isinstance(overlap, int) or overlap < 0:
+		raise ValueError("overlap must be a non-negative integer.")
+
+	return torch.cat([x.unfold(-1, size, size-overlap).permute(1, 0, 2) 
+		for x in X], dim=0)
+
+
+def unchunk(X, lengths=None, overlap=0):
+	"""Unchunk fixed-length segments back into variable-length sequences.
+
+	After chunking a set of variable length sequences into fixed-length chunks
+	and applying some method on the chunks that results in some bp-resolution
+	result, merge the chunks back into a tensor of the same length as the
+	original sequence. When the final chunk was discarded due to the original
+	sequence not being divisible by the chosen size, that portion will not
+	be reconstructed by this method. 
+
+	The overlap value should be the same as when the sequence was chunked, and
+	should correspond to the number of positions that are shared across adjacent
+	examples. When overlap is set to a value greater than 0, half of the overlap
+	goes to the elements as follows:
+
+		<------------*    |
+			   	  overlap 
+				|    *-----------> 
+
+
+	Parameters
+	----------
+	X: list or numpy.ndarray or torch.tensor, shape=(-1, n_outputs, size)
+		A set of fixed-length tensors for any number of outputs. Usually the
+		result of applying `chunk` and then some form of model.
+
+	lengths: list or numpy.ndarray or torch.tensor, shape=(-1,) or None
+		The *original lengths* of the elements that were chunked. This is not
+		the number of chunks produced, which will be influenced by the overlap,
+		but the actual length in bp of the original sequences. If None, assume
+		that all chunks in `X` come from a single variable-length sequence.
+		Default is None.
+
+	overlap: int, optional
+		The number of bp overlap between adjacent chunks. Default is 0.
+
+
+	Returns
+	-------
+	y: list of torch.Tensors or one torch.Tensor, shape=(n_outputs, -1)
+		A list of variable-length tensors if `lengths` is provided, otherwise
+		a single tensor.
+	"""
+
+	X = _cast_as_tensor(X)
+	if X.ndim <= 2:
+		raise ValueError("`X` must have at least three dimensions, with the "
+			"last dimension corresponding to length.")
+
+	lengths = _validate_input(_cast_as_tensor(lengths), "lengths", shape=(-1,), 
+	    min_value=0)
+
+	size = X.shape[-1]
+	lengths = (lengths - size) // (size - overlap) + 1
+	lengths_csum = 0
+
+	y = []
+	for length in lengths:
+	    X_ = X[lengths_csum:lengths_csum+length]
+
+	    if overlap > 0:
+	        s = overlap // 2
+	        e = -(overlap - s)
+
+	        if X_.shape[0] == 1:
+	            X_ = X_[..., s:e].moveaxis(0, -2).reshape(*X_.shape[1:-1], -1)
+	        elif X_.shape[0] == 2:
+	            X_ = torch.cat([X_[0, ..., :e], X_[1, ..., s:]], dim=-1)
+	        else:
+	            X_ = torch.cat([X_[0, ..., :e],
+	                            X_[1:-1, ..., s:e].moveaxis(0, -2).reshape(*X_.shape[1:-1], -1),
+	                            X_[-1, ..., s:]], dim=-1)
+	    else:
+	        X_ = X_.moveaxis(0, -2).reshape(*X_.shape[1:-1], -1)
+
+	    y.append(X_)
+	    lengths_csum += length
+
+	return y
+	
