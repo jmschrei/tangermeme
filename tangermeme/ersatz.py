@@ -616,3 +616,57 @@ def dinucleotide_shuffle(X, start=0, end=-1, n=20, random_state=None,
 		X_shufs.append(X_shuf)
 
 	return torch.stack(X_shufs)
+
+
+def reverse_complement(seq,ohe=True,allow_N=True,alphabet=['A', 'C', 'G', 'T']):
+    """
+    Get the reverse complement of an input DNA sequence 
+    whether it is character bases or one-hot encoded.
+    
+    Parameters
+	----------
+    - seq: str or torch tensor of one-hot encoded DNA sequence.
+        Dimensions: (batch_size, alphabet_size, motif_size).
+    - ohe: bool, whether the input is one-hot encoded or not
+    - allow_N: bool, optional
+		Whether to allow the return of the character 'N' in the sequence, i.e.
+  		if pwm at a position is all 0's return N. Default is False.
+    - alphabet : set or tuple or list, optional
+		A pre-defined alphabet where the ordering of the symbols is the same
+		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
+		the returned tensor will have a 1 at index 0 if the character was 'A'.
+		Characters outside the alphabet are ignored and none of the indexes are
+		set to 1. This is not necessary or used if a one-hot encoded tensor is
+		provided for the motif. Default is ['A', 'C', 'G', 'T'].
+    Returns
+	-------
+    rev_comp: str or torch tensor of one-hot encoded DNA sequence
+    """
+    if not ohe:
+        seq = seq.upper()
+        if not allow_N and 'N' in seq:
+            raise ValueError("N is not allowed in the sequence")
+            
+        bases_hash = {
+            "A": "T",
+            "T": "A",
+            "C": "G",
+            "G": "C",
+            "N": "N"
+        }
+        #reverse order and get complement
+        rev_comp = "".join([bases_hash[s] for s in reversed(seq)])
+    
+    else:
+        #If tensor is just (alphabet, motif_size) then add batch axis
+        if len(seq.shape) == 2:
+                seq = seq.unsqueeze(0)
+        if alphabet != ['A', 'C', 'G', 'T']:
+            #other alphabets will invalidate torch.flip approach
+            raise ValueError("Only support for standard DNA alphabet ['A', 'C', 'G', 'T']")        
+        #input is a numpy array
+        _validate_input(seq,"seq",ohe=True,ohe_dim=1,allow_N=allow_N)
+        #reverse compliment of seq
+        rev_comp = torch.flip(seq,dims=[1,2])
+    
+    return rev_comp

@@ -773,3 +773,16 @@ def test_dinucleotide_shuffle_raises_N():
 def test_dinucleotide_shuffle_homopolymer():
 	seq_ohe = one_hot_encode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA').unsqueeze(0)
 	assert_raises(ValueError, dinucleotide_shuffle, seq_ohe)
+
+
+def test_reverse_complement():
+    dna_seq = 'ATCGN'
+    assert dna_seq==reverse_complement(reverse_complement(dna_seq,ohe=False),ohe=False)
+	
+    ohe_dna = random_one_hot((1, 4, 100), random_state=0)
+    assert_array_almost_equal(ohe_dna,reverse_complement(reverse_complement(ohe_dna)))
+	
+	#create sequence test rev comp - "ACGTAN" -> "TACGT"
+    dna = one_hot_encode("ACGTAN").unsqueeze(0)
+    rev_comp_dna = reverse_complement(dna)
+    assert characters(rev_comp_dna,allow_N=True)=='NTACGT'
