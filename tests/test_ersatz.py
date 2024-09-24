@@ -17,6 +17,7 @@ from tangermeme.ersatz import delete
 from tangermeme.ersatz import randomize
 from tangermeme.ersatz import shuffle
 from tangermeme.ersatz import dinucleotide_shuffle
+from tangermeme.ersatz import reverse_complement
 
 import pandas
 import pyfaidx
