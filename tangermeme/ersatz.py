@@ -679,6 +679,5 @@ def reverse_complement(seq,ohe=True,alphabet=['A', 'C', 'G', 'T'],
             comp_base = complement_map[base]
             comp_index = alphabet.index(comp_base)
             rev_comp[comp_index] = torch.flip(seq[i], dims=[0])
-            rev_comp = torch.flip(seq,dims=[0,1])
     
     return rev_comp
