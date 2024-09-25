@@ -10,6 +10,7 @@ import pyfaidx
 import pyBigWig
 
 from tqdm import tqdm
+from itertools import compress
 
 from .utils import _validate_input
 from .utils import one_hot_encode
@@ -618,19 +619,21 @@ def dinucleotide_shuffle(X, start=0, end=-1, n=20, random_state=None,
 	return torch.stack(X_shufs)
 
 
-def reverse_complement(seq,ohe=True,allow_N=True,alphabet=['A', 'C', 'G', 'T']):
+def reverse_complement(seq,ohe=True,alphabet=['A', 'C', 'G', 'T'],
+                       complement_map = {"A": "T",
+                                         "T": "A",
+                                         "C": "G",
+                                         "G": "C",
+                                         "N": "N"}):
     """
-    Get the reverse complement of an input DNA sequence 
+    Get the reverse complement of one input DNA sequence 
     whether it is character bases or one-hot encoded.
     
     Parameters
 	----------
-    - seq: str or torch tensor of one-hot encoded DNA sequence.
-        Dimensions: (batch_size, alphabet_size, motif_size).
-    - ohe: bool, whether the input is one-hot encoded or not
-    - allow_N: bool, optional
-		Whether to allow the return of the character 'N' in the sequence, i.e.
-  		if pwm at a position is all 0's return N. Default is False.
+    - seq: str/list or torch tensor of one-hot encoded DNA sequence.
+        Dimensions: (alphabet_size, motif_size).
+    - ohe: bool, whether the input is one-hot encoded or not. Default is True.
     - alphabet : set or tuple or list, optional
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
@@ -638,35 +641,45 @@ def reverse_complement(seq,ohe=True,allow_N=True,alphabet=['A', 'C', 'G', 'T']):
 		Characters outside the alphabet are ignored and none of the indexes are
 		set to 1. This is not necessary or used if a one-hot encoded tensor is
 		provided for the motif. Default is ['A', 'C', 'G', 'T'].
+	- complement_map: dict, optional
+		A dictionary mapping each character in the alphabet to its complement. If
+		you want to use a different alphabet, you can provide a different mapping.
+  	
     Returns
 	-------
     rev_comp: str or torch tensor of one-hot encoded DNA sequence
     """
     if not ohe:
+        if isinstance(seq, list):
+            seq = ''.join(seq)
         seq = seq.upper()
-        if not allow_N and 'N' in seq:
-            raise ValueError("N is not allowed in the sequence")
-            
-        bases_hash = {
-            "A": "T",
-            "T": "A",
-            "C": "G",
-            "G": "C",
-            "N": "N"
-        }
+        #check for unknown characters
+        uniq_seq = set(seq)
+        mapp_match = [i in complement_map for i in uniq_seq]
+        assert all(mapp_match), f"Invalid sequence, not all sequence characters found in complement mapping: {
+            list(compress(uniq_seq, [not i for i in mapp_match]))}"
         #reverse order and get complement
-        rev_comp = "".join([bases_hash[s] for s in reversed(seq)])
+        rev_comp = "".join([complement_map[s] for s in reversed(seq)])
     
     else:
-        #If tensor is just (alphabet, motif_size) then add batch axis
-        if len(seq.shape) == 2:
-                seq = seq.unsqueeze(0)
-        if alphabet != ['A', 'C', 'G', 'T']:
-            #other alphabets will invalidate torch.flip approach
-            raise ValueError("Only support for standard DNA alphabet ['A', 'C', 'G', 'T']")        
-        #input is a numpy array
-        _validate_input(seq,"seq",ohe=True,ohe_dim=1,allow_N=allow_N)
-        #reverse compliment of seq
-        rev_comp = torch.flip(seq,dims=[1,2])
+        if len(seq.shape) != 2:
+            raise ValueError("PWM must have two dimensions where the " +
+                             "first dimension is the length of the alphabet and the second " +
+                             "dimension is the length of the sequence.")   
+        #input is a array, validate it
+        if 'N' in complement_map:
+            allow_N = True
+        else:
+            allow_N = False
+        _validate_input(seq,"seq",ohe=True,ohe_dim=0,allow_N=allow_N)
+        #reverse compliment of ohe seq
+        # Create a tensor to hold the reverse complement
+        rev_comp = torch.zeros_like(seq)
+        # Fill in the reverse complement tensor
+        for i, base in enumerate(alphabet):
+            comp_base = complement_map[base]
+            comp_index = alphabet.index(comp_base)
+            rev_comp[comp_index] = torch.flip(seq[i], dims=[0])
+            rev_comp = torch.flip(seq,dims=[0,1])
     
     return rev_comp
