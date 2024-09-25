@@ -656,8 +656,7 @@ def reverse_complement(seq,ohe=True,alphabet=['A', 'C', 'G', 'T'],
         #check for unknown characters
         uniq_seq = set(seq)
         mapp_match = [i in complement_map for i in uniq_seq]
-        assert all(mapp_match), f"Invalid sequence, not all sequence characters found in complement mapping: {
-            list(compress(uniq_seq, [not i for i in mapp_match]))}"
+        assert all(mapp_match), f"Invalid sequence, not all sequence characters found in complement mapping: {list(compress(uniq_seq, [not i for i in mapp_match]))}"
         #reverse order and get complement
         rev_comp = "".join([complement_map[s] for s in reversed(seq)])
     
