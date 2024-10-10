@@ -4,6 +4,7 @@
 
 import math
 import numpy
+import numba
 import torch
 import pandas
 
@@ -11,6 +12,8 @@ from .utils import _validate_input
 from .utils import characters
 
 from sklearn.isotonic import IsotonicRegression
+
+from .tools.tomtom import tomtom
 
 
 def _laplacian_null(X_sum, num_to_samp=10000, random_state=1234):
@@ -208,21 +211,28 @@ def _isotonic_thresholds(values, null_values, increasing, target_fdr,
 def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2, 
 	min_passing_frac=0.03, max_passing_frac=0.2, 
 	weak_threshold_for_counting_sign=0.8, device='cuda'):
-	"""Extract seqlets using the same procedure as TF-MoDISco does.
+	"""Extract seqlets using the procedure from TF-MoDISco.
 
-	This is the initial seqlet extraction step using the same procedure that
-	TF-MoDISco does. Importantly, TF-MoDISco does several post-processing steps
+	Seqlets are contiguous spans of high attribution characters. This method
+	for identifying them is the one that is implemented in the TF-MoDISco
+	algorithm. Importantly, TF-MoDISco does several post-processing steps
 	on these seqlets that are interleaved in the pattern identification 
 	procedure so the final set of seqlets actually used by patterns in 
 	TF-MoDISco will be smaller than the set that are returned here.
 
-	There are a few small changes here compared with the code used in the
-	TF-MoDISco repository.
+	The seqlets returned by this procedure have been optimized to be useful
+	for motif discovery, and so are generally much longer and less sensitive
+	than one might initially expect. The seqlets are longer because the local
+	context that patterns occur in might be useful, and because uninformative
+	characters on the flanks can easily be trimmed off. The seqlets are also
+	less sensitive, in the sense that sometimes spans that one might call a
+	seqlet by eye are missed, to prevent noise from contaminating the found
+	patterns.
 
 
 	Parameters
 	----------
-	X_attr: torch.Tensor, shape=(-1, len(alphabet), length)
+	X_attr: torch.Tensor, shape=(-1, length)
 		A tensor of attribution values for each position in the sequence.
 		The attributions here will be summed across the length of the alphabet
 		so the values must be amenable to that. This means that, most likely,
@@ -258,21 +268,15 @@ def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2,
 
 	Returns
 	-------
-	pos_seqlets: torch.Tensor, shape=(-1, 4)
+	seqlets: pandas.DataFrame, shape=(-1, 4)
 		A tensor containing the example index, start position, end position,
-		and attribution sum for each seqlet that passes the thresholds and
-		has a positive attribution sum.
-
-	neg_seqlets: torch.Tensor, shape=(-1. 4)
-		A tensor containing the example index, start position, end position,
-		and attribution sum for each seqlet that passes the thresholds and
-		has a negative attribution sum.
+		and attribution sum for each seqlet that passes the thresholds.
 	"""
 
-	_validate_input(X_attr, "X_attr", shape=(-1, -1, -1)) 
+	_validate_input(X_attr, "X_attr", shape=(-1, -1)) 
 	suppress = int(0.5*window_size) + flank
 
-	X_sum = X_attr.sum(axis=1).unfold(-1, window_size, 1).sum(dim=-1)
+	X_sum = X_attr.unfold(-1, window_size, 1).sum(dim=-1)
 	values = X_sum.flatten()
 	if len(values) > 1000000:
 		values = torch.from_numpy(numpy.random.RandomState(1234).choice(
@@ -324,23 +328,223 @@ def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2,
 
 	threshold = distribution[int(weak_thresh * len(distribution))]
 
-	pos_seqlets, neg_seqlets = [], []
+	seqlets_ = []
 	for example_id, start, end, in seqlets:
 		attr_flank = int(0.5 * ((end-start) - window_size))
 		attr_start, attr_end = start + attr_flank, end - attr_flank
+		attr = X_attr[example_id, attr_start:attr_end].sum(dim=-1).item()
 
-		x = X_attr[example_id, :, attr_start:attr_end]
-		attr = x.sum(axis=(-1, -2)).item()
-		seq = characters(abs(x))
+		seqlet = example_id, start.item(), end.item(), attr
+		seqlets_.append(seqlet)
 
-		seqlet = example_id, start.item(), end.item(), '*', attr, attr, seq
+	names = 'example_idx', 'start', 'end', 'attribution'
+	return pandas.DataFrame(seqlets_, columns=names)
 
-		if attr > threshold:
-			pos_seqlets.append(seqlet)
-		elif attr < -threshold:
-			neg_seqlets.append(seqlet)
 
-	names = 'example_idx', 'start', 'end', 'strand', 'score', 'attr', 'seq'
-	pos_seqlets = pandas.DataFrame(pos_seqlets, columns=names)
-	neg_seqlets = pandas.DataFrame(neg_seqlets, columns=names)
-	return pos_seqlets, neg_seqlets
+###
+
+
+@numba.njit
+def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25, 
+	additional_flanks=0):
+	"""An internal function implementing the recursive seqlet algorithm."""
+
+	n, l = X.shape
+
+	X_csum = numpy.empty_like(X)
+	for i in range(n):
+		X_csum[i, 0] = X[i, 0]    
+		for j in range(1, l):
+			X_csum[i, j] = X_csum[i, j-1] + X[i, j]
+
+	xmins = numpy.empty(max_seqlet_len+1, dtype=numpy.float64)
+	xmaxs = numpy.empty(max_seqlet_len+1, dtype=numpy.float64)
+	X_cdfs = numpy.zeros((2, max_seqlet_len+1, 1000), dtype=numpy.float64)
+
+	for j in range(min_seqlet_len, max_seqlet_len+1):
+		xmin, xmax = 0.0, 0.0
+		n_pos, n_neg = 0.0, 0.0
+		
+		for i in range(n):
+			for k in range(l-j):
+				x_ = X_csum[i, k+j] - X_csum[i, k]
+
+				if x_ > 0:
+					xmax = max(x_, xmax)
+					n_pos += 1.0
+				else:
+					xmin = min(x_, xmin)
+					n_neg += 1.0
+		
+		xmins[j] = xmin
+		xmaxs[j] = xmax
+
+		p_pos, p_neg = 1 / n_pos, 1 / n_neg
+		for i in range(n):
+			for k in range(l-j):
+				x_ = X_csum[i, k+j] - X_csum[i, k]
+
+				if x_ > 0:
+					x_int = math.floor(999 * x_ / xmax)
+					X_cdfs[0, j, x_int] += p_pos
+				else:
+					x_int = math.floor(999 * x_ / xmin)
+					X_cdfs[1, j, x_int] += p_neg
+					
+
+		for i in range(1, 1000):
+			X_cdfs[0, j, i] += X_cdfs[0, j, i-1]
+			X_cdfs[1, j, i] += X_cdfs[1, j, i-1]
+			
+			X_cdfs[0, j, i-1] = 1 - X_cdfs[0, j, i-1]
+			X_cdfs[1, j, i-1] = 1 - X_cdfs[1, j, i-1]
+		
+		X_cdfs[0, j, -1] = 1 - X_cdfs[0, j, -1]
+		X_cdfs[1, j, -1] = 1 - X_cdfs[1, j, -1]
+	
+	###
+
+	p_value = numpy.ones((max_seqlet_len+1, l), dtype=numpy.float64)
+	seqlets = []
+
+	for i in range(n):
+		for j in range(min_seqlet_len, max_seqlet_len+1):
+			for k in range(1, l-j):
+				x_ = X_csum[i, k+j-1] - X_csum[i, k-1]
+
+				if x_ > 0:
+					x_int = math.floor(999 * x_ / xmaxs[j])
+					p_value[j, k] = X_cdfs[0, j, x_int]
+				else:
+					x_int = math.floor(999 * x_ / xmins[j])
+					p_value[j, k] = X_cdfs[1, j, x_int]
+				
+				if j > min_seqlet_len:
+					p_value[j, k] = max(p_value[j-1, k], p_value[j, k])
+
+		###
+			
+		for j in range(max_seqlet_len - min_seqlet_len):
+			j = max_seqlet_len - j
+			
+			while True:
+				start = p_value[j].argmin()
+				p = p_value[j, start]
+				p_value[j, start] = 1
+	
+				if p > threshold:
+					break
+	
+				end = start
+				for k in range(j - min_seqlet_len):
+					if p_value[j-k, end+1] < threshold:
+						end += 1
+					else:
+						break
+				else:
+					start = max(start - additional_flanks, 0)
+					end = min(end + min_seqlet_len + additional_flanks - 1, l)
+					attr = X_csum[i, end-1] - X_csum[i, start-1]
+					seqlets.append((i, start, end, attr, p))
+
+					for n_idx in range(max_seqlet_len+1):
+						for s_idx in range(start, end):
+							p_value[n_idx, s_idx] = 1
+
+	return seqlets
+		
+	
+
+def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25, 
+	additional_flanks=0):
+	"""A seqlet caller implementing the recursive seqlet algorithm.
+
+	This algorithm identifies spans of high attribution characters, called
+	seqlets, using a simple approach derived from the TOMTOM/FIMO algorithms.
+	First, distributions of attribution sums are created for all potential
+	seqlet lengths by discretizing the sum, with one set of distributions for
+	positive attribution values and one for negative attribution values. Then,
+	CDFs are calculated for each distribution (or, more specifically, 1-CDFs).
+	Finally, p-values are calculated via lookup to these 1-CDFs for all
+	potential CDFs, yielding a (n_positions, n_lengths) matrix of p-values.
+
+	This algorithm then identifies seqlets by defining them to have a key
+	property: all internal spans of a seqlet must also have been called a
+	seqlet. This means that all spans from `min_seqlet_len` to `max_seqlet_len`,
+	starting at any position in the seqlet, and fully contained by the borders,
+	must have a p-value below the threshold. Functionally, this means finding
+	entries where the upper left triangle rooted in it is comprised entirely of
+	values below the threshold. Graphically, for a candidate seqlet starting at
+	X and ending at Y to be called a seqlet, all the values within the bounds
+	(in addition to X) must also have a p-value below the threshold.
+
+
+							min_seqlet_len
+                             --------
+	. . . . . . . | . . . . / . . . . . . . .
+	. . . . . . . | . . . / . . . . . . . . .
+	. . . . . . . | . . / . . . . . . . . . .
+	. . . . . . . | . / . . . . . . . . . . .
+	. . . . . . . | / . . . . . . . . . . . .
+	. . . . . . . X . . . . . . . . Y . . . .
+	. . . . . . . . . . . . . . . . . . . . .
+	. . . . . . . . . . . . . . . . . . . . .
+
+	
+	The seqlets identified by this approach will usually be much smaller than
+	those identified by the TF-MoDISco approach, including sometimes missing
+	important characters on the flanks. You can set `additional_flanks` to 
+	a higher value if you want to include additional positions on either side.
+	Importantly, the initial seqlet calls cannot overlap, but these additional
+	characters are not considered when making that determination. This means
+	that seqlets may appear to overlap when `additional_flanks` is set to a
+	higher value.
+
+
+	Parameters
+	----------
+	X: torch.Tensor or numpy.ndarray, shape=(-1, length)
+		Attributions for each position in each example. The identity of the
+		characters is not relevant for seqlet calling, so this should be the
+		"projected" attributions, i.e., the attribution of the observed
+		characters.
+
+	threshold: float, optional
+		The p-value threshold for calling seqlets. All positions within the
+		triangle (as detailed above) must be below this threshold. Default is
+		0.01.
+
+	min_seqlet_len: int, optional
+		The minimum length that a seqlet must be, and the minimal length of
+		span that must be identified as a seqlet in the recursive property.
+		Default is 4.
+
+	max_seqlet_len: int, optional
+		The maximum length that a seqlet can be. Default is 25.
+
+	additional_flanks: int, optional
+		An additional value to subtract from the start, and to add to the end,
+		of all called seqlets. Does not affect the called seqlets.
+
+
+	Returns
+	-------
+	seqlets: pandas.DataFrame, shape=(-1, 5)
+		A BED-formatted dataframe containing the called seqlets, ranked from
+		lowest p-value to higher p-value. The returned p-value is the p-value
+		of the (location, length) span and is not influenced by the other
+		values within the triangle. 
+	"""
+
+	if isinstance(X, torch.Tensor):
+		X = X.numpy()
+	elif not isinstance(X, numpy.ndarray):
+		raise ValueError("`X` must be either a torch.Tensor or numpy.ndarray.")
+
+
+	columns = ['example_idx', 'start', 'end', 'attribution', 'p-value']
+	seqlets = _recursive_seqlets(X, threshold, min_seqlet_len, max_seqlet_len, 
+		additional_flanks)
+	seqlets = pandas.DataFrame(seqlets, columns=columns)
+	return seqlets.sort_values("p-value").reset_index(drop=True)
+    

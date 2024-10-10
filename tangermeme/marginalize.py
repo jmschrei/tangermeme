@@ -103,3 +103,76 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 	y_after = func(model, X_perturb, **kwargs, **additional_func_kwargs)
 
 	return y_before, y_after
+
+
+def marginalize_annotations(model, X, X0, annotations, **kwargs):
+	"""Perform marginalizations on each annotation individually.
+
+	This function takes in a model, a set of sequences, a set of background
+	sequences, and a set of annotations, and returns the marginalization values
+	for each annotation. For each annotation, the sequence in `X` is extracted
+	and substituted into `X0` with predictions returned for `X0` before and
+	after the substitution is performed, similar to the `saturation_mutagenesis`
+	function. Each marginalization is done individually.
+
+	This function will extract the sequence in each annotation and perform a
+	marginalization on it individually. 
+
+
+	Parameters
+	----------
+	model: torch.nn.Module
+		A PyTorch model to use for making predictions. These models can take in
+		any number of inputs and make any number of outputs. The additional
+		inputs must be specified in the `args` parameter.
+
+	X: torch.tensor, shape=(-1, len(alphabet), length)
+		A one-hot encoded set of sequences corresponding to the annotations.
+
+	X0: torch.tensor, shape=(-1, len(alphabet), length)
+		A one-hot encoded set of sequences that motifs will be substituted into.
+
+	annotations: torch.Tensor, shape=(n_annotations, 3)
+		A tensor of annotations where the first column is the example_idx, the
+		second column is the start position (0-indexed) and the third column is
+		the end position (0-indexed, not inclusive).
+
+	kwargs: arguments
+		Additional optional arguments to pass into the `ablate` function.
+
+	
+	Returns
+	-------
+	y_befores: torch.Tensor or list of torch.Tensors
+		The application of `func` from the model BEFORE inserting the motif. If 
+		the output from the model's forward function is a single tensor, it will 
+		return that. If the model outputs a list of tensors, it will return 
+		those.
+
+	y_afters: torch.Tensor or list of torch.Tensors
+		The application of `func` from the model AFTER inserting the motif. If 
+		the output from the model's forward function is a single tensor, it will
+		return that. If the model outputs a list of tensors, it will return
+		those.
+	"""
+
+	y_befores, y_afters = [], []
+
+	for idx, start, end in annotations:
+		seq = X[idx, :, start:end].unsqueeze(0)
+
+		y_before, y_after = marginalize(model, X0, seq, **kwargs)
+		y_befores.append(y_before)
+		y_afters.append(y_after)
+
+	if isinstance(y_afters[0], torch.Tensor):
+		y_befores = torch.stack(y_befores)
+		y_afters = torch.stack(y_afters)
+	else:
+		y_befores = [torch.stack([x[i] for x in y_befores]) for i in range(len(
+			y_befores))]
+		y_afters = [torch.stack([x[i] for x in y_afters]) for i in range(len(
+			y_afters))]
+
+	return y_befores, y_afters
+	

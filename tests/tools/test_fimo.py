@@ -152,12 +152,12 @@ def test_fimo():
 	assert len(hits) == 12
 	for df in hits:
 		assert isinstance(df, pandas.DataFrame)
-		assert df.shape[1] == 7
-		assert tuple(df.columns) == ('motif_name', 'sequence_name','start', 
-			'end', 'strand', 'score', 'p-value')
+		assert df.shape[1] == 8
+		assert tuple(df.columns) == ('motif_name', 'motif_idx', 'sequence_name', 
+			'start', 'end', 'strand', 'score', 'p-value')
 
-	assert hits[0].shape == (1, 7)
-	assert hits[9].shape == (1, 7)
+	assert hits[0].shape == (1, 8)
+	assert hits[9].shape == (1, 8)
 
 	assert hits[0]['motif_name'][0] == "MEOX1_homeodomain_1"
 	assert hits[0]['sequence_name'][0] == 'chr7'
@@ -183,12 +183,12 @@ def test_fimo_bin_size():
 	assert len(hits) == 12
 	for df in hits:
 		assert isinstance(df, pandas.DataFrame)
-		assert df.shape[1] == 7
-		assert tuple(df.columns) == ('motif_name', 'sequence_name', 'start', 
-			'end', 'strand', 'score', 'p-value')
+		assert df.shape[1] == 8
+		assert tuple(df.columns) == ('motif_name', 'motif_idx', 'sequence_name', 
+			'start', 'end', 'strand', 'score', 'p-value')
 
-	assert hits[0].shape == (0, 7)
-	assert hits[9].shape == (1, 7)
+	assert hits[0].shape == (0, 8)
+	assert hits[9].shape == (1, 8)
 
 
 	assert hits[9]['motif_name'][0] == "FOXQ1_MOUSE.H11MO.0.C"
@@ -206,12 +206,12 @@ def test_fimo_threshold():
 	assert len(hits) == 12
 	for df in hits:
 		assert isinstance(df, pandas.DataFrame)
-		assert df.shape[1] == 7
-		assert tuple(df.columns) == ('motif_name', 'sequence_name', 'start', 
-			'end', 'strand', 'score', 'p-value')
+		assert df.shape[1] == 8
+		assert tuple(df.columns) == ('motif_name', 'motif_idx', 'sequence_name', 
+			'start', 'end', 'strand', 'score', 'p-value')
 
-	assert hits[0].shape == (13, 7)
-	assert hits[9].shape == (157, 7)
+	assert hits[0].shape == (13, 8)
+	assert hits[9].shape == (157, 8)
 
 	assert_array_equal(hits[0]['sequence_name'].values, ['chr1', 'chr2',
 		'chr7', 'chr7', 'chr7', 'chr7', 'chr7', 'chr7', 'chr7', 'chr7', 'chr7', 
@@ -251,9 +251,9 @@ def test_fimo_tensor():
 	assert len(hits) == 12
 	for df in hits:
 		assert isinstance(df, pandas.DataFrame)
-		assert df.shape[1] == 7
-		assert tuple(df.columns) == ('motif_name', 'sequence_name', 'start', 
-			'end', 'strand', 'score', 'p-value')
+		assert df.shape[1] == 8
+		assert tuple(df.columns) == ('motif_name', 'motif_idx', 'sequence_name', 
+			'start', 'end', 'strand', 'score', 'p-value')
 
 	X = random_one_hot((1, 4, 50), random_state=0).type(torch.float32)
 	X = substitute(X, "TGACGTCAT")
@@ -266,9 +266,9 @@ def test_fimo_tensor():
 
 	for df in hits:
 		assert isinstance(df, pandas.DataFrame)
-		assert df.shape[1] == 7
-		assert tuple(df.columns) == ('motif_name', 'sequence_name', 'start', 
-			'end', 'strand', 'score', 'p-value')
+		assert df.shape[1] == 8
+		assert tuple(df.columns) == ('motif_name', 'motif_idx', 'sequence_name', 
+			'start', 'end', 'strand', 'score', 'p-value')
 
 	df = hits[3]
 	assert tuple(df['sequence_name']) == tuple([0, 0])

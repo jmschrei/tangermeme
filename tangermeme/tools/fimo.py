@@ -353,11 +353,12 @@ def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1,
 			hits_['strand'] = ['+'] * len(hits[i])
 
 		hits_['motif_name'] = [motif_names[i] for _ in range(len(hits_))]
+		hits_['motif_idx'] = numpy.ones(len(hits_), dtype='int64') * i
 
 		if sequence_names is not None:
 			hits_['sequence_name'] = sequence_names[hits_['sequence_name']]
 			
-		hits[i] = hits_[['motif_name', 'sequence_name', 'start', 
+		hits[i] = hits_[['motif_name', 'motif_idx', 'sequence_name', 'start', 
 			'end', 'strand', 'score', 'p-value']]
 
 	hits = hits[:n_]

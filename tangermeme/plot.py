@@ -1,12 +1,16 @@
 # plot.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import torch
 import numpy
 import pandas
 import logomaker
 
+from matplotlib import pyplot as plt
+
+
 def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None, 
-	ylim=None, spacing=4, n_tracks=4, show_extra=True):
+	ylim=None, spacing=4, n_tracks=4, score_key='score', show_extra=True):
 	"""Make a logo plot and optionally annotate it.
 
 	This function will take in a matrix of weights for each character in a
@@ -75,6 +79,11 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 		The number of tracks of annotations to plot with bars before simply
 		putting the name of the motif. Default is 4.
 
+	score_key: str, optional
+		When annotations are provided, the name of the key to use as a score.
+		Must have the semantics that a higher value means a "better" annotation.
+		Default is 'score'.
+
 	show_extra: bool, optional
 		Whether to show motifs past the `n_tracks` number of rows that include
 		the motif and the bar indicating positioning. If False, do not show
@@ -111,7 +120,7 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 
 		annotations_ = annotations[annotations['start'] > start]
 		annotations_ = annotations_[annotations_['end'] < end]
-		annotations_ = annotations_.sort_values(["score"], ascending=False)
+		annotations_ = annotations_.sort_values([score_key], ascending=False)
 
 		ylim = ylim or max(abs(X_attr.min()), abs(X_attr.max()))
 		plt.ylim(-ylim, ylim)
@@ -120,13 +129,12 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 		motifs = numpy.zeros((end-start, annotations_.shape[0]))
 		for _, row in annotations_.iterrows():
 			motif = row.values[0]
-			motif_start = row['start']
-			motif_end = row['end']
-			score = row['score']
+			motif_start = int(row['start'])
+			motif_end = int(row['end'])
+			score = row[score_key]
 
 			motif_start -= start
 			motif_end -= start
-			
 			y_offset = 0.1
 			for i in range(annotations_.shape[0]):
 				if motifs[motif_start:motif_end, i].max() == 0:
@@ -154,3 +162,61 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 					break
 
 	return logo
+
+
+def plot_pwm(pwm, name=None, alphabet=['A', 'C', 'G', 'T'], eps=1e-7):
+	"""Plots an information-content weighted PWM and its reverse complement.
+
+	This function takes in a PWM, where the sum across all values in the
+	alphabet is equal to 1, and plots the information-content weighted version
+	of it, as well as the reverse complement. This should be used when you want
+	to visualize a motif, perhaps from a motif database.
+
+
+	Parameters
+	----------
+	pwm: torch.Tensor or numpy.ndarray, shape=(len(alphabet), length)
+		The PWM to visualize. The rows must sum to 1.
+
+	name: str or None, optional
+		The name to put as the title for the plots. If None, do not put
+		anything. Default is None.
+
+	alphabet: list, optional
+		A list of characters that comprise the alphabet. Default is
+		['A', 'C', 'G', 'T'].
+
+	eps: float, optional
+		A small pseudocount to add to counts to make the log work correctly.
+		Default is 1e-7.
+	"""
+
+	if isinstance(pwm, torch.Tensor):
+		pwm = pwm.numpy(force=True)
+	
+	bg = 0.25 * numpy.log(0.25) / numpy.log(2)
+
+	
+	plt.figure(figsize=(8, 2.5))
+	ax = plt.subplot(121)
+	plt.title(name)
+	
+	ic = pwm * numpy.log(pwm + eps) / numpy.log(2) - bg
+	ic = numpy.sum(ic, axis=0, keepdims=True)
+	plot_logo(pwm * ic, ax=ax)
+	plt.xlabel("Motif Position")
+	plt.ylabel("Information Content (Bits)", fontsize=10)
+	
+	
+	ax = plt.subplot(122)
+	plt.title(name + "RC" if name is not None else "RC")
+	pwm = pwm[::-1, ::-1]
+	ic = pwm * numpy.log(pwm + eps) / numpy.log(2) - bg
+	ic = numpy.sum(ic, axis=0, keepdims=True)
+	plot_logo(pwm * ic, ax=ax)
+	plt.xlabel("Motif Position")
+	plt.ylabel("Information Content (Bits)", fontsize=10)
+	
+	plt.tight_layout()
+	plt.show()
+	

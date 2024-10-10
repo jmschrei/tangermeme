@@ -86,12 +86,15 @@ def _integer_distances_and_histogram(X, Y, gamma, f, Z, medians, median_bins,
 			Y_counts)
 		medians[i] = m
 
+		z_min_before = z_min
+
 		z_min = min(z_min, z_min_ - m)
 		z_max = max(z_max, z_max_ - m)
 			
 	# Find the minimum value and the number of bins needed to get there
 	i_min = int(math.floor(z_min)) #offset
 	bin_scale = int(math.floor(n_bins / (z_max - i_min))) #scale
+	
 	f[:] = 0
 	
 	ys = numpy.sum(Y_counts)
@@ -435,20 +438,25 @@ def tomtom(Qs, Ts, n_nearest=None, n_score_bins=100, n_median_bins=1000,
 
 	Returns
 	-------
-	best_p_values: numpy.ndarray, shape=(len(Qs), len(Ts))
+	best_p_values: torch.Tensor, shape=(len(Qs), len(Ts))
 		The p-value of the best alignment between each query and each target.
 
-	best_scores: numpy.ndarray, shape=(len(Qs), len(Ts))
+	best_scores: torch.Tensor, shape=(len(Qs), len(Ts))
 		The scores of the best alignment between each query and each target.
 
-	best_offsets: numpy.ndarray, shape=(len(Qs), len(Ts))
+	best_offsets: torch.Tensor, shape=(len(Qs), len(Ts))
 		The offset of the best alignment between each query and each target.
 
-	best_overlaps: numpy.ndarray, shape=(len(Qs), len(Ts))
+	best_overlaps: torch.Tensor, shape=(len(Qs), len(Ts))
 		The overlap of the best alignment between each query and each target.
 
-	best_strands: numpy.ndarray, shape=(len(Qs), len(Ts))
+	best_strands: torch.Tensor, shape=(len(Qs), len(Ts))
 		The strand for the best alignment between each query and each target.
+
+	best_idxs: torch.Tensor, shape=(len(Qs), len(Ts)), optional
+		When returning only a number of nearest neighbors, the index in the
+		original ordering of the targets corresponding to each returned
+		neighbor. These will be sorted by p-value.
 	"""
 
 	if n_jobs != -1:
@@ -493,4 +501,4 @@ def tomtom(Qs, Ts, n_nearest=None, n_score_bins=100, n_median_bins=1000,
 	if n_jobs != -1:
 		numba.set_num_threads(_n_jobs)
 
-	return results.transpose(2, 0, 1)
+	return torch.from_numpy(results.transpose(2, 0, 1))

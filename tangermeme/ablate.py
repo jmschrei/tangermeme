@@ -111,7 +111,7 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 		The predictions from the model after inserting the motif in. If the
 		output from the model's forward function is a single tensor, it will
 		return that. If the model outputs a list of tensors, it will return
-		those.s
+		those.
 	"""
 
 	additional_func_kwargs = additional_func_kwargs or {}
@@ -137,3 +137,68 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 			for y in y_after]
 
 	return y_before, y_after
+
+
+def ablate_annotations(model, X, annotations, **kwargs):
+	"""Ablate each annotation individually and return the deltas.
+
+	This function takes in a model, a set of sequences, and a set of annotations
+	and goes through the annotations one at a time ablating the sequence. The
+	model predictions before and after ablation are returned, similar to the
+	saturation_mutagenesis function. Each ablation is done individually, so
+	the difference in model predictions is from just one annotation at a time.
+
+
+	Parameters
+	----------
+	model: torch.nn.Module
+		A PyTorch model to use for making predictions. These models can take in
+		any number of inputs and make any number of outputs. The additional
+		inputs must be specified in the `args` parameter.
+
+	X: torch.tensor, shape=(-1, len(alphabet), length)
+		A one-hot encoded set of sequences to have a motif inserted into.
+
+	annotations: torch.Tensor, shape=(n_annotations, 3)
+		A tensor of annotations where the first column is the example_idx, the
+		second column is the start position (0-indexed) and the third column is
+		the end position (0-indexed, not inclusive).
+
+	kwargs: arguments
+		Additional optional arguments to pass into the `ablate` function.
+
+	
+	Returns
+	-------
+	y_befores: torch.Tensor or list of torch.Tensors
+		The application of `func` from the model BEFORE ablating the motif. If 
+		the output from the model's forward function is a single tensor, it will 
+		return that. If the model outputs a list of tensors, it will return 
+		those.
+
+	y_afters: torch.Tensor or list of torch.Tensors
+		The application of `func` from the model AFTER ablating the motif. If 
+		the output from the model's forward function is a single tensor, it will
+		return that. If the model outputs a list of tensors, it will return
+		those.
+	"""
+
+	y_befores, y_afters = [], []
+
+	for idx, start, end in annotations:
+		y_before, y_after = ablate(model, X[idx:idx+1], start=start, end=end, 
+			**kwargs)
+
+		y_befores.append(y_before)
+		y_afters.append(y_after)
+
+	if isinstance(y_afters[0], torch.Tensor):
+		y_befores = torch.stack(y_befores)
+		y_afters = torch.stack(y_afters)
+	else:
+		y_befores = [torch.stack([x[i] for x in y_befores]) for i in range(len(
+			y_befores))]
+		y_afters = [torch.stack([x[i] for x in y_afters]) for i in range(len(
+			y_afters))]
+
+	return y_befores, y_afters

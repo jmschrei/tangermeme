@@ -1,13 +1,16 @@
 # test_utils.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import numpy
 import torch
+import pandas
 
 from tangermeme.utils import characters
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
 from tangermeme.utils import chunk
 from tangermeme.utils import unchunk
+from tangermeme.utils import extract_signal
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -414,3 +417,30 @@ def test_unchunk_raises():
 
 	assert_raises(IndexError, unchunk, X, lengths, overlap=2)
 	assert_raises(ValueError, unchunk, X[0], lengths[:1], overlap=2)
+
+
+###
+
+
+def test_extract_signal():
+	loci = pandas.DataFrame({
+		'example_idxs': [0, 0, 1, 2],
+		'start': [1, 9, 2, 4],
+		'end': [8, 14, 10, 12]
+	})
+
+	X = numpy.random.RandomState(0).randn(3, 1, 15)
+	X = torch.from_numpy(X)
+
+	y = extract_signal(loci, X)
+	
+	assert y.shape == (4, 1)
+	assert_array_almost_equal(y, [[ 5.3088  ],
+                  [ 2.891628],
+                  [-0.253532],
+                  [-0.917093]])
+
+	assert y[0, 0] == X[0, :, 1:8].sum()
+	assert y[1, 0] == X[0, :, 9:14].sum()
+	assert y[2, 0] == X[1, :, 2:10].sum()
+	assert y[3, 0] == X[2, :, 4:12].sum()

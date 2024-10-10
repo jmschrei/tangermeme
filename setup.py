@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='tangermeme',
-    version='0.3.0',
+    version='0.4.0',
     author='Jacob Schreiber',
     author_email='jmschreiber91@gmail.com',
     packages=['tangermeme', 'tangermeme/tools'],
@@ -22,5 +22,6 @@ setup(
         "logomaker",
         "joblib >= 1.3.2",
         "scikit-learn >= 1.2.2"
+        "matplotlib"
     ],
 )

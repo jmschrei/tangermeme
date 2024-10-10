@@ -5,6 +5,46 @@
 Release History
 ===============
 
+
+Version 0.4.0
+==============
+
+Highlights
+----------
+
+	- At a high level, this release focuses on quick ways to understand what a model has learned. This means extending seqlet calling functionality as well as introducing handling of annotations, which are any sort of notation of span along the genome -- seqlet calls, motif matches, and hit calls.
+
+
+annotate
+--------
+
+	- Added in a new file for handling annotations.
+	- Includes a `count_annotations` function for converting a sparse list of annotations into a dense matrix of counts.
+	- Also includes a `pairwise_annotations` function for looking at pairs of motifs that are learned.
+	- Also includes a `pairwise_annotations_space` function for looking at spacing between pairs of functions.
+	- Also includes an `annotate_seqlet` function for annotating seqlets using TOMTOM and a reference database.
+
+
+seqlet
+------
+
+	- Added in `recursive_seqlets`, which calls seqlets using a recursive definition that all spans within a seqlet must also be independently called as seqlets.
+
+
+plot
+----
+
+	- Added in `plot_pwm` that takes in a PWM whose rows sum to 1 and plots the information content weighted characters as well as the reverse complement.
+
+
+utils
+-----
+
+	- Added in a `pwm_consensus` function that takes in a single PWM and returns a one-hot encoded version of the consensus sequence.
+	- Added in an `extract_signal` function for extracting sums over variable-length spans from tensors. 
+
+
+
 Version 0.3.0
 ==============
 

@@ -483,3 +483,83 @@ def unchunk(X, lengths=None, overlap=0):
 
 	return y
 	
+
+def pwm_consensus(X):
+	"""Take in a PWM and return the consensus.
+
+	This function will take in a PWM that encodes the probabilities of each
+	character at each position and will return the consensus, which is the
+	most likely individual sequence according to that PWM. This is done by
+	taking the argmax at each position. When multiple characters at the same
+	position have the maximum probability, the character in the earlier
+	numerical position is chosen. If a column has a sum equal to 0 (no
+	characters allowed there) the returned consensus also has entirely 0s.
+
+
+	Parameters
+	----------
+	X: torch.Tensor, numpy.ndarray, shape=(alphabet_len, pwm_len)
+		A PWM containing the probabilities of each character at each position.
+
+
+	Returns
+	-------
+	Y: torch.Tensor, shape=(alphabet_len, pwm_len)
+		A PWM of the same shape as `X` except with the maximum-value character
+		set to 1.
+	"""
+
+	X = _cast_as_tensor(X)
+	_validate_input(X, "X", shape=(-1, -1), min_value=0, max_value=1)
+
+	alpha_idxs = X.argmax(dim=0)
+
+	Y = torch.zeros_like(X)
+	Y[alpha_idxs, torch.arange(X.shape[-1])] = 1
+	Y[:, X.sum(dim=0) == 0] = 0
+	return Y
+
+
+def extract_signal(loci, X, verbose=False):
+	"""Extracts the signal at coordinates from a tensor of examples.
+
+	This function takes in a dataframe with the first three columns being the
+	example index, the start (inclusive) and the end (not inclusive) and
+	returns the signal sum across those coordinates from the tensor. This can
+	be used, for instance, to extract attributions or genomics signal from
+	windows. This sum is done separately for each signal in the tensor.
+
+
+	Parameters
+	----------
+	loci: pandas.DataFrame
+		A set of loci to extract signal from. Multiple loci can be present on
+		the same example in X and the starts and ends can overlap.
+
+	X: torch.Tensor, numpy.ndarray, shape=(-1, n_signals, sequence_length)
+		A 3D tensor where the first dimension corresponds to the examples, the
+		second dimension corresponds to the number of signals being measured
+		at each position (e.g., different ChIP-seq tracks), and the third
+		position corresponds to the sequence length.
+
+	verbose: bool, optional
+		Whether to print a progress bar tracking the extraction process. Default
+		is False.
+
+
+	Returns
+	-------
+	Y: torch.Tensor, shape=(n_loci, n_signals)
+		The sum of the signal across all positions for each of the loci. The
+		returned value is the sum of this signal.
+	"""
+
+	_validate_input(X, "X", shape=(-1, -1, -1))
+
+	Y = torch.zeros(loci.shape[0], X.shape[1], dtype=X.dtype, device=X.device)
+
+	loci = loci.values[:, :3].astype(int)
+	for i, (idx, start, end) in enumerate(tqdm(loci, disable=not verbose)):
+		Y[i] = X[idx, :, start:end].sum(dim=-1)
+
+	return Y

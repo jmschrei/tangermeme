@@ -14,7 +14,9 @@ from tangermeme.ersatz import shuffle
 
 from tangermeme.seqlet import _laplacian_null
 from tangermeme.seqlet import _isotonic_thresholds
+
 from tangermeme.seqlet import tfmodisco_seqlets
+from tangermeme.seqlet import recursive_seqlets
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -32,8 +34,6 @@ def X_attr():
 
 @pytest.fixture
 def X_contrib(X, X_attr):
-	torch.manual_seed(0)
-	numpy.random.seed(0)
 	return (X * X_attr).sum(axis=1)
 
 ###
@@ -158,15 +158,17 @@ def test_isotonic_thresholds_min_frac(X_contrib):
 ###
 
 
-def test_tfmodisco_seqlets(X_attr, X):
-	pos_seqlets, neg_seqlets = tfmodisco_seqlets(X_attr * X, device='cpu')
+def test_tfmodisco_seqlets(X_contrib):
+	seqlets = tfmodisco_seqlets(X_contrib, device='cpu')
+	pos_seqlets = seqlets[seqlets['attribution'] >= 0]
+	neg_seqlets = seqlets[seqlets['attribution'] < 0]
 
 	assert isinstance(pos_seqlets, pandas.DataFrame)
 	assert isinstance(neg_seqlets, pandas.DataFrame)
-	assert pos_seqlets.shape == (59, 7)
-	assert neg_seqlets.shape == (105, 7)
+	assert pos_seqlets.shape == (59, 4)
+	assert neg_seqlets.shape == (105, 4)
 
-	assert_array_almost_equal(pos_seqlets.values[:15, [0, 1, 2, 4]], [
+	assert_array_almost_equal(pos_seqlets.values[:15], [
 		[0.0000e+00, 1.0430e+03, 1.0840e+03, 3.1515e-01],
         [0.0000e+00, 1.5110e+03, 1.5520e+03, 9.2622e-02],
         [0.0000e+00, 5.6900e+02, 6.1000e+02, 4.4792e-02],
@@ -183,7 +185,7 @@ def test_tfmodisco_seqlets(X_attr, X):
         [1.0000e+00, 9.2400e+02, 9.6500e+02, 1.6062e-02],
         [1.0000e+00, 1.5620e+03, 1.6030e+03, 8.2083e-03]], 4)
 
-	assert_array_almost_equal(neg_seqlets.values[:15, [0, 1, 2, 4]], [
+	assert_array_almost_equal(neg_seqlets.values[:15], [
 		[ 0.0000e+00,  9.8100e+02,  1.0220e+03, -2.3192e-02],
         [ 0.0000e+00,  8.8300e+02,  9.2400e+02, -2.1703e-02],
         [ 0.0000e+00,  1.0670e+03,  1.1080e+03, -1.7715e-02],
@@ -207,7 +209,89 @@ def test_tfmodisco_seqlets(X_attr, X):
 
 	assert_array_almost_equal(pos_counts, [ 8,  8, 12,  9, 14,  8])
 	assert_array_almost_equal(neg_counts, [19, 18, 15, 19, 15, 19])
-
-	assert all(pos_seqlets['score'] > 0)
-	assert all(neg_seqlets['score'] < 0)
 	assert all(numpy.isin(numpy.diff(pos_seqlets['example_idx']), [0, 1]))
+
+
+###
+
+
+def test_recursive_seqlets(X_contrib):
+	seqlets = recursive_seqlets(X_contrib)
+
+	assert seqlets.shape == (20, 5)
+	
+	column_names = ['example_idx', 'start', 'end', 'attribution', 'p-value']
+	for name1, name2 in zip(seqlets.columns, column_names):
+		assert name1 == name2
+
+	assert_array_almost_equal(seqlets.values, [
+		[ 1.0000e+00,  1.0380e+03,  1.0420e+03, -2.5192e-02,  1.3214e-04],
+		[ 0.0000e+00,  1.0540e+03,  1.0610e+03,  3.0307e-01,  2.0425e-04],
+		[ 1.0000e+00,  1.0540e+03,  1.0610e+03,  2.8121e-01,  9.8193e-04],
+		[ 5.0000e+00,  1.0800e+03,  1.0860e+03, -2.0043e-02,  1.4535e-03],
+		[ 3.0000e+00,  1.1870e+03,  1.1910e+03, -1.6154e-02,  1.5717e-03],
+		[ 4.0000e+00,  8.3200e+02,  8.3600e+02, -1.2807e-02,  2.0956e-03],
+		[ 1.0000e+00,  8.4700e+02,  8.5300e+02, -1.7939e-02,  2.6035e-03],
+		[ 4.0000e+00,  1.0450e+03,  1.0520e+03,  2.0798e-01,  2.6552e-03],
+		[ 4.0000e+00,  1.0620e+03,  1.0690e+03,  2.0112e-01,  3.0637e-03],
+		[ 1.0000e+00,  1.0840e+03,  1.0880e+03, -1.1433e-02,  3.5677e-03],
+		[ 1.0000e+00,  9.9300e+02,  9.9700e+02, -1.4471e-02,  3.6673e-03],
+		[ 5.0000e+00,  1.0720e+03,  1.0780e+03,  1.5735e-01,  4.0323e-03],
+		[ 4.0000e+00,  1.2280e+03,  1.2330e+03, -1.4672e-02,  4.0962e-03],
+		[ 1.0000e+00,  9.3000e+02,  9.3400e+02, -1.5100e-02,  4.5842e-03],
+		[ 1.0000e+00,  1.1160e+03,  1.1210e+03, -1.3372e-02,  4.7275e-03],
+		[ 3.0000e+00,  8.7000e+02,  8.7700e+02, -1.9001e-02,  5.4175e-03],
+		[ 1.0000e+00,  9.1400e+02,  9.2100e+02,  1.5942e-01,  6.1275e-03],
+		[ 2.0000e+00,  9.6900e+02,  9.7500e+02,  1.2634e-01,  7.8555e-03],
+		[ 2.0000e+00,  1.0290e+03,  1.0340e+03,  8.5375e-02,  8.5436e-03],
+		[ 2.0000e+00,  8.1100e+02,  8.1500e+02, -8.7880e-03,  8.8531e-03]], 4)
+
+
+def test_recursive_seqlets_additional_flanks(X_contrib):
+	seqlets = recursive_seqlets(X_contrib).values
+	seqlets2 = recursive_seqlets(X_contrib, additional_flanks=2).values
+	assert seqlets2.shape == (20, 5)
+
+	assert_array_almost_equal(seqlets[:, 0], seqlets2[:, 0])
+	assert_array_almost_equal(seqlets[:, 1], seqlets2[:, 1]+2)
+	assert_array_almost_equal(seqlets[:, 2], seqlets2[:, 2]-2)
+
+	seqlets2 = recursive_seqlets(X_contrib, additional_flanks=4).values
+	assert seqlets2.shape == (20, 5)
+
+	assert_array_almost_equal(seqlets[:, 0], seqlets2[:, 0])
+	assert_array_almost_equal(seqlets[:, 1], seqlets2[:, 1]+4)
+	assert_array_almost_equal(seqlets[:, 2], seqlets2[:, 2]-4)
+
+	seqlets2 = recursive_seqlets(X_contrib, additional_flanks=7).values
+	assert seqlets2.shape == (19, 5)
+
+
+def test_recursive_seqlets_min_length(X_contrib):
+	seqlets = recursive_seqlets(X_contrib).values
+	seqlets2 = recursive_seqlets(X_contrib, min_seqlet_len=7).values
+	seqlets3 = recursive_seqlets(X_contrib, min_seqlet_len=1).values
+
+	assert (seqlets[:, 2] - seqlets[:, 1]).min() == 4
+	assert (seqlets2[:, 2] - seqlets2[:, 1]).min() == 7
+	assert (seqlets3[:, 2] - seqlets3[:, 1]).min() == 1
+
+
+def test_recursive_seqlets_max_length(X_contrib):
+	seqlets = recursive_seqlets(X_contrib).values
+	seqlets2 = recursive_seqlets(X_contrib, max_seqlet_len=10).values
+	seqlets3 = recursive_seqlets(X_contrib, max_seqlet_len=6).values
+
+	assert (seqlets[:, 2] - seqlets[:, 1]).max() == 7
+	assert (seqlets2[:, 2] - seqlets2[:, 1]).max() == 7
+	assert (seqlets3[:, 2] - seqlets3[:, 1]).max() == 5
+
+
+def test_recursive_seqlets_p_values(X_contrib):
+	seqlets = recursive_seqlets(X_contrib).values
+	seqlets2 = recursive_seqlets(X_contrib, threshold=0.1).values
+	seqlets3 = recursive_seqlets(X_contrib, threshold=0.001).values
+
+	assert seqlets.shape == (20, 5)
+	assert seqlets2.shape == (180, 5)
+	assert seqlets3.shape == (3, 5)

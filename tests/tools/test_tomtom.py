@@ -2,6 +2,7 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import numpy
+import torch
 import pytest
 import pandas
 
@@ -84,6 +85,7 @@ def test_binned_median_long():
 
 ###
 
+
 def test_pairwise_max():
 	x = numpy.abs(numpy.random.RandomState(0).randn(100))
 	x = x / x.sum()
@@ -146,17 +148,17 @@ def test_tomtom():
 	pwms = generate_random_meme(n=20)
 	p, scores, offsets, overlaps, strands = tomtom(pwms, pwms)
 
-	assert isinstance(p, numpy.ndarray)
-	assert isinstance(scores, numpy.ndarray)
-	assert isinstance(offsets, numpy.ndarray)
-	assert isinstance(overlaps, numpy.ndarray)
-	assert isinstance(strands, numpy.ndarray)
+	assert isinstance(p, torch.Tensor)
+	assert isinstance(scores, torch.Tensor)
+	assert isinstance(offsets, torch.Tensor)
+	assert isinstance(overlaps, torch.Tensor)
+	assert isinstance(strands, torch.Tensor)
 
-	assert p.dtype == numpy.float64
-	assert scores.dtype == numpy.float64
-	assert offsets.dtype == numpy.float64
-	assert overlaps.dtype == numpy.float64
-	assert overlaps.dtype == numpy.float64
+	assert p.dtype == torch.float64
+	assert scores.dtype == torch.float64
+	assert offsets.dtype == torch.float64
+	assert overlaps.dtype == torch.float64
+	assert overlaps.dtype == torch.float64
 
 	assert p.shape == (20, 20)
 	assert scores.shape == (20, 20)
