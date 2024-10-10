@@ -1,17 +1,20 @@
 # tangermeme
 
-[![Unit Tests](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml/badge.svg)](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml)
+[![Downloads](https://static.pepy.tech/badge/tangermeme)](https://pepy.tech/project/tangermeme) [![Unit Tests](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml/badge.svg)](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml) [![Documentation Status](https://readthedocs.org/projects/tangermeme/badge/?version=latest)](https://tangermeme.readthedocs.io/en/latest/?badge=latest)
 
-[[docs](https://tangermeme.readthedocs.io/en/latest/index.html)][[tutorials](https://github.com/jmschrei/tangermeme/tree/main/docs/tutorials)]
+[[docs](https://tangermeme.readthedocs.io/en/latest/index.html)][[tutorials](https://github.com/jmschrei/tangermeme/tree/main/docs/tutorials)][[vignettes](https://github.com/jmschrei/tangermeme/tree/main/docs/vignettes)]
 
 > [!NOTE] 
 > tangermeme is under active development. The API has largely been decided on, but may change slightly across versions until the first major release.
 
-The [MEME Suite](https://meme-suite.org/meme/) is a collection of biological sequence analysis tools that rely almost solely on a collection of sequences or the motifs derived from them; tangermeme is an extension of this concept to biological sequence analysis when you have a collection of sequences *and a predictive model.* Hence, it implements many atomic sequence operations such as adding a motif to a sequence or shuffling it out, efficient tools for applying predictive models to these sequences, methods for dissecting what these predictive models have learned, and tools for designing new sequences using these models. tangermeme aims to be assumption free: models can be multi-input or multi-output, functions do not assume a distance and instead return the raw predictions, and when loss functions are necessary they can be supplied by the user. Although we will provide best practices for how to use these functions, our hope is that being assumption-free makes adaptation of tangermeme into your settings as frictionless as possible. All functions are unit-tested and implemented with both compute- and memory-efficient in mind. Finally, although the library was built with operations on DNA sequences in mind, all functions are extensible to any alphabet.
+Training sequence-based machine learning models has become widespread when studying genomics. But, what have these models learned, and what do we even do with them after training? `tangermeme` aims to provide robust and easy-to-use tools for the what-to-do-after-training question. `tangermeme` implements many atomic sequence operations such as adding a motif to a sequence or shuffling it out, efficient tools for applying predictive models to these sequences, methods for dissecting what these predictive models have learned, and tools for designing new sequences using these models. `tangermeme` aims to be assumption free: models can be multi-input or multi-output, functions do not assume a distance and instead return the raw predictions, and when loss functions are necessary they can be supplied by the user. Although we will provide best practices for how to use these functions, our hope is that being assumption-free makes adaptation of tangermeme into your settings as frictionless as possible. All functions are unit-tested and implemented with both compute- and memory-efficient in mind. Finally, although the library was built with operations on DNA sequences in mind, all functions are extensible to any alphabet.
 
-In addition to a library of functions to help you apply predictive models to sequences, future iterations of tangermeme will include PyTorch-based/GPU accelerated command-line tools that range from reimplementations of some of the tools in the MEME suite to new tools for sequence analysis that include attribution scores.
+In addition to a library of functions to help you apply predictive models to sequences, `tangermeme` includes accelerated command-line tools from the [MEME Suite](https://meme-suite.org/meme/), i.e., TOMTOM and FIMO, and will include other command-line tools for using models in the future.
 
-Please see the documentation and tutorials linked at the top of this README for more extensive documentation.
+Please see the documentation and tutorials linked at the top of this README for more extensive documentation. If you only read one vignette, read THIS ONE: [Inspecting what Cis-Regulatory Features a Model has Learned](https://tangermeme.readthedocs.io/en/latest/vignettes/Inspecting_What_Cis-Regulatory_Features_a_Model_Has_Learned.html).
+
+![image](https://github.com/user-attachments/assets/20b186e7-73af-46c7-a7b6-5484c714036e)
+
 
 ## Installation
 
@@ -24,7 +27,8 @@ This first release focused on the core prediction-based functionality (e.g., mar
 - v0.1.0: ✔️ Prediction-based functionality
 - v0.2.0: ✔️ Attribution-based functionality (e.g., attribution marginalization, support for DeepLIFT, seqlet calling..)
 - v0.3.0: ✔️ PyTorch ports for MEME and TOMTOM and command-line tools for the prediction- and attribution- based functionality 
-- v0.4.0: Focus on interleaving tools and iterative approaches
+- v0.4.0: ✔️ Focus on interleaving tools and iterative approaches
+- v0.5.0: More sophisticated methods for motif discovery
 
 ## Command-line Tools
 
@@ -243,12 +247,45 @@ When the model is the Beluga model and the goal is to design a sequence that yie
 In contrast to motif scanning, which usually relies solely on nucleotide sequence to determine whether a motif matches, seqlet calling is the identification of spans of nucleotides that have high attribution score. Seqlet calling methods usually do not rely on sequence at all because they are the first step in identifying repeating patterns based on having high attributions.
 
 ```python
-from tangermeme.seqlet import tfmodisco_seqlets
+from tangermeme.seqlet import recursive_seqlets
 
-pos_seqlets, neg_seqlets = tfmodisco_seqlets(X_attr)
+seqlets = recursive_seqlets(X_attr.sum(dim=1)) # You pass in a 2D tensor, not a 3D one
 ```
 
-![image](https://github.com/jmschrei/tangermeme/assets/3916816/b89cfe41-a796-4dfe-bec9-0e7b429b7320)
+![image](https://github.com/user-attachments/assets/152f63ab-ef58-42df-902a-1c1be2641868)
+
+The TF-MoDISco seqlet calling algorithm is also implemented. See the seqlet tutorial or API documentation for more details.
+
+Because seqlets are called entirely based on attributions, it is sometimes unclear whether the sequence content is similar to any known motif. Now, you can use `annotate_seqlets` to match seqlets to a motif database using TOMTOM! By default this will give you the nearest motif match for each seqlet but can give you any number of matches you want.
+
+```python
+motifs = read_meme("motifs.meme.txt")
+motif_idxs, motif_pvalues = annotate_seqlets(X, seqlets, motifs)
+```
+
+![image](https://github.com/user-attachments/assets/5c4ed1ab-1c1a-4d33-96e8-b25613970a22)
+
+
+#### Annotations
+
+In `tangermeme`, an annotation is any genomic span. This means it can be motif hits, seqlets, hit calls, etc., as long as it has a defined start and end coordinate. Given a set of annotations you can do many things. First, you can count the number of times each annotation appears in each sequence. 
+
+```python
+from tangermeme.annotate import count_annotations
+
+y = count_annotations((seqlets['example_idx'], motif_idxs[:, 0]))
+```
+
+For each annotation, you can get results before and after ablating the annotation from the sequence. Here is an example of running DeepLIFT/SHAP on an example after shuffling each motif instance independently, with only one line of code.
+
+```python
+from tangermeme.ablate import ablate_annotations
+
+y_before, y_after = ablate_annotations(model, X, annotations, func=deep_lift_shap)
+```
+
+![image](https://github.com/user-attachments/assets/997ca242-8c27-46b6-8204-b898e5f20166)
+
 
 
 
