@@ -52,6 +52,8 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    tutorials/Tutorial_A1_Ersatz_Sequence_Manipulation.ipynb
    tutorials/Tutorial_A2_Predictions.ipynb
    tutorials/Tutorial_A3_Deep_LIFT_SHAP.ipynb
+   tutorials/Tutorial_A4_Seqlets.ipynb
+   tutorials/Tutorial_A5_Annotations.ipynb
    tutorials/Tutorial_B1_Marginalization.ipynb
    tutorials/Tutorial_B2_Ablation.ipynb
    tutorials/Tutorial_B3_Spacing.ipynb
@@ -63,6 +65,7 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    tutorials/Tutorial_C1_IO_and_Data_Loading.ipynb
    tutorials/Tutorial_C2_Plotting.ipynb
    tutorials/Tutorial_D1_FIMO.ipynb
+   tutorials/Tutorial_D2_TOMTOM.ipynb
 
 .. toctree::
    :maxdepth: 1
@@ -70,6 +73,7 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    :caption: Vignettes
 
    vignettes/Attribution_Trickiness_and_DeepLiftShap_Implementations.ipynb
+   vignettes/Inspecting_What_Cis-Regulatory_Features_a_Model_Has_Learned.ipynb
 
 .. toctree::
    :maxdepth: 1
@@ -77,6 +81,7 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    :caption: API
 
    api/ablate.rst
+   api/annotate.rst
    api/design.rst
    api/ersatz.rst
    api/io.rst
@@ -85,5 +90,7 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    api/match.rst
    api/predict.rst
    api/product.rst
+   api/seqlets.rst
    api/space.rst
    api/variant_effect.rst
+   
