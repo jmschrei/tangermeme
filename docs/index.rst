@@ -90,7 +90,6 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    api/match.rst
    api/predict.rst
    api/product.rst
-   api/seqlets.rst
+   api/seqlet.rst
    api/space.rst
    api/variant_effect.rst
-   
