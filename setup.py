@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='tangermeme',
-    version='0.4.0',
+    version='0.4.1',
     author='Jacob Schreiber',
     author_email='jmschreiber91@gmail.com',
     packages=['tangermeme', 'tangermeme/tools'],
@@ -11,7 +11,7 @@ setup(
     license='LICENSE.txt',
     description='Biological sequence analysis for the modern age.',
     install_requires=[
-        "numpy >= 1.14.2",
+        "numpy >= 1.14.2, <= 2.0.1",
         "scipy >= 1.0.0",
         "pandas >= 1.3.3",
         "pyBigWig >= 0.3.17",
