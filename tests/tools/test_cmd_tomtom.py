@@ -7,6 +7,7 @@ from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
 
 
+@pytest.mark.cmd
 def test_cmd_tomtom():
 	fname = "tests/data/test.meme"
 
@@ -33,6 +34,7 @@ def test_cmd_tomtom():
 		assert strand.strip() == strands[i]
 
 
+@pytest.mark.cmd
 def test_cmd_tomtom2():
 	fname = "tests/data/test.meme"
 
