@@ -485,8 +485,8 @@ def tomtom(Qs, Ts, n_nearest=None, n_score_bins=100, n_median_bins=1000,
 		T_ints = numpy.around(T / T.max(axis=-1, keepdims=True) * 
 			(n_target_bins-1))
 		T_ints = T_ints.T.dot(n_target_bins ** numpy.arange(len(T))[:, None])
-		_, rr_idxs, rr_inv, rr_counts = numpy.unique(T_ints, return_index=True, 
-			return_inverse=True, return_counts=True)
+		_, rr_idxs, rr_inv, rr_counts = numpy.unique(T_ints.flatten(), 
+			return_index=True, return_inverse=True, return_counts=True)
 
 		T = T[:, rr_idxs]
 		T_norm = T_norm[rr_idxs]
