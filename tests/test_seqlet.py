@@ -159,7 +159,7 @@ def test_isotonic_thresholds_min_frac(X_contrib):
 
 
 def test_tfmodisco_seqlets(X_contrib):
-	seqlets = tfmodisco_seqlets(X_contrib, device='cpu')
+	seqlets = tfmodisco_seqlets(X_contrib)
 	pos_seqlets = seqlets[seqlets['attribution'] >= 0]
 	neg_seqlets = seqlets[seqlets['attribution'] < 0]
 
