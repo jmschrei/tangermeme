@@ -153,7 +153,7 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 					elif show_extra:
 						s = motif_start
 
-						motifs[motif_start:motif_start+len(motif)*2, i] = 1
+						motifs[motif_start:motif_start+len(str(motif))*2, i] = 1
 						y_offset += -0.1 + 0.2*(n_tracks) + 0.1*(i-n_tracks)
 						
 						plt.text(motif_start, -ylim*(y_offset+0.1), motif, 

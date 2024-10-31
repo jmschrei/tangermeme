@@ -13,10 +13,7 @@ from ..io import read_meme
 
 from tqdm import tqdm
 
-
-LOG_2 = math.log(2)
-
-@numba.njit('float64(float64, float64)', cache=True)
+@numba.njit('float64(float64, float64)', fastmath=True, cache=True)
 def logaddexp2(x, y):
 	"""Calculate the logaddexp in a numerically stable manner in base 2.
 
@@ -41,36 +38,17 @@ def logaddexp2(x, y):
 		The result of log2(pow(2, x) + pow(2, y))
 	"""
 
+	if x == float("-inf") and y == float("-inf"):
+		return float("-inf")
+
+	if x == float("inf") or y == float("inf"):
+		return float("inf")
+
 	vmax, vmin = max(x, y), min(x, y)
-	return vmax + math.log(math.pow(2, vmin - vmax) + 1) / LOG_2
+	return vmax + math.log2(math.pow(2, vmin - vmax) + 1)
 
 
-@numba.njit('void(int32[:, :], float64[:], float64[:], int32, int32, float64)',
-	cache=True)
-def _fast_pwm_to_cdf(int_log_pwm, old_logpdf, logpdf, alphabet_length, 
-	seq_length, log_bg):
-	"""A fast internal function for running the dynamic programming algorithm.
-
-	This function is written in numba to speed up the dynamic programming used
-	to convert score bins into log p-values. This is not meant to be used
-	externally.
-	"""
-
-	for i in range(1, seq_length):
-		logpdf[:] = -numpy.inf
-
-		for j, x in enumerate(old_logpdf):
-			if x != -numpy.inf:
-				for k in range(alphabet_length):
-					offset = int_log_pwm[i, k]
-
-					v1 = logpdf[j + offset]
-					v2 = log_bg + x
-					logpdf[j + offset] = logaddexp2(v1, v2)
-
-		old_logpdf[:] = logpdf
-
-
+@numba.njit(cache=True)
 def _pwm_to_mapping(log_pwm, bin_size):
 	"""An internal method for calculating score <-> log p-value mappings.
 
@@ -108,33 +86,72 @@ def _pwm_to_mapping(log_pwm, bin_size):
 		associated with each score bin.
 	"""
 
+	n, l = log_pwm.shape
+
 	log_bg = math.log2(0.25)
-	int_log_pwm = numpy.round(log_pwm / bin_size).astype(numpy.int32).T.copy()
+	int_log_pwm = numpy.round(log_pwm / bin_size).astype(numpy.int32)
 
-	smallest = int(numpy.min(numpy.cumsum(numpy.min(int_log_pwm, axis=-1), 
-		axis=-1)))
-	largest = int(numpy.max(numpy.cumsum(numpy.max(int_log_pwm, axis=-1), 
-		axis=-1))) + log_pwm.shape[1]
-	
-	logpdf = -numpy.inf * numpy.ones(largest - smallest + 1)
-	for i in range(log_pwm.shape[0]):
-		idx = int_log_pwm[0, i] - smallest
-		logpdf[idx] = numpy.logaddexp2(logpdf[idx], log_bg)
-	
-	old_logpdf = logpdf.copy()
-	logpdf[:] = 0
-	
-	_fast_pwm_to_cdf(int_log_pwm, old_logpdf, logpdf, log_pwm.shape[0], 
-		log_pwm.shape[1], log_bg)
+	smallest, largest = 9999999, -9999999
+	log_pwm_min_csum, log_pwm_max_csum = 0, 0
+	for i in range(l):
+		log_pwm_min = 9999999
+		log_pwm_max = -9999999
 
-	log1mcdf = logpdf.copy()
+		for j in range(n):
+			log_pwm_min = min(log_pwm_min, int_log_pwm[j, i])
+			log_pwm_max = max(log_pwm_max, int_log_pwm[j, i])
+
+		log_pwm_min_csum += log_pwm_min
+		log_pwm_max_csum += log_pwm_max
+
+		smallest = min(smallest, log_pwm_min_csum)
+		largest = max(largest, log_pwm_max_csum)
+
+	largest += l
+
+	logpdf = numpy.empty(largest - smallest + 1)
+	old_logpdf = -numpy.inf * numpy.ones(largest - smallest + 1)
+	for i in range(n):
+		idx = int_log_pwm[i, 0] - smallest
+		old_logpdf[idx] = logaddexp2(old_logpdf[idx], log_bg)
+
+	for i in range(1, l):
+		for j in range(largest - smallest + 1):
+			logpdf[j] = -numpy.inf
+
+		for j, x in enumerate(old_logpdf):
+			if x != -numpy.inf:
+				for k in range(n):
+					idx = j + int_log_pwm[k, i]
+					logpdf[idx] = logaddexp2(logpdf[idx], log_bg + x)
+
+		for j in range(largest - smallest + 1):
+			old_logpdf[j] = logpdf[j]
+
 	for i in range(len(logpdf) - 2, -1, -1):
-		log1mcdf[i] = numpy.logaddexp2(log1mcdf[i], log1mcdf[i + 1])
+		logpdf[i] = logaddexp2(logpdf[i], logpdf[i + 1])
 
-	return smallest, log1mcdf
+	return smallest, logpdf
 
 
-@numba.njit(parallel=True, fastmath=True)
+@numba.njit(parallel=True, cache=True)
+def _all_pwm_to_mapping(motifs, motif_lengths, bin_size):
+	n = len(motif_lengths) - 1
+
+	smallests = numpy.empty(n, dtype='int64')
+	logpdfs = [numpy.empty(0) for i in range(n)]
+
+	for i in numba.prange(n):
+		s, e = motif_lengths[i], motif_lengths[i+1]
+
+		smallest, logpdf = _pwm_to_mapping(motifs[:, s:e], bin_size)
+		smallests[i] = smallest
+		logpdfs[i] = logpdf
+
+	return smallests, logpdfs
+
+
+@numba.njit(parallel=True, fastmath=True, cache=True)
 def _fast_hits(X, chrom_lengths, pwm, pwm_lengths, score_threshold, bin_size, 
 	smallest, score_to_pvals, score_to_pval_lengths):
 	n_motifs = len(pwm_lengths) - 1
@@ -180,14 +197,15 @@ def _fast_hits(X, chrom_lengths, pwm, pwm_lengths, score_threshold, bin_size,
 	return hits
 
 
-@numba.njit
+@numba.njit(cache=True)
 def _fast_convert(X, mapping):
 	for i in range(X.shape[0]):
 		X[i] = mapping[X[i]]
 
 
 def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1, 
-	eps=0.0001, threshold=0.0001, reverse_complement=True, dim=0):
+	eps=0.0001, threshold=0.0001, reverse_complement=True, return_counts=False, 
+	dim=0):
 	"""An implementation of the FIMO algorithm from the MEME suite.
 
 	This function implements the "Finding Individual Motif Instances" (FIMO)
@@ -234,6 +252,11 @@ def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1,
 		Whether to scan each motif and also the reverse complements. Default
 		is True.
 
+	return_counts: bool, optioal
+		Whether to only return the count of the number of matches instead of
+		dataframes containing information about each match. If True, the return
+		will be a single array. Default is False
+
 	dim: 0 or 1, optional
 		Whether to return one dataframe for each motif containing all hits for
 		that motif across all examples (0, default) or one dataframe for each 
@@ -243,12 +266,13 @@ def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1,
 
 	Returns
 	-------
-	hits: list of pandas.DataFrames
+	hits: list of pandas.DataFrames or numpy.ndarray
 		A list of pandas.DataFrames containing motif hits, where the exact
-		semantics of each dataframe are determined by `dim`.
+		semantics of each dataframe are determined by `dim`. Alternatively,
+		a numpy array of just the number of counts per motif if return_counts
+		is set to True.
 	"""
 
-	tic = time.time()
 	log_threshold = math.log2(threshold)
 
 	# Extract the motifs and potentially the reverse complements
@@ -267,35 +291,27 @@ def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1,
 
 	# Initialize arrays to store motif properties
 	n_motifs = len(motifs)
-	motif_pwms, motif_names, motif_lengths = [], [], [0]
-	_score_to_pvals, _score_to_pvals_lengths = [], [0]
 
-	_smallest = numpy.empty(n_motifs, dtype=numpy.int32)
+	motif_names = numpy.array([name for name, _ in motifs])
+	motif_lengths = [0] + [pwm.shape[-1] for _, pwm in motifs]
+	motif_lengths = numpy.cumsum(motif_lengths).astype(numpy.uint64)
+
+	motif_pwms = numpy.concatenate([pwm for _, pwm in motifs], axis=-1)
+	motif_pwms = numpy.log2(motif_pwms + eps) - math.log2(0.25)
+
+	_smallest, _score_to_pvals = _all_pwm_to_mapping(motif_pwms, motif_lengths, 
+		bin_size)
+	_score_to_pvals_lengths = [0]
 	_score_thresholds = numpy.empty(n_motifs, dtype=numpy.float32)
 
-	# Fill out these motif properties
-	for i, (name, motif) in enumerate(motifs):
-		motif_names.append(name)
-		motif_lengths.append(motif.shape[-1])
-		
-		motif_pwm = numpy.log2(motif + eps) - math.log2(0.25)
-		motif_pwms.append(motif_pwm)
-
-		smallest, mapping = _pwm_to_mapping(motif_pwm, bin_size)
-		_smallest[i] = smallest
-		_score_to_pvals.append(mapping)
-		_score_to_pvals_lengths.append(len(mapping))
+	for i in range(n_motifs):	
+		_score_to_pvals_lengths.append(len(_score_to_pvals[i]))
 
 		idx = numpy.where(_score_to_pvals[i] < log_threshold)[0]
 		if len(idx) > 0:
-			_score_thresholds[i] = (idx[0] + smallest) * bin_size                              
+			_score_thresholds[i] = (idx[0] + _smallest[i]) * bin_size                              
 		else:
 			_score_thresholds[i] = float("inf")
-
-	# Convert these back to numpy arrays
-	motif_pwms = numpy.concatenate(motif_pwms, axis=-1)
-	motif_names = numpy.array(motif_names)
-	motif_lengths = numpy.cumsum(motif_lengths).astype(numpy.uint64)
 
 	_score_to_pvals = numpy.concatenate(_score_to_pvals)
 	_score_to_pvals_lengths = numpy.cumsum(_score_to_pvals_lengths)
@@ -343,6 +359,12 @@ def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1,
 	# Convert the results to pandas DataFrames
 	names = ['sequence_name', 'start', 'end', 'score', 'p-value']
 	n_ = n_motifs // 2 if reverse_complement else n_motifs
+
+	if return_counts == True:
+		counts = numpy.zeros(n_, dtype='int32')
+		for i in range(n_):
+			counts[i] = len(hits[i]) + len(hits[i+n_])
+		return counts
 
 	for i in range(n_):
 		if reverse_complement:

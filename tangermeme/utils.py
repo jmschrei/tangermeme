@@ -1,4 +1,4 @@
-# ablate.py
+# utils.py
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import numpy

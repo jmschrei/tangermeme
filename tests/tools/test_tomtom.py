@@ -183,6 +183,58 @@ def test_tomtom():
 		0., 0., 0., 1., 0., 1., 0., 1., 0., 1., 1])
 
 
+def test_tomtom_reverse_complement():
+	pwms = generate_random_meme(n=20)
+	p0, scores0, offsets0, overlaps0, strands0 = tomtom(pwms, pwms)
+	p1, scores1, offsets1, overlaps1, strands1 = tomtom(pwms,
+		[p[::-1, ::-1] for p in pwms])
+
+	assert_array_almost_equal(p0, p1, 4)
+	assert_array_almost_equal(scores0, scores1, 4)
+	assert_array_almost_equal(offsets0, offsets1, 4)
+	assert_array_almost_equal(overlaps0, overlaps1, 4)
+	assert_array_almost_equal(strands0, 1-strands1)
+
+
+def test_tomtom_homomotifs():
+	pwms = generate_random_meme(n=5)
+	all_a = numpy.array([
+		[1, 0, 0, 0],
+		[1, 0, 0, 0],
+		[1, 0, 0, 0],
+		[1, 0, 0, 0],
+		[1, 0, 0, 0]
+	])
+
+	p, scores, offsets, overlaps, strands = tomtom(pwms, [all_a])
+	assert_array_almost_equal(p[:, 0], [1, 1, 1, 1, 1], 4)
+	assert_array_almost_equal(scores[:, 0], [1600, 700, 400, 1800, 800], 4)
+	assert_array_almost_equal(torch.abs(offsets[:, 0]), [13, 4, 1, 15, 5], 4)
+	assert_array_almost_equal(overlaps[:, 0], [3, 3, 3, 3, 3], 4)
+	assert_array_almost_equal(strands[:, 0], [1, 1, 1, 1, 1])
+
+	p, scores, offsets, overlaps, strands = tomtom([all_a], pwms)
+	assert_array_almost_equal(p[0], [0.4936, 1.0000, 0.7399, 0.9794, 0.2521], 4)
+	assert_array_almost_equal(scores[0], [381., 360., 371., 374., 381.], 4)
+	assert_array_almost_equal(offsets[0], [-1.,  6., -2.,  1.,  0.], 4)
+	assert_array_almost_equal(overlaps[0], [3., 1., 2., 4., 4.], 4)
+	assert_array_almost_equal(strands[0], [1., 1., 1., 0., 1.])
+
+
+def test_tomtom_zeroes():
+	pwms = generate_random_meme(n=5)
+	all_zeroes = numpy.array([
+		[0, 0, 0, 0],
+		[0, 0, 0, 0],
+		[0, 0, 0, 0],
+		[0, 0, 0, 0],
+		[0, 0, 0, 0]
+	])
+
+	assert_raises(ValueError, tomtom, [all_zeroes], pwms)
+	assert_raises(ValueError, tomtom, pwms, [all_zeroes])
+
+
 def test_tomtom_subsets():
 	pwms = generate_random_meme(n=20)
 	p, scores, offsets, overlaps, strands = tomtom(pwms[:2], pwms)
@@ -220,6 +272,58 @@ def test_tomtom_subsets():
 	assert_array_almost_equal(offsets, offsets3[:2], 6)
 	assert_array_almost_equal(overlaps, overlaps3[:2], 6)
 	assert_array_almost_equal(strands, strands3[:2], 6)
+
+
+def test_tomtom_self():
+	pwms = generate_random_meme(n=1)
+	p, scores, offsets, overlaps, strands = tomtom(pwms, pwms)
+
+	assert p.shape == (1, 1)
+	assert scores.shape == (1, 1)
+	assert offsets.shape == (1, 1)
+	assert overlaps.shape == (1, 1)
+	assert strands.shape == (1, 1)
+
+	assert_array_almost_equal(p, [[4.4409e-16]], 6)
+	assert_array_almost_equal(scores, [[1346.]])
+	assert_array_almost_equal(offsets, [[0.]])
+	assert_array_almost_equal(overlaps, [[16.]])
+	assert_array_almost_equal(strands, [[0.]])
+
+
+def test_tomtom_selfp1():
+	pwms = generate_random_meme(n=1)
+	p, scores, offsets, overlaps, strands = tomtom(pwms, [p + 1 for p in pwms])
+
+	assert p.shape == (1, 1)
+	assert scores.shape == (1, 1)
+	assert offsets.shape == (1, 1)
+	assert overlaps.shape == (1, 1)
+	assert strands.shape == (1, 1)
+
+	assert_array_almost_equal(p, [[-1.7764e-15]], 6)
+	assert_array_almost_equal(scores, [[1491.]])
+	assert_array_almost_equal(offsets, [[0.]])
+	assert_array_almost_equal(overlaps, [[16.]])
+	assert_array_almost_equal(strands, [[0.]])
+
+
+def test_tomtom_self_rc():
+	pwms = generate_random_meme(n=1)
+	p, scores, offsets, overlaps, strands = tomtom(pwms, 
+		[p[::-1, ::-1] for p in pwms])
+
+	assert p.shape == (1, 1)
+	assert scores.shape == (1, 1)
+	assert offsets.shape == (1, 1)
+	assert overlaps.shape == (1, 1)
+	assert strands.shape == (1, 1)
+
+	assert_array_almost_equal(p, [[4.4409e-16]], 6)
+	assert_array_almost_equal(scores, [[1346.]])
+	assert_array_almost_equal(offsets, [[0.]])
+	assert_array_almost_equal(overlaps, [[16.]])
+	assert_array_almost_equal(strands, [[1.]])
 
 
 def test_tomtom_meme():

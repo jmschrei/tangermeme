@@ -9,133 +9,15 @@ import torch
 
 from numba import njit
 from numba import prange
-from numpy import uint64
+from numpy import uint8, uint64
 
+from .tomtom import _binned_median
+from .tomtom import _pairwise_max
+from .tomtom import _merge_rc_results
 
-@njit
-def _binned_median(x, bins, x_min, x_max, counts):
-	"""An internal function for calculating medians quickly.
-
-	This method uses a binning-based approximation to quickly calculate medians
-	in linear time with low constants. Rather than using a sorting algorithm,
-	which is O(n log n) or more sophisticated approaches that are O(n) but with
-	bad constants, this approach approximates the median by dividing the range
-	of the array into bins, assigning points to bins in one sweep of the data,
-	and then scanning over all bins until half of points have been encountered.
-
-	To get a better approximation of the median, sufficient statistics are
-	stored that enable returning the average of all points assigned to the
-	bin. When there an odd number of points, or an even number and the middle
-	two get assigned to the same bin, this should return the exact median.
-	"""
-
-	n, n_bins = len(x), len(bins)
-	bins[:] = 0
-
-	halfway = 0
-	x_max -= x_min
-	for i in range(n):
-		z = int((x[i] - x_min) / x_max * (n_bins - 1))
-		bins[z, 0] += counts[i]
-		bins[z, 1] += x[i] * counts[i]
-		halfway += counts[i]
-
-	halfway /= 2
-	count = 0
-	for i in range(n_bins):
-		count += bins[i, 0]
-		if count >= halfway:
-			return bins[i, 1] / bins[i, 0]
-			
-	return -99999
-
-
-@njit
-def _integer_distances_and_histogram(X, Y, gamma, gamma_int, f, medians, 
-	median_bins, X_norm, Y_norm, Y_counts, nq_csum, nq, n_bins):
-	"""An internal function for integerized scores and the histogram.
-
-	This function is the main workhorse for the TOMTOM algorithm. It contains
-	four conceptual steps: (1) calculate the distance matrix between each column 
-	in one query and each column across all targets, (2) subtract out the per
-	query-column median, (3) integerize the scores into bins, and (4) calculate
-	the histogram of these integers. 
-
-	Several speed efficiencies have been built into this, including caching
-	minimum and maximum values for each query column for re-use in the median
-	calculation, the binned median approximation, and calculating the histogram
-	simultaneously with the binned score matrix. 
-	"""
-	
-	# Calculate the Euclidean distance between query and targets
-	z_min, z_max = 9999999.9, -9999999.9
-	for i in range(nq):
-		z_min_, z_max_ = 9999999.9, -9999999.9
-		for j in range(Y.shape[-1]):
-			z = X_norm[i + nq_csum] + Y_norm[j]
-			
-			for k in range(Y.shape[0]):
-				z -= 2 * X[k, i + nq_csum] * Y[k, j]
-			  
-			z = -math.sqrt(z) if z > 0 else 0
-			z_max_ = max(z_max_, z)
-			z_min_ = min(z_min_, z)
-			gamma[j, i] = z
-		
-		# Subtract out the median from each row
-		m = _binned_median(gamma[:, i], median_bins, z_min_, z_max_, 
-			Y_counts)
-		medians[i] = m
-
-		z_min = min(z_min, z_min_ - m)
-		z_max = max(z_max, z_max_ - m)
-			
-	# Find the minimum value and the number of bins needed to get there
-	i_min = int(math.floor(z_min)) #offset
-	bin_scale = int(math.floor(n_bins / (z_max - i_min))) #scale
-	offset = -i_min * bin_scale
-
-	for i in range(nq):
-		medians[i] = medians[i] + i_min
-	
-	f[:] = 0
-	ys = numpy.sum(Y_counts)
-
-	# Convert the distances to bins and record the histogram of counts
-	for i in range(nq):
-		k = nq - i - 1
-		for j in range(Y.shape[-1]):
-			x = math.floor((gamma[j, i] - medians[i]) * bin_scale + 0.5)
-
-			gamma_int[j, k] = x - offset
-			f[i, uint64(x)] += Y_counts[j] / ys
-
-	return uint64(offset)
-
-
-@njit
-def _pairwise_max(x, y, y_csum, z, n):
-	"""An internal function for the pdf of the maximum of two pdfs.
-
-	This function takes in two probability distribution functions and
-	returns the probability distribution function for the maximum of
-	the two. In other words, it returns the probability distribution
-	for the maximum of a randomly drawn sample from the first
-	distribution and a randomly drawn sample from the second
-	distribution.
-
-	This function relies on knowing that the cumsum of y will be
-	precalculated and that the cumsum of x has to be recalculated
-	each call.
-	"""
-	
-	if x[0] == -1:
-		z[:] = y[:]        
-	else:
-		x_csum = 0
-		for i in range(n):
-			x_csum += x[i]
-			z[i] = x[i] * y_csum[i] + y[i] * x_csum - x[i] * y[i]
+from .tomtom import _integer_distances_and_histogram
+from .tomtom import _p_values
+from .tomtom import tomtom
 
  
 @njit
@@ -152,56 +34,64 @@ def _p_value_backgrounds(f, A, B, A_csum, nq, n_bins, t_max, offset):
 	"""
 
 	n = n_bins*nq + nq*offset
-	A[:] = 0
-	
+	nqm1 = uint64(nq-1)
+
+	# Clear A
 	for i in range(nq):
 		i = uint64(i)
-		for j in range(i, nq):
-			j, c = uint64(j), uint64(offset * (nq - j + i - 1))
-			
-			if i == j:
-				for l in range(1, n_bins+1):
-					l = uint64(l)
-					A[i, j, l+c] = f[j, l]
-			else:            
-				for k in range(n_bins*j+1):
-					k = uint64(k)
-					a = A[i, j-1, k+c+offset]
-					
-					if a == 0:
-						continue
-						
+		for j in range(n):
+			j = uint64(j)
+			A[0, i, j] = 0
+			A[1, i, j] = 0
+	
+	for i in range(nq):
+		c = offset * (nq - i - 1)
+		i, c = uint64(i), uint64(c)
+		im1, nqmi, nqmi1 = uint64(i-1), uint64(nq-i), uint64(nq-i-1)
+
+		if i == 0:
+			for k in range(1, n_bins+1):
+				k = uint64(k)
+				A[0, 0, k+c] = f[0, k]
+				A[1, nqm1, k+c] = f[nqm1, k]
+		else:
+			for k in range(n_bins*i+1):
+				k = uint64(k)
+				a0 = A[0, im1, k+c+offset]
+				a1 = A[1, nqmi, k+c+offset]
+
+				if a0 > 0:
 					for l in range(1, n_bins+1):
 						l = uint64(l)
-						A[i, j, l+k+c] += a * f[j, l]
-					
-			A_csum[i, j, n_bins*(j+1)+c:] = 1
-			for k in range(n_bins*(j+1)+c):
-				k = uint64(k)
-				A_csum[i, j, k] = A[i, j, k]
+						A[0, i, l+k+c] += a0 * f[i, l]
+
+				if a1 > 0:
+					for l in range(1, n_bins+1):
+						l = uint64(l)
+						A[1, nqmi1, l+k+c] += a1 * f[nqmi1, l]
+		
+		for k in range(n):
+			k, km1 = uint64(k), uint64(k-1)
+
+			if k > n_bins*(i+1)+c:
+				A_csum[0, i, k] = 1
+				A_csum[1, nqmi1, k] = 1
+			else:
+				A_csum[0, i, k] = A[0, i, k]
+				A_csum[1, nqmi1, k] = A[1, nqmi1, k]
 				if k > 0:
-					A_csum[i, j, k] += A_csum[i, j, k-1]
+					A_csum[0, i, k] += A_csum[0, i, km1]
+					A_csum[1, nqmi1, k] += A_csum[1, nqmi1, km1]
 
 	###
 
 	B[0] = -1
-	for i in range(1, min(nq, t_max+1)):
+	for i in range(1, nq):
 		_pairwise_max(B[i-1], A[0, i-1], A_csum[0, i-1], B[i], n)
-		_pairwise_max(B[i], A[nq-i, nq-1], A_csum[nq-i, nq-1], B[i], n)
+		_pairwise_max(B[i], A[1, nq-i], A_csum[1, nq-i], B[i], n)
 
-	if (t_max+1) > nq:
-		for i in range(nq, t_max+1):
-			_pairwise_max(B[i-1], A[0, nq-1], A_csum[0, nq-1], B[i], n)
-	 
-	for i in range(1, min(nq, t_max+1)):
-		B[i] = -1
-		for j in range(nq - i + 1):
-			_pairwise_max(B[i], A[j, j+i-1], A_csum[j, j+i-1], B[i], n)
-	
-		for j in range(i-1):
-			_pairwise_max(B[i], A[0, j], A_csum[0, j], B[i], n)
-			_pairwise_max(B[i], A[nq-1-j, nq-1], A_csum[nq-1-j, nq-1], 
-				B[i], n)
+	for i in range(nq, t_max+1):
+		_pairwise_max(B[i-1], A[0, nq-1], A_csum[0, nq-1], B[i], n)
 
 	# Again, `axis` is not implemented for cumsum
 	for i in range(B.shape[0]):
@@ -210,80 +100,6 @@ def _p_value_backgrounds(f, A, B, A_csum, nq, n_bins, t_max, offset):
 		
 		for j in range(n):
 			B[i, j] = 1 - B[i, j]
-			
-
-@njit
-def _p_values(gamma, B_cdfs, rr_inv, T_lens, iq, nq, offset, results):
-	"""An internal function for calculating the best match and p-values.
-
-	This function will take in the integerized score matrix `gamma` and
-	background distributions `B_cdfs` and calculate the best overlap.
-	The best overlap is calculated as the best sum of scores across the
-	alignment, minus a penalty for each unaligned column. After finding
-	a new best overlap, the p-value is calculated by comparing the
-	score to the background distribution.
-	"""
-
-	n = len(T_lens) // 2
-	total_offset = uint64(0)
-
-	max_nt = gamma.shape[0]
-	t_sums = numpy.empty(max_nt+nq-1, dtype='int16')
-
-	for i, nt in enumerate(T_lens):
-		nt = uint64(nt)
-		results[i, 0] = 1
-		results[i, 1] = 0
-
-		if i <= iq or (i >= n and i <= (n + iq)):
-			total_offset += nt
-			continue
-
-		for k in range(nt+nq-1):
-			k = uint64(k)
-			t_sums[k] = nq * offset
-
-		for k in range(nt):
-			k = uint64(k)
-			k_idx = uint64(rr_inv[total_offset + k])
-			for l in range(nq):	
-				l = uint64(l)
-				t_sums[k+l] += gamma[k_idx, l]
-
-		for k in range(nt+nq-1):
-			score = t_sums[k]
-			overlap = min(k+1, nq) - max(0, k-nt+1)
-			if score >= results[i, 1]:
-				if score == results[i, 1] and results[i, 2] >= overlap:
-					continue
-
-				results[i, 0] = B_cdfs[nt, uint64(score-1)]
-				results[i, 1] = score
-				results[i, 2] = k - nq + 1
-				results[i, 3] = overlap
-
-		total_offset += nt
-
-
-@njit
-def _merge_rc_results(results):
-	"""An internal method for taking the best across two strands."""
-
-	nt = results.shape[0]
-	n = nt // 2
-	
-	for i in range(n):
-		p = min(results[i, 0], results[i+n, 0])
-		p = 1 - (1 - p) ** 2
-
-		results[i, 0] = p
-		results[i, 4] = 0
-		
-		if results[i, 1] <= results[i+n, 1]:                
-			results[i, 1] = results[i+n, 1]
-			results[i, 2] = results[i+n, 2]
-			results[i, 3] = results[i+n, 3]
-			results[i, 4] = 1
 			
 
 @njit(parallel=True)
@@ -343,7 +159,7 @@ def _tomtom(Q, T, Q_lens, T_lens, Q_norm, T_norm, rr_inv, rr_counts, n_nearest,
 		_p_value_backgrounds(_f[pid], _A[pid], _B[pid], _A_csum[pid], nq, 
 			n_score_bins, T_max, offset)
 
-		_p_values(_gamma_int[pid], _B[pid], rr_inv, T_lens, -1, nq, offset, 
+		_p_values(_gamma_int[pid], _B[pid], rr_inv, T_lens, i, nq, offset, 
 			_results[pid])
 
 		if reverse_complement == 1:
@@ -358,11 +174,17 @@ def _tomtom(Q, T, Q_lens, T_lens, Q_norm, T_norm, rr_inv, rr_counts, n_nearest,
 			results[i, :, :5] = _results[pid, idxs]
 			results[i, :, 5] = idxs
 
+	# Enforce symmetry
+	if n_nearest == -1:
+		for i in range(results.shape[-1]):
+			for j in range(results.shape[0]):
+				for k in range(j):
+					results[j, k, i] = results[k, j, i]
 
-	return results            
+	return results           
   
 
-def tomtom(Qs, Ts, n_nearest=None, n_score_bins=100, n_median_bins=1000, 
+def symmetric_tomtom(Xs, n_score_bins=100, n_median_bins=1000, 
 	n_target_bins=100, n_cache=100, reverse_complement=True, n_jobs=-1):
 	"""A method for assigning p-values to motif similarity.
 
@@ -464,28 +286,31 @@ def tomtom(Qs, Ts, n_nearest=None, n_score_bins=100, n_median_bins=1000,
 		original ordering of the targets corresponding to each returned
 		neighbor. These will be sorted by p-value.
 	"""
-
+	
 	if n_jobs != -1:
 		_n_jobs = numba.get_num_threads()
 		numba.set_num_threads(n_jobs)
 
-	if n_nearest is None:
-		n_nearest = -1
+	if isinstance(Xs[0], torch.Tensor):
+		Xs = [X.numpy(force=True) for X in Xs]
 
-	if isinstance(Ts[0], torch.Tensor):
-		Ts = [T.numpy(force=True) for T in Ts]
+	# Enforce ordering
+	X_lens = numpy.array([X.shape[-1] for X in Xs], dtype='int64')
+	X_idxs = numpy.argsort(X_lens, kind='stable')
+	Xs = [Xs[idx] for idx in X_idxs]
 
-	Q_lens = numpy.array([Q.shape[-1] for Q in Qs], dtype='int64')
-	Q = numpy.concatenate(Qs, axis=-1)
+	Q_lens = numpy.array([X.shape[-1] for X in Xs], dtype='int64')
+	Q = numpy.concatenate(Xs, axis=-1)
 	Q_norm = (Q ** 2).sum(axis=0)
 	
 	if reverse_complement:        
-		Ts = Ts + [T[::-1, ::-1] for T in Ts]
-	
-	T_lens = numpy.array([T.shape[-1] for T in Ts], dtype='int64')
-	T = numpy.concatenate(Ts, axis=-1)
+		Xs = Xs + [X[::-1, ::-1] for X in Xs]
+
+	T_lens = numpy.array([X.shape[-1] for X in Xs], dtype='int64')
+	T = numpy.concatenate(Xs, axis=-1)
 	T_norm = (T ** 2).sum(axis=0)
 
+	# Proceeds normally from here
 	if Q_norm.max() == 0 or T_norm.max() == 0:
 		raise ValueError("Cannot have all-zeroes as targets or query.")
 
@@ -509,10 +334,12 @@ def tomtom(Qs, Ts, n_nearest=None, n_score_bins=100, n_median_bins=1000,
 	###
 	
 	results = _tomtom(Q, T, Q_lens, T_lens, Q_norm, T_norm, rr_inv, rr_counts, 
-		n_nearest, n_score_bins, n_median_bins, n_cache, 
-		int(reverse_complement))
+		-1, n_score_bins, n_median_bins, n_cache, int(reverse_complement))
 
 	if n_jobs != -1:
 		numba.set_num_threads(_n_jobs)
 
-	return torch.from_numpy(results.transpose(2, 0, 1))
+	### Undo swap 
+
+	X_idxs2 = numpy.argsort(X_idxs)
+	return torch.from_numpy(results[X_idxs2][:, X_idxs2]).permute(2, 0, 1)

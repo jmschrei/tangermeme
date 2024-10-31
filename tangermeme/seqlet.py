@@ -73,7 +73,7 @@ def _laplacian_null(X_sum, num_to_samp=10000, random_state=1234):
 
 	prob_pos = len(pos_values) / len(values) 
 	urand = torch.from_numpy(numpy.random.RandomState(random_state).uniform(
-		size=(num_to_samp, 2))).to(X_sum.device)
+		size=(num_to_samp, 2)))
 
 	icdf = numpy.log(1 - urand[:, 1])
 
@@ -210,7 +210,7 @@ def _isotonic_thresholds(values, null_values, increasing, target_fdr,
 
 def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2, 
 	min_passing_frac=0.03, max_passing_frac=0.2, 
-	weak_threshold_for_counting_sign=0.8, device='cuda'):
+	weak_threshold_for_counting_sign=0.8):
 	"""Extract seqlets using the procedure from TF-MoDISco.
 
 	Seqlets are contiguous spans of high attribution characters. This method
@@ -280,7 +280,7 @@ def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2,
 	values = X_sum.flatten()
 	if len(values) > 1000000:
 		values = torch.from_numpy(numpy.random.RandomState(1234).choice(
-			a=values, size=1000000, replace=False)).to(device)
+			a=values, size=1000000, replace=False))
 	
 	pos_values = values[values >= 0]
 	neg_values = values[values < 0]
@@ -315,8 +315,9 @@ def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2,
 	X_sum[idxs] = numpy.abs(X_sum[idxs])
 	X_sum[~idxs] = -numpy.inf
 
-	X_sum[:, :flank] = -numpy.inf
-	X_sum[:, -flank:] = -numpy.inf
+	if flank > 0:
+		X_sum[:, :flank] = -numpy.inf
+		X_sum[:, -flank:] = -numpy.inf
 
 	seqlets = _iterative_extract_seqlets(X_sum=X_sum, window_size=window_size,
 		flank=flank, suppress=suppress)
