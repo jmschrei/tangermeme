@@ -7,6 +7,7 @@ import pandas
 
 from tangermeme.utils import characters
 from tangermeme.utils import one_hot_encode
+from tangermeme.utils import reverse_complement
 from tangermeme.utils import random_one_hot
 from tangermeme.utils import chunk
 from tangermeme.utils import unchunk
@@ -287,7 +288,70 @@ def test_one_hot_encode_lower_raises():
 	assert_raises(ValueError, one_hot_encode, seq)
 
 
-##
+###
+
+
+def test_reverse_complement():
+	assert 'TTGACC' == reverse_complement('GGTCAA')
+	assert 'TTTTTT' == reverse_complement('AAAAAA')
+	assert 'ACGT' == reverse_complement('ACGT')
+
+	f = one_hot_encode
+	assert_array_almost_equal(f('TTGACC'), reverse_complement(f('GGTCAA')))
+	assert_array_almost_equal(f('TTTTTT'), reverse_complement(f('AAAAAA')))
+	assert_array_almost_equal(f('ACGT'), reverse_complement(f('ACGT')))
+
+
+def test_reverse_complement_mapping():
+	assert 'AAAAAA' == reverse_complement('GGTCAA', 
+		complement_map={'A': 'A', 'C': 'A', 'G': 'A', 'T': 'A'})
+
+	assert 'TTGACC' == reverse_complement('GGTCaa',
+		complement_map={'a': 'T', 'C': 'G', 'G': 'C', 'T': 'A'})
+
+	f = one_hot_encode
+	assert_array_almost_equal(f('TTGACC'), reverse_complement(f('GGTCAA')))
+	assert_raises(AssertionError, assert_array_almost_equal, f('TTGACC'), 
+		reverse_complement(f('GGTCAA'), complement_map={'A': 'T', 'G': 'C', 
+			'T': 'A', 'C': 'G'}))
+
+
+def test_reverse_reverse_complement():
+	rc = reverse_complement
+	f = one_hot_encode
+
+	assert 'TTGACC' == rc(rc('TTGACC'))
+	assert 'TTTTTT' == rc(rc('TTTTTT'))
+	assert 'ACGT' == rc(rc('ACGT'))
+
+	assert_array_almost_equal(f('TTGACC'), rc(rc(f('TTGACC'))))
+	assert_array_almost_equal(f('TTTTTT'), rc(rc(f('TTTTTT'))))
+	assert_array_almost_equal(f('ACGT'), rc(rc(f('ACGT'))))
+
+
+def test_reverse_complement_Ns():
+	assert 'TTGACCN' == reverse_complement('NGGTCAA')
+	assert 'TTTNTTT' == reverse_complement('AAANAAA')
+	assert 'NNN' == reverse_complement('NNN')
+
+	f = one_hot_encode
+	assert_array_almost_equal(f('TTGACCN'), reverse_complement(f('NGGTCAA')))
+	assert_array_almost_equal(f('TTTNTTT'), reverse_complement(f('AAANAAA')))
+	assert_array_almost_equal(f('NNN'), reverse_complement(f('NNN')))
+
+
+def test_reverse_complement_disallow_Ns():
+	assert_raises(ValueError, reverse_complement, "TTTGAN", allow_N=False)
+	assert_raises(ValueError, reverse_complement, "N", allow_N=False)
+	assert_raises(ValueError, reverse_complement, "NNNN", allow_N=False)
+
+
+def test_reverse_complement_raises():
+	assert_raises(ValueError, reverse_complement, "ZZ")
+	assert_raises(ValueError, reverse_complement, "aCGT")
+
+
+###
 
 
 def test_random_one_hot():

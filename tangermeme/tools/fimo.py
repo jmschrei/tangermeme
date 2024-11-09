@@ -323,7 +323,8 @@ def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1,
 		X, lengths = [], [0]
 		
 		alphabet = ''.join(alphabet)
-		alpha_idxs = numpy.frombuffer(bytearray(alphabet, 'utf8'), dtype=numpy.int8)
+		alpha_idxs = numpy.frombuffer(bytearray(alphabet, 'utf8'), 
+			dtype=numpy.int8)
 		one_hot_mapping = numpy.zeros(256, dtype=numpy.int8) - 1
 		for i, idx in enumerate(alpha_idxs):
 			one_hot_mapping[idx] = i
@@ -332,7 +333,8 @@ def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1,
 			chrom = chrom[:].seq.upper()
 			lengths.append(lengths[-1] + len(chrom))
 			
-			X_idxs = numpy.frombuffer(bytearray(chrom, "utf8"), dtype=numpy.int8)
+			X_idxs = numpy.frombuffer(bytearray(chrom, "utf8"), 
+				dtype=numpy.int8)
 			_fast_convert(X_idxs, one_hot_mapping)
 			X.append(X_idxs)
 			

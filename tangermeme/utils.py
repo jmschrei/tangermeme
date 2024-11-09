@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 
 def _validate_input(X, name, shape=None, dtype=None, min_value=None,
-	max_value=None, ohe=False, ohe_dim=1,allow_N=False):
+	max_value=None, ohe=False, ohe_dim=1, allow_N=False):
 	"""An internal function for validating properties of the input.
 
 	This function will take in an object and verify characteristics of it, such
@@ -48,7 +48,12 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 
 	allow_N: bool, optional
 		Whether to allow the return of the character 'N' in the sequence, i.e.
-  		if pwm at a position is all 0's return N. Default is False.
+		if pwm at a position is all 0's return N. Default is False.
+
+
+	Returns
+	X: torch.Tensor
+		The same object, unmodified, for convenience.
 	"""
 
 	if not isinstance(X, torch.Tensor):
@@ -83,7 +88,7 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 			raise ValueError("{} must be one-hot encoded.".format(name))
 
 		if ((not (X.sum(axis=1) == 1).all()) and (not allow_N)
-          ) or ((allow_N) and (not ((X.sum(axis=ohe_dim) == 1) | (X.sum(axis=ohe_dim) == 0)).all())):
+		  ) or ((allow_N) and (not ((X.sum(axis=ohe_dim) == 1) | (X.sum(axis=ohe_dim) == 0)).all())):
 			raise ValueError("{} must be one-hot encoded ".format(name) +
 				"and cannot have unknown characters.")
 
@@ -164,7 +169,7 @@ def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False, allow_N=False):
   
 	allow_N: bool, optional
 		Whether to allow the return of the character 'N' in the sequence, i.e.
-  		if pwm at a position is all 0's return N. Default is False.
+		if pwm at a position is all 0's return N. Default is False.
 
 
 	Returns
@@ -201,7 +206,7 @@ def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False, allow_N=False):
 		dna_chars[n_inds] = 'N'
 	else:
 		dna_chars = alphabet[pwm.argmax(axis=0)]
-    
+	
 	return ''.join(dna_chars)
 
 
@@ -292,6 +297,65 @@ def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype=torch.int8,
 	one_hot_encoding = numpy.zeros((n, m), dtype=numpy.int8)
 	_fast_one_hot_encode(one_hot_encoding, seq_idxs, one_hot_mapping)
 	return torch.from_numpy(one_hot_encoding).type(dtype).T
+
+
+def reverse_complement(seq, complement_map={"A": "T", "C": "G", "G": "C", 
+	"T": "A"}, allow_N=True):
+	"""Return the reverse complement of a single sequence.
+
+	This function will take in a single one-hot encoding of a sequence, or a
+	single string, and return the reverse complement. If the input is a torch
+	tensor, the encoding is simply flipped along both axes. If the input is
+	a string, it is flipped and then each value is flipped according to the
+	provided complement map. 
+
+	Note that this function will not convert your sequence to upper-case or
+	modify it in any other manner.
+
+	
+	Parameters
+	----------
+	seq: str or torch.Tensor w/ shape (alphabet_size, length)
+		The sequence to be reverse complemented.
+	
+	complement_map: dict, optional
+		The ordering and complement of each nucleotide. When the input is a
+		string, this is used to directly convert characters. When the input is
+		a torch tensor, the ordering of *keys* is assumed to be the order of 
+		characters in the alphabet and the manner in which to flip depends on 
+		it. Default is the nucleotide alphabet.
+
+	allow_N: bool, optional
+		Whether to allow N characters when doing the reverse complement. Only
+		matters when reverse complementing strings. Default is True.
+	
+	Returns
+	-------
+	rev_comp: str or torch.Tensor w/ shape (alphabet_size, length)
+		The reverse complemented string or 
+	"""
+
+	if isinstance(seq, str):
+		seq_rc = []
+
+		for char in seq:
+			if char in complement_map:
+				seq_rc.append(complement_map[char])
+			elif char == 'N' and allow_N:
+				seq_rc.append('N')
+			else:
+				raise ValueError("'{}' not in complement map".format(char))
+
+		seq_rc = ''.join(reversed(seq_rc))
+
+	elif isinstance(seq, torch.Tensor):
+
+		chars = list(complement_map.keys())
+		idxs = [chars.index(char) for char in complement_map.values()]
+
+		seq_rc = torch.flip(seq, dims=(-1,))[idxs]
+
+	return seq_rc
 
 
 def random_one_hot(shape, probs=None, dtype='int8', random_state=None):
@@ -419,7 +483,7 @@ def unchunk(X, lengths=None, overlap=0):
 	goes to the elements as follows:
 
 		<------------*    |
-			   	  overlap 
+				  overlap 
 				|    *-----------> 
 
 
@@ -453,7 +517,7 @@ def unchunk(X, lengths=None, overlap=0):
 			"last dimension corresponding to length.")
 
 	lengths = _validate_input(_cast_as_tensor(lengths), "lengths", shape=(-1,), 
-	    min_value=0)
+		min_value=0)
 
 	size = X.shape[-1]
 	lengths = (lengths - size) // (size - overlap) + 1
@@ -461,25 +525,25 @@ def unchunk(X, lengths=None, overlap=0):
 
 	y = []
 	for length in lengths:
-	    X_ = X[lengths_csum:lengths_csum+length]
+		X_ = X[lengths_csum:lengths_csum+length]
 
-	    if overlap > 0:
-	        s = overlap // 2
-	        e = -(overlap - s)
+		if overlap > 0:
+			s = overlap // 2
+			e = -(overlap - s)
 
-	        if X_.shape[0] == 1:
-	            X_ = X_[..., s:e].moveaxis(0, -2).reshape(*X_.shape[1:-1], -1)
-	        elif X_.shape[0] == 2:
-	            X_ = torch.cat([X_[0, ..., :e], X_[1, ..., s:]], dim=-1)
-	        else:
-	            X_ = torch.cat([X_[0, ..., :e],
-	                            X_[1:-1, ..., s:e].moveaxis(0, -2).reshape(*X_.shape[1:-1], -1),
-	                            X_[-1, ..., s:]], dim=-1)
-	    else:
-	        X_ = X_.moveaxis(0, -2).reshape(*X_.shape[1:-1], -1)
+			if X_.shape[0] == 1:
+				X_ = X_[..., s:e].moveaxis(0, -2).reshape(*X_.shape[1:-1], -1)
+			elif X_.shape[0] == 2:
+				X_ = torch.cat([X_[0, ..., :e], X_[1, ..., s:]], dim=-1)
+			else:
+				X_ = torch.cat([X_[0, ..., :e],
+								X_[1:-1, ..., s:e].moveaxis(0, -2).reshape(*X_.shape[1:-1], -1),
+								X_[-1, ..., s:]], dim=-1)
+		else:
+			X_ = X_.moveaxis(0, -2).reshape(*X_.shape[1:-1], -1)
 
-	    y.append(X_)
-	    lengths_csum += length
+		y.append(X_)
+		lengths_csum += length
 
 	return y
 	

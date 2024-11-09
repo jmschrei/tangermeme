@@ -6,6 +6,33 @@ Release History
 ===============
 
 
+Version 0.4.1
+=============
+
+Highlights
+----------
+
+
+plots
+-----
+
+	- Fixed a bug where `plot_logo` raises an error when `start` and `end` are not provided but `annotations` are. 
+	- Fixed a bug where `plot_logo` plots annotations using calls to `plt` instead of directly on the provided artboard.
+
+
+tools
+-----
+
+	- Sped up `tomtom` by using more compact dtypes and avoiding cache misses
+	- Added `symmetric_tomtom` which takes in a set of items and orders them such that the smaller item is always the query and the larger one is always the target. This reduces the number of background distributions that need to be made from a quadratic number to a linear one, significantly speeding up the algorithm.
+
+
+utils
+-----
+
+	- Added `reverse_complement` function that can convert one-hot encodings and strings. Thanks @Al-Murphy!
+
+
 Version 0.4.0
 ==============
 

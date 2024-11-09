@@ -116,14 +116,14 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 		logo.style_glyphs_in_sequence(sequence=seq, color=color)
 
 	if annotations is not None:
-		start, end = start or 0, end or X.shape[-1]
+		start, end = start or 0, end or X_attr.shape[-1]
 
 		annotations_ = annotations[annotations['start'] > start]
 		annotations_ = annotations_[annotations_['end'] < end]
 		annotations_ = annotations_.sort_values([score_key], ascending=False)
 
 		ylim = ylim or max(abs(X_attr.min()), abs(X_attr.max()))
-		plt.ylim(-ylim, ylim)
+		ax.set_ylim(-ylim, ylim)
 		r = ylim*2
 
 		motifs = numpy.zeros((end-start, annotations_.shape[0]))
@@ -146,8 +146,8 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 						xp = [motif_start, motif_end]
 						yp = [-ylim*y_offset, -ylim*y_offset]
 
-						plt.plot(xp, yp, color='0.3', linewidth=2)        
-						plt.text(xp[0], -ylim*(y_offset+0.1), text, 
+						ax.plot(xp, yp, color='0.3', linewidth=2)        
+						ax.text(xp[0], -ylim*(y_offset+0.1), text, 
 							color='0.3', fontsize=9)
 						
 					elif show_extra:
@@ -156,7 +156,7 @@ def plot_logo(X_attr, ax, color=None, annotations=None, start=None, end=None,
 						motifs[motif_start:motif_start+len(str(motif))*2, i] = 1
 						y_offset += -0.1 + 0.2*(n_tracks) + 0.1*(i-n_tracks)
 						
-						plt.text(motif_start, -ylim*(y_offset+0.1), motif, 
+						ax.text(motif_start, -ylim*(y_offset+0.1), motif, 
 							color='0.7', fontsize=9)    
 						
 					break
