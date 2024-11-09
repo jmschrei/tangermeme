@@ -167,12 +167,7 @@ def _tomtom(Q, T, Q_lens, T_lens, Q_norm, T_norm, rr_inv, rr_counts, n_nearest,
 		else:
 			_results[pid, :, 4] = 0
 
-		if n_nearest == -1:
-			results[i] = _results[pid, :n_in_targets]
-		else:
-			idxs = numpy.argsort(_results[pid, :n_in_targets, 0])[:n_nearest]
-			results[i, :, :5] = _results[pid, idxs]
-			results[i, :, 5] = idxs
+		results[i] = _results[pid, :n_in_targets]
 
 	# Enforce symmetry
 	if n_nearest == -1:
