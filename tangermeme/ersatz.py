@@ -89,7 +89,7 @@ def insert(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
 	return torch.cat([X[:, :, :start], motif, X[:, :, start:]], dim=-1)
 
 
-def substitute(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
+def substitute(X, motif, start=None, alphabet=['A', 'C', 'G', 'T'], allow_N=False):
 	"""Substitute a motif into a set of sequences at a defined position.
 
 	This function will take in a tensor of one-hot encoded sequences or a string
@@ -135,6 +135,9 @@ def substitute(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
 		set to 1. This is not necessary or used if a one-hot encoded tensor is
 		provided for the motif. Default is ['A', 'C', 'G', 'T'].
 
+	allow_N: bool, optional
+		Whether to allow 'N' in the sequence, i.e.
+  		if pwm at a position is all 0's return N. Default is False.
 
 	Returns
 	-------
@@ -146,8 +149,8 @@ def substitute(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
 	if isinstance(motif, str):
 		motif = one_hot_encode(motif, alphabet=alphabet).unsqueeze(0)
 
-	_validate_input(X, "X", ohe=True)
-	_validate_input(motif, "motif", shape=(-1, X.shape[1], -1), ohe=True)
+	_validate_input(X, "X", ohe=True, allow_N=allow_N)
+	_validate_input(motif, "motif", shape=(-1, X.shape[1], -1), ohe=True, allow_N=allow_N)
 
 	if motif.shape[-1] > X.shape[-1]:
 		raise ValueError("Motif cannot be longer than sequence.")
