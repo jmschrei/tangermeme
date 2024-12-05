@@ -2,13 +2,26 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import time
+import numba
 import numpy
 import torch
+
+from tqdm import tqdm
 
 from .utils import one_hot_encode
 from .ersatz import substitute
 from .predict import predict
 
+
+@numba.njit(parallel=True, cache=True)
+def _fast_tile_substitute(X, motif):
+	"""This function takes a motif and inserts it at all possibilities"""
+	
+	n_alphabet, n_len = motif.shape
+	for i in numba.prange(X.shape[0]):
+		for j in range(n_len):
+			for k in range(n_alphabet):
+				X[i, k, j+i] = motif[k, j]
 
 def greedy_substitution(model, X, motifs, y, loss=torch.nn.MSELoss(
 	reduction='none'), mask=None, tol=1e-3, max_iter=-1, args=None, start=None, 
@@ -117,7 +130,7 @@ def greedy_substitution(model, X, motifs, y, loss=torch.nn.MSELoss(
 	iteration = 0
 
 	y_orig = predict(model, X, args=args, batch_size=batch_size, device=device, 
-		verbose=verbose)
+		verbose=False)
 
 	mask = mask if mask is not None else torch.ones(y_orig.shape[1], dtype=bool)
 
@@ -134,22 +147,24 @@ def greedy_substitution(model, X, motifs, y, loss=torch.nn.MSELoss(
 
 		tic = time.time()
 		best_improvement, best_motif_idx, best_pos = 0, -1, -1
-		for idx, motif in enumerate(motifs):
-			X_ = torch.cat([substitute(X, motif, start=start, 
-				alphabet=alphabet) for start in range(X.shape[-1] - len(motif))
-			])
+		for idx, motif in enumerate(tqdm(motifs, disable=not verbose)):
+			motif_ohe = one_hot_encode(motif, alphabet=alphabet).numpy()
+			
+			X_ = X.repeat(X.shape[-1] - len(motif), 1, 1).numpy(force=True)
+			_fast_tile_substitute(X_, motif_ohe)
+			X_ = torch.from_numpy(X_)
 
 			y_hat = predict(model, X_, args=args, batch_size=batch_size, 
 				device=device, verbose=False)
-			
+
 			loss_curr = loss(
 				y[:, mask].expand_as(y_hat[:, mask]), 
 				y_hat[:, mask],
 			).mean(dim=tuple(range(1, len(y_hat.shape))))
-
+			
 			pos = loss_curr.argmin()
 			loss_curr = loss_curr[pos]
-
+			
 			improvement = loss_prev - loss_curr
 			if improvement > best_improvement:
 				best_improvement = improvement
