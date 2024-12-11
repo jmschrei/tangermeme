@@ -78,9 +78,9 @@ def _edit_distance_one(X, start, end):
 	return X_
 
 
-def saturation_mutagenesis(model, X, args=None, start=0, end=-1, batch_size=32,
-	target=None, hypothetical=False, raw_outputs=False, device='cuda', 
-	verbose=False):
+def saturation_mutagenesis(model, X, args=None, start=0, end=-1, 
+	batch_size=32, target=None, hypothetical=False, raw_outputs=False, 
+	device='cuda', verbose=False):
 	"""Performs in-silico saturation mutagenesis on a set of sequences.
 
 	This function will perform in-silico saturation mutagenesis on a set of 
@@ -121,8 +121,9 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1, batch_size=32,
 		Default is 0.
 
 	end: int, optional
-		The end of where to to make perturbations to the sequence,
-		non-inclusive. Default is -1.
+		The end of where to to make perturbations to the sequence. If end is
+		positive, it is non-inclusive. If end is negative, it is inclusive.
+		Default is -1, meaning the entire sequence.
 
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.
@@ -168,6 +169,9 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1, batch_size=32,
 	"""
 
 	y0 = predict(model, X, args=args, device=device)
+
+	if end < 0:
+		end = X.shape[-1] + 1 + end
 	
 	y_hat = []
 	for i in range(X.shape[0]):

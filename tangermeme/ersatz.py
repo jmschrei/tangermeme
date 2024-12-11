@@ -400,8 +400,9 @@ def shuffle(X, start=0, end=-1, n=1, random_state=None):
 		Default is 0, shuffling the entire sequence.
 
 	end: int, optional
-		The ending position of where to randomize the sequence, not inclusive.
-		Default is -1, shuffling the entire sequence.
+		The ending position of where to randomize the sequence. If end is
+		positive then it is non-inclusive, but if end is negative then it is
+		inclusive. Default is -1, shuffling the entire sequence.
 
 	n: int, optional
 		The number of times to shuffle that region. Default is 1.
@@ -583,8 +584,9 @@ def dinucleotide_shuffle(X, start=0, end=-1, n=20, random_state=None,
 		Default is 0, shuffling the entire sequence.
 
 	end: int, optional
-		The ending position of where to randomize the sequence, not inclusive.
-		Default is -1, shuffling the entire sequence.
+		The ending position of where to randomize the sequence. If end is
+		positive then it is non-inclusive, but if end is negative then it is
+		inclusive. Default is -1, shuffling the entire sequence.
 
 	n: int, optional
 		The number of times to shuffle that region. Default is 20.
@@ -603,6 +605,9 @@ def dinucleotide_shuffle(X, start=0, end=-1, n=20, random_state=None,
 	"""
 
 	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1)
+
+	if end < 0:
+		end = X.shape[-1] + 1 + end
 
 	if random_state is None:
 		random_state = numpy.random.randint(0, 9999999)

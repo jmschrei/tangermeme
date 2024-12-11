@@ -32,7 +32,6 @@ def test_characters_ohe():
 	seq_chars = characters(ohe)
 
 	assert isinstance(seq_chars, str)
-	print(seq_chars)
 	assert len(seq_chars) == 5
 	assert seq_chars == seq
 
