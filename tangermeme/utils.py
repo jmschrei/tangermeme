@@ -81,11 +81,22 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 
 	if ohe:
 		values = torch.unique(X)
-		if len(values) != 2:
-			raise ValueError("{} must be one-hot encoded.".format(name))
+		if not allow_N:
+			if (len(values) != 2):
+				raise ValueError("{} must be one-hot encoded.".format(name))
 
-		if not all(values == torch.tensor([0, 1], device=X.device)):
-			raise ValueError("{} must be one-hot encoded.".format(name))
+			if not all(values == torch.tensor([0, 1], device=X.device)):
+				raise ValueError("{} must be one-hot encoded.".format(name))
+		else:
+			if (len(values) > 3):
+				raise ValueError("{} must be one-hot encoded.".format(name))
+
+			if len(values) == 3:
+				if not all((values == torch.tensor([0, 0.25, 1], device=X.device))):
+					raise ValueError("{} must be one-hot encoded.".format(name))
+			else:
+				if not all((values == torch.tensor([0, 1], device=X.device))):
+					raise ValueError("{} must be one-hot encoded.".format(name))
 
 		if ((not (X.sum(axis=1) == 1).all()) and (not allow_N)
 		  ) or ((allow_N) and (not ((X.sum(axis=ohe_dim) == 1) | (X.sum(axis=ohe_dim) == 0)).all())):
