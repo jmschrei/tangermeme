@@ -17,7 +17,7 @@ from .utils import one_hot_encode
 from .utils import random_one_hot
 
 
-def insert(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
+def insert(X, motif, start=None, alphabet=list("ACGT")):
 	"""Insert a motif into a set of sequences at a defined position.
 
 	This function will take in a tensor of one-hot encoded sequences or a string
@@ -55,7 +55,7 @@ def insert(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
 		middle of the motif occurs at the middle of the sequence. Default is 
 		None.
 
-	alphabet : set or tuple or list, optional
+	alphabet: set or tuple or list, optional
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
 		the returned tensor will have a 1 at index 0 if the character was 'A'.
@@ -85,11 +85,11 @@ def insert(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
 			raise ValueError("Provided start falls off the end of the sequence")
 	else:
 		start = X.shape[-1] // 2
-	
+
 	return torch.cat([X[:, :, :start], motif, X[:, :, start:]], dim=-1)
 
 
-def substitute(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
+def substitute(X, motif, start=None, alphabet=list("ACGT"), ignore=["N"]):
 	"""Substitute a motif into a set of sequences at a defined position.
 
 	This function will take in a tensor of one-hot encoded sequences or a string
@@ -111,6 +111,12 @@ def substitute(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
 	between the motifs and the sequence, i.e., that motif at index 5 will be 
 	substituted into the sequence at index 5.
 
+	Finally, if all-zeros positions are present in a motif -- or if a string
+	motif is passed in and some characters are present in the `ignore` list --
+	the original sequence will be kept. For instance, passing in the motif
+	"ACNNGT" with the default ignore list will update each sequence to have the
+	dinucleotide `AC` followed by the original sequence followed by `GT`.
+
 
 	Parameters
 	----------
@@ -127,13 +133,19 @@ def substitute(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
 		middle of the motif occurs at the middle of the sequence. Default is 
 		None.
 
-	alphabet : set or tuple or list, optional
+	alphabet: set or tuple or list, optional
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
 		the returned tensor will have a 1 at index 0 if the character was 'A'.
 		Characters outside the alphabet are ignored and none of the indexes are
 		set to 1. This is not necessary or used if a one-hot encoded tensor is
 		provided for the motif. Default is ['A', 'C', 'G', 'T'].
+
+	ignore: set or tuple or list, optional
+		A set of characters indicating that the original value of the sequence
+		should be maintained at this position. This is only relevant when a
+		string is provided for the motif and causes an all-zeros column to be
+		added to the one-hot encoding of the motif. Default is ["N"].
 
 
 	Returns
@@ -144,10 +156,12 @@ def substitute(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
 	"""
 
 	if isinstance(motif, str):
-		motif = one_hot_encode(motif, alphabet=alphabet).unsqueeze(0)
+		motif = one_hot_encode(motif, alphabet=alphabet, ignore=ignore)
+		motif = motif.unsqueeze(0)
 
 	_validate_input(X, "X", ohe=True)
-	_validate_input(motif, "motif", shape=(-1, X.shape[1], -1), ohe=True)
+	_validate_input(motif, "motif", shape=(-1, X.shape[1], -1), ohe=True,
+		allow_N=True)
 
 	if motif.shape[-1] > X.shape[-1]:
 		raise ValueError("Motif cannot be longer than sequence.")
@@ -158,16 +172,20 @@ def substitute(X, motif, start=None, alphabet=['A', 'C', 'G', 'T']):
 	else:
 		start = X.shape[-1] // 2 - motif.shape[-1] // 2
 
-
-	n = motif.shape[-1]
-
 	X = torch.clone(X)
-	X[:, :, start:start+n] = motif
+	for i in range(motif.shape[-1]):
+		idxs = motif[:, :, i].sum(dim=1) == 1
+
+		if idxs.all():
+			X[:, :, start+i] = motif[:, :, i]
+		elif idxs.sum() > 0:
+			X[idxs, :, start+i] = motif[idxs, :, i]
+
 	return X
 
 
-def multisubstitute(X, motifs, spacing, start=None, 
-	alphabet=['A', 'C', 'G', 'T']):
+def multisubstitute(X, motifs, spacing, start=None, alphabet=list("ACGT"),
+	ignore=["N"]):
 	"""Substitute a set of motif into sequences with provided spacings.
 
 	This function will take in a list of tensors of one-hot encoded sequences 
@@ -215,6 +233,12 @@ def multisubstitute(X, motifs, spacing, start=None,
 		set to 1. This is not necessary or used if a one-hot encoded tensor is
 		provided for the motif. Default is ['A', 'C', 'G', 'T'].
 
+	ignore: set or tuple or list, optional
+		A set of characters indicating that the original value of the sequence
+		should be maintained at this position. This is only relevant when a
+		string is provided for the motif and causes an all-zeros column to be
+		added to the one-hot encoding of the motif. Default is ["N"].
+
 
 	Returns
 	-------
@@ -249,10 +273,11 @@ def multisubstitute(X, motifs, spacing, start=None,
 				"larger than the sequence being inserted into.")
 
 	for i in range(len(spacing)):
-		X = substitute(X, motifs[i], start=start, alphabet=alphabet)
+		X = substitute(X, motifs[i], start=start, alphabet=alphabet, 
+			ignore=ignore)
 		start += motif_lengths[i] + spacing[i]
 
-	X = substitute(X, motifs[-1], start=start, alphabet=alphabet)
+	X = substitute(X, motifs[-1], start=start, alphabet=alphabet, ignore=ignore)
 	return X
 
 

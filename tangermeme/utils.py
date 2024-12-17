@@ -87,10 +87,14 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 		if not all(values == torch.tensor([0, 1], device=X.device)):
 			raise ValueError("{} must be one-hot encoded.".format(name))
 
-		if ((not (X.sum(axis=1) == 1).all()) and (not allow_N)
-		  ) or ((allow_N) and (not ((X.sum(axis=ohe_dim) == 1) | (X.sum(axis=ohe_dim) == 0)).all())):
-			raise ValueError("{} must be one-hot encoded ".format(name) +
-				"and cannot have unknown characters.")
+		if allow_N:
+			if not torch.all(torch.sum(X, axis=ohe_dim) <= 1):
+				raise ValueError("{} must be one-hot encoded.".format(name) +
+					"and contain unknown characters as all-zeroes.")
+		else:
+			if not torch.all(X.sum(axis=ohe_dim) == 1):
+				raise ValueError("{} must be one-hot encoded ".format(name) +
+					"and cannot have unknown characters.")				
 
 	return X
 
