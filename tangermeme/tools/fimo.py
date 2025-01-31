@@ -283,7 +283,8 @@ def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1,
 	else:
 		raise ValueError("`motifs` must be a dict or a filename.")
 
-	motifs: list[tuple[str, numpy.ndarray]] = []
+	motifs_fwd: list[tuple[str, numpy.ndarray]] = []
+	motifs_rev: list[tuple[str, numpy.ndarray]] = []
 	for name in motifs_:
 		# motifs can be either dict[str, np.ndarray] or dict[str, torch.Tensor],
 		# convert to numpy array if needed.
@@ -294,9 +295,14 @@ def fimo(motifs, sequences, alphabet=['A', 'C', 'G', 'T'], bin_size=0.1,
 			raise ValueError(
 				f"`motifs` must be a dict[str, numpy.ndarray] or dict[str, torch.Tensor], not {type(pwm)}."
 			)
-		motifs.append((name, pwm))
+		motifs_fwd.append((name, pwm))
 		if reverse_complement:
-			motifs.append((name + "-rc", pwm[::-1, ::-1]))
+			motifs_rev.append((name + "-rc", pwm[::-1, ::-1]))
+	
+	if reverse_complement:
+		motifs = [*motifs_fwd, *motifs_rev]
+	else:
+		motifs = motifs_fwd
 
 	# Initialize arrays to store motif properties
 	n_motifs = len(motifs)
