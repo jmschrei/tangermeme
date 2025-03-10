@@ -7,7 +7,8 @@ import itertools
 from tqdm import trange
 
 
-def predict(model, X, args=None, batch_size=32, device='cuda', verbose=False):
+def predict(model, X, args=None, batch_size=32, dtype=None, device='cuda', 
+	verbose=False):
 	"""Make batched predictions in a memory-efficient manner.
 
 	This function will take a PyTorch model and make predictions from it using
@@ -18,10 +19,13 @@ def predict(model, X, args=None, batch_size=32, device='cuda', verbose=False):
 
 	Before starting predictions, the model is moved to the specified device. As 
 	predictions are being made, each batch is also moved to the specified 
-	device and then moved back to the CPU after predictions are made. This is
-	to allow the function to work on massive numbers of examples that would
-	not necessarily each fit in memory. If the batches themselves do not fit
-	in memory, try lowering the batch size.
+	device and then moved back to the CPU after predictions are made. Each batch
+	is converted to the provided dtype if provided, keeping the original blob of
+	examples in the original dtype. These features allow the function to work on 
+	massive data sets that do not fit in GPU memory. For example, the original
+	sequences can be kept as 8-bit integers for compression and each batch will
+	be upcast to the desired precision. If a single batch does not fit in memory,
+	try lowering the batch size.
 
 
 	Parameters
@@ -41,6 +45,11 @@ def predict(model, X, args=None, batch_size=32, device='cuda', verbose=False):
 
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.
+
+	dtype: str or torch.dtype or None, optional
+		The dtype to use with mixed precision autocasting. If None, use the dtype of
+		the *model*. This allows you to use int8 to represent large data sets and
+		only convert batches to the higher precision, saving memory. Defailt is None.
 
 	device: str or torch.device, optional
 		The device to move the model and batches to when making predictions. If
@@ -62,12 +71,14 @@ def predict(model, X, args=None, batch_size=32, device='cuda', verbose=False):
 	"""
 
 	model = model.to(device).eval()
-
-	try:
-		dtype = next(model.parameters()).dtype
-	except:
-		dtype = X.dtype
-
+	
+	if dtype is None:
+		try:
+			dtype = next(model.parameters()).dtype
+		except:
+			dtype = torch.float32
+	elif isinstance(dtype, str):
+		dtype = getattr(torch, dtype)
 
 	if args is not None:
 		for arg in args:
@@ -83,16 +94,17 @@ def predict(model, X, args=None, batch_size=32, device='cuda', verbose=False):
 
 		for start in trange(0, X.shape[0], batch_size, disable=not verbose):
 			end = start + batch_size
-			X_ = X[start:end].to(device).type(dtype)
+			X_ = X[start:end].type(dtype).to(device)
 
 			if X_.shape[0] == 0:
 				continue
 
-			if args is not None:
-				args_ = [a[start:end].to(device) for a in args]
-				y_ = model(X_, *args_)
-			else:
-				y_ = model(X_)
+			with torch.autocast(device_type=device, dtype=dtype):
+				if args is not None:
+					args_ = [a[start:end].type(dtype).to(device) for a in args]
+					y_ = model(X_, *args_)
+				else:
+					y_ = model(X_)
 
 			# Move to the CPU
 			if isinstance(y_, torch.Tensor):
@@ -103,7 +115,6 @@ def predict(model, X, args=None, batch_size=32, device='cuda', verbose=False):
 				raise ValueError("Cannot interpret output from model.")
 
 			y.append(y_)
-
 
 	# Concatenate the outputs
 	if isinstance(y[0], torch.Tensor):

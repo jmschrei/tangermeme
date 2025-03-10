@@ -233,3 +233,51 @@ def test_predict_raises_args(X, alpha, beta):
 		args=(alpha[:5],), device='cpu')
 	assert_raises(ValueError, predict, model, X, batch_size=2, 
 		args=(alpha, beta[:5]), device='cpu')
+
+
+def test_predict_flattendense_16bit_str(X):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	y = predict(model, X, batch_size=8, dtype='float16', device='cpu')
+
+	assert y.shape == (64, 3)
+	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
+
+	assert_array_almost_equal(y[:8], [
+		[ 0.1928,  0.2788, -0.1000],
+        [-0.0505,  0.0174, -0.1751],
+        [-0.1408,  0.0105,  0.0673],
+        [-0.2375, -0.0069,  0.0835],
+        [ 0.0442, -0.0692, -0.1565],
+        [-0.3489, -0.0876, -0.2994],
+        [-0.3894, -0.1332, -0.3717],
+        [-0.3682,  0.5173, -0.4089]], 3)
+
+	assert_array_almost_equal(y, model(X).detach(), 3)
+	assert_array_almost_equal(y, predict(model, X, batch_size=1, device='cpu'), 3)
+	assert_array_almost_equal(y, predict(model, X, batch_size=64, device='cpu'), 3)
+
+
+def test_predict_flattendense_16bit(X):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	y = predict(model, X, batch_size=8, dtype=torch.float16, device='cpu')
+
+	assert y.shape == (64, 3)
+	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
+
+	assert_array_almost_equal(y[:8], [
+		[ 0.1928,  0.2788, -0.1000],
+        [-0.0505,  0.0174, -0.1751],
+        [-0.1408,  0.0105,  0.0673],
+        [-0.2375, -0.0069,  0.0835],
+        [ 0.0442, -0.0692, -0.1565],
+        [-0.3489, -0.0876, -0.2994],
+        [-0.3894, -0.1332, -0.3717],
+        [-0.3682,  0.5173, -0.4089]], 3)
+
+	assert_array_almost_equal(y, model(X).detach(), 3)
+	assert_array_almost_equal(y, predict(model, X, batch_size=1, device='cpu'), 3)
+	assert_array_almost_equal(y, predict(model, X, batch_size=64, device='cpu'), 3)
