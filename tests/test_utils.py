@@ -5,6 +5,8 @@ import numpy
 import torch
 import pandas
 
+
+from tangermeme.utils import _validate_input
 from tangermeme.utils import characters
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import reverse_complement
@@ -15,6 +17,126 @@ from tangermeme.utils import extract_signal
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
+
+
+
+def test_validate_input_shape():
+	X = torch.randn(1)
+	assert_raises(ValueError, _validate_input, X, "X", shape=(2, 1))
+	assert_raises(ValueError, _validate_input, X, "X", shape=(2,))
+	assert_raises(ValueError, _validate_input, X, "X", shape=(-1, -1))
+	assert_raises(ValueError, _validate_input, X, "X", shape=(-1, 1))
+	_validate_input(X, "X", shape=(1,))
+	_validate_input(X, "X", shape=(-1,))
+
+	X = torch.randn(5, 3)
+	assert_raises(ValueError, _validate_input, X, "X", shape=(-1,))
+	assert_raises(ValueError, _validate_input, X, "X", shape=(3,))
+	assert_raises(ValueError, _validate_input, X, "X", shape=(5,))
+	assert_raises(ValueError, _validate_input, X, "X", shape=(1, 4))
+	assert_raises(ValueError, _validate_input, X, "X", shape=(-1, -1, -1))
+	assert_raises(ValueError, _validate_input, X, "X", shape=(5, 3, -1))
+	_validate_input(X, "X", shape=(5, 3))
+	_validate_input(X, "X", shape=(-1, 3))
+	_validate_input(X, "X", shape=(5, -1))
+	_validate_input(X, "X", shape=(-1, -1))
+
+
+def test_validate_input_dtype():
+	X = torch.randn(5, 3)
+	assert_raises(ValueError, _validate_input, X, "X", dtype=torch.float16)
+	assert_raises(ValueError, _validate_input, X, "X", dtype=torch.float64)
+	assert_raises(ValueError, _validate_input, X, "X", dtype=torch.int8)
+	assert_raises(ValueError, _validate_input, X, "X", dtype=torch.int32)
+	_validate_input(X, "X", dtype=torch.float32)
+
+
+def test_validate_input_min_value():
+	X = torch.randn(100, 100)
+	assert_raises(ValueError, _validate_input, X, "X", min_value=0.0)
+	_validate_input(torch.abs(X), "X", min_value=0.0)
+
+	X[X < 0] = 0
+	_validate_input(X, "X", min_value=0.0)
+
+	X = X.type(torch.int8)
+	_validate_input(X, "X", min_value=0.0)
+
+
+def test_validate_input_max_value():
+	X = torch.randn(100, 100)
+	assert_raises(ValueError, _validate_input, X, "X", max_value=0.0)
+	_validate_input(-torch.abs(X), "X", max_value=0.0)
+
+	X[X > 0] = 0
+	_validate_input(X, "X", max_value=0.0)
+
+	X = X.type(torch.int8)
+	_validate_input(X, "X", max_value=0.0)
+
+
+def test_validate_input_ohe():
+	X = random_one_hot((1, 4, 10), random_state=0)
+
+	_validate_input(X, "X", ohe=True, ohe_dim=1)
+	_validate_input(X.type(torch.float64), "X", ohe=True, ohe_dim=1)
+	_validate_input(X.type(torch.int8), "X", ohe=True, ohe_dim=1)
+	_validate_input(X.type(torch.int32), "X", ohe=True, ohe_dim=1)
+	_validate_input(X.permute(1, 0, 2), "X", ohe=True, ohe_dim=0)
+	_validate_input(X.permute(2, 0, 1), "X", ohe=True, ohe_dim=2)
+
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=0)
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=2)
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=-1)
+	assert_raises(ValueError, _validate_input, X + 0.2, "X", ohe=True, 
+		ohe_dim=1)
+	assert_raises(ValueError, _validate_input, X - 1, "X", ohe=True, 
+		ohe_dim=1)
+
+	X[0, 2, 3] = 1
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1)
+
+	X[0, :, 3] = 0
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1)
+
+	X = random_one_hot((1, 4, 10), random_state=0)[0]
+	_validate_input(X, "X", ohe=True, ohe_dim=0)
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1)
+
+	X = random_one_hot((1, 4, 10), random_state=0)[0, :, 0]
+	_validate_input(X, "X", ohe=True, ohe_dim=0)
+	assert_raises(IndexError, _validate_input, X, "X", ohe=True, ohe_dim=1)
+
+
+def test_validate_input_allow_N():
+	X = random_one_hot((2, 4, 10), random_state=0)
+	_validate_input(X, "X", ohe=True, ohe_dim=1)
+
+	X[0, :, 0] = 0
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1)
+	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
+
+	X[0, 1, 0] = 2
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1,
+		allow_N=True)
+
+	X[0, :, 0] = 1
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1,
+		allow_N=True)
+
+	X[0, 0, 0] = 0
+	X[0, 1, 0] = 1
+	X[0, 2, 0] = -1
+	X[0, 3, 0] = 1
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1,
+		allow_N=True)
+
+	X = random_one_hot((2, 4, 10), random_state=0).float()
+	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
+
+	X[0, 1, 0] = 0.5
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1,
+		allow_N=True)
 
 
 ##
@@ -32,7 +154,6 @@ def test_characters_ohe():
 	seq_chars = characters(ohe)
 
 	assert isinstance(seq_chars, str)
-	print(seq_chars)
 	assert len(seq_chars) == 5
 	assert seq_chars == seq
 

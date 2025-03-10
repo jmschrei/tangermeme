@@ -5,6 +5,27 @@
 Release History
 ===============
 
+Version 0.4.3
+=============
+
+ersatz
+------
+
+	- Substitute now accepts Ns or all-zeroes positions as inputs and, at those positions, will not alter the original sequence. If only one motif is given, this will be the same across all background sequences. If one motif is given per background sequence, this is done on a per-background example.
+	- The above change means that higher-level functions like `marginalize` can now be run with motifs that contain missing characters, without any changes needed.
+	- The default `start` and `end` of `dinucleotide_shuffle` have been set to `None` because using `0` and `-1` meant that the last provided position never got shuffled.
+
+
+design
+------
+
+	- Changed `mask` parameter to `output_mask` 
+	- Added `input_mask` which restricts what positions can be the start of motifs, so design can be restricted to subsets of the sequence or certain important elements can be ignored.
+	- Significantly sped up the creation of sequences with tiled motifs implanted using a numba function, which can speed up design 3-10x.
+	- Added in `greedy_marginalize` which design constructs using marginalizations
+
+
+
 
 Version 0.4.1
 =============

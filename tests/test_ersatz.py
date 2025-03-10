@@ -431,8 +431,6 @@ def test_multisubstitute_str_odd(X):
 		'GTCCATCAGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 
-	print(X.shape, X_substitute.shape, new_seq_ohe.shape)
-
 	assert X_substitute.shape == new_seq_ohe.shape
 	assert X_substitute.sum() == new_seq_ohe.sum()
 	assert_array_almost_equal(X_substitute.sum(dim=-1), new_seq_ohe.sum(dim=-1))
