@@ -74,6 +74,7 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
 
    vignettes/Attribution_Trickiness_and_DeepLiftShap_Implementations.ipynb
    vignettes/Inspecting_What_Cis-Regulatory_Features_a_Model_Has_Learned.ipynb
+   vignettes/Wrappers_are_Productivity_Hacks.ipynb
 
 .. toctree::
    :maxdepth: 1
