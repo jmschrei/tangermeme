@@ -405,12 +405,17 @@ def random_one_hot(shape, probs=None, dtype='int8', random_state=None):
 	if not isinstance(random_state, numpy.random.RandomState):
 		random_state = numpy.random.RandomState(random_state)
 
+	if isinstance(probs, list):
+		probs = numpy.array(probs)
+		
 	n = shape[1]
 	ohe = numpy.zeros(shape, dtype=dtype)
 
 	for i in range(ohe.shape[0]):
 		if probs is None:
 			probs_ = None
+		elif probs.ndim == 1:
+			probs_ = probs
 		elif probs.shape[0] == 1:
 			probs_ = probs[0]
 		else:

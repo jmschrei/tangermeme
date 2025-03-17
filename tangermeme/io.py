@@ -12,6 +12,7 @@ import pyBigWig
 from tqdm import tqdm
 
 from .utils import one_hot_encode
+from .utils import characters
 
 
 def _interleave_loci(loci, chroms=None):
@@ -387,6 +388,30 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		y_return.append(torch.from_numpy(numpy.stack(in_signals_)))
 
 	return y_return[0] if len(y_return) == 1 else y_return
+
+
+def one_hot_to_fasta(X, filename, mode='w', headers=None, 
+	alphabet=['A', 'C', 'G', 'T']):
+	"""Write out one-hot encoded sequences to a FASTA file.
+	
+	This function will take a set of one-hot encoded sequences and convert them to
+	characters and write them out in FASTA format. If headers are provided for
+	each sequence, these are used, otherwise the numeric index is used.
+	"""
+	
+	with open(filename, mode=mode) as outfile:
+		for i, X_seq in enumerate(X):
+			X_chars = characters(X_seq, alphabet=alphabet)
+			
+			if headers is None:
+				outfile.write("> {}\n".format(i))
+			else:
+				outfile.write("> {}\n".format(headers[i]))
+			
+			for start in range(0, len(X_chars), 80):
+				outfile.write(X_chars[start:start+80] + "\n")
+				
+			outfile.write("\n")
 
 
 def read_meme(filename, n_motifs=None):

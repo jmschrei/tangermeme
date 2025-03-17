@@ -5,6 +5,35 @@
 Release History
 ===============
 
+Version 0.4.4
+=============
+
+io
+----
+
+	- Added `one_hot_to_fasta` which takes a 3D one-hot encoded tensor and an optional list of headers and outputs a FASTA file with those sequences. 
+
+
+plot
+----
+
+	- Added `plot_attributions` which wraps the calculation and the visualization of attributions between multiple models and multiple sequences.
+	- Added `show_score` to `plot_logo` where 
+
+
+predict
+-------
+
+	- Added `dtype` to `predict`, which will autocast the model and the data to the desired dtype to increase speed. Currently only supports the dtypes supported by torch.autocast. This allows datasets to be represented as torch.uint8 and only converted to higher precision in each batch, yielding significant memory savings.
+
+
+tools/fimo
+----------
+
+	- Fixed a bug to allow dict[str: numpy.ndarray] to be used for the motifs. Thanks @SeppeDeWinter!
+
+
+
 Version 0.4.3
 =============
 
