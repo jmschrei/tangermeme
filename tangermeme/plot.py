@@ -163,8 +163,8 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
                 The colormap to use for the annotations. Rows of annotation labels receive 
                 distinct colors, bars are colored according to their corresponding label.
                 If a string, must be a valid matplotlib qualitative colormap name 
-                (the first row of annotations will always be black).
                 If a list, must be a list of colors (list of colornames or list of RGB tuples).
+                Labels are colorcoded if there is more than 1 row of annotations, otherwise black.
 
 
         Returns
