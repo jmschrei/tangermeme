@@ -8,6 +8,7 @@ import logomaker
 
 from matplotlib import pyplot as plt
 from matplotlib.colors import ListedColormap
+import matplotlib
 
 from .deep_lift_shap import deep_lift_shap
 
