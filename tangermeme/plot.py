@@ -81,7 +81,7 @@ def place_new_bar(box, box_list, y_step=None, n_tracks=4, show_extra=True):
 
 def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None, 
         end=None, ylim=None, spacing=4, n_tracks=4, score_key='score', 
-        show_extra=True, show_score=True, annot_cmap="Dark2"):
+        show_extra=True, show_score=True, annot_cmap="Set1"):
         """Make a logo plot and optionally annotate it.
 
         This function will take in a matrix of weights for each character in a
@@ -198,7 +198,7 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
         #Set annotation colormap
         if type(annot_cmap) == str:
                 cmap = plt.get_cmap(annot_cmap)
-                cmap = ListedColormap([(0,0,0)] + list(cmap.colors)) #add black as the first color
+                #cmap = ListedColormap([(0,0,0)] + list(cmap.colors)) #add black as the first color
         elif type(annot_cmap) == list:
                 cmap = ListedColormap(annot_cmap)
         elif type(annot_cmap) == matplotlib.colors.ListedColormap:
@@ -228,7 +228,8 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
                 linewidth = width_in*0.25
 
                 #plotting annotation labels
-                label_bos_objects = []
+                label_box_objects = []
+                visible_label_box_objects = []
                 label_text_boxes = []
                 text_box_colors = []
                 for i,(_, row) in enumerate(annotations_.iterrows()):
@@ -261,14 +262,17 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
                                 text_box.set_fontsize(labelsize/2)
                                 if not show_extra:
                                         text_color = (1,1,1,0)
+                        else:
+                                visible_label_box_objects.append(text_box)
                         
                         text_box.set_position((bbox_new_transformed.x0, bbox_new_transformed.y0))
                         text_box.set_color(text_color)
                         text_box_colors.append(text_color)
                         label_text_boxes.append(bbox_new)
-                        label_bos_objects.append(text_box)
+                        label_box_objects.append(text_box)
                 
                 #plotting annotation bars
+                bars_box_objects = []
                 bars_boxes = []
                 bars_ymins=[]
                 for i,(_, row) in enumerate(annotations_.iterrows()):
@@ -298,11 +302,21 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
                         bars_boxes.append(bar_box_new)
                         bar[0].set_color(bar_color)
                         bars_ymins.append(bar_box_new_transformed.y0)
+                        bars_box_objects.append(bar[0])
+
                 
                 #shift text boxes down under the lowest bar
                 bars_ymin = min(bars_ymins)
-                for label_box in label_bos_objects:
+                for label_box in label_box_objects:
                         label_box.set_y(label_box.get_position()[1] + bars_ymin) 
+                
+                #if there is only one row of annotations, set colors to black
+                if len(set([vis_box.get_color() for vis_box in visible_label_box_objects])) == 1:
+                        for label_box in visible_label_box_objects:
+                                label_box.set_color((0,0,0))
+                        for bar_box in bars_box_objects:
+                                bar_box.set_color((0,0,0))
+                        
 
         return logo
 
