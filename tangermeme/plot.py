@@ -216,7 +216,8 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
                 ax.set_ylim(-ylim, ylim)
                 r = ylim*2
                 y_offset_bars=ax.get_ylim()[0]/8
-                y_offset_labels = y_offset_bars +ax.get_ylim()[0]/10 
+                #y_offset_labels = y_offset_bars +ax.get_ylim()[0]/10 
+                y_offset_labels = 0
 
                 #deterrmine label text size and line width according to figure size
                 bbox = ax.get_position()
@@ -227,7 +228,7 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
                 linewidth = width_in*0.25
 
                 #plotting annotation labels
-
+                label_bos_objects = []
                 label_text_boxes = []
                 text_box_colors = []
                 for i,(_, row) in enumerate(annotations_.iterrows()):
@@ -265,9 +266,11 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
                         text_box.set_color(text_color)
                         text_box_colors.append(text_color)
                         label_text_boxes.append(bbox_new)
+                        label_bos_objects.append(text_box)
                 
                 #plotting annotation bars
                 bars_boxes = []
+                bars_ymins=[]
                 for i,(_, row) in enumerate(annotations_.iterrows()):
                         motif = row.values[0]
                         motif_start = int(row['start'])
@@ -294,6 +297,12 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
                         bar[0].set_ydata([bar_box_new_transformed.y0, bar_box_new_transformed.y1])
                         bars_boxes.append(bar_box_new)
                         bar[0].set_color(bar_color)
+                        bars_ymins.append(bar_box_new_transformed.y0)
+                
+                #shift text boxes down under the lowest bar
+                bars_ymin = min(bars_ymins)
+                for label_box in label_bos_objects:
+                        label_box.set_y(label_box.get_position()[1] + bars_ymin) 
 
         return logo
 
