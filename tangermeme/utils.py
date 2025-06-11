@@ -146,6 +146,106 @@ def _cast_as_tensor(value, dtype=None):
 			return torch.tensor(value, dtype=dtype)
 
 
+def example_to_fasta_coords(example_df, loci_df, window=None, one_indexed=False):
+	"""Converts coordinates within a given example to those in a FASTA file.
+	
+	Many analyses involve extracting windows from the genome and processing them
+	independently. When coordinates are identified on these windows, e.g.,
+	seqlets or other spans, all that is recorded is the example index and the
+	relative positions from the start of the extracted window. Frequently, though,
+	one wants to know these coordinates on the original genome or other entity
+	encoded in a FASTA file. This function cross-references the example indexes
+	and BED-formatted locus file that the examples were extracted from to get
+	the coordinates on the original sequence.
+	
+	This cross-referencing has several steps.
+	
+		(1) For each span in `example_df` pull out the chrom, start, and end
+		positions in `loci_df`. If `window` is provided, do not use the start and
+		end in the file but, rather, extract a window centered on the middle of the
+		provided coordinates.
+		
+		(2) Use the chrom directly, and add the start and end coordinates to the
+		start of the extracted window from step (1).
+	
+	This function assumes by default that `example_df` is zero-indexed, in the 
+	sense that the minimum start is 0. When doing the conversion, the start and
+	end are simply added to the value in `loci_df`. This means that `loci_df` can
+	be either zero- or one-indexed and the resulting df will match this indexing.
+	If `example_df` is one-indexed, use the optional parameter.
+	
+	
+	Parameters
+	----------
+	example_df: pandas.DataFrame
+		A BED-formatted dataframe where the first three columns must be the example
+		index, the start, and the end coordinates. It does not matter what these
+		columns are named, and there can be additional columns past these.
+	
+	loci_df: pandas.DataFrame
+		A BED-formatted dataframe where the first three columns must be the example
+		index, the start, and the end coordinates. It does not matter what these
+		columns are named, and there can be additional columns past these.
+		
+		NOTE: some processing steps may skip over elements in BED files and return
+		a tensor with fewer elements than there are entries in the original BED
+		file. Please check to make sure this has not happened, or everything will
+		be misaligned.
+	
+	window: int or None, optional
+		If None, use the start and end coordinates in `loci_df` directly. If an
+		integer, these start and end coordinates will be replaced with a window
+		centered on the middle of these original coordinates that spans this
+		window length. This is useful when processing methods extracted windows
+		of uniform length from a peak file, regardless of the length of that
+		peak. Default is None.
+		
+	one_indexed: bool, optional
+		Whether `example_df` is one-indexed. If it were one-indexed, the smallest
+		start value would be 1 and so 1 would have to be subtracted from each
+		correction. If False, assumes that the smallest start value is 0 and no
+		change needs to be made. Default is False.
+		
+	
+	Returns
+	-------
+	coords_df: pandas.DataFrame
+		A dataframe of corrected coordinates where the first three columns are
+		chrom, start, and end, and correspond to the same coordinate system as
+		in `loci_df`. Put another way, if `loci_df` contains peaks on a reference
+		genome, this returned file will now contain coordinates on that reference.
+		The names of the first three columns will be replaced with the names of the
+		first three columns in `loci_df`, and all other columns in the file will
+		be left unchanged.
+	"""
+	
+	loci_chroms = loci_df.iloc[:, 0].values
+	loci_starts = loci_df.iloc[:, 1].values
+	loci_ends = loci_df.iloc[:, 2].values
+	
+	if window is not None:
+		mid = (loci_ends + loci_starts) // 2
+		
+		loci_starts = mid - window // 2
+		loci_ends = mid + window // 2 + window % 2
+	
+	coords_ = example_df.iloc[:, :3].values
+	idxs = coords_[:, 0]
+	
+	example_chroms = loci_chroms[idxs]
+	example_starts = loci_starts[idxs] + coords_[:, 1] - one_indexed
+	example_ends = loci_starts[idxs] + coords_[:, 2] - one_indexed
+	
+	names = loci_df.columns[:3]
+	key_map = dict(zip(example_df.columns[:3], names))
+	coords_df = example_df.copy()
+	coords_df = coords_df.rename(key_map, axis='columns')
+	coords_df[names[0]] = example_chroms
+	coords_df[names[1]] = example_starts
+	coords_df[names[2]] = example_ends
+	return coords_df
+
+
 def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False, allow_N=False):
 	"""Converts a PWM/one-hot encoding to a string sequence.
 

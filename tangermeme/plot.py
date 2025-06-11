@@ -251,6 +251,7 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
                         text_box = ax.text(motif_start, y_offset_labels, text, fontsize=labelsize)
                         ax.get_figure().canvas.draw()
                         bbox = text_box.get_window_extent()
+
                         #...shift box down if it overlaps with previously drawn boxes
                         bbox_new, steps_down_taken = place_new_box(bbox, label_text_boxes, n_tracks=n_tracks,show_extra=show_extra)
                         bbox_new_transformed = bbox_new.transformed(ax.transData.inverted())
@@ -287,7 +288,7 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
                         if bar_color == (0.7,0.7,0.7) or bar_color == (1,1,1,0): #for labels beyond the n_tracks limit, no bar is plotted.
                                 continue
 
-                        xp = [motif_start, motif_end]
+                        xp = [motif_start-0.1, motif_end-0.5]
                         yp = [y_offset_bars, y_offset_bars]
 
                         #plot bar in topmost place...

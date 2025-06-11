@@ -13,8 +13,6 @@ from .utils import characters
 
 from sklearn.isotonic import IsotonicRegression
 
-from .tools.tomtom import tomtom
-
 
 def _laplacian_null(X_sum, num_to_samp=10000, random_state=1234):
 	"""An internal function for calculating a null distribution.
@@ -352,22 +350,25 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 
 	n, l = X.shape
 
-	X_csum = numpy.empty_like(X)
+	# Convert observed attributions into cumsums for fast span calculation
+	X_csum = numpy.zeros((n+1, l))
 	for i in range(n):
-		X_csum[i, 0] = X[i, 0]    
-		for j in range(1, l):
-			X_csum[i, j] = X_csum[i, j-1] + X[i, j]
+		for j in range(l):
+			X_csum[i, j+1] = X_csum[i, j] + X[i, j]
 
 	xmins = numpy.empty(max_seqlet_len+1, dtype=numpy.float64)
 	xmaxs = numpy.empty(max_seqlet_len+1, dtype=numpy.float64)
 	X_cdfs = numpy.zeros((2, max_seqlet_len+1, 1000), dtype=numpy.float64)
 
+	# Construct background distributions
 	for j in range(min_seqlet_len, max_seqlet_len+1):
 		xmin, xmax = 0.0, 0.0
 		n_pos, n_neg = 0.0, 0.0
-		
+
+		# For a given span size, find the minimum and maximum values and the count
+		# of the number of attribution values in each.
 		for i in range(n):
-			for k in range(l-j):
+			for k in range(l-j+1):
 				x_ = X_csum[i, k+j] - X_csum[i, k]
 
 				if x_ > 0:
@@ -376,13 +377,15 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 				else:
 					xmin = min(x_, xmin)
 					n_neg += 1.0
-		
+
 		xmins[j] = xmin
 		xmaxs[j] = xmax
-
 		p_pos, p_neg = 1 / n_pos, 1 / n_neg
+
+		# Now go through again and bin the attribution value, recording the count of
+		# the number of occurences, pre-divided by the total count to get probs.
 		for i in range(n):
-			for k in range(l-j):
+			for k in range(l-j+1):
 				x_ = X_csum[i, k+j] - X_csum[i, k]
 
 				if x_ > 0:
@@ -393,25 +396,27 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 					X_cdfs[1, j, x_int] += p_neg
 					
 
-		for i in range(1, 1000):
-			X_cdfs[0, j, i] += X_cdfs[0, j, i-1]
-			X_cdfs[1, j, i] += X_cdfs[1, j, i-1]
+		# Convert these PDFs into 1 - CDFs.
+		for i in range(1, 1001):
+			if i < 1000:
+				X_cdfs[0, j, i] += X_cdfs[0, j, i-1]
+				X_cdfs[1, j, i] += X_cdfs[1, j, i-1]
 			
 			X_cdfs[0, j, i-1] = 1 - X_cdfs[0, j, i-1]
 			X_cdfs[1, j, i-1] = 1 - X_cdfs[1, j, i-1]
-		
-		X_cdfs[0, j, -1] = 1 - X_cdfs[0, j, -1]
-		X_cdfs[1, j, -1] = 1 - X_cdfs[1, j, -1]
-	
+
 	###
 
 	p_value = numpy.ones((max_seqlet_len+1, l), dtype=numpy.float64)
 	seqlets = []
 
+	# Calculate p-values for each seqlet span and keep only the maximum p-value of
+	# spans starting here thus-far. Because of the recursive property, if a span
+	# has a high p-value, definitionally none of the other spans including it can.
 	for i in range(n):
 		for j in range(min_seqlet_len, max_seqlet_len+1):
-			for k in range(1, l-j):
-				x_ = X_csum[i, k+j-1] - X_csum[i, k-1]
+			for k in range(l-j+1):
+				x_ = X_csum[i, k+j] - X_csum[i, k]
 
 				if x_ > 0:
 					x_int = math.floor(999 * x_ / xmaxs[j])
@@ -421,36 +426,35 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 					p_value[j, k] = X_cdfs[1, j, x_int]
 				
 				if j > min_seqlet_len:
-					p_value[j, k] = max(p_value[j-1, k], p_value[j, k])
+					if p_value[j-1, k] >= threshold:
+						p_value[j, k] = threshold
+					#p_value[j, k] = max(p_value[j-1, k], p_value[j, k])
 
-		###
-			
-		for j in range(max_seqlet_len - min_seqlet_len):
+		# Iteratively identify spans, from longest to shortest, that satisfy the
+		# recursive p-value threshold.
+		for j in range(max_seqlet_len - min_seqlet_len + 1):
 			j = max_seqlet_len - j
-			
+
 			while True:
 				start = p_value[j].argmin()
 				p = p_value[j, start]
 				p_value[j, start] = 1
-	
-				if p > threshold:
-					break
-	
-				end = start
-				for k in range(j - min_seqlet_len):
-					if p_value[j-k, end+1] < threshold:
-						end += 1
-					else:
-						break
-				else:
-					start = max(start - additional_flanks, 0)
-					end = min(end + min_seqlet_len + additional_flanks - 1, l)
-					attr = X_csum[i, end-1] - X_csum[i, start-1]
-					seqlets.append((i, start, end, attr, p))
 
-					for n_idx in range(max_seqlet_len+1):
-						for s_idx in range(start, end):
-							p_value[n_idx, s_idx] = 1
+				if p >= threshold:
+					break
+
+				for k in range(j - min_seqlet_len):
+					if p_value[j-k, start+k+1] >= threshold:
+						break
+
+				else:
+					for end in range(start, min(start+j, l-1)):
+						p_value[:, end] = 1
+
+					end = min(start + j + additional_flanks, l-1)
+					start = max(start - additional_flanks, 0)
+					attr = X_csum[i, end] - X_csum[i, start]
+					seqlets.append((i, start, end, attr, p))
 
 	return seqlets
 		
@@ -461,7 +465,7 @@ def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	"""A seqlet caller implementing the recursive seqlet algorithm.
 
 	This algorithm identifies spans of high attribution characters, called
-	seqlets, using a simple approach derived from the TOMTOM/FIMO algorithms.
+	seqlets, using a simple approach derived from the Tomtom/FIMO algorithms.
 	First, distributions of attribution sums are created for all potential
 	seqlet lengths by discretizing the sum, with one set of distributions for
 	positive attribution values and one for negative attribution values. Then,

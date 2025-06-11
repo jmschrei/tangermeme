@@ -218,53 +218,53 @@ def test_tfmodisco_seqlets(X_contrib):
 def test_recursive_seqlets(X_contrib):
 	seqlets = recursive_seqlets(X_contrib)
 
-	assert seqlets.shape == (20, 5)
+	assert seqlets.shape == (45, 5)
 	
 	column_names = ['example_idx', 'start', 'end', 'attribution', 'p-value']
 	for name1, name2 in zip(seqlets.columns, column_names):
 		assert name1 == name2
 
-	assert_array_almost_equal(seqlets.values, [
-		[ 1.0000e+00,  1.0380e+03,  1.0420e+03, -2.5192e-02,  1.3214e-04],
-		[ 0.0000e+00,  1.0540e+03,  1.0610e+03,  3.0307e-01,  2.0425e-04],
-		[ 1.0000e+00,  1.0540e+03,  1.0610e+03,  2.8121e-01,  9.8193e-04],
-		[ 5.0000e+00,  1.0800e+03,  1.0860e+03, -2.0043e-02,  1.4535e-03],
-		[ 3.0000e+00,  1.1870e+03,  1.1910e+03, -1.6154e-02,  1.5717e-03],
-		[ 4.0000e+00,  8.3200e+02,  8.3600e+02, -1.2807e-02,  2.0956e-03],
-		[ 1.0000e+00,  8.4700e+02,  8.5300e+02, -1.7939e-02,  2.6035e-03],
-		[ 4.0000e+00,  1.0450e+03,  1.0520e+03,  2.0798e-01,  2.6552e-03],
-		[ 4.0000e+00,  1.0620e+03,  1.0690e+03,  2.0112e-01,  3.0637e-03],
-		[ 1.0000e+00,  1.0840e+03,  1.0880e+03, -1.1433e-02,  3.5677e-03],
-		[ 1.0000e+00,  9.9300e+02,  9.9700e+02, -1.4471e-02,  3.6673e-03],
-		[ 5.0000e+00,  1.0720e+03,  1.0780e+03,  1.5735e-01,  4.0323e-03],
-		[ 4.0000e+00,  1.2280e+03,  1.2330e+03, -1.4672e-02,  4.0962e-03],
-		[ 1.0000e+00,  9.3000e+02,  9.3400e+02, -1.5100e-02,  4.5842e-03],
-		[ 1.0000e+00,  1.1160e+03,  1.1210e+03, -1.3372e-02,  4.7275e-03],
-		[ 3.0000e+00,  8.7000e+02,  8.7700e+02, -1.9001e-02,  5.4175e-03],
-		[ 1.0000e+00,  9.1400e+02,  9.2100e+02,  1.5942e-01,  6.1275e-03],
-		[ 2.0000e+00,  9.6900e+02,  9.7500e+02,  1.2634e-01,  7.8555e-03],
-		[ 2.0000e+00,  1.0290e+03,  1.0340e+03,  8.5375e-02,  8.5436e-03],
-		[ 2.0000e+00,  8.1100e+02,  8.1500e+02, -8.7880e-03,  8.8531e-03]], 4)
+	assert_array_almost_equal(seqlets.values[:20], [
+	   [ 0.00000000e+00,  1.05200000e+03,  1.06100000e+03,  3.10099975e-01, -8.88178420e-15],
+       [ 1.00000000e+00,  1.03500000e+03,  1.04300000e+03, -4.09194521e-02,  3.10862447e-15],
+       [ 5.00000000e+00,  1.08000000e+03,  1.08700000e+03, -2.25865107e-02,  3.91696044e-04],
+       [ 3.00000000e+00,  8.68000000e+02,  8.77000000e+02, -2.31096810e-02,  7.71604938e-04],
+       [ 1.00000000e+00,  1.54400000e+03,  1.54800000e+03, -1.51427423e-02,  7.95967100e-04],
+       [ 1.00000000e+00,  1.05200000e+03,  1.06100000e+03,  2.85009005e-01,  8.23045267e-04],
+       [ 1.00000000e+00,  9.28000000e+02,  9.34000000e+02, -1.94051632e-02,  9.21901752e-04],
+       [ 3.00000000e+00,  1.18500000e+03,  1.19200000e+03, -1.92600280e-02,  1.30565348e-03],
+       [ 1.00000000e+00,  9.10000000e+02,  9.14000000e+02, -1.38847770e-02,  1.59193420e-03],
+       [ 1.00000000e+00,  9.91000000e+02,  9.97000000e+02, -1.67364757e-02,  1.71210325e-03],
+       [ 4.00000000e+00,  1.22800000e+03,  1.23400000e+03, -1.65439546e-02,  1.97550375e-03],
+       [ 3.00000000e+00,  1.26400000e+03,  1.26800000e+03, -1.25000235e-02,  2.12257893e-03],
+       [ 5.00000000e+00,  9.77000000e+02,  9.81000000e+02, -1.24873505e-02,  2.12257893e-03],
+       [ 4.00000000e+00,  8.31000000e+02,  8.37000000e+02, -1.56007004e-02,  2.37060450e-03],
+       [ 1.00000000e+00,  8.47000000e+02,  8.54000000e+02, -1.70986112e-02,  2.61130696e-03],
+       [ 4.00000000e+00,  1.04500000e+03,  1.05300000e+03,  2.12268971e-01,  2.64335096e-03],
+       [ 0.00000000e+00,  1.51700000e+03,  1.52100000e+03, -1.17767966e-02,  2.78588485e-03],
+       [ 2.00000000e+00,  1.17900000e+03,  1.18300000e+03, -1.16636232e-02,  3.31652958e-03],
+       [ 0.00000000e+00,  9.33000000e+02,  9.37000000e+02, -1.13330282e-02,  3.84717432e-03],
+       [ 2.00000000e+00,  1.37400000e+03,  1.37800000e+03, -1.10360066e-02,  4.24515787e-03]], 4)
 
 
 def test_recursive_seqlets_additional_flanks(X_contrib):
 	seqlets = recursive_seqlets(X_contrib).values
 	seqlets2 = recursive_seqlets(X_contrib, additional_flanks=2).values
-	assert seqlets2.shape == (20, 5)
+	assert seqlets2.shape == (45, 5)
 
 	assert_array_almost_equal(seqlets[:, 0], seqlets2[:, 0])
 	assert_array_almost_equal(seqlets[:, 1], seqlets2[:, 1]+2)
 	assert_array_almost_equal(seqlets[:, 2], seqlets2[:, 2]-2)
 
 	seqlets2 = recursive_seqlets(X_contrib, additional_flanks=4).values
-	assert seqlets2.shape == (20, 5)
+	assert seqlets2.shape == (45, 5)
 
 	assert_array_almost_equal(seqlets[:, 0], seqlets2[:, 0])
 	assert_array_almost_equal(seqlets[:, 1], seqlets2[:, 1]+4)
 	assert_array_almost_equal(seqlets[:, 2], seqlets2[:, 2]-4)
 
 	seqlets2 = recursive_seqlets(X_contrib, additional_flanks=7).values
-	assert seqlets2.shape == (19, 5)
+	assert seqlets2.shape == (45, 5)
 
 
 def test_recursive_seqlets_min_length(X_contrib):
@@ -282,9 +282,9 @@ def test_recursive_seqlets_max_length(X_contrib):
 	seqlets2 = recursive_seqlets(X_contrib, max_seqlet_len=10).values
 	seqlets3 = recursive_seqlets(X_contrib, max_seqlet_len=6).values
 
-	assert (seqlets[:, 2] - seqlets[:, 1]).max() == 7
-	assert (seqlets2[:, 2] - seqlets2[:, 1]).max() == 7
-	assert (seqlets3[:, 2] - seqlets3[:, 1]).max() == 5
+	assert (seqlets[:, 2] - seqlets[:, 1]).max() == 10
+	assert (seqlets2[:, 2] - seqlets2[:, 1]).max() == 10
+	assert (seqlets3[:, 2] - seqlets3[:, 1]).max() == 6
 
 
 def test_recursive_seqlets_p_values(X_contrib):
@@ -292,6 +292,6 @@ def test_recursive_seqlets_p_values(X_contrib):
 	seqlets2 = recursive_seqlets(X_contrib, threshold=0.1).values
 	seqlets3 = recursive_seqlets(X_contrib, threshold=0.001).values
 
-	assert seqlets.shape == (20, 5)
-	assert seqlets2.shape == (180, 5)
-	assert seqlets3.shape == (3, 5)
+	assert seqlets.shape == (45, 5)
+	assert seqlets2.shape == (443, 5)
+	assert seqlets3.shape == (6, 5)

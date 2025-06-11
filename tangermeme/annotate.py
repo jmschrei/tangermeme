@@ -7,7 +7,8 @@ import pandas
 
 from .io import read_meme
 from .utils import _validate_input
-from .tools.tomtom import tomtom
+
+from memelite import tomtom
 
 
 def annotate_seqlets(X, seqlets, motifs, n_nearest=1, n_jobs=-1, **kwargs):
@@ -74,7 +75,7 @@ def annotate_seqlets(X, seqlets, motifs, n_nearest=1, n_jobs=-1, **kwargs):
 	p_values, _, _, _, _, idxs = tomtom(X_seqlets, motif_pwms, 
 		n_nearest=n_nearest, n_jobs=n_jobs, **kwargs)
 
-	return idxs.type(torch.int32), p_values
+	return torch.from_numpy(idxs).type(torch.int32), torch.from_numpy(p_values)
 
 
 def count_annotations(X, dtype=torch.uint8, shape=None, dim=None):

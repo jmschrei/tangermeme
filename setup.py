@@ -22,6 +22,7 @@ setup(
         "logomaker",
         "joblib >= 1.3.2",
         "scikit-learn >= 1.2.2",
-        "matplotlib"
+        "matplotlib",
+        "memelite"
     ],
 )

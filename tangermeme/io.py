@@ -14,6 +14,8 @@ from tqdm import tqdm
 from .utils import one_hot_encode
 from .utils import characters
 
+from memelite.io import read_meme as memelite_read_meme
+
 
 def _interleave_loci(loci, chroms=None):
 	"""An internal function for processing the provided loci.
@@ -65,8 +67,10 @@ def _interleave_loci(loci, chroms=None):
 		if isinstance(df, str):
 			df = pandas.read_csv(df, sep='\t', usecols=[0, 1, 2], 
 				header=None, index_col=False, names=names)
+			
 		elif isinstance(df, pandas.DataFrame):
 			df = df.iloc[:, [0, 1, 2]].copy()
+		
 		else:
 			raise ValueError("Provided loci must be a string or pandas " +
 				"DataFrame, or a list/tuple of those.")
@@ -176,7 +180,7 @@ def _extract_locus_signal(signals, chrom, start, end):
 def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None, 
 	in_window=2114, out_window=1000, max_jitter=0, min_counts=None,
 	max_counts=None, target_idx=0, n_loci=None, alphabet=['A', 'C', 'G', 'T'], 
-	ignore=['N'], verbose=False):
+	ignore=['N'], return_filtered=False, verbose=False):
 	"""Extract sequence and signal information for each provided locus.
 
 	This function will take in a set of loci, sequences, and optionally signals,
@@ -284,6 +288,11 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		are set to 1 in the returned one-hot encoding. Put another way, the
 		sum across characters is equal to 1 for all positions except those
 		where the original sequence is in this list. Default is ['N'].
+		
+	return_filtered: bool, optional
+		Whether to return a tensor containing whether each element in the provided
+		loci have been filtered out because of falling off the edge of chromosomes
+		or the signal not falling in the specified boundaries. Default is False.
 
 	verbose: bool, optional
 		Whether to display a progress bar while loading. Default is False.
@@ -306,9 +315,15 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		as loci in the locus file after optional filtering by chromosome and
 		the second dimension is in the same order as the list of in signal files.
 		If no in signal files are given, this is not returned.
+	
+	filtered: torch.tensor, shape=(n,), dtype=bool
+		Whether each locus in the provided list has been kept (True) or filtered
+		(False) due to the coordinates falling off the edges of the loci. Only
+		returned if return_filtered=True.
 	"""
 
 	seqs, signals_, in_signals_ = [], [], []
+	filtered = []
 	in_width, out_width = in_window // 2, out_window // 2
 	if signals is None and in_signals is None:
 		out_width = 0
@@ -337,7 +352,8 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		else:
 			chrom_length = len(sequences[chrom])
 
-		if start < 0 or end >= chrom_length: 
+		if start < 0 or end >= chrom_length:
+			filtered.append(False)
 			continue
 
 		if n_loci is not None and len(seqs) == n_loci:
@@ -351,9 +367,11 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 			signal = _extract_locus_signal(signals, chrom, start, end)
 
 			if min_counts is not None and signal[target_idx].sum() < min_counts:
+				filtered.append(False)
 				continue
 
 			if max_counts is not None and signal[target_idx].sum() > max_counts:
+				filtered.append(False)
 				continue
 
 			signals_.append(signal)
@@ -373,6 +391,7 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 			seq = one_hot_encode(sequences[chrom][start:end].seq.upper(),
 				alphabet=alphabet, ignore=ignore)
 
+		filtered.append(True)
 		seqs.append(seq)
 
 	if not isinstance(sequences, dict):
@@ -386,6 +405,10 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 
 	if in_signals is not None:
 		y_return.append(torch.from_numpy(numpy.stack(in_signals_)))
+		
+	if return_filtered:
+		filtered = torch.tensor(filtered)
+		y_return.append(torch.where(filtered == True)[0])
 
 	return y_return[0] if len(y_return) == 1 else y_return
 
@@ -421,6 +444,9 @@ def read_meme(filename, n_motifs=None):
 	and returns a dictionary of the PWMs where the keys are the metadata
 	line and the values are the PWMs.
 
+	This function is a wrapper around the memelite one, except that it returns
+	torch tensors instead of numpy arrays.
+
 
 	Parameters
 	----------
@@ -434,34 +460,8 @@ def read_meme(filename, n_motifs=None):
 		A dictionary of the motifs in the MEME file.
 	"""
 
-	motifs = {}
-
-	with open(filename, "r") as infile:
-		motif, width, i = None, None, 0
-
-		for line in infile:
-			if motif is None:
-				if line[:5] == 'MOTIF':
-					motif = line.replace('MOTIF ', '').strip("\r\n")
-				else:
-					continue
-
-			elif width is None:
-				if line[:6] == 'letter':
-					width = int(line.split()[5])
-					pwm = numpy.zeros((width, 4))
-
-			elif i < width:
-				pwm[i] = list(map(float, line.strip("\r\n").split()))
-				i += 1
-
-			else:
-				motifs[motif] = torch.from_numpy(pwm.T)
-				motif, width, i = None, None, 0
-
-				if n_motifs is not None and len(motifs) == n_motifs:
-					break
-
+	motifs = memelite_read_meme(filename, n_motifs=n_motifs)
+	motifs = {name: torch.from_numpy(pwm) for name, pwm in motifs.items()}
 	return motifs
 
 
