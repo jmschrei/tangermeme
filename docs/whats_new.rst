@@ -5,6 +5,48 @@
 Release History
 ===============
 
+Version 0.5.0
+=============
+
+Highlights
+----------
+
+	- The Tomtom and FIMO tools have been moved to memesuite-lite so they can be used without a PyTorch dependency
+	- All internals tools that used Tomtom and FIMO now call the memesuite-lite versions
+
+annotate
+--------
+
+	- The call to tomtom now goes to memesuite-lite
+
+
+io
+----
+
+	- `read_meme` now calls the memesuite-lite function and wraps the numpy arrays into torch tensors.
+	- `return_filtered` has been added as an optional parameter to `extract_loci` where, if set to true, returns a list of indexes for the loci that are kept or discarded. Note that the indexes are into the INTERLEAVED LOCI, not the original set of indices.
+
+
+plot
+----
+
+	- Improved the placement of annotation labels in `plot_logo`. Thanks Nikolaus Mandlburger!
+	- Fixed a bug where annotations were extended an additional basepair to the right
+
+
+seqlet
+------
+
+	- The `recursive_seqlet` algorithm has been slightly modified to more closely match the provided description. This change involves using the calculated p-values instead of the maximum p-value for each position across all seqlets of smaller size. As a consequence, motifs should not be be shifted to the right anymore.
+
+
+utils
+-----
+
+	- Added a `example_to_fasta_coordinates` which will convert the relative coordinates in examples to exact coordinates on the genome when provided with a BED file of examples and a FASTA file. This is useful if you have seqlet coordinates for each example and need to convert them to positions on the genome.
+
+
+
 Version 0.4.4
 =============
 
@@ -18,7 +60,7 @@ plot
 ----
 
 	- Added `plot_attributions` which wraps the calculation and the visualization of attributions between multiple models and multiple sequences.
-	- Added `show_score` to `plot_logo` where 
+	- Added `show_score` to `plot_logo` where you can optionally hide the score from the visualization
 
 
 predict
