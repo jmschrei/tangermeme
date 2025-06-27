@@ -13,7 +13,8 @@ In addition to a library of functions to help you apply predictive models to seq
 
 Please see the documentation and tutorials linked at the top of this README for more extensive documentation. If you only read one vignette, read THIS ONE: [Inspecting what Cis-Regulatory Features a Model has Learned](https://tangermeme.readthedocs.io/en/latest/vignettes/Inspecting_What_Cis-Regulatory_Features_a_Model_Has_Learned.html).
 
-![image](https://github.com/user-attachments/assets/20b186e7-73af-46c7-a7b6-5484c714036e)
+<br>
+<img src="https://github.com/user-attachments/assets/20b186e7-73af-46c7-a7b6-5484c714036e" width=60%>
 
 
 ## Installation
