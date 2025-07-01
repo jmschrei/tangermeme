@@ -33,17 +33,8 @@ This first release focused on the core prediction-based functionality (e.g., mar
 
 ## Command-line Tools
 
-tangermeme implements command-line tools for the FIMO and TOMTOM algorithms. These can be called using
-
-`tangermeme fimo -m <motif_file> -s <sequencce_file> ...`
-
-and
-
-`tangermeme tomtom -q <motif_file_1> -t <motif_file_2>`
-
-Alternatively, TOMTOM can be called by just providing a hard sequence as a query. This can be valuable when you are manually analyzing data and want to check what motif best captures a specific area/seqlet you are looking at.
-
-`tangermeme tomtom -q ACGTTTG`
+> [!WARNING]
+> These FIMO and Tomtom command-line tools have been moved to [memesuite-lite](https://github.com/jmschrei/memesuite-lite), where their functionality has also been expanded and the PyTorch requirement has been removed. Please use those!
 
 ## Usage
 
