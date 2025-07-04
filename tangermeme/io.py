@@ -8,6 +8,7 @@ import pandas
 
 import pyfaidx
 import pyBigWig
+import pybigtools
 
 from tqdm import tqdm
 
@@ -114,7 +115,7 @@ def _load_signals(signals):
 	_signals = []
 	for i, signal in enumerate(signals):
 		if isinstance(signal, str):
-			signal = pyBigWig.open(signal)
+			signal = pybigtools.open(signal)
 		elif not isinstance(signal, dict):
 			raise ValueError("Signals must either be a list of strings " +
 				"or a list of dictionaries.")
@@ -162,16 +163,15 @@ def _extract_locus_signal(signals, chrom, start, end):
 	values = []
 	for i, signal in enumerate(signals):
 		if isinstance(signal, dict):
-			values_ = signal[chrom][start:end]
+			values_ = numpy.array(signal[chrom][start:end],dtype=numpy.float32)
 		else:
 			try:
-				values_ = signal.values(chrom, start, end, numpy=True)
+				values_ = numpy.array(signal.values(chrom, start, end),dtype=numpy.float32)
 			except:
+				#TO DO: check that this is still ok
 				print(f"Warning: {chrom} {start} {end} not " +
 					"valid bigwig indexes. Using zeros instead.")
-				values_ = numpy.zeros(end-start)
-
-		values_ = numpy.nan_to_num(values_)
+				values_ = numpy.zeros(end-start,dtype=numpy.float32)
 		values.append(values_)
 
 	return values
