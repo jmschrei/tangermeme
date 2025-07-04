@@ -5,6 +5,20 @@
 Release History
 ===============
 
+
+
+Version 0.5.1
+=============
+
+Highlights
+----------
+
+	- Add `summits` to `extract_loci` to center on summits when a BED10 file is provided
+	- Improve casting of indexes for variant effect predictions
+	- Slight improvement to the usability of deep_lift_shap
+
+
+
 Version 0.5.0
 =============
 
