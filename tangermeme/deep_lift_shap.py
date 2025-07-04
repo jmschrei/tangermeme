@@ -6,7 +6,6 @@ import torch.nn.functional as F
 
 import warnings
 
-from typing import cast
 from tqdm import trange
 from .ersatz import dinucleotide_shuffle
 
@@ -362,6 +361,8 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 		torch.nn.MaxPool2d: _maxpool,
 		torch.nn.Softmax: _softmax
 	}
+	
+	# Misc. set up for overriding operations
 
 	if additional_nonlinear_ops is not None:
 		for key, value in additional_nonlinear_ops.items():
@@ -371,16 +372,18 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 	for module in model.modules():
 		module._NON_LINEAR_OPS = _NON_LINEAR_OPS
 
-	attributions, references_, Xi, rj, attr_ = [], [], [], [], []
-	if isinstance(references, torch.Tensor):
-		n_shuffles = references.shape[1]
-	n, z = X.shape[0] * n_shuffles, 0
-
 	try:
 		model.apply(_register_hooks)
 	except Exception as e:
 		model.apply(_clear_hooks)
 		raise(e)
+	
+	# Begin DeepLIFT procedure
+	
+	attributions, references_, Xi, rj, attr_ = [], [], [], [], []
+	if isinstance(references, torch.Tensor):
+		n_shuffles = references.shape[1]
+	n, z = X.shape[0] * n_shuffles, 0
 
 	for i in trange(n, disable=not verbose):
 		Xi.append(i // n_shuffles)

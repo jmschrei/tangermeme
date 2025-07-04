@@ -17,7 +17,7 @@ from .utils import characters
 from memelite.io import read_meme as memelite_read_meme
 
 
-def _interleave_loci(loci, chroms=None):
+def _interleave_loci(loci, chroms=None, summits=False):
 	"""An internal function for processing the provided loci.
 
 	There are two aspects that have to be considered when processing the loci.
@@ -43,6 +43,10 @@ def _interleave_loci(loci, chroms=None):
 		interleaving to ensure balance across sets of loci. If None, do not
 		do filtering. Default is None.
 
+	summits: bool, optional
+		Whether to include the summits, which are the 10th column in a BED10 file,
+		when loading the dataframe.
+
 
 	Returns
 	-------
@@ -61,15 +65,17 @@ def _interleave_loci(loci, chroms=None):
 		raise ValueError("Provided loci must be a string or pandas " +
 			"DataFrame, or a list/tuple of those.")
 
-	names = ['chrom', 'start', 'end']
+	cols = [0, 1, 2] + ([9] if summits else [])
+	names = ['chrom', 'start', 'end'] + (['summit'] if summits else [])
+
 	loci_dfs = []
 	for i, df in enumerate(loci):
 		if isinstance(df, str):
-			df = pandas.read_csv(df, sep='\t', usecols=[0, 1, 2], 
+			df = pandas.read_csv(df, sep='\t', usecols=cols, 
 				header=None, index_col=False, names=names)
 			
 		elif isinstance(df, pandas.DataFrame):
-			df = df.iloc[:, [0, 1, 2]].copy()
+			df = df.iloc[:, cols].copy()
 		
 		else:
 			raise ValueError("Provided loci must be a string or pandas " +
@@ -179,8 +185,9 @@ def _extract_locus_signal(signals, chrom, start, end):
 
 def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None, 
 	in_window=2114, out_window=1000, max_jitter=0, min_counts=None,
-	max_counts=None, target_idx=0, n_loci=None, alphabet=['A', 'C', 'G', 'T'], 
-	ignore=['N'], return_filtered=False, verbose=False):
+	max_counts=None, target_idx=0, n_loci=None, summits=False,
+	alphabet=['A', 'C', 'G', 'T'], ignore=['N'], return_filtered=False, 
+	verbose=False):
 	"""Extract sequence and signal information for each provided locus.
 
 	This function will take in a set of loci, sequences, and optionally signals,
@@ -276,6 +283,12 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		loci may be filtered out for various reasons, and those are not
 		counted towards the total. If None, no cap. Default is None.
 
+	summits: bool, optional
+		Whether to return a region centered around the summit instead of the center
+		between the start and end. If True, it will add the 10th column (index 9)
+		to the start to get the center of the window, and so the data must be in 
+		narrowPeak format.
+
 	alphabet : set or tuple or list
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
@@ -329,7 +342,7 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		out_width = 0
 
 	# Load the sequences
-	loci = _interleave_loci(loci, chroms)
+	loci = _interleave_loci(loci, chroms, summits=summits)
 
 	if isinstance(sequences, str):
 		sequences = pyfaidx.Fasta(sequences)
@@ -342,8 +355,14 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 	d = not verbose
 
 	max_width = max(in_width, out_width)
-	for chrom, start, end in tqdm(loci.values, disable=d, desc=desc):
-		mid = start + (end - start) // 2
+	for entry in tqdm(loci.values, disable=d, desc=desc):
+		chrom, start, end = entry[:3]
+
+		if summits:
+			mid = start + entry[3]
+		else:
+			mid = start + (end - start) // 2
+
 		start = mid - max(out_width, in_width) - max_jitter
 		end = mid + max(out_width, in_width) + max_jitter
 

@@ -5,7 +5,9 @@ import torch
 import itertools
 
 from .io import extract_loci
+
 from .utils import one_hot_encode
+from .utils import _cast_as_tensor
 
 from .ersatz import delete
 from .ersatz import insert
@@ -90,6 +92,8 @@ def substitution_effect(model, X, substitutions, args=None, func=predict,
 	y_after: torch.Tensor
 		The output from `func` after the variants are included.
 	"""
+
+	substitutions = _cast_as_tensor(substitutions)
 
 	additional_func_kwargs = additional_func_kwargs or {}
 
@@ -197,6 +201,8 @@ def deletion_effect(model, X, deletions, left=False, args=None, func=predict,
 	y_after: torch.Tensor
 		The output from `func` after the variants are included.
 	"""
+
+	deletions = _cast_as_tensor(deletions)
 
 	additional_func_kwargs = additional_func_kwargs or {}
 
@@ -310,6 +316,8 @@ def insertion_effect(model, X, insertions, left=False, args=None, func=predict,
 	y_after: torch.Tensor
 		The output from `func` after the variants are included.
 	"""
+
+	insertions = _cast_as_tensor(insertions)
 
 	additional_func_kwargs = additional_func_kwargs or {}
 	X_var = []
