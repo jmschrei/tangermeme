@@ -13,7 +13,8 @@ In addition to a library of functions to help you apply predictive models to seq
 
 Please see the documentation and tutorials linked at the top of this README for more extensive documentation. If you only read one vignette, read THIS ONE: [Inspecting what Cis-Regulatory Features a Model has Learned](https://tangermeme.readthedocs.io/en/latest/vignettes/Inspecting_What_Cis-Regulatory_Features_a_Model_Has_Learned.html).
 
-![image](https://github.com/user-attachments/assets/20b186e7-73af-46c7-a7b6-5484c714036e)
+<br>
+<img src="https://github.com/user-attachments/assets/20b186e7-73af-46c7-a7b6-5484c714036e" width=60%>
 
 
 ## Installation
@@ -32,17 +33,8 @@ This first release focused on the core prediction-based functionality (e.g., mar
 
 ## Command-line Tools
 
-tangermeme implements command-line tools for the FIMO and TOMTOM algorithms. These can be called using
-
-`tangermeme fimo -m <motif_file> -s <sequencce_file> ...`
-
-and
-
-`tangermeme tomtom -q <motif_file_1> -t <motif_file_2>`
-
-Alternatively, TOMTOM can be called by just providing a hard sequence as a query. This can be valuable when you are manually analyzing data and want to check what motif best captures a specific area/seqlet you are looking at.
-
-`tangermeme tomtom -q ACGTTTG`
+> [!WARNING]
+> These FIMO and Tomtom command-line tools have been moved to [memesuite-lite](https://github.com/jmschrei/memesuite-lite), where their functionality has also been expanded and the PyTorch requirement has been removed. Please use those!
 
 ## Usage
 
