@@ -8,6 +8,7 @@ import pandas
 
 import pyfaidx
 import pyBigWig
+import pybigtools
 
 from tqdm import tqdm
 
@@ -127,7 +128,7 @@ def _load_signals(signals):
 	-------
 	_signals: list of dicts
 		A list of either pointers to opened bigwig files or dictionaries of
-		numpy a
+		numpy arrays.
 	"""
 
 	if signals is None:
@@ -136,7 +137,7 @@ def _load_signals(signals):
 	_signals = []
 	for i, signal in enumerate(signals):
 		if isinstance(signal, str):
-			signal = pyBigWig.open(signal)
+			signal = pybigtools.open(signal)
 		elif not isinstance(signal, dict):
 			raise ValueError("Signals must either be a list of strings " +
 				"or a list of dictionaries.")
@@ -157,8 +158,8 @@ def _extract_locus_signal(signals, chrom, start, end):
 
 	Parameters
 	----------
-	signals: list of pyBigWig objects or dictionaries
-		A list of opened pyBigWig objects or dictionaries where the keys are
+	signals: list of pybigtools' BBIRead objects or dictionaries
+		A list of BBIRead objects (as returned by pybigtools.open()) or dictionaries where the keys are
 		chromosomes and the values are the signal at each position in the
 		chromosome.
 
@@ -184,16 +185,14 @@ def _extract_locus_signal(signals, chrom, start, end):
 	values = []
 	for i, signal in enumerate(signals):
 		if isinstance(signal, dict):
-			values_ = signal[chrom][start:end]
+			values_ = numpy.array(signal[chrom][start:end],dtype=numpy.float32)
 		else:
 			try:
-				values_ = signal.values(chrom, start, end, numpy=True)
+				values_ = numpy.array(signal.values(chrom, start, end),dtype=numpy.float32)
 			except:
 				print(f"Warning: {chrom} {start} {end} not " +
 					"valid bigwig indexes. Using zeros instead.")
-				values_ = numpy.zeros(end-start)
-
-		values_ = numpy.nan_to_num(values_)
+				values_ = numpy.zeros(end-start,dtype=numpy.float32)
 		values.append(values_)
 
 	return values
@@ -253,13 +252,13 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 
 	signals: list of strs or list of dictionaries or None, optional
 		A list of filepaths to bigwig files, where each filepath will be read
-		using pyBigWig, or a list of dictionaries where the keys are the same
+		using pybigtools, or a list of dictionaries where the keys are the same
 		set of unique chromosomes and the values are numpy arrays or memory
 		maps. If None, no signal tensor is returned. Default is None.
 
 	input_signals: list of strs or list of dictionaries or None, optional
 		A list of filepaths to bigwig files, where each filepath will be read
-		using pyBigWig, or a list of dictionaries where the keys are the same
+		using pybigtools, or a list of dictionaries where the keys are the same
 		set of unique chromosomes and the values are numpy arrays or memory
 		maps. If None, no tensor is returned. Default is None. 
 
