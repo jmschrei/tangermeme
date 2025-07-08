@@ -14,10 +14,6 @@ from tangermeme.utils import random_one_hot
 from tangermeme.kmers import kmers
 from tangermeme.kmers import gapped_kmers
 
-import pandas
-import pyfaidx
-import pyBigWig
-
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
 

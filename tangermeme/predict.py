@@ -7,8 +7,8 @@ import itertools
 from tqdm import trange
 
 
-def predict(model, X, args=None, batch_size=32, dtype=None, device='cuda', 
-	verbose=False):
+def predict(model, X, args=None, func=None, batch_size=32, dtype=None, 
+	device='cuda', verbose=False):
 	"""Make batched predictions in a memory-efficient manner.
 
 	This function will take a PyTorch model and make predictions from it using
@@ -42,6 +42,10 @@ def predict(model, X, args=None, batch_size=32, dtype=None, device='cuda',
 		and the element must be formatted to be the same batch size as `X`. If
 		None, no additional arguments are passed into the forward function.
 		Default is None.
+
+	func: function or None, optional 
+		A function to apply to a batch of predictions after they have been made.
+		If None, do nothing to them. Default is None.
 
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.
@@ -105,6 +109,11 @@ def predict(model, X, args=None, batch_size=32, dtype=None, device='cuda',
 					y_ = model(X_, *args_)
 				else:
 					y_ = model(X_)
+
+			# If a post-processing function is provided, apply it to the raw output
+			# from the model.
+			if func is not None:
+				y_ = func(y_)
 
 			# Move to the CPU
 			if isinstance(y_, torch.Tensor):

@@ -13,7 +13,6 @@ from tangermeme.io import _load_signals
 from tangermeme.io import _extract_locus_signal
 
 from tangermeme.io import read_meme
-from tangermeme.io import read_vcf
 from tangermeme.io import extract_loci
 
 from numpy.testing import assert_raises
@@ -286,19 +285,87 @@ def test_interleave_loci_multi_chroms(short_loci1, short_loci2):
 	assert (df == base_df).all(None)
 
 
+def test_interleave_loci_bed10_summits_str():
+	df = _interleave_loci("tests/data/test2.bed10", summits=True)
+
+	base_df = pandas.DataFrame({
+		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4', 
+			'chr5', 'chr5'],
+		'start': [40, 121, 45, 132, 20, 25, 21, 52, 97],
+		'end': [60, 141, 65, 152, 40, 45, 41, 72, 117]
+	})
+
+	assert (df == base_df).all(None)
+
+ 
+def test_interleave_loci_bed10_no_summits_str():
+	df = _interleave_loci("tests/data/test2.bed10", summits=False)
+
+	base_df = pandas.DataFrame({
+		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4', 
+			'chr5', 'chr5'],
+		'start': [40, 120, 40, 120, 5, 25, 20, 50, 80],
+		'end': [60, 140, 60, 140, 25, 45, 40, 70, 100]
+	})
+
+	assert (df == base_df).all(None)
+						  
+
 def test_interleave_loci_single_raises():
 	assert_raises(ValueError, _interleave_loci, 5)
 	assert_raises(ValueError, _interleave_loci, numpy.random.randn(5, 5))
 
 
-def test_ineterleave_loci_multi_raises():
+def test_interleave_loci_multi_raises():
 	assert_raises(ValueError, _interleave_loci, [5, 1])
 	assert_raises(ValueError, _interleave_loci, [numpy.random.randn(5, 5)])	
 
 
-def test_ineterleave_loci_multi_raises_chroms():
+def test_interleave_loci_multi_raises_chroms():
 	assert_raises(ValueError, _interleave_loci, ["tests/data/test2.bed", 
 		"tests/data/test.bed"], 'chr1')
+
+
+def test_interleave_loci_raises_summits_bed():
+	assert_raises(ValueError, _interleave_loci, ["tests/data/test2.bed", 
+		"tests/data/test.bed"], None, True)
+
+def test_interleave_loci_raises_summits_interleave():
+	assert_raises(ValueError, _interleave_loci, ["tests/data/test2.bed", 
+		"tests/data/test.bed"], None, True)
+
+def test_interleave_loci_raises_summits_negative():
+	base_df = pandas.DataFrame({
+		'chrom': ['chr1', 'chr1', 'chr2', 'chr2'],
+		'start': [40, 120, 40, 120],
+		'end': [60, 140, 60, 140],
+		'4': ['-', '-', '-', '-'],
+		'5': ['-', '-', '-', '-'],
+		'6': ['-', '-', '-', '-'],
+		'7': ['-', '-', '-', '-'],
+		'8': ['-', '-', '-', '-'],
+		'9': ['-', '-', '-', '-'],
+		'10': [-1, 0, 1, 0],
+	})
+
+	assert_raises(ValueError, _interleave_loci, base_df, None, True)
+
+
+def test_interleave_loci_raises_summits_too_large():
+	base_df = pandas.DataFrame({
+		'chrom': ['chr1', 'chr1', 'chr2', 'chr2'],
+		'start': [40, 120, 40, 120],
+		'end': [60, 140, 60, 140],
+		'4': ['-', '-', '-', '-'],
+		'5': ['-', '-', '-', '-'],
+		'6': ['-', '-', '-', '-'],
+		'7': ['-', '-', '-', '-'],
+		'8': ['-', '-', '-', '-'],
+		'9': ['-', '-', '-', '-'],
+		'10': [21, 0, 1, 0],
+	})
+
+	assert_raises(ValueError, _interleave_loci, base_df, None, True)
 
 
 ##
@@ -319,6 +386,54 @@ def test_load_signals_bw():
 
 	assert len(bw) == 2
 	assert isinstance(bw, list)
+
+
+def test_load_signals_values():
+	bw = _load_signals(["tests/data/test.bw"])
+
+	vals = bw[0].values("chr1", 0, 20, numpy=True)
+	
+	assert type(vals) == numpy.ndarray
+	assert vals.shape == (20,)
+	assert_array_almost_equal(vals, [
+		0.407911, 1.343698, 2.955252, 0.897452, 0.928617, 1.562161,
+		0.662164, 1.387003, 0.963338, 1.988053, 1.373694, 1.417226,
+		1.202522, 0.829855, 1.740464, 1.479131, 0.495755, 0.129613,
+		0.111225, 0.772133])
+
+
+def test_load_signals_multi_values():
+	bw = _load_signals(["tests/data/test.bw", "tests/data/test2.bw"])
+
+	vals = bw[0].values("chr1", 0, 10, numpy=True)
+	assert type(vals) == numpy.ndarray
+	assert vals.shape == (10,)
+	assert_array_almost_equal(vals, [
+		0.407911, 1.343698, 2.955252, 0.897452, 0.928617, 1.562161,
+		0.662164, 1.387003, 0.963338, 1.988053])
+
+	vals = bw[1].values("chr1", 0, 10, numpy=True)
+	assert type(vals) == numpy.ndarray
+	assert vals.shape == (10,)
+	assert_array_almost_equal(vals, [
+		0.210908, 1.711426, 0.292976, 0.948357, 1.946163, 0.806502,
+		0.342074, 0.386286, 0.655825, 0.257574])
+
+
+def test_load_signals_nan():
+	bw = _load_signals(["tests/data/test3.bw"])
+
+	vals = bw[0].values("chr1", 0, 40, numpy=True)
+	assert len(bw) == 1
+	assert isinstance(bw, list)
+	assert numpy.isnan(vals).sum() == 20
+	
+	nan = numpy.nan
+	assert_array_almost_equal(vals, [
+		nan, nan, nan, nan, nan, nan, nan, nan, nan,  6.,  1., nan,  1.,
+		2.,  4., 14., 28., nan, 42., 36., 41., 50.,  2.,  1., nan, 20.,
+		4., nan, nan, nan, nan, nan,  1., nan,  1., nan,  1.,  5.,  3.,
+		nan])
 
 
 def test_load_signals_dict():
@@ -388,6 +503,20 @@ def test_extract_locus_signal_single():
 
 	assert_array_almost_equal(signal, [[2.127791, 0.102535, 0.436831, 0.434451, 
 		0.895565], [0.331885, 1.177428, 0.475862, 0.340272, 0.873283]])
+
+
+def test_extract_locus_signal_nan():
+	bw = pyBigWig.open("tests/data/test3.bw")
+	signal = _extract_locus_signal([bw], 'chr1', 0, 40)[0]
+	
+	assert not numpy.isnan(signal).any()
+	
+	nan = 0.0
+	assert_array_almost_equal(signal, [
+		nan, nan, nan, nan, nan, nan, nan, nan, nan,  6.,  1., nan,  1.,
+		2.,  4., 14., 28., nan, 42., 36., 41., 50.,  2.,  1., nan, 20.,
+		4., nan, nan, nan, nan, nan,  1., nan,  1., nan,  1.,  5.,  3.,
+		nan])
 
 
 def test_extract_locus_signal_raises_single():
@@ -566,7 +695,6 @@ def test_extract_loci_seq_raises_sequences():
 		"tests/data/test.bed", "ACGTG")
 
 
-
 ###
 
 
@@ -681,7 +809,30 @@ def test_extract_loci_max_counts(loci_signal):
 	assert_array_almost_equal([abs(y).sum()], [17.1784], 4)
 
 
+def test_extract_loci_nans():
+	loci = "tests/data/test.bed"
+	bw = ["tests/data/test3.bw"]
+	fasta = "tests/data/test.fa"
+
+	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10)
+
+	assert X.shape == (5, 4, 8)
+	assert X.dtype == torch.int8
+	assert X.sum() == 40
+
+	assert y.shape == (5, 1, 10)
+	assert not numpy.isnan(y).any()
+	assert_array_almost_equal([abs(y).sum()], [214.0], 4)
+	assert_array_almost_equal(y, [
+		[[14., 28.,  0., 42., 36., 41., 50.,  2.,  1.,  0.]],
+		[[ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.]],
+		[[ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.]],
+		[[ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.]],
+		[[ 0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.]]])
+
+
 ###
+
 
 def test_extract_loci_controls(loci_signal):
 	loci = "tests/data/test.bed"
@@ -759,17 +910,5 @@ def test_read_meme_n_motifs():
 	assert all([key in motifs.keys() for key in keys])
 
 
-###
 
-
-def test_read_vcf():
-	vcf = read_vcf("tests/data/test.vcf")
-
-	assert vcf.shape == (5, 9) 
-	assert (vcf.columns.values == ("CHROM", "POS", "ID", "REF", "ALT", "QUAL", 
-		"FILTER", "INFO", "FORMAT")).all()
-	
-	assert (vcf['POS'].values == (14370, 17330, 1110696, 1230237, 
-		1234567)).all()
-	assert (vcf['ALT'].values == ('A', 'A', 'G,T', '.', 'G,GTCT')).all()
 

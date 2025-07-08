@@ -18,7 +18,7 @@ from memelite.io import read_meme as memelite_read_meme
 
 
 def _interleave_loci(loci, chroms=None, summits=False):
-	"""An internal function for processing the provided loci.
+	"""An internal function for loading and processing the provided loci.
 
 	There are two aspects that have to be considered when processing the loci.
 	The first is that the user can pass in either strings containing filenames
@@ -30,6 +30,11 @@ def _interleave_loci(loci, chroms=None, summits=False):
 	loci on those chromosomes before interleaving. If a more complicated form
 	of filtering is desired, one should pre-filter the dataframes and pass those
 	into this function for interleaving.
+
+	If one wishes to center on summits, the input data must be in BED10 format
+	where the 10th column (index 9 when zero-indexing) is the relative offset
+	of the summit. This will adjust the start and end of the coordinates to
+	be centered on the summits.
 
 
 	Parameters
@@ -73,13 +78,24 @@ def _interleave_loci(loci, chroms=None, summits=False):
 		if isinstance(df, str):
 			df = pandas.read_csv(df, sep='\t', usecols=cols, 
 				header=None, index_col=False, names=names)
-			
+
 		elif isinstance(df, pandas.DataFrame):
 			df = df.iloc[:, cols].copy()
-		
+
 		else:
 			raise ValueError("Provided loci must be a string or pandas " +
 				"DataFrame, or a list/tuple of those.")
+
+		if summits:
+			if df.iloc[:, -1].min() < 0:
+				raise ValueError("Summits cannot be negative values.")
+
+			if ((df.iloc[:, -1] + df.iloc[:, 1]) > df.iloc[:, 2]).any():
+				raise ValueError("Summit + start cannot be larger than end.")
+
+			df['start'] += df['summit']
+			df['end'] += df['summit']
+			df = df.drop(columns=['summit'], axis=1)
 
 		if chroms is not None:
 			df = df[numpy.isin(df['chrom'], chroms)]
@@ -355,13 +371,8 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 	d = not verbose
 
 	max_width = max(in_width, out_width)
-	for entry in tqdm(loci.values, disable=d, desc=desc):
-		chrom, start, end = entry[:3]
-
-		if summits:
-			mid = start + entry[3]
-		else:
-			mid = start + (end - start) // 2
+	for chrom, start, end in tqdm(loci.values, disable=d, desc=desc):
+		mid = start + (end - start) // 2
 
 		start = mid - max(out_width, in_width) - max_jitter
 		end = mid + max(out_width, in_width) + max_jitter

@@ -6,9 +6,6 @@ import numpy
 import torch
 import pandas
 
-import pyfaidx
-import pyBigWig
-
 from tqdm import tqdm
 from itertools import compress
 
