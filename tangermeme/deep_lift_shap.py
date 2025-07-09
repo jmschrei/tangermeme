@@ -7,6 +7,8 @@ import torch.nn.functional as F
 import warnings
 
 from tqdm import trange
+
+from .utils import _validate_input
 from .ersatz import dinucleotide_shuffle
 
 
@@ -199,7 +201,7 @@ def _maxpool(module, grad_input, grad_output):
 def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 	references=dinucleotide_shuffle, n_shuffles=20, return_references=False, 
 	hypothetical=False, warning_threshold=0.001, additional_nonlinear_ops=None,
-	print_convergence_deltas=False, raw_outputs=False, device='cuda', 
+	print_convergence_deltas=False, raw_outputs=False, dtype=None, device='cuda',
 	random_state=None, verbose=False):
 	"""Calculate attributions for a set of sequences using DeepLIFT/SHAP.
 
@@ -312,6 +314,11 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 		the multipliers for each example-reference pair -- or the processed
 		attribution values. Default is False.
 
+	dtype: str or torch.dtype or None, optional
+		The dtype to use with mixed precision autocasting. If None, use the dtype of
+		the *model*. This allows you to use int8 to represent large data sets and
+		only convert batches to the higher precision, saving memory. Defailt is None.
+
 	device: str or torch.device, optional
 		The device to move the model and batches to when making predictions. If
 		set to 'cuda' without a GPU, this function will crash and must be set
@@ -339,6 +346,8 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 		`return_references = True`. 
 	"""
 
+	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True)
+	
 	_NON_LINEAR_OPS = {
 		torch.nn.ReLU: _nonlinear,
 		torch.nn.ReLU6: _nonlinear,
@@ -361,7 +370,15 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 		torch.nn.MaxPool2d: _maxpool,
 		torch.nn.Softmax: _softmax
 	}
-	
+
+	if dtype is None:
+		try:
+			dtype = next(model.parameters()).dtype
+		except:
+			dtype = torch.float32
+	elif isinstance(dtype, str):
+		dtype = getattr(torch, dtype)
+
 	# Misc. set up for overriding operations
 
 	if additional_nonlinear_ops is not None:
@@ -382,7 +399,11 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 	
 	attributions, references_, Xi, rj, attr_ = [], [], [], [], []
 	if isinstance(references, torch.Tensor):
+		print(references.shape)
+		_validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
+			X.shape[2]), ohe=True, allow_N=False, ohe_dim=-2)
 		n_shuffles = references.shape[1]
+
 	n, z = X.shape[0] * n_shuffles, 0
 
 	for i in trange(n, disable=not verbose):
@@ -420,13 +441,14 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 
 				# Calculate the gradients using the rescale rule
 				with torch.autograd.set_grad_enabled(True):
-					if _args is not None:
-						_args = (torch.cat([arg, arg]) for arg in _args)
-						y = model(X_, *_args)[:, target]
-					else:
-						y = model(X_)[:, target]
+					with torch.autocast(device_type=device, dtype=dtype):
+						if _args is not None:
+							_args = (torch.cat([arg, arg]) for arg in _args)
+							y = model(X_, *_args)[:, target]
+						else:
+							y = model(X_)[:, target]
 
-					multipliers = torch.autograd.grad(y.sum(), _X)[0]
+						multipliers = torch.autograd.grad(y.sum(), _X)[0]
 
 				# Check that the prediction-difference-from-reference is equal to
 				# the sum of the attributions

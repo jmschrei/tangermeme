@@ -313,9 +313,9 @@ def test_deep_lift_shap_reference_tensor(X):
 
 	X_attr0 = deep_lift_shap(model, X, references=references, device='cpu', 
 		random_state=0)
-	X_attr1 = deep_lift_shap(model, X[0:10], references=references, 
+	X_attr1 = deep_lift_shap(model, X[0:10], references=references[:10], 
 		device='cpu', random_state=1)
-	X_attr2 = deep_lift_shap(model, X[0:10], references=references, 
+	X_attr2 = deep_lift_shap(model, X[0:10], references=references[:10], 
 		device='cpu', random_state=2)
 
 	assert_array_almost_equal(X_attr0[:10], X_attr1)
@@ -554,11 +554,11 @@ def test_deep_lift_shap_raises(X, references):
 	assert_raises(IndexError, deep_lift_shap, model, X, args=(alpha, beta[:3]),
 		device='cpu')
 	
-	assert_raises(IndexError, deep_lift_shap, model, X, 
+	assert_raises(ValueError, deep_lift_shap, model, X, 
 		references=references[:10], device='cpu')
-	assert_raises(RuntimeError, deep_lift_shap, model, X, 
+	assert_raises(ValueError, deep_lift_shap, model, X, 
 		references=references[:, :, :2], device='cpu')
-	assert_raises(RuntimeError, deep_lift_shap, model, X, 
+	assert_raises(ValueError, deep_lift_shap, model, X, 
 		references=references[:, :, :, :10], device='cpu')
 
 
@@ -1080,9 +1080,9 @@ def test_captum_deep_lift_shap_n_shuffles(X, references):
 	for model in _SumModel, FlattenDense(n_outputs=1), _Scatter, _Conv:
 		torch.manual_seed(0)
 
-		X_attr0 = deep_lift_shap(model, X[:4], references=references, 
+		X_attr0 = deep_lift_shap(model, X[:4], references=references[:4], 
 			n_shuffles=3, batch_size=1, device='cpu', random_state=0)
-		X_attr1 = _captum_deep_lift_shap(model, X[:4], references=references,
+		X_attr1 = _captum_deep_lift_shap(model, X[:4], references=references[:4],
 			n_shuffles=3, batch_size=1, device='cpu', random_state=0)
 
 		assert X_attr0.shape == X_attr1.shape

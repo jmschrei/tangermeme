@@ -61,15 +61,18 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 
 	if shape is not None:
 		if len(shape) != len(X.shape):
-			raise ValueError("{} must have shape {}".format(name, shape))
+			raise ValueError("{} has shape {} but must have shape {}".format(name, 
+				X.shape, shape))
 
 		for i in range(len(shape)):
 			if shape[i] != -1 and shape[i] != X.shape[i]:
-				raise ValueError("{} must have shape {}".format(name, shape))
+				raise ValueError("{} has shape {} but must have shape {}".format(name,
+					X.shape, shape))
 
 
 	if dtype is not None and X.dtype != dtype:
-		raise ValueError("{} must have dtype {}".format(name, dtype))
+		raise ValueError("{} has dtype {} but must have dtype {}".format(name, X.dtype, 
+			dtype))
 
 	if min_value is not None and X.min() < min_value:
 		raise ValueError("{} cannot have a value below {}".format(name,

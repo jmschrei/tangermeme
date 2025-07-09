@@ -4,7 +4,9 @@
 import numpy
 import torch
 
+from .utils import _validate_input
 from .utils import one_hot_encode
+
 from .ersatz import substitute
 from .predict import predict
 
@@ -96,7 +98,7 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 		those.
 	"""
 
-	X = _validate_input(X, "X", shape=(-1, len(alphabet), -1))
+	_validate_input(X, "X", shape=(-1, len(alphabet), -1), ohe=True, allow_N=True)
 	additional_func_kwargs = additional_func_kwargs or {}
 
 	X_perturb = substitute(X, motif, start=start, alphabet=alphabet)

@@ -4,6 +4,7 @@
 import torch
 import inspect
 
+from .utils import _validate_input
 from .ersatz import shuffle
 from .predict import predict
 
@@ -114,6 +115,7 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 		those.
 	"""
 
+	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, allow_N=True)
 	additional_func_kwargs = additional_func_kwargs or {}
 	if 'random_state' in inspect.signature(func).parameters.keys():
 		if 'random_state' not in additional_func_kwargs:
