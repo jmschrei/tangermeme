@@ -100,4 +100,5 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    api/product.rst
    api/seqlet.rst
    api/space.rst
+   api/utils.rst
    api/variant_effect.rst

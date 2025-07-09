@@ -391,7 +391,7 @@ def test_load_signals_bw():
 def test_load_signals_values():
 	bw = _load_signals(["tests/data/test.bw"])
 
-	vals = bw[0].values("chr1", 0, 20, numpy=True)
+	vals = bw[0].values("chr1", 0, 20)
 	
 	assert type(vals) == numpy.ndarray
 	assert vals.shape == (20,)
@@ -405,14 +405,14 @@ def test_load_signals_values():
 def test_load_signals_multi_values():
 	bw = _load_signals(["tests/data/test.bw", "tests/data/test2.bw"])
 
-	vals = bw[0].values("chr1", 0, 10, numpy=True)
+	vals = bw[0].values("chr1", 0, 10)
 	assert type(vals) == numpy.ndarray
 	assert vals.shape == (10,)
 	assert_array_almost_equal(vals, [
 		0.407911, 1.343698, 2.955252, 0.897452, 0.928617, 1.562161,
 		0.662164, 1.387003, 0.963338, 1.988053])
 
-	vals = bw[1].values("chr1", 0, 10, numpy=True)
+	vals = bw[1].values("chr1", 0, 10)
 	assert type(vals) == numpy.ndarray
 	assert vals.shape == (10,)
 	assert_array_almost_equal(vals, [
@@ -423,7 +423,7 @@ def test_load_signals_multi_values():
 def test_load_signals_nan():
 	bw = _load_signals(["tests/data/test3.bw"])
 
-	vals = bw[0].values("chr1", 0, 40, numpy=True)
+	vals = bw[0].values("chr1", 0, 40, missing=numpy.nan)
 	assert len(bw) == 1
 	assert isinstance(bw, list)
 	assert numpy.isnan(vals).sum() == 20
@@ -478,7 +478,7 @@ def test_extract_locus_signal_single():
 		0.987924, 0.60746 , 0.387713]])
 
 
-def test_extract_locus_signal_single():
+def test_extract_locus_signal_multi():
 	bw = pyBigWig.open("tests/data/test.bw")
 	bw2 = pyBigWig.open("tests/data/test2.bw")
 	signal = _extract_locus_signal([bw, bw2], 'chr1', 60, 67)

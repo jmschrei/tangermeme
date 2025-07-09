@@ -51,10 +51,10 @@ def test_space_summodel(X):
 	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
 		batch_size=5, device='cpu')
 
-	assert y_before.shape == (64, 1, 4)
+	assert y_before.shape == (64, 4)
 	assert y_before.dtype == torch.float32
 	assert y_before.sum() == X.sum()
-	assert_array_almost_equal(y_before[:8, 0], [
+	assert_array_almost_equal(y_before[:8], [
 		[25., 24., 19., 32.],
         [26., 18., 29., 27.],
         [28., 25., 21., 26.],
@@ -89,9 +89,9 @@ def test_space_flattendense(X):
 	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
 		batch_size=5, device='cpu')
 
-	assert y_before.shape == (64, 1, 3)
+	assert y_before.shape == (64, 3)
 	assert y_before.dtype == torch.float32
-	assert_array_almost_equal(y_before[:8, 0], [
+	assert_array_almost_equal(y_before[:8], [
 		[ 0.1928,  0.2788, -0.1000],
         [-0.0505,  0.0174, -0.1751],
         [-0.1408,  0.0105,  0.0673],
@@ -125,9 +125,9 @@ def test_space_conv(X):
 	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
 		start=0, batch_size=5, device='cpu')
 
-	assert y_before.shape == (64, 1, 12, 98)
+	assert y_before.shape == (64, 12, 98)
 	assert y_before.dtype == torch.float32
-	assert_array_almost_equal(y_before[:2, 0, :4, :10], [
+	assert_array_almost_equal(y_before[:2, :4, :10], [
 		[[-0.2713, -0.5317, -0.3737, -0.4055, -0.3269, -0.3269, -0.1928,
           -0.3509, -0.4816, -0.3197],
          [-0.2988,  0.0980, -0.1013, -0.2560,  0.2595,  0.2595,  0.2167,
@@ -179,12 +179,12 @@ def test_space_scatter(X):
 	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
 		start=0, batch_size=8, device='cpu')
 
-	assert y_before.shape == (64, 1, 100, 4)
+	assert y_before.shape == (64, 100, 4)
 	assert y_before.dtype == torch.float32
 	assert y_before.sum() == X.sum()
 	assert (y_before.sum(axis=-1) == X.sum(axis=-2)).all()
 
-	assert_array_almost_equal(y_before[:4, 0, :5], [
+	assert_array_almost_equal(y_before[:4, :5], [
 		[[1., 0., 0., 0.],
          [0., 0., 0., 1.],
          [0., 1., 0., 0.],
@@ -250,13 +250,13 @@ def test_space_convdense(X):
 		start=0, batch_size=2, device='cpu')
 
 	assert len(y_before) == 2
-	assert y_before[0].shape == (64, 1, 12, 98)
-	assert y_before[1].shape == (64, 1, 3)
+	assert y_before[0].shape == (64, 12, 98)
+	assert y_before[1].shape == (64, 3)
 
 	assert y_before[0].dtype == torch.float32
 	assert y_before[1].dtype == torch.float32
 
-	assert_array_almost_equal(y_before[0][:2, 0, :4, :4], [
+	assert_array_almost_equal(y_before[0][:2, :4, :4], [
 		[[-0.7757,  0.0397, -0.8799, -1.0194],
          [ 0.0947,  0.2042, -0.2302, -0.3144],
          [ 0.3781,  0.5009,  0.8585,  0.6738],
@@ -267,7 +267,7 @@ def test_space_convdense(X):
          [ 0.4828,  0.5419,  0.3170,  0.3288],
          [-0.1026, -0.4676, -0.3080, -0.2606]]], 4)
 
-	assert_array_almost_equal(y_before[1][:4, 0], [
+	assert_array_almost_equal(y_before[1][:4], [
 		[ 0.1928,  0.2788, -0.1000],
         [-0.0505,  0.0174, -0.1751],
         [-0.1408,  0.0105,  0.0673],
@@ -305,8 +305,8 @@ def test_space_convdense_batch_size(X):
 		batch_size=68, device='cpu')
 
 	assert len(y_before) == 2
-	assert y_before[0].shape == (64, 1, 12, 98)
-	assert y_before[1].shape == (64, 1, 3)
+	assert y_before[0].shape == (64, 12, 98)
+	assert y_before[1].shape == (64, 3)
 
 	assert len(y_after) == 2
 	assert y_after[0].shape == (64, 1, 12, 98)
@@ -319,7 +319,7 @@ def test_space_scatter_batch_size(X):
 	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
 		batch_size=68, device='cpu')
 
-	assert y_before.shape == (64, 1, 100, 4)
+	assert y_before.shape == (64, 100, 4)
 	assert y_after.shape == (64, 1, 100, 4)
 
 
@@ -370,9 +370,9 @@ def test_space_deep_lift_shap(X):
 		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
 		random_state=0)
 
-	assert y_before.shape == (2, 1, 4, 100)
+	assert y_before.shape == (2, 4, 100)
 	assert y_before.dtype == torch.float32
-	assert_array_almost_equal(y_before[:, 0, :, 48:52], [
+	assert_array_almost_equal(y_before[:, :, 48:52], [
 				[[-0.0000,  0.0000,  0.0003, -0.0000],
          [ 0.0000,  0.0000, -0.0000, -0.0017],
          [ 0.0002, -0.0000,  0.0000, -0.0000],
@@ -410,9 +410,9 @@ def test_space_deep_lift_shap_flattendense(X):
 		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
 		random_state=0)
 
-	assert y_before.shape == (8, 1, 4, 100)
+	assert y_before.shape == (8, 4, 100)
 	assert y_before.dtype == torch.float32
-	assert_array_almost_equal(y_before[:4, 0, :, 48:53], [
+	assert_array_almost_equal(y_before[:4, :, 48:53], [
 				[[-0.0000,  0.0000,  0.0330,  0.0000,  0.0000],
          [-0.0000, -0.0000, -0.0000, -0.0704, -0.0272],
          [ 0.0161, -0.0000, -0.0000, -0.0000,  0.0000],
@@ -475,9 +475,9 @@ def test_space_deep_lift_shap_vs_attribute(X):
 	y_after0 = deep_lift_shap(model, multisubstitute(X[:8], ["ACGTC", "GAGA"], 
 		1), device='cpu', n_shuffles=3, random_state=0)
 
-	assert y_before.shape == (8, 1, 4, 100)
+	assert y_before.shape == (8, 4, 100)
 	assert y_before.dtype == torch.float32
-	assert_array_almost_equal(y_before[:, 0], y_before0, 4)
+	assert_array_almost_equal(y_before, y_before0, 4)
 
 	assert y_after.shape == (8, 1, 4, 100)
 	assert y_after.dtype == torch.float32
@@ -495,7 +495,7 @@ def test_space_deep_lift_shap_alpha(X, alpha):
 		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
 		random_state=0, args=(alpha,))
 
-	assert y_before0.shape == (8, 1, 4, 100)
+	assert y_before0.shape == (8, 4, 100)
 	assert y_before0.dtype == torch.float32
 	assert_array_almost_equal(y_before0, y_before1, 4)
 
@@ -515,7 +515,7 @@ def test_space_deep_lift_shap_alpha_beta(X, alpha, beta):
 		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
 		random_state=0, args=(alpha, beta))
 
-	assert y_before0.shape == (8, 1, 4, 100)
+	assert y_before0.shape == (8, 4, 100)
 	assert y_before0.dtype == torch.float32
 	assert_raises(AssertionError, assert_array_almost_equal, y_before0, 
 		y_before1, 4)
@@ -537,9 +537,9 @@ def test_space_deep_lift_shap_n_shuffles(X):
 		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=10, 
 		random_state=0)
 
-	assert y_before0.shape == (8, 1, 4, 100)
+	assert y_before0.shape == (8, 4, 100)
 	assert y_before0.dtype == torch.float32
-	assert_array_almost_equal(y_before0[:2, 0, :, :4], [
+	assert_array_almost_equal(y_before0[:2, :, :4], [
 				[[ 0.0000, -0.0000, -0.0000, -0.0169],
          [ 0.0000,  0.0000,  0.0028,  0.0000],
          [ 0.0000, -0.0000, -0.0000, -0.0000],
@@ -550,9 +550,9 @@ def test_space_deep_lift_shap_n_shuffles(X):
          [-0.0000,  0.0000, -0.0000, -0.0000],
          [-0.0000, -0.0000,  0.0000,  0.0314]]], 4)
 
-	assert y_before1.shape == (8, 1, 4, 100)
+	assert y_before1.shape == (8, 4, 100)
 	assert y_before1.dtype == torch.float32
-	assert_array_almost_equal(y_before1[:2, 0, :, :4], [
+	assert_array_almost_equal(y_before1[:2, :, :4], [
 				[[ 0.0000, -0.0000, -0.0000, -0.0268],
          [ 0.0000,  0.0000,  0.0087, -0.0000],
          [ 0.0000,  0.0000, -0.0000, -0.0000],
@@ -598,9 +598,9 @@ def test_space_deep_lift_shap_hypothetical(X):
 		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
 		hypothetical=True, random_state=0)
 
-	assert y_before.shape == (8, 1, 4, 100)
+	assert y_before.shape == (8, 4, 100)
 	assert y_before.dtype == torch.float32
-	assert_array_almost_equal(y_before[:2, 0, :, :4], [
+	assert_array_almost_equal(y_before[:2, :, :4], [
 				[[ 0.0000, -0.0069, -0.0166, -0.0169],
          [ 0.0474,  0.0000,  0.0028,  0.0073],
          [ 0.0025, -0.0015, -0.0132, -0.0145],

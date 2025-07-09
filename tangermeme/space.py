@@ -96,27 +96,24 @@ def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
 
 	spacing = _validate_input(_cast_as_tensor(spacing, dtype=torch.int32), 
 		"spacing", shape=(-1, len(motifs)-1))
+	X = _validate_input(X, "X", shape=(-1, len(alphabet), -1))
 
-	y_befores, y_afters = [], []
+	y_before = func(model, X, **kwargs, **additional_func_kwargs)
+	y_afters = []
 
 	for _spacing in tqdm(spacing, disable=not verbose):
 		_spacing = [s.item() for s in _spacing]
+		
 		X_perturb = multisubstitute(X, motifs, _spacing, start=start, 
 			alphabet=alphabet)
-
-		y_before = func(model, X, **kwargs, **additional_func_kwargs)
-		y_befores.append(y_before)
 
 		y_after = func(model, X_perturb, **kwargs, **additional_func_kwargs)
 		y_afters.append(y_after)
 
-	if isinstance(y_befores[0], torch.Tensor):
-		y_befores = torch.stack(y_befores).transpose(0, 1)
+	if isinstance(y_afters[0], torch.Tensor):
 		y_afters = torch.stack(y_afters).transpose(0, 1)
 	else:
-		y_befores = [torch.stack(y_).transpose(0, 1) for y_ in list(zip(
-			*y_befores))]
 		y_afters = [torch.stack(y_).transpose(0, 1) for y_ in list(zip(
 			*y_afters))]
 
-	return y_befores, y_afters
+	return y_before, y_afters

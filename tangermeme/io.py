@@ -185,14 +185,16 @@ def _extract_locus_signal(signals, chrom, start, end):
 	values = []
 	for i, signal in enumerate(signals):
 		if isinstance(signal, dict):
-			values_ = numpy.array(signal[chrom][start:end],dtype=numpy.float32)
+			values_ = numpy.array(signal[chrom][start:end], dtype=numpy.float32)
 		else:
 			try:
-				values_ = numpy.array(signal.values(chrom, start, end),dtype=numpy.float32)
+				values_ = numpy.array(signal.values(chrom, start, end), dtype=numpy.float32)
 			except:
 				print(f"Warning: {chrom} {start} {end} not " +
 					"valid bigwig indexes. Using zeros instead.")
 				values_ = numpy.zeros(end-start,dtype=numpy.float32)
+				
+		values_ = numpy.nan_to_num(values_)
 		values.append(values_)
 
 	return values

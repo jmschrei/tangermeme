@@ -96,6 +96,7 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 		those.
 	"""
 
+	X = _validate_input(X, "X", shape=(-1, len(alphabet), -1))
 	additional_func_kwargs = additional_func_kwargs or {}
 
 	X_perturb = substitute(X, motif, start=start, alphabet=alphabet)
