@@ -107,7 +107,7 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1,
 
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A set of one-hot encoded sequences to calculate attribution values
-		for. 
+		for. The input tensor should be on the CPU.
 
 	args: tuple or None, optional
 		An optional set of additional arguments to pass into the model. If
@@ -204,6 +204,8 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1,
 
 	if raw_outputs == False:
 		attr = _attribution_score(y0, y_hat, target)
+		if X.device.type != 'cpu':
+        	X = X.cpu()
 		if end <= 0:
 			return X * attr if hypothetical == False else attr
 		return X[:, :, start:end] * attr if hypothetical == False else attr
