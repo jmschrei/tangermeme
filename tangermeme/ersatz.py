@@ -649,4 +649,3 @@ def dinucleotide_shuffle(X, start=0, end=-1, n=20, random_state=None,
 		X_shufs.append(X_shuf)
 
 	return torch.stack(X_shufs)
-	return torch.stack(X_shufs)
