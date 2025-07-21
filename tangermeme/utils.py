@@ -115,8 +115,9 @@ def _cast_as_tensor(value, dtype=None):
 	value: array-like
 		An array-like object to be cast into a torch.tensor
 
-	dtype: torch.dtype
-		A torch dtype to cast the values in the torch.tensor to
+	dtype: torch.dtype or None, optional
+		A torch dtype to cast the values in the torch.tensor to. If None, do not
+		do casting. Default is None.
 
 
 	Returns

@@ -399,7 +399,6 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 	
 	attributions, references_, Xi, rj, attr_ = [], [], [], [], []
 	if isinstance(references, torch.Tensor):
-		print(references.shape)
 		_validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
 			X.shape[2]), ohe=True, allow_N=False, ohe_dim=-2)
 		n_shuffles = references.shape[1]

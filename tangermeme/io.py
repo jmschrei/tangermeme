@@ -18,6 +18,30 @@ from .utils import characters
 from memelite.io import read_meme as memelite_read_meme
 
 
+def _load_exclusion_zones(chrom_lengths, exclusion_lists):
+	if exclusion_lists is not None:
+		# Initialize the exclusion zones, where overlapping loci must be removed
+		exclusion_zones = {}
+		for chrom, size in chrom_lengths.items():
+			exclusion_zones[chrom] = numpy.zeros(size // 100 + 1, dtype='bool')
+		
+		# Fill in the exclusion zones using the provided coordinates
+		names = 'chrom', 'start', 'end'
+
+		exclusion_list = pandas.concat([
+			pandas.read_csv(elist, sep="\t", names=names, header=None, 
+				usecols=(0, 1, 2)) for elist in exclusion_lists 
+		])
+
+		for _, (chrom, start, end) in exclusion_list.iterrows():
+			start = start // 100
+			end = end // 100 + 1
+
+			exclusion_zones[chrom][start:end] = True
+		
+		return exclusion_zones
+
+
 def _interleave_loci(loci, chroms=None, summits=False):
 	"""An internal function for loading and processing the provided loci.
 
@@ -71,22 +95,24 @@ def _interleave_loci(loci, chroms=None, summits=False):
 		raise ValueError("Provided loci must be a string or pandas " +
 			"DataFrame, or a list/tuple of those.")
 
+	###
+		
 	cols = [0, 1, 2] + ([9] if summits else [])
 	names = ['chrom', 'start', 'end'] + (['summit'] if summits else [])
 
 	loci_dfs = []
 	for i, df in enumerate(loci):
+		# Extract the relevant columns from the dataframes
 		if isinstance(df, str):
 			df = pandas.read_csv(df, sep='\t', usecols=cols, 
 				header=None, index_col=False, names=names)
-
 		elif isinstance(df, pandas.DataFrame):
 			df = df.iloc[:, cols].copy()
-
 		else:
 			raise ValueError("Provided loci must be a string or pandas " +
 				"DataFrame, or a list/tuple of those.")
 
+		# If using summits, correct the coordinates to be centered on them
 		if summits:
 			if df.iloc[:, -1].min() < 0:
 				raise ValueError("Summits cannot be negative values.")
@@ -97,7 +123,8 @@ def _interleave_loci(loci, chroms=None, summits=False):
 			df['start'] += df['summit']
 			df['end'] += df['summit']
 			df = df.drop(columns=['summit'], axis=1)
-
+		
+		# If filtering chromosomes, remove loci on unallowed chromosomes
 		if chroms is not None:
 			df = df[numpy.isin(df['chrom'], chroms)]
 
@@ -203,8 +230,8 @@ def _extract_locus_signal(signals, chrom, start, end):
 def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None, 
 	in_window=2114, out_window=1000, max_jitter=0, min_counts=None,
 	max_counts=None, target_idx=0, n_loci=None, summits=False,
-	alphabet=['A', 'C', 'G', 'T'], ignore=['N'], return_filtered=False, 
-	verbose=False):
+	alphabet=['A', 'C', 'G', 'T'], ignore=['N'], exclusion_lists=None, 
+	return_mask=False, verbose=False):
 	"""Extract sequence and signal information for each provided locus.
 
 	This function will take in a set of loci, sequences, and optionally signals,
@@ -236,6 +263,15 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 
 		- (3) If min_counts or max_counts are specified and the locus has a 
 		number of counts not in those boundaries.
+
+	If exclusion lists are provided, they will be used to filter out loci that
+	fall in 100bp chunks that also include any of the regions in any of the
+	exclusion lists. For example, if one of the exclusion lists has an element
+	that is
+
+		chr7    108    234
+
+	loci will be removed if and of their bp fall within chr7 100 300.
  
 
 	Parameters
@@ -318,8 +354,13 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		are set to 1 in the returned one-hot encoding. Put another way, the
 		sum across characters is equal to 1 for all positions except those
 		where the original sequence is in this list. Default is ['N'].
-		
-	return_filtered: bool, optional
+
+	exclusion_lists: list or None, optional
+		A list of strings of filenames to BED-formatted files containing exclusion
+		lists, i.e., regions where overlapping loci should be filtered out. If None,
+		no filtering is performed based on exclusion zones. Default is None.
+
+	return_mask: bool, optional
 		Whether to return a tensor containing whether each element in the provided
 		loci have been filtered out because of falling off the edge of chromosomes
 		or the signal not falling in the specified boundaries. Default is False.
@@ -346,28 +387,39 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		the second dimension is in the same order as the list of in signal files.
 		If no in signal files are given, this is not returned.
 	
-	filtered: torch.tensor, shape=(n,), dtype=bool
-		Whether each locus in the provided list has been kept (True) or filtered
-		(False) due to the coordinates falling off the edges of the loci. Only
-		returned if return_filtered=True.
+	kept_mask: torch.tensor, shape=(n0,), dtype=bool
+		A boolean vector of length equal to the number of pre-filtered peaks, with
+		entries being True if they were kept and False if they were filted out.
+		Applying this mask to the complete set of interleaved peaks will yield
+		the returned values. Only returned if `return_idxs=True`.
 	"""
 
 	seqs, signals_, in_signals_ = [], [], []
-	filtered = []
+	kept_mask = []
 	in_width, out_width = in_window // 2, out_window // 2
 	if signals is None and in_signals is None:
 		out_width = 0
 
-	# Load the sequences
-	loci = _interleave_loci(loci, chroms, summits=summits)
-
+	# Extract the length of each chromosome
+	chrom_lengths = {}
 	if isinstance(sequences, str):
 		sequences = pyfaidx.Fasta(sequences)
+		for key, value in sequences.items():
+			chrom_lengths[key] = len(value)
+	else:
+		for key, value in sequences.items():
+			chrom_lengths[key] = sequences[key].shape[-1]
 
-	# Load the signal and optional in signal tracks if filenames are given
+
+	# Create the exclusion zones from the exclusion lists, if provided
+	exclusion_zones = _load_exclusion_zones(chrom_lengths, exclusion_lists)
+
+	# Load the loci
+	loci = _interleave_loci(loci, chroms, summits=summits)
+	
 	signals = _load_signals(signals)
 	in_signals = _load_signals(in_signals)
-
+	
 	desc = "Loading Loci"
 	d = not verbose
 
@@ -378,17 +430,16 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		start = mid - max(out_width, in_width) - max_jitter
 		end = mid + max(out_width, in_width) + max_jitter
 
-		if isinstance(sequences, dict):
-			chrom_length = sequences[chrom].shape[-1]
-		else:
-			chrom_length = len(sequences[chrom])
-
-		if start < 0 or end >= chrom_length:
-			filtered.append(False)
+		# Does it fall off the end of a chromosome?
+		if start < 0 or end >= chrom_lengths[chrom]:
+			kept_mask.append(False)
 			continue
 
-		if n_loci is not None and len(seqs) == n_loci:
-			break 
+		if exclusion_zones is not None:
+			s, e = start // 100, end // 100 + 1
+			if exclusion_zones[chrom][s:e].any():
+				kept_mask.append(False)
+				continue
 
 		# Extract a window of signal using the output size
 		start = mid - out_width - max_jitter
@@ -398,11 +449,11 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 			signal = _extract_locus_signal(signals, chrom, start, end)
 
 			if min_counts is not None and signal[target_idx].sum() < min_counts:
-				filtered.append(False)
+				kept_mask.append(False)
 				continue
 
 			if max_counts is not None and signal[target_idx].sum() > max_counts:
-				filtered.append(False)
+				kept_mask.append(False)
 				continue
 
 			signals_.append(signal)
@@ -422,12 +473,16 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 			seq = one_hot_encode(sequences[chrom][start:end].seq.upper(),
 				alphabet=alphabet, ignore=ignore)
 
-		filtered.append(True)
+		kept_mask.append(True)
 		seqs.append(seq)
+
+		if n_loci is not None and len(seqs) == n_loci:
+			break 
 
 	if not isinstance(sequences, dict):
 		sequences.close()
-
+		
+	# Figure out how to format the outputs depending on the provided parameters
 	seqs = torch.from_numpy(numpy.stack(seqs))
 	y_return = [seqs]
 
@@ -437,9 +492,9 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 	if in_signals is not None:
 		y_return.append(torch.from_numpy(numpy.stack(in_signals_)))
 		
-	if return_filtered:
-		filtered = torch.tensor(filtered)
-		y_return.append(torch.where(filtered == True)[0])
+	if return_mask:
+		kept_mask = torch.tensor(kept_mask)
+		y_return.append(kept_mask)
 
 	return y_return[0] if len(y_return) == 1 else y_return
 

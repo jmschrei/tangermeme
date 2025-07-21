@@ -30,7 +30,7 @@ def _fast_tile_substitute(X, motif, idxs):
 				X[i, k, j+idx] = motif[k, j]
 
 
-def screen(model, y, shape, loss=torch.nn.MSELoss(reduction='none'), tol=1e-3,
+def screen(model, shape, y=None, loss=torch.nn.MSELoss(reduction='none'), tol=1e-3,
 	max_iter=-1, args=None, n_best=1, alphabet=['A', 'C', 'G', 'T'], 
 	batch_size=32, func=random_one_hot, additional_func_kwargs={}, dtype=None, 
 	device='cuda', random_state=None, verbose=False):
@@ -55,17 +55,19 @@ def screen(model, y, shape, loss=torch.nn.MSELoss(reduction='none'), tol=1e-3,
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	y: torch.Tensor or list of torch.Tensors
-		A tensor or list of Tensors providing the desired output from the model.
-		The type and shape must be compatible with the provided loss function
-		and comparable to the output from `model`. Each tensor should have a
-		shape of (1, n) where n is the number of outputs from the model. The 
-		first dimension is 1 to make broadcasting work correctly.
-
 	shape: tuple
 		Dimensions for the randomly generated sequences, excluding the batch
 		dimension. For a model expecting an input like (32, 4, 2114), where
 		32 is the batch size, `shape` should be (4, 2114). 
+
+	y: torch.Tensor or list of torch.Tensors or None
+		A tensor or list of Tensors providing the desired output from the model.
+		The type and shape must be compatible with the provided loss function
+		and comparable to the output from `model`. Each tensor should have a
+		shape of (1, n) where n is the number of outputs from the model. The 
+		first dimension is 1 to make broadcasting work correctly. If None,
+		simply choose the edit that yields the strongest response from the
+		model. Default is None.
 
 	loss: function, optional
 		This function must take in `y` and `y_hat` where `y` is the desired
@@ -118,7 +120,7 @@ def screen(model, y, shape, loss=torch.nn.MSELoss(reduction='none'), tol=1e-3,
 		set to 'cuda' without a GPU, this function will crash and must be set
 		to 'cpu'. Default is 'cuda'. 
 
-	random_state: int or None or numpy.random.RandomState, optional
+	random_state: int or None, optional
 		The random seed to use to ensure determinism of the generation function.
 		If None, not deterministic. Default is None.
 
@@ -131,6 +133,9 @@ def screen(model, y, shape, loss=torch.nn.MSELoss(reduction='none'), tol=1e-3,
 	X: torch.Tensor, shape=(n_best, len(alphabet), length)
 		The screened examples with the lowest loss.
 	"""
+
+	if y is None:
+		y = [9_999_999]
 
 	y = _cast_as_tensor(y)
 	
@@ -161,15 +166,18 @@ def screen(model, y, shape, loss=torch.nn.MSELoss(reduction='none'), tol=1e-3,
 		iteration += 1
 		if -pq[0][0] < tol or iteration == max_iter:
 			break
+		
+		if random_state is not None:
+			random_state += 1
     
 	Xs = [heapq.heappop(pq)[1] for i in range(n_best)]
 	X = torch.flip(torch.stack(Xs), dims=(0,))
 	return X
 
 
-def greedy_substitution(model, X, motifs, y, loss=torch.nn.MSELoss(
-	reduction='none'), reverse_complement=True, input_mask=None, 
-	output_mask=None, tol=1e-3, max_iter=-1, args=None, 
+def greedy_substitution(model, X, y=None, motifs=None, 
+	loss=torch.nn.MSELoss(reduction='none'), reverse_complement=True, 
+	input_mask=None, output_mask=None, tol=1e-3, max_iter=-1, args=None, 
 	alphabet=['A', 'C', 'G', 'T'], batch_size=32, device='cuda', verbose=False):
 	"""Greedily add motifs to achieve a desired goal. 
 
@@ -197,17 +205,20 @@ def greedy_substitution(model, X, motifs, y, loss=torch.nn.MSELoss(
 		A one-hot encoded sequence to use as the base for design. This must be
 		a single sequence and has the first dimension for broadcasting reasons.
 
-	motifs: list of strings
-		A list of strings where each string is a motif that can be inserted into
-		the sequence. These strings will be one-hot encoded according to the
-		provided alphabet.
-
-	y: torch.Tensor or list of torch.Tensors
+	y: torch.Tensor or list of torch.Tensors or None
 		A tensor or list of Tensors providing the desired output from the model.
 		The type and shape must be compatible with the provided loss function
 		and comparable to the output from `model`. Each tensor should have a
 		shape of (1, n) where n is the number of outputs from the model. The 
-		first dimension is 1 to make broadcasting work correctly.
+		first dimension is 1 to make broadcasting work correctly. If None,
+		simply choose the edit that yields the strongest response from the
+		model. Default is None.
+
+	motifs: list of strings or None
+		A list of strings where each string is a motif that can be inserted into
+		the sequence. These strings will be one-hot encoded according to the
+		provided alphabet. If None, use the provided alphabet as the motifs to
+		only change one character at a time. Default is None.
 
 	loss: function, optional
 		This function must take in `y` and `y_hat` where `y` is the desired
@@ -277,9 +288,21 @@ def greedy_substitution(model, X, motifs, y, loss=torch.nn.MSELoss(
 	iteration = 0
 
 	X = torch.clone(X)
+	
+	if y is None:
+		y = [[9_999_999]]
+	
+	y = _cast_as_tensor(y)
+	if y.ndim == 1:
+		y = y.unsqueeze(0)
+	
 	y_orig = predict(model, X, args=args, batch_size=batch_size, device=device, 
 		verbose=False)
 
+	if motifs is None:
+		motifs = alphabet
+		reverse_complement = False
+	
 	if reverse_complement:
 		motifs = motifs + [rc(motif) for motif in motifs]
 
@@ -287,7 +310,7 @@ def greedy_substitution(model, X, motifs, y, loss=torch.nn.MSELoss(
 		output_mask = torch.ones(y_orig.shape[1], dtype=bool)
 
 	if input_mask is None:
-		input_mask = torch.ones(y_orig.shape[1], dtype=bool)
+		input_mask = torch.ones(X.shape[-1], dtype=bool)
 
 	loss_prev = loss(y[:, output_mask], y_orig[:, output_mask]).mean()
 	loss_orig = loss_prev
@@ -296,17 +319,15 @@ def greedy_substitution(model, X, motifs, y, loss=torch.nn.MSELoss(
 		print(("Iteration 0 -- Loss: {:4.4}, Improvement: N/A, Idx: N/A, " +
 			"Time (s): 0s").format(loss_prev, time.time() - tic))
 
-	while True:
-		if iteration == max_iter:
-			break
-
+	while iteration < max_iter:
 		tic = time.time()
 		best_improvement, best_motif_idx, best_pos = 0, -1, -1
 		for idx, motif in enumerate(tqdm(motifs, disable=not verbose)):
 			motif_ohe = one_hot_encode(motif, alphabet=alphabet).numpy()
 			
 			input_mask_ = torch.clone(input_mask)
-			input_mask_[-len(motif):] = False
+			if len(motif) > 1:
+				input_mask_[-len(motif)+1:] = False
 			input_idxs = torch.where(input_mask_ == True)[0].numpy()
 
 			X_ = X.float().repeat(input_idxs.shape[0], 1, 1).numpy(force=True)
@@ -351,7 +372,7 @@ def greedy_substitution(model, X, motifs, y, loss=torch.nn.MSELoss(
 	return X
 
 
-def greedy_marginalize(model, X, motifs, y, loss=torch.nn.MSELoss(
+def greedy_marginalize(model, X, y, motifs, loss=torch.nn.MSELoss(
 	reduction='none'), max_spacing=12, reverse_complement=True, 
 	output_mask=None, tol=1e-3, max_iter=-1, args=None, 
 	alphabet=['A', 'C', 'G', 'T'], batch_size=32, device='cuda', verbose=False):
@@ -391,17 +412,17 @@ def greedy_marginalize(model, X, motifs, y, loss=torch.nn.MSELoss(
 		A one-hot encoded sequence to use as the base for design. This must be
 		a single sequence and has the first dimension for broadcasting reasons.
 
-	motifs: list of strings
-		A list of strings where each string is a motif that can be inserted into
-		the sequence. These strings will be one-hot encoded according to the
-		provided alphabet.
-
 	y: torch.Tensor or list of torch.Tensors
 		A tensor or list of Tensors providing the desired output from the model.
 		The type and shape must be compatible with the provided loss function
 		and comparable to the output from `model`. Each tensor should have a
 		shape of (1, n) where n is the number of outputs from the model. The 
 		first dimension is 1 to make broadcasting work correctly.
+
+	motifs: list of strings
+		A list of strings where each string is a motif that can be inserted into
+		the sequence. These strings will be one-hot encoded according to the
+		provided alphabet.
 
 	loss: function, optional
 		This function must take in `y` and `y_hat` where `y` is the desired
@@ -456,12 +477,16 @@ def greedy_marginalize(model, X, motifs, y, loss=torch.nn.MSELoss(
 
 	Returns
 	-------
-	X: torch.Tensor, shape=(-1, len(alphabet), length)
-		The edited sequence. 
+	X: torch.Tensor, shape=(len(alphabet), length)
+		The designed construct. 
 	"""
 
 	tic = time.time()
 	iteration = 0
+
+	y = _cast_as_tensor(y)
+	if y.ndim == 1:
+		y = y.unsqueeze(0)
 
 	X = torch.clone(X)
 	y_orig = predict(model, X, args=args, batch_size=batch_size, device=device, 
@@ -476,7 +501,6 @@ def greedy_marginalize(model, X, motifs, y, loss=torch.nn.MSELoss(
 	if output_mask is None:
 		output_mask = torch.ones(y_orig.shape[1], dtype=bool)
 
-	#loss_prev = loss(y[:, output_mask], y_orig[:, output_mask]).mean()
 	loss_prev = loss(torch.zeros_like(y[:, output_mask]), 
 		y[:, output_mask]).mean()
 	loss_orig = loss_prev
