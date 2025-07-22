@@ -35,6 +35,16 @@ class Conv(torch.nn.Module):
 		return self.conv(X)
 
 
+class Conv1(torch.nn.Module):
+	def __init__(self):
+		super(Conv1, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 12, (3,))
+		self.conv2 = torch.nn.Conv1d(12, 1, (5,))
+
+	def forward(self, X):
+		return self.conv2(self.conv1(X))[:, 0]
+
+
 class Scatter(torch.nn.Module):
 	def __init__(self):
 		super(Scatter, self).__init__()

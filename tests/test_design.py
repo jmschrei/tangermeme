@@ -17,10 +17,6 @@ from tangermeme.io import read_meme
 from tangermeme.utils import characters
 
 from .toy_models import SumModel
-from .toy_models import FlattenDense
-from .toy_models import Conv
-from .toy_models import Scatter
-from .toy_models import ConvDense
 from .toy_models import SmallDeepSEA
 
 from numpy.testing import assert_raises
