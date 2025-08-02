@@ -198,7 +198,7 @@ def _maxpool(module, grad_input, grad_output):
 	return (new_grad_inp,)
 
 
-def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
+def deep_lift_shap(model, X, args=None, model_kwargs=dict(), target=0,  batch_size=32,
 	references=dinucleotide_shuffle, n_shuffles=20, return_references=False, 
 	hypothetical=False, warning_threshold=0.001, additional_nonlinear_ops=None,
 	print_convergence_deltas=False, raw_outputs=False, dtype=None, device='cuda',
@@ -250,6 +250,9 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 		None, no additional arguments are passed into the forward function.
 		Default is None.
 
+	model_kwargs: dict, optional
+		Additional keyword arguments passed to the model foward function.
+		
 	target: int, optional
 		The output of the model to calculate gradients/attributions for. This
 		will index the last dimension of the predictions. Default is 0.
@@ -443,9 +446,9 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 					with torch.autocast(device_type=device, dtype=dtype):
 						if _args is not None:
 							_args = (torch.cat([arg, arg]) for arg in _args)
-							y = model(X_, *_args)[:, target]
+							y = model(X_, *_args, **model_kwargs)[:, target]
 						else:
-							y = model(X_)[:, target]
+							y = model(X_, **model_kwargs)[:, target]
 
 						multipliers = torch.autograd.grad(y.sum(), _X)[0]
 
