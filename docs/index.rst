@@ -86,6 +86,14 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
 .. toctree::
    :maxdepth: 1
    :hidden:
+   :caption: Paper Notebooks
+
+   paper/Fig1_Timings_Examples.ipynb
+   paper/Fig2_Seqlet_Calling_and_Downstream_Analyses.ipynb
+
+.. toctree::
+   :maxdepth: 1
+   :hidden:
    :caption: API
 
    api/ablate.rst
