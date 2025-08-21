@@ -1,6 +1,8 @@
 # pisa.py
 # Based on the algorithm proposed by Charles McAnany et al.
+# https://www.biorxiv.org/content/10.1101/2025.04.07.647613v2
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
+
 
 import torch
 import warnings
