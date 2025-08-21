@@ -345,130 +345,126 @@ def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2,
 
 @numba.njit
 def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25, 
-	additional_flanks=0):
-	"""An internal function implementing the recursive seqlet algorithm."""
+	additional_flanks=0, n_bins=1000):
+	"""An internal function implementing the recursive seqlet algorithm.
+	
+	This algorithm has four steps. 
+	
+	(1) Convert attribution scores into integer bins and calculate a histogram
+	(2) Convert these histograms into null distributions across lengths
+	(3) Use the null distributions to calculate p-values for each possible length 
+	(4) Decode this matrix of p-values to find the longest seqlets
+	"""
 
 	n, l = X.shape
+	m = n*l
 
-	# Convert observed attributions into cumsums for fast span calculation
-	X_csum = numpy.zeros((n+1, l))
+	###
+	# Step 1: Calculate a histogram of binned scores
+	###
+
+	xmax, xmin = X.max(), X.min()
+	bin_width = (xmax - xmin) / (n_bins - 1)
+
+	f = numpy.zeros(n_bins, dtype=numpy.float64)
+
+	for i in range(n):
+		for j in range(l):
+			x_bin = math.floor((X[i, j] - xmin) / bin_width)
+			f[x_bin] += 1
+
+	f = f / m
+
+	###
+	# Step 2: Calculate null distributions across lengths
+	###
+
+	scores = numpy.zeros((max_seqlet_len+1, n_bins*max_seqlet_len), 
+		dtype=numpy.float64)
+	scores[1, :n_bins] = f
+	
+	rcdfs = numpy.zeros_like(scores)
+	rcdfs[:, 0] = 1.0
+	
+	for seqlet_len in range(2, max_seqlet_len+1):
+		for i in range(n_bins * (seqlet_len-1)):
+			for j in range(n_bins):
+				scores[seqlet_len, i+j] += scores[seqlet_len-1, i] * f[j]
+
+		for i in range(1, n_bins * seqlet_len):
+			rcdfs[seqlet_len, i] = max(rcdfs[seqlet_len, i-1] - scores[seqlet_len, i], 0)
+
+	###
+	# Step 3: Calculate p-values given these 1-CDFs
+	###
+
+	X_csum = numpy.zeros((n, l+1))
 	for i in range(n):
 		for j in range(l):
 			X_csum[i, j+1] = X_csum[i, j] + X[i, j]
 
-	xmins = numpy.empty(max_seqlet_len+1, dtype=numpy.float64)
-	xmaxs = numpy.empty(max_seqlet_len+1, dtype=numpy.float64)
-	X_cdfs = numpy.zeros((2, max_seqlet_len+1, 1000), dtype=numpy.float64)
-
-	# Construct background distributions
-	for j in range(min_seqlet_len, max_seqlet_len+1):
-		xmin, xmax = 0.0, 0.0
-		n_pos, n_neg = 0.0, 0.0
-
-		# For a given span size, find the minimum and maximum values and the count
-		# of the number of attribution values in each.
-		for i in range(n):
-			for k in range(l-j+1):
-				x_ = X_csum[i, k+j] - X_csum[i, k]
-
-				if x_ > 0:
-					xmax = max(x_, xmax)
-					n_pos += 1.0
-				else:
-					xmin = min(x_, xmin)
-					n_neg += 1.0
-
-		xmins[j] = xmin
-		xmaxs[j] = xmax
-		p_pos, p_neg = 1 / n_pos, 1 / n_neg
-
-		# Now go through again and bin the attribution value, recording the count of
-		# the number of occurences, pre-divided by the total count to get probs.
-		for i in range(n):
-			for k in range(l-j+1):
-				x_ = X_csum[i, k+j] - X_csum[i, k]
-
-				if x_ > 0:
-					x_int = math.floor(999 * x_ / xmax)
-					X_cdfs[0, j, x_int] += p_pos
-				else:
-					x_int = math.floor(999 * x_ / xmin)
-					X_cdfs[1, j, x_int] += p_neg
-					
-
-		# Convert these PDFs into 1 - CDFs.
-		for i in range(1, 1001):
-			if i < 1000:
-				X_cdfs[0, j, i] += X_cdfs[0, j, i-1]
-				X_cdfs[1, j, i] += X_cdfs[1, j, i-1]
-			
-			X_cdfs[0, j, i-1] = 1 - X_cdfs[0, j, i-1]
-			X_cdfs[1, j, i-1] = 1 - X_cdfs[1, j, i-1]
 
 	###
-
-	p_value = numpy.ones((max_seqlet_len+1, l), dtype=numpy.float64)
+	# Step 4: Decode p-values into seqlets
+	###
+	
 	seqlets = []
-
-	# Calculate p-values for each seqlet span and keep only the maximum p-value of
-	# spans starting here thus-far. Because of the recursive property, if a span
-	# has a high p-value, definitionally none of the other spans including it can.
+	
 	for i in range(n):
-		for j in range(min_seqlet_len, max_seqlet_len+1):
-			for k in range(l-j+1):
-				x_ = X_csum[i, k+j] - X_csum[i, k]
+		p_value = numpy.ones((max_seqlet_len+1, l), dtype=numpy.float64)
+		p_value[:min_seqlet_len] = 0
+		p_value[:, -min_seqlet_len] = 1
 
-				if x_ > 0:
-					x_int = math.floor(999 * x_ / xmaxs[j])
-					p_value[j, k] = X_cdfs[0, j, x_int]
-				else:
-					x_int = math.floor(999 * x_ / xmins[j])
-					p_value[j, k] = X_cdfs[1, j, x_int]
+		for seqlet_len in range(min_seqlet_len, max_seqlet_len+1):
+			for k in range(l-seqlet_len+1):
+				x_ = X_csum[i, k+seqlet_len] - X_csum[i, k]
+				x_ = math.floor((x_ - xmin*seqlet_len) / bin_width)
 				
-				if j > min_seqlet_len:
-					if p_value[j-1, k] >= threshold:
-						p_value[j, k] = threshold
-					#p_value[j, k] = max(p_value[j-1, k], p_value[j, k])
+				p_value[seqlet_len, k] = max(rcdfs[seqlet_len, x_],
+					p_value[seqlet_len-1, k])
 
 		# Iteratively identify spans, from longest to shortest, that satisfy the
 		# recursive p-value threshold.
 		for j in range(max_seqlet_len - min_seqlet_len + 1):
-			j = max_seqlet_len - j
+			seqlet_len = max_seqlet_len - j
 
 			while True:
-				start = p_value[j].argmin()
-				p = p_value[j, start]
-				p_value[j, start] = 1
+				start = p_value[seqlet_len].argmin()
+				p = p_value[seqlet_len, start]
+				p_value[seqlet_len, start] = 1
 
 				if p >= threshold:
 					break
 
-				for k in range(j - min_seqlet_len):
-					if p_value[j-k, start+k+1] >= threshold:
+				for k in range(1, seqlet_len):
+					if p_value[seqlet_len-k, start+k] >= threshold:
 						break
 
 				else:
-					for end in range(start, min(start+j, l-1)):
+					for end in range(start, min(start+seqlet_len, l-1)):
 						p_value[:, end] = 1
 
-					end = min(start + j + additional_flanks, l-1)
+					end = min(start + seqlet_len + additional_flanks, l-1)
 					start = max(start - additional_flanks, 0)
 					attr = X_csum[i, end] - X_csum[i, start]
 					seqlets.append((i, start, end, attr, p))
 
 	return seqlets
-		
-	
+
 
 def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25, 
-	additional_flanks=0):
+	additional_flanks=0, n_bins=1000):
 	"""A seqlet caller implementing the recursive seqlet algorithm.
+
+	NOTE: Currently only *positive* seqlets will be identified. The easiest way
+	to get negative seqlets is to run this on the absolute value of the
+	attribution values and then re-extract the attribution sums given the
+	boundaries.
 
 	This algorithm identifies spans of high attribution characters, called
 	seqlets, using a simple approach derived from the Tomtom/FIMO algorithms.
 	First, distributions of attribution sums are created for all potential
-	seqlet lengths by discretizing the sum, with one set of distributions for
-	positive attribution values and one for negative attribution values. Then,
+	seqlet lengths by discretizing the attribution sum into integers. Then,
 	CDFs are calculated for each distribution (or, more specifically, 1-CDFs).
 	Finally, p-values are calculated via lookup to these 1-CDFs for all
 	potential CDFs, yielding a (n_positions, n_lengths) matrix of p-values.
@@ -531,6 +527,10 @@ def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 		An additional value to subtract from the start, and to add to the end,
 		of all called seqlets. Does not affect the called seqlets.
 
+	n_bins: int, optional
+		The number of bins to use when estimating the PDFs and CDFs. Default is
+		1000.
+
 
 	Returns
 	-------
@@ -546,10 +546,9 @@ def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	elif not isinstance(X, numpy.ndarray):
 		raise ValueError("`X` must be either a torch.Tensor or numpy.ndarray.")
 
-
 	columns = ['example_idx', 'start', 'end', 'attribution', 'p-value']
 	seqlets = _recursive_seqlets(X, threshold, min_seqlet_len, max_seqlet_len, 
-		additional_flanks)
+		additional_flanks, n_bins)
 	seqlets = pandas.DataFrame(seqlets, columns=columns)
 	return seqlets.sort_values("p-value").reset_index(drop=True)
     

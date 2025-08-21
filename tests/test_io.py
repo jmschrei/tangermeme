@@ -291,8 +291,8 @@ def test_interleave_loci_bed10_summits_str():
 	base_df = pandas.DataFrame({
 		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4', 
 			'chr5', 'chr5'],
-		'start': [40, 121, 45, 132, 20, 25, 21, 52, 97],
-		'end': [60, 141, 65, 152, 40, 45, 41, 72, 117]
+		'start': [30, 111, 35, 122, 10, 15, 11, 42, 87],
+		'end': [50, 131, 55, 142, 30, 35, 31, 62, 107]
 	})
 
 	assert (df == base_df).all(None)

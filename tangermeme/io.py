@@ -120,8 +120,11 @@ def _interleave_loci(loci, chroms=None, summits=False):
 			if ((df.iloc[:, -1] + df.iloc[:, 1]) > df.iloc[:, 2]).any():
 				raise ValueError("Summit + start cannot be larger than end.")
 
-			df['start'] += df['summit']
-			df['end'] += df['summit']
+			mid = df['start'] + df['summit']
+			w = df['end'] - df['start']
+			
+			df['start'] = mid - w // 2
+			df['end'] = mid + w // 2
 			df = df.drop(columns=['summit'], axis=1)
 		
 		# If filtering chromosomes, remove loci on unallowed chromosomes

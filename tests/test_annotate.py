@@ -48,56 +48,54 @@ def X_contrib(X):
 
 def test_annotate_seqlets(X, X_contrib):
 	seqlets = recursive_seqlets(X_contrib)
-	assert seqlets.shape == (45, 5)
+	assert seqlets.shape == (24, 5)
 
 	idxs, pvals = annotate_seqlets(X, seqlets, "tests/data/test.meme")
 
-	assert idxs.shape == (45, 1)
+	assert idxs.shape == (24, 1)
 	assert idxs.dtype == torch.int32
 
-	assert pvals.shape == (45, 1)
+	assert pvals.shape == (24, 1)
 	assert pvals.dtype == torch.float64
 
-	assert_array_almost_equal(idxs[:, 0], [ 9,  4,  6,  3,  1,  8,  8,  6,  4,  1,
-		1,  9,  4,  0,  0,  9,  5,  8,   9,  4,  6,  7,  9,  9,  7,  6,  8,  9,  
-		7,  8,  6,  4,  4,  4,  7, 11,   2,  9,  6,  6,  9,  9,  7,  4,  9])
+	assert_array_almost_equal(idxs[:, 0], [
+		9, 6, 9, 3, 6, 9, 9, 9, 6, 6, 9, 8, 9, 9, 7, 7, 6, 9, 6, 7, 9, 8, 6, 7
+	])
 
 	assert_array_almost_equal(pvals[:, 0], [
-		0.1190, 0.0205, 0.1175, 0.1948, 0.0351, 0.0911, 0.0319, 0.1152, 0.1830,
-        0.0166, 0.1166, 0.0751, 0.0121, 0.0255, 0.1146, 0.1539, 0.0051, 0.0389,
-        0.1410, 0.0190, 0.0227, 0.1354, 0.0210, 0.1313, 0.0493, 0.0124, 0.0389,
-        0.0755, 0.0731, 0.0098, 0.0389, 0.0267, 0.0268, 0.0189, 0.1354, 0.0101,
-        0.1512, 0.0138, 0.0013, 0.0178, 0.1414, 0.1023, 0.1351, 0.0623, 0.0017
-	], 4)
+		0.0641, 0.0117, 0.0053, 0.0923, 0.0178, 0.0196, 0.0803, 0.0341, 0.0178, 
+		0.0389, 0.0088, 0.2461, 0.0046, 0.0056, 0.1181, 0.1354, 0.0408, 0.0088, 
+		0.2298, 0.0087, 0.0361, 0.0638, 0.0849, 0.1354], 
+	4)
 
 
 def test_annotate_seqlets_n_nearest(X, X_contrib):
 	seqlets = recursive_seqlets(X_contrib)
-	assert seqlets.shape == (45, 5)
+	assert seqlets.shape == (24, 5)
 
 	idxs, pvals = annotate_seqlets(X, seqlets, "tests/data/test.meme",
 		n_nearest=3)
 	
-	assert idxs.shape == (45, 3)
+	assert idxs.shape == (24, 3)
 	assert idxs.dtype == torch.int32
 
-	assert pvals.shape == (45, 3)
+	assert pvals.shape == (24, 3)
 	assert pvals.dtype == torch.float64
 
 
 	idxs, pvals = annotate_seqlets(X, seqlets, "tests/data/test.meme",
 		n_nearest=12)
 	
-	assert idxs.shape == (45, 12)
+	assert idxs.shape == (24, 12)
 	assert idxs.dtype == torch.int32
 
-	assert pvals.shape == (45, 12)
+	assert pvals.shape == (24, 12)
 	assert pvals.dtype == torch.float64
 
 
 def test_annotate_seqlets_reverse_complement(X, X_contrib):
 	seqlets = recursive_seqlets(X_contrib)
-	assert seqlets.shape == (45, 5)
+	assert seqlets.shape == (24, 5)
 
 	idxs0, pvals0 = annotate_seqlets(X, seqlets, "tests/data/test.meme",
 		reverse_complement=True)
@@ -184,7 +182,9 @@ def test_count_annotations_raises(annotations):
 def test_pairwise_annotations_small():
 	X = torch.Tensor([[0, 0], [0, 0], [0, 1], [1, 0], [1, 1]]).type(torch.int8)
 	y = pairwise_annotations(X)
+	assert_array_almost_equal(y, [[0, 2], [2, 0]])
 
+	y = pairwise_annotations(X, unique=False)
 	assert_array_almost_equal(y, [[1, 3], [3, 0]])
 
 
@@ -194,13 +194,27 @@ def test_pairwise_annotations(annotations):
 	assert y.shape == (7, 7)
 	assert y.dtype == torch.int64
 
-	assert_array_almost_equal(y, [[ 4, 12, 10,  5,  8, 12, 12],
+	assert_array_almost_equal(y, [
+		[0, 8, 7, 4, 6, 4, 7],
+        [8, 0, 6, 4, 7, 6, 4],
+        [7, 6, 0, 3, 7, 6, 3],
+        [4, 4, 3, 0, 7, 3, 2],
+        [6, 7, 7, 7, 0, 5, 3],
+        [4, 6, 6, 3, 5, 0, 3],
+        [7, 4, 3, 2, 3, 3, 0]
+	])
+
+	y = pairwise_annotations(annotations, unique=False)
+
+	assert_array_almost_equal(y, [
+		[ 4, 12, 10,  5,  8, 12, 12],
 		[12,  3,  8,  5,  9, 15,  5],
 		[10,  8,  2,  4,  9, 11,  4],
 		[ 5,  5,  4,  1, 10,  6,  2],
 		[ 8,  9,  9, 10,  4, 11,  3],
 		[12, 15, 11,  6, 11, 6,  3],
-		[12,  5,  4,  2,  3,  3,  2]])
+		[12,  5,  4,  2,  3,  3,  2]
+	])
 
 
 def test_pairwise_annotations_raises(annotations):

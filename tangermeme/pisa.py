@@ -202,7 +202,7 @@ def pisa(model, X, args=None, batch_size=32, references=dinucleotide_shuffle,
         if isinstance(references, torch.Tensor):
             _references = references[i]
         else:
-            _references = references(_X, n=n_shuffles, 
+            _references = references(_X.cpu(), n=n_shuffles, 
                 random_state=random_state)[0]
 
         _references = _references.to(device).requires_grad_()

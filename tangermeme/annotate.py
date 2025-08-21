@@ -167,7 +167,7 @@ def count_annotations(X, dtype=torch.uint8, shape=None, dim=None):
 	return y
 
 
-def pairwise_annotations(X, dtype=torch.int64, symmetric=True, shape=None):
+def pairwise_annotations(X, dtype=torch.int64, unique=True, symmetric=True, shape=None):
 	"""Returns the number of times pairs of annotations occur in an example.
 
 	This function takes in a tensor of (example_idx, annotation_idx) pairs and
@@ -187,6 +187,12 @@ def pairwise_annotations(X, dtype=torch.int64, symmetric=True, shape=None):
 
 	dtype: torch.dtype, optional
 		The dtype of the returned matrix. Default is torch.int64.
+
+	unique: bool, optional
+		Whether to count only unique pairs within each example or each instance.
+		For example, if set to True, an example with 3 instances of KL4 would
+		contribute only a single KLF4-KLF4 interaction to the matrix, whereas
+		if set to True, would contribute many. Default is True.
 
 	symmetric: bool, optional
 		Whether to return a symmetric matrix or one where the row is the first
@@ -237,6 +243,9 @@ def pairwise_annotations(X, dtype=torch.int64, symmetric=True, shape=None):
 
 	y = torch.zeros(n_annotations, n_annotations, dtype=dtype).numpy()
 	for annotations in example_annotations:
+		if unique:
+			annotations = numpy.unique(annotations)
+		
 		for i, idx0 in enumerate(annotations[:-1]):
 			for j, idx1 in enumerate(annotations[i+1:]):
 				y[idx0, idx1] += 1
