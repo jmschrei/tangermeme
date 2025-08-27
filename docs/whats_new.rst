@@ -7,6 +7,31 @@ Release History
 
 
 
+Version 1.0.0
+=============
+
+Highlights
+----------
+
+	- Our first major release, corresponding to the paper publication.
+	- Changes the `recursive_seqlet` calling algorithm slightly to be more principled
+	- Adds in new design methods and features
+
+
+seqlets
+-------
+
+	- The `recursive_seqlet` algorithm has been slightly altered to make the calculated p-values more faithful. Rather than calculating a null as the empirically observed attribution sum across different lengths, where the "p-value" is just the probability that the observed attribution is higher, null distributions for different lengths are inferred from the previous lengths
+
+
+design
+------
+
+	- `screen` is added in as a new design method that randomly generates sequences and chooses the one with the best predictions. Each batch is fast because nothing special is done, but also each batch is independent from the others and so there is no guarantee that each iteration yields better results
+	- Design methods now allow you to not pass in a `y` target value and instead will try to just maximize the predictions.
+
+
+
 Version 0.5.1
 =============
 

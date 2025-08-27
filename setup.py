@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='tangermeme',
-    version='0.5.1',
+    version='1.0.0',
     author='Jacob Schreiber',
     author_email='jmschreiber91@gmail.com',
     packages=['tangermeme'],
@@ -17,7 +17,7 @@ setup(
         "pyBigWig >= 0.3.17",
         "torch >= 1.9.0",
         "pybigtools",
-	"pyfaidx >= 0.7.2.1",
+        "pyfaidx >= 0.7.2.1",
         "tqdm >= 4.64.1",
         "numba >= 0.55.1",
         "logomaker",
