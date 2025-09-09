@@ -19,6 +19,8 @@ Please see the documentation and tutorials linked at the top of this README for 
 
 `pip install tangermeme`
 
+If PyTorch is already installed, this should take less than five minutes. If PyTorch needs to be installed, this command should do so but may cause the installation to take up to ten minutes. The majority of time will be spend resolving dependencies.
+
 ## Roadmap
 
 This first release focused on the core prediction-based functionality (e.g., marginalizations, ISM, etc..) that subsequent releases will build on. Although my focus will largely follow my research projects and the feedback I receive from the community, here is a roadmap for what I currently plan to focus on in the next few releases.
