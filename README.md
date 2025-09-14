@@ -1,6 +1,6 @@
 # tangermeme
 
-[![Downloads](https://static.pepy.tech/badge/tangermeme)](https://pepy.tech/project/tangermeme) [![Unit Tests](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml/badge.svg)](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml) [![Documentation Status](https://readthedocs.org/projects/tangermeme/badge/?version=latest)](https://tangermeme.readthedocs.io/en/latest/?badge=latest)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/tangermeme?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=ORANGE&left_text=downloads)](https://pepy.tech/projects/tangermeme) [![Unit Tests](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml/badge.svg)](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml) [![Documentation Status](https://readthedocs.org/projects/tangermeme/badge/?version=latest)](https://tangermeme.readthedocs.io/en/latest/?badge=latest)
 
 [[docs](https://tangermeme.readthedocs.io/en/latest/index.html)][[tutorials](https://github.com/jmschrei/tangermeme/tree/main/docs/tutorials)][[vignettes](https://github.com/jmschrei/tangermeme/tree/main/docs/vignettes)]
 
