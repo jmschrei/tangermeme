@@ -2,7 +2,7 @@
 
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/tangermeme?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=ORANGE&left_text=downloads)](https://pepy.tech/projects/tangermeme) [![Unit Tests](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml/badge.svg)](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml) [![Documentation Status](https://readthedocs.org/projects/tangermeme/badge/?version=latest)](https://tangermeme.readthedocs.io/en/latest/?badge=latest)
 
-[[docs](https://tangermeme.readthedocs.io/en/latest/index.html)][[tutorials](https://github.com/jmschrei/tangermeme/tree/main/docs/tutorials)][[vignettes](https://github.com/jmschrei/tangermeme/tree/main/docs/vignettes)]
+[[preprint](https://www.biorxiv.org/content/10.1101/2025.08.08.669296v2)][[docs](https://tangermeme.readthedocs.io/en/latest/index.html)][[tutorials](https://github.com/jmschrei/tangermeme/tree/main/docs/tutorials)][[vignettes](https://github.com/jmschrei/tangermeme/tree/main/docs/vignettes)]
 
 > [!NOTE] 
 > If you use tangermeme in your work, please consider citing the [preprint](https://www.biorxiv.org/content/10.1101/2025.08.08.669296v2). Citations allow me to continue developing software like this for the community. 
