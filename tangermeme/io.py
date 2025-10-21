@@ -7,7 +7,6 @@ import torch
 import pandas
 
 import pyfaidx
-import pyBigWig
 import pybigtools
 
 from tqdm import tqdm
