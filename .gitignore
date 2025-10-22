@@ -1,1 +1,26 @@
+*.swp
+*.swo
+*~
+
+*.py[cod]
+__pycache__
+.cache
+.pytest_cache
+.ipynb_checkpoints/
+.venv/*
+
+# setup and build
+docs/_*
+*.egg-info/
+dist/
+build/
+MANIFEST
+
+# OS-generated files
+.DS_Store
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
 *.torch
