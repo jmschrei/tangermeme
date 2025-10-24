@@ -10,7 +10,7 @@ sampling of GC-matched negatives.
 import numpy
 import pandas
 import pyfaidx
-import pyBigWig
+import pybigtools
 
 from tqdm import tqdm
 from scipy.stats import ks_2samp
@@ -101,10 +101,10 @@ def _perc_generator(sequences, chars):
 	return (sum(seq.count(c) for c in chars) / len(seq) for seq in sequences)
 
 def _extract_counts(chrom, start, end, bw_stream):
-	"""Extract the signal from the pyBigWig `bw_stream` in the provided locus and returns
+	"""Extract the signal from the pybigtools `bw_stream` in the provided locus and returns
 	the sum of the base pair values. If the signal cannot be extracted, returns nan."""
 	try:
-		value = bw_stream.stats(chrom, start, end, type="sum", exact=True)[0]
+		value = bw_stream.values(chrom, start, end, bins=1, summary="sum", exact=True)[0]
 		return value if value is not None else 0
 	except:
 		return float('nan')
@@ -120,7 +120,7 @@ def _count_generator(coords, bw_stream, buffer = False):
 		return _count_generator_stream(coords, bw_stream)
 
 def _count_generator_stream(coords, bw_stream):
-	"""Takes a list of locus `coords` and a pyBigWig `bw_stream` and returns a generator
+	"""Takes a list of locus `coords` and a pybigtools `bw_stream` and returns a generator
 	producing the sum of counts for each locus. The signals are streamed from the locus,
 	such that only one locus signal is kept in memory at a time. As reading from a bigwig
 	is a bit slow, it can be quite time consuming to use this function across an entire
@@ -128,7 +128,7 @@ def _count_generator_stream(coords, bw_stream):
 	return (_extract_counts(*locus, bw_stream) for locus in coords)
 
 def _count_generator_buffered(coords, bw_stream):
-	"""Takes a list of locus `coords` and a pyBigWig `bw_stream` and returns a generator
+	"""Takes a list of locus `coords` and a pybigtools `bw_stream` and returns a generator
 	producing the sum of counts for each locus. The signal for an entire chromosome
 	is kept in memory at a time, to speed up the extraction of multiple signals across
 	a chromosome. This function should mainly be used if calculating the counts for
@@ -139,7 +139,7 @@ def _count_generator_buffered(coords, bw_stream):
 		if buffer_chrom != chrom:
 			buffer_chrom = chrom
 			try:
-				buffer_signal = bw_stream.values(chrom, 0, -1, numpy=True)
+				buffer_signal = bw_stream.values(chrom, 0, None)
 			except:
 				buffer_signal = None
 		if buffer_signal is not None:
@@ -192,7 +192,7 @@ def _char_perc_from_coords(fasta, coords, chars, num_regions=-1, buffer=False, v
 	perc: numpy.ndarray, shape=(len(list(coords)), )
 	"""
 	desc = "Getting %s percentages" % ''.join(chars)
-    
+
 	with pyfaidx.Fasta(fasta) as genome_stream:
 		generator = _sequence_generator(coords, genome_stream, buffer=buffer)
 		generator = _perc_generator(generator, chars)
@@ -228,7 +228,7 @@ def _counts_from_coords(bigwig, coords, num_regions=-1, buffer=False, verbose=Fa
 	buffer: bool, optional
 		Whether to load the entire chromosomal signal into memory and
 		and extract the locus signals as slices of the entire chromosome.
-		Should only be set to true if there are many regions on the same 
+		Should only be set to true if there are many regions on the same
 		chromosome. If calculating counts for regions on many chromosomes,
 		the regions should be sorted by chromosome.
 		If set to false, will instead only load the signal for a single
@@ -243,7 +243,7 @@ def _counts_from_coords(bigwig, coords, num_regions=-1, buffer=False, verbose=Fa
 	"""
 	desc = "Getting counts"
 
-	with pyBigWig.open(bigwig, "r") as bw_stream:
+	with pybigtools.open(bigwig, "r") as bw_stream:
 		generator = _count_generator(coords, bw_stream, buffer=buffer)
 		generator = tqdm(generator, disable=not verbose, desc=desc)
 		count = numpy.fromiter(generator, dtype=float, count=num_regions)
@@ -257,7 +257,7 @@ def _calculate_char_perc(sequence, width, chars):
 	of each non-overlapping block of length `width` across the sequence
 	containing `chars`. This is usually used to calculate GC percentage but
 	can also be used to calculate the percentage of N's in a sequence.
-	
+
 
 	Parameters
 	----------
@@ -285,7 +285,7 @@ def _calculate_char_perc(sequence, width, chars):
 	perc = numpy.fromiter(perc, dtype=float, count=num_regions)
 	return perc
 
-def _extract_and_filter_chrom(fasta, chrom, in_window, out_window, 
+def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 	max_n_perc=0.1, gc_bin_width=0.02, bigwig=None, signal_threshold=None):
 	"""Calculate GC content for, and filter, one chromosome.
 
@@ -295,7 +295,7 @@ def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 	and filter the loci based on having a signal threshold smaller than some
 	value, where the signal is summed across the width.
 
-	
+
 	Parameters
 	----------
 	fasta: str
@@ -347,18 +347,18 @@ def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 	del sequence
 
 	idxs = n_perc <= max_n_perc
-    
+
 	if bigwig is not None:
 		assert(in_window >= out_window), "out_window cannot be larger than in_window."
 		left_flank = (in_window - out_window) // 2
 		right_flank = (in_window - out_window + 1) // 2
-        
-		with pyBigWig.open(bigwig, "r") as bw:
+
+		with pybigtools.open(bigwig, "r") as bw:
 			try:
-				values = bw.values(chrom, 0, -1, numpy=True)
+				values = bw.values(chrom, 0, None)
 			except RuntimeError:
 				return {}
-        
+
 		values = values[:values.shape[0] // in_window * in_window]
 		values = values.reshape(-1, in_window)
 		values = values[:, left_flank:-right_flank]
@@ -373,12 +373,12 @@ def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 	return gc_perc
 
 
-def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000, 
-	max_n_perc=0.1, gc_bin_width=0.02, bigwig=None, signal_beta=0.5, 
+def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
+	max_n_perc=0.1, gc_bin_width=0.02, bigwig=None, signal_beta=0.5,
 	chroms=None, random_state=None, n_jobs=-1, verbose=False):
 	"""Extract matching loci given a fasta file.
 
-	This function takes in a set of loci (a bed file or a pandas dataframe in 
+	This function takes in a set of loci (a bed file or a pandas dataframe in
 	bed format) and returns a GC-matched set of negatives. This will also
 	perform basic filtering to ignore regions of the genome that are too high
 	in Ns. Optionally, it can take in a bigwig and a signal threshold and only
@@ -438,12 +438,12 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 
 	n_jobs: integer, optional
 		Number of parallel processes to use for extracting background gc content.
-		-1 means use all available CPUs. Default is -1. 
+		-1 means use all available CPUs. Default is -1.
 
 	verbose: bool, optional
 		Whether to print display bars and diagnostics to ensure that the
 		sampling is reasonable. When set to True, there may be a large amount
-		of output. Default is False. 
+		of output. Default is False.
 
 
 	Returns
@@ -459,7 +459,7 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 		random_state = numpy.random.RandomState(random_state)
 
 	if isinstance(loci, str):
-		loci = pandas.read_csv(loci, sep='\t', usecols=[0, 1, 2], header=None, 
+		loci = pandas.read_csv(loci, sep='\t', usecols=[0, 1, 2], header=None,
 			index_col=False, names=['chrom', 'start', 'end'])
 
 	loci_chroms = numpy.unique(loci['chrom'])
@@ -479,7 +479,7 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 		loci_count = _counts_from_coords(bigwig, coords, num_regions, buffer=False, verbose=verbose)
 		robust_min = numpy.nanquantile(loci_count, 0.01).item()
 		threshold = robust_min * signal_beta
-    
+
 	coords = list(_resize_coords_generator(coords, in_window))
 	loci_n = _char_perc_from_coords(fasta, coords, 'N', num_regions, buffer=False, verbose=verbose)
 	loci_gc = _char_perc_from_coords(fasta, coords, 'GC', num_regions, buffer=False, verbose=verbose)
@@ -508,20 +508,20 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 	desc = 'Getting background GC'
 	f = delayed(_extract_and_filter_chrom)
 	chrom_percs = Parallel(n_jobs=n_jobs)(f(
-		fasta=fasta, 
-		chrom=chrom, 
+		fasta=fasta,
+		chrom=chrom,
 		in_window=in_window,
-		out_window=out_window, 
+		out_window=out_window,
 		max_n_perc=max_n_perc,
 		gc_bin_width=gc_bin_width,
-		bigwig=bigwig, 
-		signal_threshold=threshold) 
+		bigwig=bigwig,
+		signal_threshold=threshold)
 		for chrom in tqdm(chroms, disable=not verbose, desc=desc))
-   
+
 	# Merge them into a single dictionary, keeping track of chroms
 	bg_bin_count = numpy.zeros(int(1./gc_bin_width) + 1, dtype=int)
 	gc_percs = {perc: [] for perc in range(len(bg_bin_count))}
-	
+
 	for chrom, percs in zip(chroms, chrom_percs):
 		for key, values in percs.items():
 			for value in values:
@@ -571,8 +571,8 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 		print("GC Bin\tBackground Count\tPeak Count\tChosen Count")
 		for i in range(n):
 			print("{:2.2f}: {:8d}\t{:8d}\t{:8d}".format(
-				numpy.arange(0, 1.01, gc_bin_width)[i], 
-				orig_bg_bin_count[i], orig_loci_bin_count[i], 
+				numpy.arange(0, 1.01, gc_bin_width)[i],
+				orig_bg_bin_count[i], orig_loci_bin_count[i],
 				matched_loci_bin_count[i]))
 
 	# Extract the loci
@@ -587,11 +587,11 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 
 	matched_loci = pandas.DataFrame(matched_loci)
 
-	if verbose:     
+	if verbose:
 		matched_gc = []
 		for i,j in enumerate(matched_loci_bin_count):
 			matched_gc.extend([i]*j)
-            
+
 		stats = ks_2samp(loci_gc, matched_gc)
 		print("GC-bin KS test stat:{:3.3}, p-value {:3.3}".format(
 			stats.statistic, stats.pvalue))
@@ -603,6 +603,6 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 			matched_count_max = _counts_from_coords(bigwig, coords, num_regions, buffer=False, verbose=verbose).max()
 			print("Peak Robust Signal Minimum: {}".format(robust_min))
 			print("Matched Signal Maximum: {}".format(matched_count_max))
-  
+
 	matched_loci = matched_loci.sort_values(["chrom", "start"])
 	return matched_loci

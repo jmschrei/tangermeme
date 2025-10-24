@@ -6,7 +6,7 @@ import torch
 import pytest
 import pandas
 import pyfaidx
-import pyBigWig
+import pybigtools
 
 from tangermeme.io import _interleave_loci
 from tangermeme.io import _load_signals
@@ -22,7 +22,7 @@ from numpy.testing import assert_array_almost_equal
 @pytest.fixture
 def short_loci1():
 	return pandas.DataFrame({
-		'chrom': ['chr1', 'chr1', 'chr1', 'chr2', 'chr2'], 
+		'chrom': ['chr1', 'chr1', 'chr1', 'chr2', 'chr2'],
 		'start': [10, 80, 140, 25, 35],
 		'end': [30, 100, 160, 55, 65]
 	})
@@ -31,7 +31,7 @@ def short_loci1():
 @pytest.fixture
 def short_loci2():
 	return pandas.DataFrame({
-		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4', 
+		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4',
 			'chr5', 'chr5'],
 		'start': [40, 120, 40, 120, 5, 25, 20, 50, 80],
 		'end': [60, 140, 60, 140, 25, 45, 40, 70, 100]
@@ -59,7 +59,7 @@ def loci_seqs():
         [[0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
          [1, 0, 0, 1, 0, 0, 1, 0, 0, 0],
          [0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
-         [0, 1, 0, 0, 1, 0, 0, 1, 0, 1]], 
+         [0, 1, 0, 0, 1, 0, 0, 1, 0, 1]],
 
         [[1, 0, 0, 0, 1, 0, 1, 0, 0, 0],
          [0, 1, 0, 1, 0, 0, 0, 0, 1, 0],
@@ -71,49 +71,49 @@ def loci_seqs():
 @pytest.fixture
 def loci2_seqs():
 	return [
-		[[0, 1, 1, 0, 0, 0, 1, 0, 0, 1], 
-		 [0, 0, 0, 1, 0, 0, 0, 1, 0, 0], 
-		 [1, 0, 0, 0, 0, 1, 0, 0, 0, 0], 
-		 [0, 0, 0, 0, 1, 0, 0, 0, 1, 0]], 
+		[[0, 1, 1, 0, 0, 0, 1, 0, 0, 1],
+		 [0, 0, 0, 1, 0, 0, 0, 1, 0, 0],
+		 [1, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+		 [0, 0, 0, 0, 1, 0, 0, 0, 1, 0]],
 
-		[[0, 0, 1, 0, 0, 0, 0, 1, 0, 1], 
-		 [0, 0, 0, 1, 0, 0, 1, 0, 0, 0], 
-		 [0, 1, 0, 0, 0, 1, 0, 0, 0, 0], 
-		 [1, 0, 0, 0, 1, 0, 0, 0, 1, 0]], 
+		[[0, 0, 1, 0, 0, 0, 0, 1, 0, 1],
+		 [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+		 [0, 1, 0, 0, 0, 1, 0, 0, 0, 0],
+		 [1, 0, 0, 0, 1, 0, 0, 0, 1, 0]],
 
-		[[1, 0, 0, 0, 1, 0, 1, 0, 0, 0], 
-		 [0, 1, 0, 1, 0, 0, 0, 0, 1, 0], 
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 
-		 [0, 0, 1, 0, 0, 1, 0, 1, 0, 1]], 
+		[[1, 0, 0, 0, 1, 0, 1, 0, 0, 0],
+		 [0, 1, 0, 1, 0, 0, 0, 0, 1, 0],
+		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+		 [0, 0, 1, 0, 0, 1, 0, 1, 0, 1]],
 
-		[[0, 0, 1, 0, 0, 1, 0, 0, 1, 0], 
+		[[0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
 		 [1, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-		 [0, 0, 0, 0, 0, 0, 0, 1, 0, 0], 
-		 [0, 1, 0, 1, 0, 0, 1, 0, 0, 0]], 
+		 [0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+		 [0, 1, 0, 1, 0, 0, 1, 0, 0, 0]],
 
-		[[0, 0, 1, 0, 0, 1, 0, 1, 0, 0], 
+		[[0, 0, 1, 0, 0, 1, 0, 1, 0, 0],
 		 [0, 0, 0, 0, 1, 0, 1, 0, 0, 1],
-		 [1, 1, 0, 1, 0, 0, 0, 0, 0, 0], 
-		 [0, 0, 0, 0, 0, 0, 0, 0, 1, 0]], 
+		 [1, 1, 0, 1, 0, 0, 0, 0, 0, 0],
+		 [0, 0, 0, 0, 0, 0, 0, 0, 1, 0]],
 
-		[[0, 1, 0, 0, 1, 0, 0, 1, 0, 0], 
+		[[0, 1, 0, 0, 1, 0, 0, 1, 0, 0],
 		 [1, 0, 1, 0, 0, 1, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 
-		 [0, 0, 0, 1, 0, 0, 1, 0, 0, 1]], 
+		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+		 [0, 0, 0, 1, 0, 0, 1, 0, 0, 1]],
 
-		[[0, 0, 0, 0, 0, 1, 0, 0, 0, 0], 
+		[[0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
 		 [1, 0, 0, 0, 1, 0, 1, 0, 0, 0],
-		 [0, 0, 1, 1, 0, 0, 0, 1, 0, 0], 
-		 [0, 1, 0, 0, 0, 0, 0, 0, 1, 1]], 
+		 [0, 0, 1, 1, 0, 0, 0, 1, 0, 0],
+		 [0, 1, 0, 0, 0, 0, 0, 0, 1, 1]],
 
-		[[0, 1, 0, 0, 0, 0, 0, 0, 0, 0], 
+		[[0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
 		 [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]], 
+		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
 
-		[[0, 0, 0, 0, 1, 0, 0, 0, 1, 0], 
+		[[0, 0, 0, 0, 1, 0, 0, 0, 1, 0],
 		 [0, 1, 0, 0, 0, 1, 0, 1, 0, 0],
-		 [1, 0, 0, 1, 0, 0, 1, 0, 0, 0], 
+		 [1, 0, 0, 1, 0, 0, 1, 0, 0, 0],
 		 [0, 0, 1, 0, 0, 0, 0, 0, 0, 1]]
 	]
 
@@ -121,49 +121,49 @@ def loci2_seqs():
 @pytest.fixture
 def loci_signal():
 	return [
-		[[1.4791311025619507, 0.49575525522232056, 0.12961287796497345, 
-		  0.11122498661279678, 0.7721329927444458, 1.9588080644607544, 
-		  0.1597556471824646, 0.1069917380809784, 1.620334506034851, 
-		  1.0501784086227417], 
-		 [0.13018153607845306, 0.6349451541900635, 0.43743935227394104, 
-		  0.23381824791431427, 0.5979234576225281, 1.9726061820983887, 
-		  0.4418468773365021, 0.778532087802887, 0.3186179995536804, 
-		  1.5812746286392212]], 
+		[[1.4791311025619507, 0.49575525522232056, 0.12961287796497345,
+		  0.11122498661279678, 0.7721329927444458, 1.9588080644607544,
+		  0.1597556471824646, 0.1069917380809784, 1.620334506034851,
+		  1.0501784086227417],
+		 [0.13018153607845306, 0.6349451541900635, 0.43743935227394104,
+		  0.23381824791431427, 0.5979234576225281, 1.9726061820983887,
+		  0.4418468773365021, 0.778532087802887, 0.3186179995536804,
+		  1.5812746286392212]],
 
-		[[0.20437310636043549, 0.22272270917892456, 0.30441057682037354, 
-		  1.9459599256515503, 0.16146144270896912, 2.937054395675659, 
-		  1.358080267906189, 1.1391572952270508, 0.5296049118041992, 
-		  1.6804014444351196], 
-		 [1.206719994544983, 0.2273847460746765, 1.027625560760498, 
-		  1.3341655731201172, 0.041398968547582626, 1.630789875984192, 
-		  0.0022149726282805204, 0.8115938901901245, 0.09121190011501312, 
-		  0.322033166885376]], 
+		[[0.20437310636043549, 0.22272270917892456, 0.30441057682037354,
+		  1.9459599256515503, 0.16146144270896912, 2.937054395675659,
+		  1.358080267906189, 1.1391572952270508, 0.5296049118041992,
+		  1.6804014444351196],
+		 [1.206719994544983, 0.2273847460746765, 1.027625560760498,
+		  1.3341655731201172, 0.041398968547582626, 1.630789875984192,
+		  0.0022149726282805204, 0.8115938901901245, 0.09121190011501312,
+		  0.322033166885376]],
 
-		[[0.48324692249298096, 1.001604437828064, 0.6735547780990601, 
-		  0.363113671541214, 0.6795873045921326, 0.5142682790756226, 
-		  1.7785857915878296, 1.4153209924697876, 0.6760514974594116, 
-		  0.27945613861083984], 
-		 [0.32088014483451843, 0.9074110984802246, 1.125154733657837, 
-		  1.0642825365066528, 0.2592030167579651, 0.9836715459823608, 
-		  0.6187756657600403, 0.058271586894989014, 0.18631218373775482, 
-		  1.8474831581115723]], 
+		[[0.48324692249298096, 1.001604437828064, 0.6735547780990601,
+		  0.363113671541214, 0.6795873045921326, 0.5142682790756226,
+		  1.7785857915878296, 1.4153209924697876, 0.6760514974594116,
+		  0.27945613861083984],
+		 [0.32088014483451843, 0.9074110984802246, 1.125154733657837,
+		  1.0642825365066528, 0.2592030167579651, 0.9836715459823608,
+		  0.6187756657600403, 0.058271586894989014, 0.18631218373775482,
+		  1.8474831581115723]],
 
-		[[0.8443564176559448, 0.5371090173721313, 0.2512274384498596, 
-		  0.9364936351776123, 1.5986690521240234, 0.6665113568305969, 
-		  1.692335605621338, 0.41500651836395264, 1.6298010349273682, 
-		  1.1278733015060425], 
-		 [0.0422024242579937, 0.8806508779525757, 1.4816402196884155, 
-		  1.1951619386672974, 0.6161070466041565, 0.21235889196395874, 
-		  0.29951179027557373, 0.7038488388061523, 1.1673632860183716, 
-		  1.2555632591247559]], 
+		[[0.8443564176559448, 0.5371090173721313, 0.2512274384498596,
+		  0.9364936351776123, 1.5986690521240234, 0.6665113568305969,
+		  1.692335605621338, 0.41500651836395264, 1.6298010349273682,
+		  1.1278733015060425],
+		 [0.0422024242579937, 0.8806508779525757, 1.4816402196884155,
+		  1.1951619386672974, 0.6161070466041565, 0.21235889196395874,
+		  0.29951179027557373, 0.7038488388061523, 1.1673632860183716,
+		  1.2555632591247559]],
 
-		[[1.5983798503875732, 0.24384598433971405, 0.8742402195930481, 
-		  0.9665769934654236, 0.677355170249939, 1.2272214889526367, 
-		  0.867402970790863, 0.19692184031009674, 2.5657830238342285, 
-		  1.0753364562988281], 
-		 [0.9491047859191895, 0.4262428283691406, 0.9736483693122864, 
-		  0.6608085036277771, 0.6526103615760803, 2.4809725284576416, 
-		  0.702046811580658, 0.17438605427742004, 0.6000516414642334, 
+		[[1.5983798503875732, 0.24384598433971405, 0.8742402195930481,
+		  0.9665769934654236, 0.677355170249939, 1.2272214889526367,
+		  0.867402970790863, 0.19692184031009674, 2.5657830238342285,
+		  1.0753364562988281],
+		 [0.9491047859191895, 0.4262428283691406, 0.9736483693122864,
+		  0.6608085036277771, 0.6526103615760803, 2.4809725284576416,
+		  0.702046811580658, 0.17438605427742004, 0.6000516414642334,
 		  1.1334248781204224]]
 	]
 
@@ -184,13 +184,13 @@ def test_interleave_loci_single_str(short_loci1, short_loci2):
 
 def test_interleave_loci_single_df(short_loci1, short_loci2):
 	names = ['chrom', 'start', 'end']
-	
-	df = pandas.read_csv("tests/data/test.bed", delimiter='\t', 
+
+	df = pandas.read_csv("tests/data/test.bed", delimiter='\t',
 		index_col=False, names=names, header=None)
 	assert (df == short_loci1).all(None)
 	assert_raises(ValueError, df.__eq__, short_loci2)
 
-	df = pandas.read_csv("tests/data/test2.bed", delimiter='\t', 
+	df = pandas.read_csv("tests/data/test2.bed", delimiter='\t',
 		index_col=False, names=names, header=None)
 	assert (df == short_loci2).all(None)
 	assert_raises(ValueError, df.__eq__, short_loci1)
@@ -208,12 +208,12 @@ def test_interleave_loci_multi_str(short_loci1, short_loci2):
 	#
 
 	df = _interleave_loci(["tests/data/test.bed", "tests/data/test2.bed"])
-	
+
 	assert_raises(ValueError, df.__eq__, short_loci1)
 	assert_raises(ValueError, df.__eq__, short_loci2)
 
 	base_df = pandas.DataFrame({
-		'chrom': ['chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr2', 'chr2', 
+		'chrom': ['chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr2', 'chr2',
 			'chr2', 'chr2', 'chr3', 'chr3', 'chr4', 'chr5', 'chr5'],
 		'start': [10, 40, 80, 120, 140, 40, 25, 120, 35, 5, 25, 20, 50, 80],
 		'end': [30, 60, 100, 140, 160, 60, 55, 140, 65, 25, 45, 40, 70, 100]
@@ -221,15 +221,15 @@ def test_interleave_loci_multi_str(short_loci1, short_loci2):
 
 	assert (df == base_df).all(None)
 
-	# 
+	#
 
 	df = _interleave_loci(["tests/data/test2.bed", "tests/data/test.bed"])
-	
+
 	assert_raises(ValueError, df.__eq__, short_loci1)
 	assert_raises(ValueError, df.__eq__, short_loci2)
 
 	base_df = pandas.DataFrame({
-		'chrom': ['chr1', 'chr1', 'chr1', 'chr1', 'chr2', 'chr1', 'chr2', 
+		'chrom': ['chr1', 'chr1', 'chr1', 'chr1', 'chr2', 'chr1', 'chr2',
 			'chr2', 'chr3', 'chr2', 'chr3', 'chr4', 'chr5', 'chr5'],
 		'start': [40, 10, 120, 80, 40, 140, 120, 25, 5, 35, 25, 20, 50, 80],
 		'end': [60, 30, 140, 100, 60, 160, 140, 55, 25, 65, 45, 40, 70, 100]
@@ -259,7 +259,7 @@ def test_interleave_loci_multi_chroms(short_loci1, short_loci2):
 	assert(not (df == short_loci2).all(None))
 
 	base_df = pandas.DataFrame({
-		'chrom': ['chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr2', 'chr2', 
+		'chrom': ['chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr2', 'chr2',
 			'chr2', 'chr2'],
 		'start': [10, 40, 80, 120, 140, 40, 25, 120, 35],
 		'end': [30, 60, 100, 140, 160, 60, 55, 140, 65]
@@ -267,16 +267,16 @@ def test_interleave_loci_multi_chroms(short_loci1, short_loci2):
 
 	assert (df == base_df).all(None)
 
-	# 
+	#
 
 	df = _interleave_loci(["tests/data/test2.bed", "tests/data/test.bed"],
 		chroms=chroms)
-	
+
 	assert_raises(ValueError, df.__eq__, short_loci1)
 	assert(not (df == short_loci2).all(None))
 
 	base_df = pandas.DataFrame({
-		'chrom': ['chr1', 'chr1', 'chr1', 'chr1', 'chr2', 'chr1', 'chr2', 
+		'chrom': ['chr1', 'chr1', 'chr1', 'chr1', 'chr2', 'chr1', 'chr2',
 			'chr2', 'chr2'],
 		'start': [40, 10, 120, 80, 40, 140, 120, 25, 35],
 		'end': [60, 30, 140, 100, 60, 160, 140, 55, 65]
@@ -289,7 +289,7 @@ def test_interleave_loci_bed10_summits_str():
 	df = _interleave_loci("tests/data/test2.bed10", summits=True)
 
 	base_df = pandas.DataFrame({
-		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4', 
+		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4',
 			'chr5', 'chr5'],
 		'start': [30, 111, 35, 122, 10, 15, 11, 42, 87],
 		'end': [50, 131, 55, 142, 30, 35, 31, 62, 107]
@@ -297,19 +297,19 @@ def test_interleave_loci_bed10_summits_str():
 
 	assert (df == base_df).all(None)
 
- 
+
 def test_interleave_loci_bed10_no_summits_str():
 	df = _interleave_loci("tests/data/test2.bed10", summits=False)
 
 	base_df = pandas.DataFrame({
-		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4', 
+		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4',
 			'chr5', 'chr5'],
 		'start': [40, 120, 40, 120, 5, 25, 20, 50, 80],
 		'end': [60, 140, 60, 140, 25, 45, 40, 70, 100]
 	})
 
 	assert (df == base_df).all(None)
-						  
+
 
 def test_interleave_loci_single_raises():
 	assert_raises(ValueError, _interleave_loci, 5)
@@ -318,20 +318,20 @@ def test_interleave_loci_single_raises():
 
 def test_interleave_loci_multi_raises():
 	assert_raises(ValueError, _interleave_loci, [5, 1])
-	assert_raises(ValueError, _interleave_loci, [numpy.random.randn(5, 5)])	
+	assert_raises(ValueError, _interleave_loci, [numpy.random.randn(5, 5)])
 
 
 def test_interleave_loci_multi_raises_chroms():
-	assert_raises(ValueError, _interleave_loci, ["tests/data/test2.bed", 
+	assert_raises(ValueError, _interleave_loci, ["tests/data/test2.bed",
 		"tests/data/test.bed"], 'chr1')
 
 
 def test_interleave_loci_raises_summits_bed():
-	assert_raises(ValueError, _interleave_loci, ["tests/data/test2.bed", 
+	assert_raises(ValueError, _interleave_loci, ["tests/data/test2.bed",
 		"tests/data/test.bed"], None, True)
 
 def test_interleave_loci_raises_summits_interleave():
-	assert_raises(ValueError, _interleave_loci, ["tests/data/test2.bed", 
+	assert_raises(ValueError, _interleave_loci, ["tests/data/test2.bed",
 		"tests/data/test.bed"], None, True)
 
 def test_interleave_loci_raises_summits_negative():
@@ -392,7 +392,7 @@ def test_load_signals_values():
 	bw = _load_signals(["tests/data/test.bw"])
 
 	vals = bw[0].values("chr1", 0, 20)
-	
+
 	assert type(vals) == numpy.ndarray
 	assert vals.shape == (20,)
 	assert_array_almost_equal(vals, [
@@ -427,7 +427,7 @@ def test_load_signals_nan():
 	assert len(bw) == 1
 	assert isinstance(bw, list)
 	assert numpy.isnan(vals).sum() == 20
-	
+
 	nan = numpy.nan
 	assert_array_almost_equal(vals, [
 		nan, nan, nan, nan, nan, nan, nan, nan, nan,  6.,  1., nan,  1.,
@@ -453,7 +453,7 @@ def test_load_signals_dict():
 
 
 def test_extract_locus_signal_single():
-	bw = pyBigWig.open("tests/data/test.bw")
+	bw = pybigtools.open("tests/data/test.bw")
 	signal = _extract_locus_signal([bw], 'chr1', 3, 14)
 
 	assert len(signal) == 1
@@ -462,7 +462,7 @@ def test_extract_locus_signal_single():
 	assert isinstance(signal, list)
 	assert isinstance(signal[0], numpy.ndarray)
 
-	assert_array_almost_equal(signal, [[0.897452, 0.928617, 1.562161, 0.662164, 
+	assert_array_almost_equal(signal, [[0.897452, 0.928617, 1.562161, 0.662164,
 		1.387003, 0.963338, 1.988053, 1.373694, 1.417226, 1.202522, 0.829855]])
 
 	signal = _extract_locus_signal([bw], 'chr2', 16, 30)
@@ -473,14 +473,14 @@ def test_extract_locus_signal_single():
 	assert isinstance(signal, list)
 	assert isinstance(signal[0], numpy.ndarray)
 
-	assert_array_almost_equal(signal, [[0.029941, 0.262425, 0.636352, 0.368483, 
-		1.263775, 1.253909, 1.099941, 1.176394, 2.038911, 0.193013, 0.367099, 
+	assert_array_almost_equal(signal, [[0.029941, 0.262425, 0.636352, 0.368483,
+		1.263775, 1.253909, 1.099941, 1.176394, 2.038911, 0.193013, 0.367099,
 		0.987924, 0.60746 , 0.387713]])
 
 
 def test_extract_locus_signal_multi():
-	bw = pyBigWig.open("tests/data/test.bw")
-	bw2 = pyBigWig.open("tests/data/test2.bw")
+	bw = pybigtools.open("tests/data/test.bw")
+	bw2 = pybigtools.open("tests/data/test2.bw")
 	signal = _extract_locus_signal([bw, bw2], 'chr1', 60, 67)
 
 	assert len(signal) == 2
@@ -489,8 +489,8 @@ def test_extract_locus_signal_multi():
 	assert isinstance(signal, list)
 	assert isinstance(signal[0], numpy.ndarray)
 
-	assert_array_almost_equal(signal, [[1.375648, 0.055379, 1.975644, 0.353604, 
-		0.106355, 0.151777, 1.656914], [0.070536, 1.10706 , 0.195981, 0.396659, 
+	assert_array_almost_equal(signal, [[1.375648, 0.055379, 1.975644, 0.353604,
+		0.106355, 0.151777, 1.656914], [0.070536, 1.10706 , 0.195981, 0.396659,
 		0.646639, 0.509053, 0.814386]])
 
 	signal = _extract_locus_signal([bw, bw2], 'chr2', 10, 15)
@@ -501,16 +501,16 @@ def test_extract_locus_signal_multi():
 	assert isinstance(signal, list)
 	assert isinstance(signal[0], numpy.ndarray)
 
-	assert_array_almost_equal(signal, [[2.127791, 0.102535, 0.436831, 0.434451, 
+	assert_array_almost_equal(signal, [[2.127791, 0.102535, 0.436831, 0.434451,
 		0.895565], [0.331885, 1.177428, 0.475862, 0.340272, 0.873283]])
 
 
 def test_extract_locus_signal_nan():
-	bw = pyBigWig.open("tests/data/test3.bw")
+	bw = pybigtools.open("tests/data/test3.bw")
 	signal = _extract_locus_signal([bw], 'chr1', 0, 40)[0]
-	
+
 	assert not numpy.isnan(signal).any()
-	
+
 	nan = 0.0
 	assert_array_almost_equal(signal, [
 		nan, nan, nan, nan, nan, nan, nan, nan, nan,  6.,  1., nan,  1.,
@@ -520,7 +520,7 @@ def test_extract_locus_signal_nan():
 
 
 def test_extract_locus_signal_raises_single():
-	bw = pyBigWig.open("tests/data/test.bw")
+	bw = pybigtools.open("tests/data/test.bw")
 	assert_raises(ValueError, _extract_locus_signal, bw, 'chr1', 3, 14)
 
 
@@ -580,40 +580,40 @@ def test_extract_loci_seq_jitter(loci_seqs):
 	assert X.sum() == 200
 
 	X_true = [
-		[[0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 
-		  0, 0, 0, 0, 1, 0, 0, 0], 
-		 [0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 
-		  0, 1, 1, 0, 0, 0, 0, 0], 
-		 [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 
-		  0, 0, 0, 0, 0, 1, 0, 1], 
-		 [0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 
-		  1, 0, 0, 1, 0, 0, 1, 0]], 
+		[[0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+		  0, 0, 0, 0, 1, 0, 0, 0],
+		 [0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0,
+		  0, 1, 1, 0, 0, 0, 0, 0],
+		 [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+		  0, 0, 0, 0, 0, 1, 0, 1],
+		 [0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+		  1, 0, 0, 1, 0, 0, 1, 0]],
 
-		[[0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 
-		  0, 0, 0, 1, 0, 0, 0, 1], 
-		 [0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 
-		  1, 0, 0, 0, 1, 0, 1, 0], 
-		 [0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 
-		  0, 0, 1, 0, 0, 0, 0, 0], 
-		 [1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 
-		  0, 1, 0, 0, 0, 1, 0, 0]], 
+		[[0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1,
+		  0, 0, 0, 1, 0, 0, 0, 1],
+		 [0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0,
+		  1, 0, 0, 0, 1, 0, 1, 0],
+		 [0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0,
+		  0, 0, 1, 0, 0, 0, 0, 0],
+		 [1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0,
+		  0, 1, 0, 0, 0, 1, 0, 0]],
 
-		[[1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 
-		  0, 0, 1, 0, 1, 0, 0, 0], 
-		 [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 
-		  0, 1, 0, 0, 0, 0, 1, 0], 
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 
-		  0, 0, 0, 0, 0, 0, 0, 0], 
-		 [0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 
-		  1, 0, 0, 1, 0, 1, 0, 1]], 
+		[[1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0,
+		  0, 0, 1, 0, 1, 0, 0, 0],
+		 [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1,
+		  0, 1, 0, 0, 0, 0, 1, 0],
+		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+		  0, 0, 0, 0, 0, 0, 0, 0],
+		 [0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0,
+		  1, 0, 0, 1, 0, 1, 0, 1]],
 
-		[[0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 
-		  0, 1, 0, 0, 1, 0, 0, 1], 
-		 [1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 
-		  0, 0, 1, 0, 0, 1, 0, 0], 
-		 [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-		  0, 0, 0, 0, 0, 0, 0, 0], 
-		 [0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 
+		[[0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0,
+		  0, 1, 0, 0, 1, 0, 0, 1],
+		 [1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1,
+		  0, 0, 1, 0, 0, 1, 0, 0],
+		 [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		  0, 0, 0, 0, 0, 0, 0, 0],
+		 [0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0,
 		  1, 0, 0, 1, 0, 0, 1, 0]]
 		]
 
@@ -632,14 +632,14 @@ def test_extract_loci_seq_alphabet(loci_seqs):
 	assert X.sum() == 50
 	assert_array_almost_equal(X[:, [0, 2, 1, 3]], loci_seqs)
 
-	X = extract_loci(loci, fasta, alphabet=['A', 'C', 'G', 'T', 'Z'], 
+	X = extract_loci(loci, fasta, alphabet=['A', 'C', 'G', 'T', 'Z'],
 		in_window=10)
 
 	assert X.shape == (5, 5, 10)
 	assert X.dtype == torch.int8
 	assert X.sum() == 50
 
-	expanded_loci_seqs = numpy.concatenate([loci_seqs, numpy.zeros([5, 1, 10])], 
+	expanded_loci_seqs = numpy.concatenate([loci_seqs, numpy.zeros([5, 1, 10])],
 		axis=1)
 
 	assert_array_almost_equal(X, expanded_loci_seqs)
@@ -661,10 +661,10 @@ def test_extract_loci_seq_no_lower(loci2_seqs):
 	loci = "tests/data/test2.bed"
 	fasta = "tests/data/test.fa"
 
-	X = extract_loci(loci, fasta, alphabet=['A', 'C', 'G', 'T', 'a'], 
+	X = extract_loci(loci, fasta, alphabet=['A', 'C', 'G', 'T', 'a'],
 		in_window=10)
 
-	loci2_seqs = numpy.concatenate([loci2_seqs, numpy.zeros([9, 1, 10])], 
+	loci2_seqs = numpy.concatenate([loci2_seqs, numpy.zeros([9, 1, 10])],
 		axis=1)
 
 	assert X.shape == (9, 5, 10)
@@ -674,7 +674,7 @@ def test_extract_loci_seq_no_lower(loci2_seqs):
 
 
 def test_extract_loci_seq_interleave(loci_seqs, loci2_seqs):
-	loci_seqs = numpy.concatenate([loci_seqs, loci2_seqs])[[0, 5, 1, 6, 2, 7, 3, 
+	loci_seqs = numpy.concatenate([loci_seqs, loci2_seqs])[[0, 5, 1, 6, 2, 7, 3,
 		8, 4, 9, 10, 11, 12, 13]]
 
 	X = extract_loci(["tests/data/test.bed", "tests/data/test2.bed"],
@@ -683,7 +683,7 @@ def test_extract_loci_seq_interleave(loci_seqs, loci2_seqs):
 	assert X.shape == (14, 4, 10)
 	assert X.dtype == torch.int8
 	assert X.sum() == 132
-	assert_array_almost_equal(X, loci_seqs)	
+	assert_array_almost_equal(X, loci_seqs)
 
 
 def test_extract_loci_seq_raises_loci():
@@ -691,7 +691,7 @@ def test_extract_loci_seq_raises_loci():
 
 
 def test_extract_loci_seq_raises_sequences():
-	assert_raises(pyfaidx.FastaNotFoundError, extract_loci, 
+	assert_raises(pyfaidx.FastaNotFoundError, extract_loci,
 		"tests/data/test.bed", "ACGTG")
 
 
@@ -752,7 +752,7 @@ def test_extract_loci_min_counts(loci_signal):
 	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
 	fasta = "tests/data/test.fa"
 
-	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10, 
+	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10,
 		min_counts=10, target_idx=0)
 
 	assert X.shape == (2, 4, 8)
@@ -761,11 +761,11 @@ def test_extract_loci_min_counts(loci_signal):
 
 	assert y.shape == (2, 2, 10)
 	assert y.dtype == torch.float32
-	assert all(y[:, 0].sum(axis=-1) > 10) 
+	assert all(y[:, 0].sum(axis=-1) > 10)
 	assert_array_almost_equal([abs(y).sum()], [36.2247], 4)
 
 
-	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10, 
+	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10,
 		min_counts=7, target_idx=1)
 
 	assert X.shape == (4, 4, 8)
@@ -774,7 +774,7 @@ def test_extract_loci_min_counts(loci_signal):
 
 	assert y.shape == (4, 2, 10)
 	assert y.dtype == torch.float32
-	assert all(y[:, 1].sum(axis=-1) > 7) 
+	assert all(y[:, 1].sum(axis=-1) > 7)
 	assert_array_almost_equal([abs(y).sum()], [66.8475], 4)
 
 
@@ -783,7 +783,7 @@ def test_extract_loci_max_counts(loci_signal):
 	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
 	fasta = "tests/data/test.fa"
 
-	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10, 
+	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10,
 		max_counts=10, target_idx=0)
 
 	assert X.shape == (3, 4, 8)
@@ -796,7 +796,7 @@ def test_extract_loci_max_counts(loci_signal):
 	assert_array_almost_equal([abs(y).sum()], [47.8011], 4)
 
 
-	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10, 
+	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10,
 		max_counts=7, target_idx=1)
 
 	assert X.shape == (1, 4, 8)
@@ -840,7 +840,7 @@ def test_extract_loci_controls(loci_signal):
 	controls = ["tests/data/test.bw", "tests/data/test2.bw"]
 	fasta = "tests/data/test.fa"
 
-	X, y, controls = extract_loci(loci, fasta, bw, controls, in_window=16, 
+	X, y, controls = extract_loci(loci, fasta, bw, controls, in_window=16,
 		out_window=10)
 
 	assert X.shape == (5, 4, 16)
@@ -891,9 +891,9 @@ def test_read_meme():
 	assert isinstance(motifs, dict)
 	assert all(isinstance(key, str) for key in motifs.keys())
 	assert all(isinstance(pwm, torch.Tensor) for pwm in motifs.values())
-	
+
 	assert all([key in motifs.keys() for key in keys])
-	assert_array_almost_equal(motifs['FOSL2+JUND_MA1145.1'], pwm) 
+	assert_array_almost_equal(motifs['FOSL2+JUND_MA1145.1'], pwm)
 
 
 def test_read_meme_n_motifs():
@@ -906,7 +906,7 @@ def test_read_meme_n_motifs():
 	assert isinstance(motifs, dict)
 	assert all(isinstance(key, str) for key in motifs.keys())
 	assert all(isinstance(pwm, torch.Tensor) for pwm in motifs.values())
-	
+
 	assert all([key in motifs.keys() for key in keys])
 
 

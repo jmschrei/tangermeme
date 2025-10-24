@@ -6,7 +6,6 @@ import torch
 import pytest
 import pandas
 import pyfaidx
-import pyBigWig
 
 
 from numpy.testing import assert_raises
@@ -65,7 +64,7 @@ def test_substitution_effect(X, substitutions):
 	assert y.shape == (3, 1)
 	assert y_var.shape == (3, 1)
 
-	assert_array_almost_equal(y, [[-0.0851], [-0.0855], [-0.0644]], 4) 
+	assert_array_almost_equal(y, [[-0.0851], [-0.0855], [-0.0644]], 4)
 	assert_array_almost_equal(y_var, [[-0.0835], [-0.0963], [-0.0644]], 4)
 
 
@@ -82,7 +81,7 @@ def test_substitution_effect_summodel(X, substitutions):
 	assert_array_almost_equal(y, [
 		[25, 24, 19, 32],
         [26, 18, 29, 27],
-        [28, 25, 21, 26]]) 
+        [28, 25, 21, 26]])
 	assert_array_almost_equal(y_var, [
 		[25, 25, 20, 30],
         [26, 20, 29, 25],
@@ -99,7 +98,7 @@ def test_deletion_effect(X_del, deletions):
 	assert y.shape == (3, 1)
 	assert y_var.shape == (3, 1)
 
-	assert_array_almost_equal(y, [[-0.0851], [-0.0976], [-0.0940]], 4) 
+	assert_array_almost_equal(y, [[-0.0851], [-0.0976], [-0.0940]], 4)
 	assert_array_almost_equal(y_var, [[-0.0814], [-0.0852], [-0.0940]], 4)
 
 
@@ -116,7 +115,7 @@ def test_deletion_effect_summodel(X_del, substitutions):
 	assert_array_almost_equal(y, [
 		[25, 24, 19, 32],
         [25, 18, 29, 28],
-        [30, 25, 19, 26]]) 
+        [30, 25, 19, 26]])
 	assert_array_almost_equal(y_var, [
 		[25, 25, 20, 30],
         [23, 18, 30, 29],
@@ -149,9 +148,8 @@ def test_insertion_effect_summodel(X, substitutions):
 	assert_array_almost_equal(y, [
 		[25, 24, 19, 32],
         [26, 18, 29, 27],
-        [28, 25, 21, 26]]) 
+        [28, 25, 21, 26]])
 	assert_array_almost_equal(y_var, [
 		[24., 24., 20., 32.],
         [26., 19., 28., 27.],
         [28., 25., 21., 26.]])
-	
