@@ -57,7 +57,7 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    tutorials/Tutorial_B1_Marginalization.ipynb
    tutorials/Tutorial_B2_Ablation.ipynb
    tutorials/Tutorial_B3_Spacing.ipynb
-   tutorials/Tutorial_B4_In_silico_Saturation_Mutagenesis.ipynb
+   tutorials/Tutorial_B4_Saturation_Mutagenesis.ipynb
    tutorials/Tutorial_B5_Variant_Effect.ipynb
    tutorials/Tutorial_B6_Design.ipynb
    tutorials/Tutorial_B7_Cartesian_Product.ipynb
