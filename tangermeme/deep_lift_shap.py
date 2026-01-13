@@ -85,6 +85,12 @@ def _register_hooks(module):
 		return
 	if not isinstance(module, tuple(module._NON_LINEAR_OPS.keys())):
 		return
+	
+	# Initialize stacks to handle shared/reused modules correctly
+    # When a module is used multiple times in forward pass, we need to
+    # store each input/output separately so backward pass gets correct values
+	module._input_stack = []
+	module._output_stack = []
 
 	module.handles = []
 	module.handles.append(module.register_forward_hook(_f_hook))
@@ -99,16 +105,30 @@ def _clear_hooks(module):
 
 		del module.handles
 
+	# Clean up stacks
+	if hasattr(module, "_input_stack"):
+		del module._input_stack
+	if hasattr(module, "_output_stack"):
+		del module._output_stack
+
 
 def _fp_hook(module, inputs): 
-	module.input = inputs[0].clone().detach()
+	# push to stack (don't overwrite) to handle shared modules
+	module._input_stack.append(inputs[0].clone().detach())
 
 
 def _f_hook(module, inputs, outputs):
-	module.output = outputs.clone().detach()
+	# push to stack (don't overwrite) to handle shared modules
+	module._output_stack.append(outputs.clone().detach())
 
 
 def _b_hook(module, grad_input, grad_output):
+	# Pop from stacks (LIFO order matches backward pass order)
+    # This ensures each backward call gets the correct input/output
+    # from the corresponding forward call, even for shared modules
+	module.input = module._input_stack.pop()
+	module.output = module._output_stack.pop()
+
 	return module._NON_LINEAR_OPS[type(module)](module, grad_input, 
 		grad_output)
 
