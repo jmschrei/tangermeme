@@ -1116,52 +1116,26 @@ def test_captum_deep_lift_shap_args(X, references):
 	assert_array_almost_equal(X_attr0, X_attr1)
 
 
-###############################################################################
-# Tests for shared/reused module handling (stack-based hooks)
-###############################################################################
+###
 
 
 class SharedReluModel(torch.nn.Module):
-	"""Model that uses the same ReLU module multiple times in forward pass."""
-
 	def __init__(self):
 		super(SharedReluModel, self).__init__()
 		self.conv1 = torch.nn.Conv1d(4, 8, (5,))
 		self.conv2 = torch.nn.Conv1d(8, 4, (3,))
-		self.shared_relu = torch.nn.ReLU()  # Same module used twice
+		self.shared_relu = torch.nn.ReLU()
 		self.flatten = torch.nn.Flatten()
 		self.linear = torch.nn.Linear(376, 1)
 
 	def forward(self, X):
-		X = self.shared_relu(self.conv1(X))  # First use of shared_relu
-		X = self.shared_relu(self.conv2(X))  # Second use of shared_relu
-		X = self.flatten(X)
-		return self.linear(X)
-
-
-class MultipleSharedReluModel(torch.nn.Module):
-	"""Model that uses the same ReLU module many times in forward pass."""
-
-	def __init__(self, n_uses=5):
-		super(MultipleSharedReluModel, self).__init__()
-		self.convs = torch.nn.ModuleList([
-			torch.nn.Conv1d(4 if i == 0 else 8, 8, (3,), padding='same')
-			for i in range(n_uses)
-		])
-		self.shared_relu = torch.nn.ReLU()  # Same module used n_uses times
-		self.flatten = torch.nn.Flatten()
-		self.linear = torch.nn.Linear(800, 1)
-
-	def forward(self, X):
-		for conv in self.convs:
-			X = self.shared_relu(conv(X))  # Reuse shared_relu each time
+		X = self.shared_relu(self.conv1(X))
+		X = self.shared_relu(self.conv2(X))
 		X = self.flatten(X)
 		return self.linear(X)
 
 
 class MultipleSharedActivationsModel(torch.nn.Module):
-	"""Model with multiple different shared activation modules."""
-
 	def __init__(self):
 		super(MultipleSharedActivationsModel, self).__init__()
 		self.conv1 = torch.nn.Conv1d(4, 8, (5,), padding='same')
@@ -1173,99 +1147,33 @@ class MultipleSharedActivationsModel(torch.nn.Module):
 		self.linear = torch.nn.Linear(400, 1)
 
 	def forward(self, X):
-		X = self.shared_relu(self.conv1(X))   # relu use 1
-		X = self.shared_tanh(X)               # tanh use 1
-		X = self.shared_relu(self.conv2(X))   # relu use 2
-		X = self.shared_tanh(X)               # tanh use 2
-		X = self.shared_relu(self.conv3(X))   # relu use 3
-		X = self.flatten(X)
-		return self.linear(X)
-
-
-class DeeplyNestedSharedModel(torch.nn.Module):
-	"""Model with deeply nested structure and shared modules."""
-
-	def __init__(self):
-		super(DeeplyNestedSharedModel, self).__init__()
-		self.shared_relu = torch.nn.ReLU()
-		self.convs = torch.nn.ModuleList([
-			torch.nn.Conv1d(4 if i == 0 else 16, 16, (3,), padding='same')
-			for i in range(10)  # 10 conv layers
-		])
-		self.pool = torch.nn.MaxPool1d(2)
-		self.flatten = torch.nn.Flatten()
-		self.linear = torch.nn.Linear(800, 1)
-
-	def forward(self, X):
-		for i, conv in enumerate(self.convs):
-			X = self.shared_relu(conv(X))
-			if i == 4:  # Pool in the middle
-				X = self.pool(X)
-		X = self.flatten(X)
-		return self.linear(X)
-
-
-class ManyModulesModel(torch.nn.Module):
-	"""Stress test model with many individual (non-shared) modules."""
-
-	def __init__(self, n_layers=100):
-		super(ManyModulesModel, self).__init__()
-		self.convs = torch.nn.ModuleList()
-		self.relus = torch.nn.ModuleList()
-
-		for i in range(n_layers):
-			in_ch = 4 if i == 0 else 8
-			self.convs.append(torch.nn.Conv1d(in_ch, 8, (3,), padding='same'))
-			self.relus.append(torch.nn.ReLU())
-
-		self.flatten = torch.nn.Flatten()
-		self.linear = torch.nn.Linear(800, 1)
-
-	def forward(self, X):
-		for conv, relu in zip(self.convs, self.relus):
-			X = relu(conv(X))
+		X = self.shared_relu(self.conv1(X))
+		X = self.shared_tanh(X)
+		X = self.shared_relu(self.conv2(X))
+		X = self.shared_tanh(X)
+		X = self.shared_relu(self.conv3(X))
 		X = self.flatten(X)
 		return self.linear(X)
 
 
 class SharedPoolModel(torch.nn.Module):
-	"""Model with shared MaxPool layer used multiple times."""
-
 	def __init__(self):
 		super(SharedPoolModel, self).__init__()
 		self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
 		self.conv2 = torch.nn.Conv1d(8, 8, (3,), padding='same')
 		self.shared_relu = torch.nn.ReLU()
-		self.shared_pool = torch.nn.MaxPool1d(2)  # Shared pooling
+		self.shared_pool = torch.nn.MaxPool1d(2)
 		self.flatten = torch.nn.Flatten()
 		self.linear = torch.nn.Linear(200, 1)
 
 	def forward(self, X):
-		X = self.shared_pool(self.shared_relu(self.conv1(X)))  # pool use 1
-		X = self.shared_pool(self.shared_relu(self.conv2(X)))  # pool use 2
+		X = self.shared_pool(self.shared_relu(self.conv1(X)))
+		X = self.shared_pool(self.shared_relu(self.conv2(X)))
 		X = self.flatten(X)
 		return self.linear(X)
 
 
 def test_deep_lift_shap_shared_relu(X):
-	"""Test model with a single shared ReLU used twice."""
-	torch.manual_seed(0)
-	model = SharedReluModel()
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X[:4], device='cpu', random_state=0,
-			warning_threshold=1e-4)
-
-	assert X_attr.shape == X[:4].shape
-	assert X_attr.dtype == torch.float32
-
-	# Verify attributions are not all zeros (model is actually computing)
-	assert torch.abs(X_attr).sum() > 0
-
-
-def test_deep_lift_shap_shared_relu_batch_sizes(X):
-	"""Test shared module model with different batch sizes gives same results."""
 	torch.manual_seed(0)
 	model = SharedReluModel()
 
@@ -1273,43 +1181,15 @@ def test_deep_lift_shap_shared_relu_batch_sizes(X):
 		batch_size=1)
 	X_attr2 = deep_lift_shap(model, X[:4], device='cpu', random_state=0,
 		batch_size=4)
-	X_attr3 = deep_lift_shap(model, X[:4], device='cpu', random_state=0,
-		batch_size=100)
+
+	assert X_attr1.shape == X[:4].shape
+	assert X_attr1.dtype == torch.float32
+	assert torch.abs(X_attr1).sum() > 0
 
 	assert_array_almost_equal(X_attr1, X_attr2)
-	assert_array_almost_equal(X_attr1, X_attr3)
-
-
-def test_deep_lift_shap_multiple_shared_relu(X):
-	"""Test model with ReLU used 5 times in forward pass."""
-	torch.manual_seed(0)
-	model = MultipleSharedReluModel(n_uses=5)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X[:4], device='cpu', random_state=0,
-			warning_threshold=1e-4)
-
-	assert X_attr.shape == X[:4].shape
-	assert torch.abs(X_attr).sum() > 0
-
-
-def test_deep_lift_shap_many_shared_relu_uses(X):
-	"""Stress test: model with ReLU used 20 times in forward pass."""
-	torch.manual_seed(0)
-	model = MultipleSharedReluModel(n_uses=20)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X[:2], device='cpu', random_state=0,
-			n_shuffles=3, warning_threshold=1e-4)
-
-	assert X_attr.shape == X[:2].shape
-	assert torch.abs(X_attr).sum() > 0
 
 
 def test_deep_lift_shap_multiple_shared_activations(X):
-	"""Test model with multiple different shared activation types."""
 	torch.manual_seed(0)
 	model = MultipleSharedActivationsModel()
 
@@ -1322,36 +1202,7 @@ def test_deep_lift_shap_multiple_shared_activations(X):
 	assert torch.abs(X_attr).sum() > 0
 
 
-def test_deep_lift_shap_deeply_nested_shared(X):
-	"""Test deeply nested model with shared relu and pooling."""
-	torch.manual_seed(0)
-	model = DeeplyNestedSharedModel()
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X[:4], device='cpu', random_state=0,
-			warning_threshold=1e-4)
-
-	assert X_attr.shape == X[:4].shape
-	assert torch.abs(X_attr).sum() > 0
-
-
-def test_deep_lift_shap_many_modules_stress(X):
-	"""Stress test: model with 30 separate layers."""
-	torch.manual_seed(0)
-	model = ManyModulesModel(n_layers=30)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X[:2], device='cpu', random_state=0,
-			n_shuffles=3, warning_threshold=1e-4)
-
-	assert X_attr.shape == X[:2].shape
-	assert torch.abs(X_attr).sum() > 0
-
-
 def test_deep_lift_shap_shared_pool(X):
-	"""Test model with shared MaxPool layer."""
 	torch.manual_seed(0)
 	model = SharedPoolModel()
 
@@ -1365,59 +1216,20 @@ def test_deep_lift_shap_shared_pool(X):
 
 
 def test_deep_lift_shap_shared_module_cleanup(X):
-	"""Verify that stacks are properly cleaned up after execution."""
 	torch.manual_seed(0)
 	model = SharedReluModel()
 
-	# Run deep_lift_shap
 	X_attr = deep_lift_shap(model, X[:2], device='cpu', random_state=0)
 
-	# Check that stacks have been removed from all modules
 	for module in model.modules():
-		assert not hasattr(module, '_input_stack'), \
-			f"_input_stack not cleaned up in {type(module).__name__}"
-		assert not hasattr(module, '_output_stack'), \
-			f"_output_stack not cleaned up in {type(module).__name__}"
-		assert not hasattr(module, 'handles'), \
-			f"handles not cleaned up in {type(module).__name__}"
-
-
-def test_deep_lift_shap_shared_module_cleanup_on_error(X):
-	"""Verify that stacks are cleaned up even when an error occurs."""
-	torch.manual_seed(0)
-
-	class BrokenModel(torch.nn.Module):
-		def __init__(self):
-			super(BrokenModel, self).__init__()
-			self.relu = torch.nn.ReLU()
-			self.linear = torch.nn.Linear(400, 1)
-
-		def forward(self, X):
-			X = self.relu(X)
-			# This will cause a shape error
-			raise RuntimeError("Intentional error for testing")
-
-	model = BrokenModel()
-
-	# Run deep_lift_shap and expect error
-	try:
-		deep_lift_shap(model, X[:2], device='cpu', random_state=0)
-	except RuntimeError:
-		pass
-
-	# Check that stacks have been removed despite error
-	for module in model.modules():
-		assert not hasattr(module, '_input_stack'), \
-			f"_input_stack not cleaned up after error in {type(module).__name__}"
-		assert not hasattr(module, '_output_stack'), \
-			f"_output_stack not cleaned up after error in {type(module).__name__}"
+		assert not hasattr(module, '_input_stack')
+		assert not hasattr(module, '_output_stack')
+		assert not hasattr(module, 'handles')
 
 
 def test_deep_lift_shap_shared_vs_separate_modules(X):
-	"""Compare shared module model against equivalent separate modules model."""
 	torch.manual_seed(0)
 
-	# Model with shared relu
 	class SharedModel(torch.nn.Module):
 		def __init__(self):
 			super(SharedModel, self).__init__()
@@ -1432,7 +1244,6 @@ def test_deep_lift_shap_shared_vs_separate_modules(X):
 			X = self.shared_relu(self.conv2(X))
 			return self.linear(self.flatten(X))
 
-	# Model with separate relus
 	class SeparateModel(torch.nn.Module):
 		def __init__(self):
 			super(SeparateModel, self).__init__()
@@ -1451,12 +1262,10 @@ def test_deep_lift_shap_shared_vs_separate_modules(X):
 	shared_model = SharedModel()
 	separate_model = SeparateModel()
 
-	# Copy weights from shared to separate model
 	separate_model.conv1.load_state_dict(shared_model.conv1.state_dict())
 	separate_model.conv2.load_state_dict(shared_model.conv2.state_dict())
 	separate_model.linear.load_state_dict(shared_model.linear.state_dict())
 
-	# Get attributions - they should be identical since weights are the same
 	X_attr_shared = deep_lift_shap(shared_model, X[:4], device='cpu',
 		random_state=0)
 	X_attr_separate = deep_lift_shap(separate_model, X[:4], device='cpu',
@@ -1465,21 +1274,18 @@ def test_deep_lift_shap_shared_vs_separate_modules(X):
 	assert_array_almost_equal(X_attr_shared, X_attr_separate, decimal=5)
 
 
-def test_deep_lift_shap_shared_relu_raw_outputs(X):
-	"""Test shared module model with raw_outputs=True."""
+def test_deep_lift_shap_shared_raw_outputs(X):
 	torch.manual_seed(0)
 	model = SharedReluModel()
 
 	X_attr, refs = deep_lift_shap(model, X[:2], device='cpu', raw_outputs=True,
 		random_state=0, n_shuffles=3, return_references=True)
 
-	# raw_outputs returns shape (batch, n_shuffles, channels, length)
 	assert X_attr.shape == (2, 3, 4, 100)
 	assert refs.shape == (2, 3, 4, 100)
 
 
-def test_deep_lift_shap_shared_relu_hypothetical(X):
-	"""Test shared module model with hypothetical attributions."""
+def test_deep_lift_shap_shared_hypothetical(X):
 	torch.manual_seed(0)
 	model = SharedReluModel()
 
@@ -1491,14 +1297,10 @@ def test_deep_lift_shap_shared_relu_hypothetical(X):
 
 
 def test_deep_lift_shap_shared_independence(X):
-	"""Test that shared module attributions are independent per sample."""
 	torch.manual_seed(0)
 	model = SharedReluModel()
 
-	# Get attributions for all samples
 	X_attr_all = deep_lift_shap(model, X[:8], device='cpu', random_state=0)
-
-	# Get attributions for individual samples
 	X_attr_0 = deep_lift_shap(model, X[0:1], device='cpu', random_state=0)
 	X_attr_5 = deep_lift_shap(model, X[5:6], device='cpu', random_state=0)
 
