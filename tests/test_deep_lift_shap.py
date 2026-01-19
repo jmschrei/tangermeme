@@ -1130,11 +1130,203 @@ def test_captum_deep_lift_shap_args(X, references):
 	assert_array_almost_equal(X_attr0, X_attr1)
 
 
-	X_attr0 = deep_lift_shap(model, X, args=(alpha, beta), 
+	X_attr0 = deep_lift_shap(model, X, args=(alpha, beta),
 		references=references, device='cpu', random_state=0)
-	X_attr1 = _captum_deep_lift_shap(model, X, args=(alpha, beta), 
+	X_attr1 = _captum_deep_lift_shap(model, X, args=(alpha, beta),
 		references=references, device='cpu', random_state=0)
 
 	assert X_attr0.shape == X_attr1.shape
 	assert X_attr0.dtype == X_attr1.dtype
 	assert_array_almost_equal(X_attr0, X_attr1)
+
+
+###
+
+
+class SharedReluModel(torch.nn.Module):
+	def __init__(self):
+		super(SharedReluModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (5,))
+		self.conv2 = torch.nn.Conv1d(8, 4, (3,))
+		self.shared_relu = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(376, 1)
+
+	def forward(self, X):
+		X = self.shared_relu(self.conv1(X))
+		X = self.shared_relu(self.conv2(X))
+		X = self.flatten(X)
+		return self.linear(X)
+
+
+class MultipleSharedActivationsModel(torch.nn.Module):
+	def __init__(self):
+		super(MultipleSharedActivationsModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (5,), padding='same')
+		self.conv2 = torch.nn.Conv1d(8, 8, (3,), padding='same')
+		self.conv3 = torch.nn.Conv1d(8, 4, (3,), padding='same')
+		self.shared_relu = torch.nn.ReLU()
+		self.shared_tanh = torch.nn.Tanh()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(400, 1)
+
+	def forward(self, X):
+		X = self.shared_relu(self.conv1(X))
+		X = self.shared_tanh(X)
+		X = self.shared_relu(self.conv2(X))
+		X = self.shared_tanh(X)
+		X = self.shared_relu(self.conv3(X))
+		X = self.flatten(X)
+		return self.linear(X)
+
+
+class SharedPoolModel(torch.nn.Module):
+	def __init__(self):
+		super(SharedPoolModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.conv2 = torch.nn.Conv1d(8, 8, (3,), padding='same')
+		self.shared_relu = torch.nn.ReLU()
+		self.shared_pool = torch.nn.MaxPool1d(2)
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(200, 1)
+
+	def forward(self, X):
+		X = self.shared_pool(self.shared_relu(self.conv1(X)))
+		X = self.shared_pool(self.shared_relu(self.conv2(X)))
+		X = self.flatten(X)
+		return self.linear(X)
+
+
+def test_deep_lift_shap_shared_relu(X):
+	torch.manual_seed(0)
+	model = SharedReluModel()
+
+	X_attr1 = deep_lift_shap(model, X[:4], device='cpu', random_state=0,
+		batch_size=1)
+	X_attr2 = deep_lift_shap(model, X[:4], device='cpu', random_state=0,
+		batch_size=4)
+
+	assert X_attr1.shape == X[:4].shape
+	assert X_attr1.dtype == torch.float32
+	assert torch.abs(X_attr1).sum() > 0
+
+	assert_array_almost_equal(X_attr1, X_attr2)
+
+
+def test_deep_lift_shap_multiple_shared_activations(X):
+	torch.manual_seed(0)
+	model = MultipleSharedActivationsModel()
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X[:4], device='cpu', random_state=0,
+			warning_threshold=1e-4)
+
+	assert X_attr.shape == X[:4].shape
+	assert torch.abs(X_attr).sum() > 0
+
+
+def test_deep_lift_shap_shared_pool(X):
+	torch.manual_seed(0)
+	model = SharedPoolModel()
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X[:4], device='cpu', random_state=0,
+			warning_threshold=1e-4)
+
+	assert X_attr.shape == X[:4].shape
+	assert torch.abs(X_attr).sum() > 0
+
+
+def test_deep_lift_shap_shared_module_cleanup(X):
+	torch.manual_seed(0)
+	model = SharedReluModel()
+
+	X_attr = deep_lift_shap(model, X[:2], device='cpu', random_state=0)
+
+	for module in model.modules():
+		assert not hasattr(module, '_input_stack')
+		assert not hasattr(module, '_output_stack')
+		assert not hasattr(module, 'handles')
+
+
+def test_deep_lift_shap_shared_vs_separate_modules(X):
+	torch.manual_seed(0)
+
+	class SharedModel(torch.nn.Module):
+		def __init__(self):
+			super(SharedModel, self).__init__()
+			self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
+			self.conv2 = torch.nn.Conv1d(8, 4, (3,), padding='same')
+			self.shared_relu = torch.nn.ReLU()
+			self.flatten = torch.nn.Flatten()
+			self.linear = torch.nn.Linear(400, 1)
+
+		def forward(self, X):
+			X = self.shared_relu(self.conv1(X))
+			X = self.shared_relu(self.conv2(X))
+			return self.linear(self.flatten(X))
+
+	class SeparateModel(torch.nn.Module):
+		def __init__(self):
+			super(SeparateModel, self).__init__()
+			self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
+			self.conv2 = torch.nn.Conv1d(8, 4, (3,), padding='same')
+			self.relu1 = torch.nn.ReLU()
+			self.relu2 = torch.nn.ReLU()
+			self.flatten = torch.nn.Flatten()
+			self.linear = torch.nn.Linear(400, 1)
+
+		def forward(self, X):
+			X = self.relu1(self.conv1(X))
+			X = self.relu2(self.conv2(X))
+			return self.linear(self.flatten(X))
+
+	shared_model = SharedModel()
+	separate_model = SeparateModel()
+
+	separate_model.conv1.load_state_dict(shared_model.conv1.state_dict())
+	separate_model.conv2.load_state_dict(shared_model.conv2.state_dict())
+	separate_model.linear.load_state_dict(shared_model.linear.state_dict())
+
+	X_attr_shared = deep_lift_shap(shared_model, X[:4], device='cpu',
+		random_state=0)
+	X_attr_separate = deep_lift_shap(separate_model, X[:4], device='cpu',
+		random_state=0)
+
+	assert_array_almost_equal(X_attr_shared, X_attr_separate, decimal=5)
+
+
+def test_deep_lift_shap_shared_raw_outputs(X):
+	torch.manual_seed(0)
+	model = SharedReluModel()
+
+	X_attr, refs = deep_lift_shap(model, X[:2], device='cpu', raw_outputs=True,
+		random_state=0, n_shuffles=3, return_references=True)
+
+	assert X_attr.shape == (2, 3, 4, 100)
+	assert refs.shape == (2, 3, 4, 100)
+
+
+def test_deep_lift_shap_shared_hypothetical(X):
+	torch.manual_seed(0)
+	model = SharedReluModel()
+
+	X_attr = deep_lift_shap(model, X[:4], hypothetical=True, device='cpu',
+		random_state=0)
+
+	assert X_attr.shape == X[:4].shape
+	assert torch.abs(X_attr).sum() > 0
+
+
+def test_deep_lift_shap_shared_independence(X):
+	torch.manual_seed(0)
+	model = SharedReluModel()
+
+	X_attr_all = deep_lift_shap(model, X[:8], device='cpu', random_state=0)
+	X_attr_0 = deep_lift_shap(model, X[0:1], device='cpu', random_state=0)
+	X_attr_5 = deep_lift_shap(model, X[5:6], device='cpu', random_state=0)
+
+	assert_array_almost_equal(X_attr_all[0:1], X_attr_0)
+	assert_array_almost_equal(X_attr_all[5:6], X_attr_5)
