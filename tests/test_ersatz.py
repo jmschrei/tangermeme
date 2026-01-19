@@ -18,10 +18,6 @@ from tangermeme.ersatz import randomize
 from tangermeme.ersatz import shuffle
 from tangermeme.ersatz import dinucleotide_shuffle
 
-import pandas
-import pyfaidx
-import pyBigWig
-
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
 
@@ -43,11 +39,11 @@ def test_insert_str(X):
 	assert X_insert.shape[-1] != X.shape[-1]
 	assert X_insert.sum() != X.sum()
 
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_insert.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_insert, X)
 
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACTGACGTACAT' + 
+	new_seq = ('CACATCATCTCATCATCTGCTGACTACTGACGTACAT' +
 		'CAGGTCTGACTGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 
@@ -65,11 +61,11 @@ def test_insert_ohe(X):
 	assert X_insert.shape[-1] != X.shape[-1]
 	assert X_insert.sum() != X.sum()
 
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_insert.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_insert, X)
 
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACTGACGTACAT' + 
+	new_seq = ('CACATCATCTCATCATCTGCTGACTACTGACGTACAT' +
 		'CAGGTCTGACTGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 
@@ -86,11 +82,11 @@ def test_insert_start(X):
 	assert X_insert.shape[:2] == X.shape[:2]
 	assert X_insert.shape[-1] != X.shape[-1]
 	assert X_insert.sum() != X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_insert.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_insert, X)
 
-	new_seq = ('CATCAGCACATCATCTCATCATCTGCTGACTAC' + 
+	new_seq = ('CATCAGCACATCATCTCATCATCTGCTGACTAC' +
 		'TGACGTAGTCTGACTGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 	assert_array_almost_equal(X_insert, new_seq_ohe)
@@ -102,11 +98,11 @@ def test_insert_start(X):
 	assert X_insert.shape[:2] == X.shape[:2]
 	assert X_insert.shape[-1] == 77
 	assert X_insert.sum() != X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_insert.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_insert, X)
 
-	new_seq = ('CACATCATCTCATCAGCCCCATCATCTGCTGACTACTGA' + 
+	new_seq = ('CACATCATCTCATCAGCCCCATCATCTGCTGACTACTGA' +
 		'CGTAGTCTGACTGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 	assert_array_almost_equal(X_insert, new_seq_ohe)
@@ -154,11 +150,11 @@ def test_substitute_str(X):
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACTGACCAT' + 
+	new_seq = ('CACATCATCTCATCATCTGCTGACTACTGACCAT' +
 		'CAGTGACTGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 
@@ -174,11 +170,11 @@ def test_substitute_ohe(X):
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACTGACCAT' + 
+	new_seq = ('CACATCATCTCATCATCTGCTGACTACTGACCAT' +
 		'CAGTGACTGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 
@@ -249,11 +245,11 @@ def test_substitute_start_str(X):
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
-	new_seq = ('CATCAGATCTCATCATCTGCTGACTACT' + 
+	new_seq = ('CATCAGATCTCATCATCTGCTGACTACT' +
 		'GACGTAGTCTGACTGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 	assert_array_almost_equal(X_substitute, new_seq_ohe)
@@ -264,7 +260,7 @@ def test_substitute_start_str(X):
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
@@ -280,11 +276,11 @@ def test_substitute_start_ohe(X):
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
-	new_seq = ('CATCAGATCTCATCATCTGCTGACTACT' + 
+	new_seq = ('CATCAGATCTCATCATCTGCTGACTACT' +
 		'GACGTAGTCTGACTGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 	assert_array_almost_equal(X_substitute, new_seq_ohe)
@@ -295,7 +291,7 @@ def test_substitute_start_ohe(X):
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
@@ -345,7 +341,7 @@ def test_delete(X):
 	assert X_delete.shape != X.shape
 	assert X_delete.shape[-1] == X.shape[-1] - 5
 	assert X_delete.sum() == X[:, :, 5:].sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_delete.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_delete, X)
 
@@ -356,7 +352,7 @@ def test_delete(X):
 	assert_array_almost_equal(X_delete[:, :, :10], X[:, :, :10])
 	assert_array_almost_equal(X_delete[:, :, 10:], X[:, :, 17:])
 
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_delete.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_delete, X)
 
@@ -383,11 +379,11 @@ def test_multisubstitute_str(X):
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACTCATCAG' + 
+	new_seq = ('CACATCATCTCATCATCTGCTGACTACTCATCAG' +
 		'CATCAGCTGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 
@@ -403,11 +399,11 @@ def test_multisubstitute_str_even(X):
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACATCAGTA' + 
+	new_seq = ('CACATCATCTCATCATCTGCTGACTACATCAGTA' +
 		'GTCATCAGGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 
@@ -423,11 +419,11 @@ def test_multisubstitute_str_odd(X):
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACATCAGTA' + 
+	new_seq = ('CACATCATCTCATCATCTGCTGACTACATCAGTA' +
 		'GTCCATCAGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 
@@ -443,11 +439,11 @@ def test_multisubstitute_ohe(X):
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACTCATCAG' + 
+	new_seq = ('CACATCATCTCATCATCTGCTGACTACTCATCAG' +
 		'CATCAGCTGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 
@@ -491,7 +487,7 @@ def test_multisubstitute_start(X):
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
@@ -511,26 +507,26 @@ def test_multisubstitute_start(X):
 	X_substitute = multisubstitute(X, motifs, spacing=[5, 4], start=10)
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
-	new_seq = ('CACATCATCTCATCATCTGAGCACTACCGACGTAG' + 
+	new_seq = ('CACATCATCTCATCATCTGAGCACTACCGACGTAG' +
 		'TCTGACTGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
-	assert_array_almost_equal(X_substitute, new_seq_ohe)	
+	assert_array_almost_equal(X_substitute, new_seq_ohe)
 
 
 def test_multisubstitute_raises_alphabet(X):
 	motif = one_hot_encode('CACCAG', alphabet=['A', 'C', 'G'])
 	assert_raises(ValueError, multisubstitute, X, [motif, motif], [0])
-	assert_raises(ValueError, multisubstitute, X, [motif, motif], [0], 
+	assert_raises(ValueError, multisubstitute, X, [motif, motif], [0],
 		['A', 'C', 'G'])
 
 
 def test_multisubstitute_raises_length(X):
 	assert_raises(ValueError, multisubstitute, X, ['C'*1000, 'C'], [0])
-	assert_raises(ValueError, multisubstitute, X, ['C', 
+	assert_raises(ValueError, multisubstitute, X, ['C',
 		one_hot_encode('C'*1000)], [0])
 
 
@@ -555,18 +551,18 @@ def test_randomize(X):
 	assert (X_rand[:, 0, :, :10] == X[:, :, :10]).all()
 	assert (X_rand[:, 0, :, 30:] == X[:, :, 30:]).all()
 
-	assert_raises(AssertionError, assert_array_almost_equal, 
+	assert_raises(AssertionError, assert_array_almost_equal,
 		X_rand.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_rand, X)
 
 
 def test_randomize_probs(X):
-	X_rand = randomize(X, start=10, end=30, probs=[[1.0, 0.0, 0.0, 0.0]], 
+	X_rand = randomize(X, start=10, end=30, probs=[[1.0, 0.0, 0.0, 0.0]],
 		random_state=0)
-	assert_array_almost_equal(X_rand[:, 0, :, 10:30].sum(dim=(0, -1)), 
+	assert_array_almost_equal(X_rand[:, 0, :, 10:30].sum(dim=(0, -1)),
 		[20, 0, 0, 0])
 
-	X_rand = randomize(X.repeat(2, 1, 1), start=10, end=30, 
+	X_rand = randomize(X.repeat(2, 1, 1), start=10, end=30,
 		probs=[[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], random_state=0)
 	assert_array_almost_equal(X_rand[0, 0, :, 10:30].sum(dim=-1), [20, 0, 0, 0])
 	assert_array_almost_equal(X_rand[1, 0, :, 10:30].sum(dim=-1), [0, 0, 20, 0])
@@ -577,12 +573,12 @@ def test_randomize_n(X):
 	assert X_rand.shape == (1, 12, 4, X.shape[-1])
 	assert (X_rand[0, 0:1] != X_rand[0]).any()
 
-	X_rand = randomize(X, start=10, end=30, probs=[[1.0, 0.0, 0.0, 0.0]], n=12, 
+	X_rand = randomize(X, start=10, end=30, probs=[[1.0, 0.0, 0.0, 0.0]], n=12,
 		random_state=0)
 	assert X_rand.shape == (1, 12, 4, X.shape[-1])
 	assert (X_rand[0, 0:1] == X_rand[0]).all()
 
-	X_rand = randomize(X.repeat(5, 1, 1), start=10, end=30, n=12, 
+	X_rand = randomize(X.repeat(5, 1, 1), start=10, end=30, n=12,
 		random_state=0)
 	assert X_rand.shape == (5, 12, 4, X.shape[-1])
 	assert (X_rand[:, 0:1] != X_rand).any()
@@ -596,13 +592,13 @@ def test_randomize_raises_ends(X):
 
 
 def test_randomize_raises_probs(X):
-	assert_raises(ValueError, randomize, X, start=5, end=10, 
+	assert_raises(ValueError, randomize, X, start=5, end=10,
 		probs=[[0.1, 0.8, 0.1]])
-	assert_raises(ValueError, randomize, X, start=5, end=10, 
+	assert_raises(ValueError, randomize, X, start=5, end=10,
 		probs=[[0.1, 0.8, 0.1, 0.0], [0.4, 0.3, 0.2]])
-	assert_raises(ValueError, randomize, X, start=5, end=10, 
+	assert_raises(ValueError, randomize, X, start=5, end=10,
 		probs=[0.1, 0.8, 0.1, 0.0])
-	assert_raises(ValueError, randomize, X, start=5, end=10, 
+	assert_raises(ValueError, randomize, X, start=5, end=10,
 		probs=[[0.1, 100.8, 0.1]])
 
 
@@ -677,7 +673,7 @@ def test_dinucleotide_shuffle_composition():
 				dinucs_shuffled[dinucs_seq[k:k+2]] += 1
 
 			for key, value in dinucs_shuffled.items():
-				assert dinucs[key] == value 
+				assert dinucs[key] == value
 
 
 def test_dinucleotide_shuffle_start_end():
@@ -703,7 +699,7 @@ def test_dinucleotide_shuffle_start_end():
 				dinucs_shuffled[dinucs_seq[k:k+2]] += 1
 
 			for key, value in dinucs_shuffled.items():
-				assert dinucs[key] == value 	
+				assert dinucs[key] == value
 
 
 def test_dinucleotide_shuffle_large_alphabet():
@@ -724,7 +720,7 @@ def test_dinucleotide_shuffle_large_alphabet():
 			dinucs_shuffled[dinucs_seq[i:i+2]] += 1
 
 		for key, value in dinucs_shuffled.items():
-			assert dinucs[key] == value 
+			assert dinucs[key] == value
 
 
 def test_dinucleotide_shuffle_missing_alphabet():
@@ -744,7 +740,7 @@ def test_dinucleotide_shuffle_missing_alphabet():
 			dinucs_shuffled[dinucs_seq[i:i+2]] += 1
 
 		for key, value in dinucs_shuffled.items():
-			assert dinucs[key] == value 
+			assert dinucs[key] == value
 
 
 def test_dinucleotide_shuffle_raises_short():
@@ -754,7 +750,7 @@ def test_dinucleotide_shuffle_raises_short():
 
 def test_dinucleotide_shuffle_raises_ohe():
 	seq = 'ATATATTAAAATTATTATATATTTATATATTTAAAAATTTTTAATA'
-	motif = one_hot_encode(seq).unsqueeze(0) 
+	motif = one_hot_encode(seq).unsqueeze(0)
 
 	assert_raises(ValueError, dinucleotide_shuffle, motif + 1)
 	assert_raises(ValueError, dinucleotide_shuffle, motif.unsqueeze(0))
