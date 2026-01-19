@@ -287,15 +287,7 @@ def greedy_substitution(model, X, y=None, motifs=None,
 	tic = time.time()
 	iteration = 0
 
-	X = torch.clone(X)
-	
-	if y is None:
-		y = [[9_999_999]]
-	
-	y = _cast_as_tensor(y)
-	if y.ndim == 1:
-		y = y.unsqueeze(0)
-	
+	X = torch.clone(X)	
 	y_orig = predict(model, X, args=args, batch_size=batch_size, device=device, 
 		verbose=False)
 
@@ -312,7 +304,16 @@ def greedy_substitution(model, X, y=None, motifs=None,
 	if input_mask is None:
 		input_mask = torch.ones(X.shape[-1], dtype=bool)
 
-	loss_prev = loss(y[:, output_mask], y_orig[:, output_mask]).mean()
+	if y is not None:
+		y = _cast_as_tensor(y)
+		if y.ndim == 1:
+			y = y.unsqueeze(0)
+
+		loss_prev = loss(y[:, output_mask], y_orig[:, output_mask]).mean()
+	else:
+		loss_prev = -y_orig[:, output_mask].mean()
+	
+	
 	loss_orig = loss_prev
 
 	if verbose:
@@ -322,6 +323,7 @@ def greedy_substitution(model, X, y=None, motifs=None,
 	while iteration < max_iter:
 		tic = time.time()
 		best_improvement, best_motif_idx, best_pos = 0, -1, -1
+		
 		for idx, motif in enumerate(tqdm(motifs, disable=not verbose)):
 			motif_ohe = one_hot_encode(motif, alphabet=alphabet).numpy()
 			
@@ -337,10 +339,14 @@ def greedy_substitution(model, X, y=None, motifs=None,
 			y_hat = predict(model, X_, args=args, batch_size=batch_size, 
 				device=device, verbose=False)
 
-			loss_curr = loss(
-				y[:, output_mask].expand_as(y_hat[:, output_mask]), 
-				y_hat[:, output_mask],
-			).mean(dim=tuple(range(1, len(y_hat.shape))))
+			if y is not None:
+				loss_curr = loss(
+					y[:, output_mask].expand_as(y_hat[:, output_mask]), 
+					y_hat[:, output_mask],
+				).mean(dim=tuple(range(1, len(y_hat.shape))))
+			else:
+				loss_curr = -y_hat[:, output_mask].mean(
+					dim=tuple(range(1, len(y_hat.shape))))
 			
 			pos = loss_curr.argmin()
 			loss_curr = loss_curr[pos]

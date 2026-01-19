@@ -16,11 +16,6 @@ from tqdm import tqdm
 from scipy.stats import ks_2samp
 from joblib import Parallel, delayed
 
-def _get_chrom_sizes_dict(fasta, chroms):
-	"""Returns a dictionary with the elements of `chroms` as keys and the
-	size of the chromosomes as values, extracted from the file `fasta`."""
-	with pyfaidx.Fasta(fasta) as genome_stream:
-		return {chrom:len(genome_stream[chrom]) for chrom in chroms}
 
 def _chrom_coords_generator(chrom, chrom_size, width):
 	"""Tiles a given `chrom` from 0 to `chrom_size`, returning region
@@ -375,7 +370,7 @@ def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 
 def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000, 
 	max_n_perc=0.1, gc_bin_width=0.02, bigwig=None, signal_beta=0.5, 
-	chroms=None, random_state=None, n_jobs=-1, verbose=False):
+	chroms=None, random_state=None, n_jobs=1, verbose=False):
 	"""Extract matching loci given a fasta file.
 
 	This function takes in a set of loci (a bed file or a pandas dataframe in 
@@ -462,13 +457,17 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 		loci = pandas.read_csv(loci, sep='\t', usecols=[0, 1, 2], header=None, 
 			index_col=False, names=['chrom', 'start', 'end'])
 
-	loci_chroms = numpy.unique(loci['chrom'])
-	if chroms is None:
-		chroms = loci_chroms
+	if chroms is not None:
+		loci = loci[numpy.isin(loci['chrom'], chroms)]
+	else:
+		chroms = numpy.unique(loci['chrom'])
 
-	chrom_sizes = _get_chrom_sizes_dict(fasta, loci_chroms)
+	fa = pyfaidx.Fasta(fasta)
+	chrom_sizes = {key: len(fa[key]) for key in chroms}
 
-	if verbose: print("Processing given loci.")
+	if verbose: 
+		print("Processing given loci.")
+	
 	coords = _loci_coords_generator(loci, max(in_window, out_window))
 	coords = list(_valid_generator(coords, chrom_sizes))
 	num_regions = len(coords)

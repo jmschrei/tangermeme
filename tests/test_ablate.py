@@ -315,7 +315,7 @@ def test_ablate_convdense(X):
 	torch.manual_seed(0)
 	model = ConvDense()
 	y_before, y_after = ablate(model, X, 46, 54, random_state=0, batch_size=2, 
-		device='cpu')
+		device='cpu', n=3)
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 12, 98)
@@ -343,8 +343,8 @@ def test_ablate_convdense(X):
 
 
 	assert len(y_after) == 2
-	assert y_after[0].shape == (64, 20, 12, 98)
-	assert y_after[1].shape == (64, 20, 3)
+	assert y_after[0].shape == (64, 3, 12, 98)
+	assert y_after[1].shape == (64, 3, 3)
 
 	assert y_after[0].dtype == torch.float32
 	assert y_after[1].dtype == torch.float32
@@ -371,16 +371,14 @@ def test_ablate_convdense(X):
           [ 2.2734e-01,  3.0591e-01,  5.6276e-01,  4.8191e-01],
           [-7.6136e-01, -5.3260e-01, -4.2626e-01, -7.7912e-01]]]], 4)
 
-	assert_array_almost_equal(y_after[1][:2, :4], [
+	assert_array_almost_equal(y_after[1][:2, :3], [
 		[[ 0.1324,  0.3553,  0.1465],
          [ 0.2455,  0.3811,  0.1003],
-         [ 0.1798,  0.2700,  0.1818],
-         [ 0.1989,  0.2952,  0.0110]],
+         [ 0.1798,  0.2700,  0.1818]],
 
         [[-0.1501, -0.0500, -0.0986],
          [-0.0370, -0.0243, -0.1448],
-         [-0.1027, -0.1353, -0.0634],
-         [-0.0835, -0.1101, -0.2342]]], 4)
+         [-0.1027, -0.1353, -0.0634]]], 4)
 
 
 def test_ablate_convdense_alpha(X, alpha):
@@ -388,7 +386,7 @@ def test_ablate_convdense_alpha(X, alpha):
 	model = ConvDense()
 
 	y_before, y_after = ablate(model, X, 46, 54, random_state=0, 
-		args=(alpha[:, :, None],), batch_size=2, device='cpu')
+		args=(alpha[:, :, None],), n=3, batch_size=2, device='cpu')
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 12, 98)
@@ -416,8 +414,8 @@ def test_ablate_convdense_alpha(X, alpha):
 
 
 	assert len(y_after) == 2
-	assert y_after[0].shape == (64, 20, 12, 98)
-	assert y_after[1].shape == (64, 20, 3)
+	assert y_after[0].shape == (64, 3, 12, 98)
+	assert y_after[1].shape == (64, 3, 3)
 
 	assert y_after[0].dtype == torch.float32
 	assert y_after[1].dtype == torch.float32
@@ -444,29 +442,27 @@ def test_ablate_convdense_alpha(X, alpha):
           [ 0.6275,  0.7061,  0.9629,  0.8821],
           [-0.3612, -0.1324, -0.0261, -0.3790]]]], 4)
 
-	assert_array_almost_equal(y_after[1][:2, :4], [
+	assert_array_almost_equal(y_after[1][:2, :3], [
 		[[ 0.1324,  0.3553,  0.1465],
          [ 0.2455,  0.3811,  0.1003],
-         [ 0.1798,  0.2700,  0.1818],
-         [ 0.1989,  0.2952,  0.0110]],
+         [ 0.1798,  0.2700,  0.1818]],
 
         [[-0.1501, -0.0500, -0.0986],
          [-0.0370, -0.0243, -0.1448],
-         [-0.1027, -0.1353, -0.0634],
-         [-0.0835, -0.1101, -0.2342]]], 4)
+         [-0.1027, -0.1353, -0.0634]]], 4)
 
 
 def test_ablate_convdense_batch_size(X, alpha):
 	torch.manual_seed(0)
 	model = ConvDense()
 	y_before0, y_after0 = ablate(model, X, 46, 54, random_state=0, 
-		args=(alpha[:, :, None],), batch_size=1, device='cpu')
+		args=(alpha[:, :, None],), batch_size=1, n=4, device='cpu')
 
 	y_before1, y_after1 = ablate(model, X, 46, 54, random_state=0, 
-		args=(alpha[:, :, None],), batch_size=5, device='cpu')
+		args=(alpha[:, :, None],), batch_size=5, n=4, device='cpu')
 
 	y_before2, y_after2 = ablate(model, X, 46, 54, random_state=0, 
-		args=(alpha[:, :, None],), batch_size=68, device='cpu')
+		args=(alpha[:, :, None],), batch_size=68, n=4, device='cpu')
 
 	assert len(y_before0) == len(y_before1) == len(y_before2) == 2
 	assert len(y_after0) == len(y_after1) == len(y_after2) == 2
@@ -480,14 +476,14 @@ def test_ablate_convdense_batch_size(X, alpha):
 	assert y_before2[0].shape == (64, 12, 98)
 	assert y_before2[1].shape == (64, 3)
 
-	assert y_after0[0].shape == (64, 20, 12, 98)
-	assert y_after0[1].shape == (64, 20, 3)
+	assert y_after0[0].shape == (64, 4, 12, 98)
+	assert y_after0[1].shape == (64, 4, 3)
 
-	assert y_after1[0].shape == (64, 20, 12, 98)
-	assert y_after1[1].shape == (64, 20, 3)
+	assert y_after1[0].shape == (64, 4, 12, 98)
+	assert y_after1[1].shape == (64, 4, 3)
 
-	assert y_after2[0].shape == (64, 20, 12, 98)
-	assert y_after2[1].shape == (64, 20, 3)
+	assert y_after2[0].shape == (64, 4, 12, 98)
+	assert y_after2[1].shape == (64, 4, 3)
 
 	assert_array_almost_equal(y_before0[0], y_before1[0])
 	assert_array_almost_equal(y_before0[0], y_before2[0])

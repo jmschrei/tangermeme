@@ -375,6 +375,30 @@ def test_deep_lift_shap_n_shuffles(X):
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr3)
 
 
+def test_deep_lift_shap_input_type(X):
+	torch.manual_seed(0)
+	model = SmallDeepSEA(n_outputs=1)
+
+	X_attr0 = deep_lift_shap(model, X, device='cpu', 
+		n_shuffles=5, random_state=0)
+	X_attr1 = deep_lift_shap(model, X.type(torch.int8), device='cpu', 
+		n_shuffles=5, random_state=0)
+	X_attr2 = deep_lift_shap(model, X.type(torch.int16), device='cpu',
+		n_shuffles=5, random_state=0)
+	X_attr3 = deep_lift_shap(model, X.type(torch.float16), device='cpu',
+		n_shuffles=5, random_state=0)
+	X_attr4 = deep_lift_shap(model, X.type(torch.bfloat16), device='cpu',
+		n_shuffles=5, random_state=0)
+	X_attr5 = deep_lift_shap(model, X.type(torch.int32), device='cpu',
+		n_shuffles=5, random_state=0)
+
+	assert_array_almost_equal(X_attr0, X_attr1)
+	assert_array_almost_equal(X_attr0, X_attr2)
+	assert_array_almost_equal(X_attr0, X_attr3)
+	assert_array_almost_equal(X_attr0, X_attr4)
+	assert_array_almost_equal(X_attr0, X_attr5)
+	
+
 def test_deep_lift_shap_shuffle_ordering(X):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()

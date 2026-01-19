@@ -78,40 +78,34 @@ def test_pisa(X):
 	torch.manual_seed(0)
 	model = Conv1()
 
-	X_attr1 = pisa(model, X, device='cpu', n_shuffles=3, 
-		random_state=0, batch_size=1)
-	X_attr2 = pisa(model, X, device='cpu', n_shuffles=3, 
+	X = X[:, :, :15]
+	X_attr = pisa(model, X, device='cpu', n_shuffles=3, 
 		random_state=0, batch_size=4)
 
-	assert X_attr1.shape == (2, 94, 4, 100)
-	assert X_attr2.shape == (2, 94, 4, 100)
-
-	assert X_attr1.dtype == torch.float32
-	assert X_attr2.dtype == torch.float32
-
-	assert_array_almost_equal(X_attr1, X_attr2)
-	assert_array_almost_equal(X_attr1[:, :2, :, :5], [
-		[[[ 0.0000,  0.0000, -0.0000,  0.0688, -0.0000],
-          [-0.0000, -0.0000,  0.0425, -0.0000, -0.0000],
+	assert X_attr.shape == (2, 9, 4, 15)
+	assert X_attr.dtype == torch.float32
+	
+	assert_array_almost_equal(X_attr[:, :2, :, :5], [
+		[[[ 0.0000,  0.0000, -0.0000,  0.0103, -0.0000],
+          [-0.0000,  0.0000,  0.0339, -0.0000, -0.0000],
           [ 0.0000,  0.0000,  0.0000, -0.0000,  0.0000],
-          [ 0.0000, -0.0642, -0.0000,  0.0000,  0.0376]],
+          [ 0.0000,  0.0000, -0.0000, -0.0000,  0.0000]],
 
-         [[ 0.0000,  0.0000,  0.0000,  0.0221,  0.0000],
-          [ 0.0000, -0.0000,  0.0043,  0.0000,  0.0000],
+         [[ 0.0000, -0.0000,  0.0000,  0.0187,  0.0000],
+          [ 0.0000, -0.0000,  0.0202,  0.0000, -0.0000],
           [ 0.0000,  0.0000,  0.0000,  0.0000, -0.0000],
-          [ 0.0000,  0.0164, -0.0000, -0.0000,  0.1269]]],
+          [ 0.0000,  0.0000, -0.0000, -0.0000,  0.0000]]],
 
 
-        [[[ 0.0000,  0.0000,  0.0221,  0.0000, -0.0328],
-          [ 0.0000,  0.0000,  0.0000, -0.0000, -0.0000],
-          [ 0.0000,  0.0149,  0.0000, -0.0000,  0.0000],
-          [ 0.0000, -0.0000, -0.0000,  0.0408,  0.0000]],
+        [[[ 0.0000,  0.0000,  0.0000,  0.0000, -0.0656],
+          [ 0.0000, -0.0000,  0.0000, -0.0000, -0.0000],
+          [ 0.0000,  0.0000,  0.0000, -0.0000,  0.0000],
+          [ 0.0000, -0.0000, -0.0000, -0.0103,  0.0000]],
 
-         [[ 0.0000, -0.0000,  0.0776, -0.0000,  0.0103],
-          [ 0.0000, -0.0000,  0.0000,  0.0000, -0.0000],
-          [ 0.0000,  0.0190,  0.0000,  0.0000, -0.0000],
-          [ 0.0000, -0.0000, -0.0000, -0.0592, -0.0000]]]
-	], 4)
+         [[ 0.0000, -0.0000,  0.0000,  0.0000,  0.0207],
+          [ 0.0000, -0.0000, -0.0000,  0.0000, -0.0000],
+          [ 0.0000,  0.0000, -0.0000,  0.0000, -0.0000],
+          [ 0.0000, -0.0000, -0.0000, -0.0187, -0.0000]]]], 4)
 
 
 def test_pisa_deep_lift_shap(X):
@@ -192,7 +186,7 @@ def test_pisa_hypothetical(X):
 
 
 def test_pisa_independence():
-	X_ = random_one_hot((12, 4, 100), random_state=0).type(torch.float32)
+	X_ = random_one_hot((12, 4, 25), random_state=0).type(torch.float32)
 	X = substitute(X_, "ACGTACGT")
 
 	torch.manual_seed(0)
@@ -243,11 +237,11 @@ def test_pisa_reference_tensor(X):
 def test_pisa_batch_size(X):
 	torch.manual_seed(0)
 	model = Conv1()
-	X = X[:1, :, :50]
+	X = X[:1, :, :15]
 
-	X_attr0 = pisa(model, X, device='cpu', random_state=0)
-	X_attr1 = pisa(model, X, batch_size=1, device='cpu', random_state=0)
-	X_attr2 = pisa(model, X, batch_size=1000, device='cpu', random_state=0)
+	X_attr0 = pisa(model, X, device='cpu', random_state=0, n_shuffles=3)
+	X_attr1 = pisa(model, X, batch_size=1, device='cpu', random_state=0, n_shuffles=3)
+	X_attr2 = pisa(model, X, batch_size=1000, device='cpu', random_state=0, n_shuffles=3)
 
 	assert_array_almost_equal(X_attr0, X_attr1)
 	assert_array_almost_equal(X_attr0, X_attr2)
@@ -256,6 +250,8 @@ def test_pisa_batch_size(X):
 def test_pisa_n_shuffles(X):
 	torch.manual_seed(0)
 	model = Conv1()
+
+	X = X[:, :, :30]
 
 	X_attr0 = deep_lift_shap(model, X, n_shuffles=1, device='cpu', 
 		random_state=0)

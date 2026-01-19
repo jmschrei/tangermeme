@@ -410,8 +410,8 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 		rj.append(i % n_shuffles)
 
 		if len(Xi) == batch_size or i == (n-1):
-			_X = X[Xi].cpu()
-			_args = None if args is None else tuple([a[Xi].to(device) 
+			_X = X[Xi].cpu().type(dtype)
+			_args = None if args is None else tuple([a[Xi].to(device).type(dtype)
 				for a in args])
 
 			# Handle reference sequences while ensuring that the same seed is
@@ -427,8 +427,8 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 						random_state=random_state+rj[j])[:, 0] 
 							for j in range(len(_X))])
 
-			_X = _X.to(device).requires_grad_()
-			_references = _references.to(device).requires_grad_()
+			_X = _X.to(device).type(dtype).requires_grad_()
+			_references = _references.to(device).type(dtype).requires_grad_()
 
 			# This next block is actually running DeepLIFT by concatenating the
 			# batch of examples and the batch of references and running the

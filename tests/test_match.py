@@ -295,30 +295,24 @@ def test_extract_and_filter_chrom_signal_threshold():
 ###
 
 
-
-	#def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000, 
-	#max_n_perc=0.1, gc_bin_width=0.02, bigwig=None, signal_beta=0.5, 
-	#chroms=None, random_state=None, verbose=False):
-
-
 def test_extract_matching_loci():
 	regions = extract_matching_loci("tests/data/test.bed", "tests/data/test.fa", 
 		chroms=['chr1'], in_window=10, out_window=10, random_state=0)
 
 	assert isinstance(regions, pandas.DataFrame)
-	assert regions.shape == (5, 3)
+	assert regions.shape == (3, 3)
 	assert tuple(regions.columns) == ('chrom', 'start', 'end')
 
 	assert numpy.unique(regions['chrom']).shape[0] == 1
 	assert numpy.unique(regions['chrom']) == ('chr1',)
-	assert tuple(regions['start']) == (70, 170, 190, 200, 240)
-	assert tuple(regions['end']) == (80, 180, 200, 210, 250)
+	assert tuple(regions['start']) == (70, 190, 240)
+	assert tuple(regions['end']) == (80, 200, 250)
 
-	X0 = extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10)
+	X0 = extract_loci("tests/data/test.bed", "tests/data/test.fa", chroms=['chr1'], in_window=10)
 	X1 = extract_loci(regions, "tests/data/test.fa", in_window=10)
 
-	assert X0[:, [1, 2]].sum() == 20
-	assert X1[:, [1, 2]].sum() == 21
+	assert X0[:, [1, 2]].sum() == 13
+	assert X1[:, [1, 2]].sum() == 13
 
 
 def test_extract_matching_loci_start_edge():

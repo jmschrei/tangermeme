@@ -2,11 +2,10 @@ from setuptools import setup
 
 setup(
     name='tangermeme',
-    version='1.0.0',
+    version='1.0.2',
     author='Jacob Schreiber',
     author_email='jmschreiber91@gmail.com',
     packages=['tangermeme'],
-    #scripts=['cmd/tangermeme'],
     url='https://github.com/jmschrei/tangermeme',
     license='LICENSE.txt',
     description='Biological sequence analysis for the modern age.',
