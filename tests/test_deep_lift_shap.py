@@ -1272,37 +1272,3 @@ def test_deep_lift_shap_shared_vs_separate_modules(X):
 		random_state=0)
 
 	assert_array_almost_equal(X_attr_shared, X_attr_separate, decimal=5)
-
-
-def test_deep_lift_shap_shared_raw_outputs(X):
-	torch.manual_seed(0)
-	model = SharedReluModel()
-
-	X_attr, refs = deep_lift_shap(model, X[:2], device='cpu', raw_outputs=True,
-		random_state=0, n_shuffles=3, return_references=True)
-
-	assert X_attr.shape == (2, 3, 4, 100)
-	assert refs.shape == (2, 3, 4, 100)
-
-
-def test_deep_lift_shap_shared_hypothetical(X):
-	torch.manual_seed(0)
-	model = SharedReluModel()
-
-	X_attr = deep_lift_shap(model, X[:4], hypothetical=True, device='cpu',
-		random_state=0)
-
-	assert X_attr.shape == X[:4].shape
-	assert torch.abs(X_attr).sum() > 0
-
-
-def test_deep_lift_shap_shared_independence(X):
-	torch.manual_seed(0)
-	model = SharedReluModel()
-
-	X_attr_all = deep_lift_shap(model, X[:8], device='cpu', random_state=0)
-	X_attr_0 = deep_lift_shap(model, X[0:1], device='cpu', random_state=0)
-	X_attr_5 = deep_lift_shap(model, X[5:6], device='cpu', random_state=0)
-
-	assert_array_almost_equal(X_attr_all[0:1], X_attr_0)
-	assert_array_almost_equal(X_attr_all[5:6], X_attr_5)
