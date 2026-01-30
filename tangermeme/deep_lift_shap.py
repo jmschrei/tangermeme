@@ -86,7 +86,8 @@ def _register_hooks(module):
 	if not isinstance(module, tuple(module._NON_LINEAR_OPS.keys())):
 		return
 
-	module._grad_context = {}  # Maps id(grad) -> (input, output)
+	# store I/O pairs keyed by id(grad)
+	module._grad_context = {} 
 
 	module.handles = []
 	module.handles.append(module.register_forward_hook(_f_hook))
@@ -111,9 +112,9 @@ def _f_hook(module, inputs, outputs):
 	captured_input = inputs[0].clone().detach()
 	captured_output = outputs.clone().detach()
 
+	# store I/O with unique identifier - leave grad untouched
 	def _store_context_for_backward(grad):
 		module._grad_context[id(grad)] = (captured_input, captured_output)
-		return grad
 
 	outputs.register_hook(_store_context_for_backward)
 
@@ -122,8 +123,9 @@ def _b_hook(module, grad_input, grad_output):
 	grad_id = id(grad_output[0])
 	context = module._grad_context.pop(grad_id, None)
 
+	# fallback for safety
 	if context is None:
-		return grad_input  # Graceful fallback
+		return grad_input
 
 	module.input, module.output = context
 	return module._NON_LINEAR_OPS[type(module)](module, grad_input, grad_output)
