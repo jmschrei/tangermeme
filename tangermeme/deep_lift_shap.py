@@ -80,21 +80,16 @@ def hypothetical_attributions(multipliers, X, references):
 	return (projected_contribs,)
 
 
-def _register_hooks(module): 
+def _register_hooks(module):
 	if len(module._backward_hooks) > 0:
 		return
 	if not isinstance(module, tuple(module._NON_LINEAR_OPS.keys())):
 		return
-	
-	# Initialize stacks to handle shared/reused modules correctly
-    # When a module is used multiple times in forward pass, we need to
-    # store each input/output separately so backward pass gets correct values
-	module._input_stack = []
-	module._output_stack = []
+
+	module._grad_context = {}  # Maps id(grad) -> (input, output)
 
 	module.handles = []
 	module.handles.append(module.register_forward_hook(_f_hook))
-	module.handles.append(module.register_forward_pre_hook(_fp_hook))
 	module.handles.append(module.register_full_backward_hook(_b_hook))
 
 
@@ -102,35 +97,36 @@ def _clear_hooks(module):
 	if hasattr(module, "handles") and len(module.handles) > 0:
 		for handle in module.handles:
 			handle.remove()
-
 		del module.handles
 
-	# Clean up stacks
-	if hasattr(module, "_input_stack"):
-		del module._input_stack
-	if hasattr(module, "_output_stack"):
-		del module._output_stack
-
-
-def _fp_hook(module, inputs): 
-	# push to stack (don't overwrite) to handle shared modules
-	module._input_stack.append(inputs[0].clone().detach())
+	if hasattr(module, "_grad_context"):
+		module._grad_context.clear()
+		del module._grad_context
 
 
 def _f_hook(module, inputs, outputs):
-	# push to stack (don't overwrite) to handle shared modules
-	module._output_stack.append(outputs.clone().detach())
+	if not outputs.requires_grad:
+		return
+
+	captured_input = inputs[0].clone().detach()
+	captured_output = outputs.clone().detach()
+
+	def _store_context_for_backward(grad):
+		module._grad_context[id(grad)] = (captured_input, captured_output)
+		return grad
+
+	outputs.register_hook(_store_context_for_backward)
 
 
 def _b_hook(module, grad_input, grad_output):
-	# Pop from stacks (LIFO order matches backward pass order)
-    # This ensures each backward call gets the correct input/output
-    # from the corresponding forward call, even for shared modules
-	module.input = module._input_stack.pop()
-	module.output = module._output_stack.pop()
+	grad_id = id(grad_output[0])
+	context = module._grad_context.pop(grad_id, None)
 
-	return module._NON_LINEAR_OPS[type(module)](module, grad_input, 
-		grad_output)
+	if context is None:
+		return grad_input  # Graceful fallback
+
+	module.input, module.output = context
+	return module._NON_LINEAR_OPS[type(module)](module, grad_input, grad_output)
 
 
 def _nonlinear(module, grad_input, grad_output):
