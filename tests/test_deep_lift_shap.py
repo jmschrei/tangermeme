@@ -27,6 +27,9 @@ from .toy_models import Scatter
 from .toy_models import ConvDense
 from .toy_models import ConvPoolDense
 from .toy_models import SmallDeepSEA
+from .toy_models import SharedReluModel
+from .toy_models import MultipleSharedActivationsModel
+from .toy_models import SharedPoolModel
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -1119,60 +1122,6 @@ def test_captum_deep_lift_shap_args(X, references):
 ###
 
 
-class SharedReluModel(torch.nn.Module):
-	def __init__(self):
-		super(SharedReluModel, self).__init__()
-		self.conv1 = torch.nn.Conv1d(4, 8, (5,))
-		self.conv2 = torch.nn.Conv1d(8, 4, (3,))
-		self.shared_relu = torch.nn.ReLU()
-		self.flatten = torch.nn.Flatten()
-		self.linear = torch.nn.Linear(376, 1)
-
-	def forward(self, X):
-		X = self.shared_relu(self.conv1(X))
-		X = self.shared_relu(self.conv2(X))
-		X = self.flatten(X)
-		return self.linear(X)
-
-
-class MultipleSharedActivationsModel(torch.nn.Module):
-	def __init__(self):
-		super(MultipleSharedActivationsModel, self).__init__()
-		self.conv1 = torch.nn.Conv1d(4, 8, (5,), padding='same')
-		self.conv2 = torch.nn.Conv1d(8, 8, (3,), padding='same')
-		self.conv3 = torch.nn.Conv1d(8, 4, (3,), padding='same')
-		self.shared_relu = torch.nn.ReLU()
-		self.shared_tanh = torch.nn.Tanh()
-		self.flatten = torch.nn.Flatten()
-		self.linear = torch.nn.Linear(400, 1)
-
-	def forward(self, X):
-		X = self.shared_relu(self.conv1(X))
-		X = self.shared_tanh(X)
-		X = self.shared_relu(self.conv2(X))
-		X = self.shared_tanh(X)
-		X = self.shared_relu(self.conv3(X))
-		X = self.flatten(X)
-		return self.linear(X)
-
-
-class SharedPoolModel(torch.nn.Module):
-	def __init__(self):
-		super(SharedPoolModel, self).__init__()
-		self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
-		self.conv2 = torch.nn.Conv1d(8, 8, (3,), padding='same')
-		self.shared_relu = torch.nn.ReLU()
-		self.shared_pool = torch.nn.MaxPool1d(2)
-		self.flatten = torch.nn.Flatten()
-		self.linear = torch.nn.Linear(200, 1)
-
-	def forward(self, X):
-		X = self.shared_pool(self.shared_relu(self.conv1(X)))
-		X = self.shared_pool(self.shared_relu(self.conv2(X)))
-		X = self.flatten(X)
-		return self.linear(X)
-
-
 def test_deep_lift_shap_shared_relu(X):
 	torch.manual_seed(0)
 	model = SharedReluModel()
@@ -1272,3 +1221,37 @@ def test_deep_lift_shap_shared_vs_separate_modules(X):
 		random_state=0)
 
 	assert_array_almost_equal(X_attr_shared, X_attr_separate, decimal=5)
+
+
+def test_deep_lift_shap_residual(X):
+	torch.manual_seed(0)
+
+	class ResidualModel(torch.nn.Module):
+		def __init__(self):
+			super(ResidualModel, self).__init__()
+			self.conv1 = torch.nn.Conv1d(4, 4, (3,), padding='same')
+			self.relu1 = torch.nn.ReLU()
+			self.conv2 = torch.nn.Conv1d(4, 4, (3,), padding='same')
+			self.relu2 = torch.nn.ReLU()
+			self.flatten = torch.nn.Flatten()
+			self.linear = torch.nn.Linear(400, 1)
+
+		def forward(self, X):
+			residual = X
+			X = self.relu1(self.conv1(X))
+			X = self.conv2(X)
+			X = self.relu2(X + residual)
+			return self.linear(self.flatten(X))
+
+	model = ResidualModel()
+
+	X_attr1 = deep_lift_shap(model, X[:4], device='cpu', random_state=0,
+		batch_size=1)
+	X_attr2 = deep_lift_shap(model, X[:4], device='cpu', random_state=0,
+		batch_size=4)
+
+	assert X_attr1.shape == X[:4].shape
+	assert X_attr1.dtype == torch.float32
+	assert torch.abs(X_attr1).sum() > 0
+
+	assert_array_almost_equal(X_attr1, X_attr2, decimal=4)

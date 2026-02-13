@@ -121,3 +121,57 @@ class SmallDeepSEA(torch.nn.Module):
 		X = X.reshape(X.shape[0], -1)
 		X = self.relu3(self.linear1(X))
 		return self.linear2(X)
+
+
+class SharedReluModel(torch.nn.Module):
+	def __init__(self):
+		super(SharedReluModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (5,))
+		self.conv2 = torch.nn.Conv1d(8, 4, (3,))
+		self.shared_relu = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(376, 1)
+
+	def forward(self, X):
+		X = self.shared_relu(self.conv1(X))
+		X = self.shared_relu(self.conv2(X))
+		X = self.flatten(X)
+		return self.linear(X)
+
+
+class MultipleSharedActivationsModel(torch.nn.Module):
+	def __init__(self):
+		super(MultipleSharedActivationsModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (5,), padding='same')
+		self.conv2 = torch.nn.Conv1d(8, 8, (3,), padding='same')
+		self.conv3 = torch.nn.Conv1d(8, 4, (3,), padding='same')
+		self.shared_relu = torch.nn.ReLU()
+		self.shared_tanh = torch.nn.Tanh()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(400, 1)
+
+	def forward(self, X):
+		X = self.shared_relu(self.conv1(X))
+		X = self.shared_tanh(X)
+		X = self.shared_relu(self.conv2(X))
+		X = self.shared_tanh(X)
+		X = self.shared_relu(self.conv3(X))
+		X = self.flatten(X)
+		return self.linear(X)
+
+
+class SharedPoolModel(torch.nn.Module):
+	def __init__(self):
+		super(SharedPoolModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.conv2 = torch.nn.Conv1d(8, 8, (3,), padding='same')
+		self.shared_relu = torch.nn.ReLU()
+		self.shared_pool = torch.nn.MaxPool1d(2)
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(200, 1)
+
+	def forward(self, X):
+		X = self.shared_pool(self.shared_relu(self.conv1(X)))
+		X = self.shared_pool(self.shared_relu(self.conv2(X)))
+		X = self.flatten(X)
+		return self.linear(X)
