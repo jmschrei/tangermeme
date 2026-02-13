@@ -175,3 +175,52 @@ class SharedPoolModel(torch.nn.Module):
 		X = self.shared_pool(self.shared_relu(self.conv2(X)))
 		X = self.flatten(X)
 		return self.linear(X)
+
+
+class ResidualModel(torch.nn.Module):
+	def __init__(self):
+		super(ResidualModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 4, (3,), padding='same')
+		self.relu1 = torch.nn.ReLU()
+		self.conv2 = torch.nn.Conv1d(4, 4, (3,), padding='same')
+		self.relu2 = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(400, 1)
+
+	def forward(self, X):
+		residual = X
+		X = self.relu1(self.conv1(X))
+		X = self.conv2(X)
+		X = self.relu2(X + residual)
+		return self.linear(self.flatten(X))
+
+
+class SharedSeparateModel(torch.nn.Module):
+	def __init__(self):
+		super(SharedSeparateModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.conv2 = torch.nn.Conv1d(8, 4, (3,), padding='same')
+		self.shared_relu = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(400, 1)
+
+	def forward(self, X):
+		X = self.shared_relu(self.conv1(X))
+		X = self.shared_relu(self.conv2(X))
+		return self.linear(self.flatten(X))
+
+
+class SeparateModel(torch.nn.Module):
+	def __init__(self):
+		super(SeparateModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.conv2 = torch.nn.Conv1d(8, 4, (3,), padding='same')
+		self.relu1 = torch.nn.ReLU()
+		self.relu2 = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(400, 1)
+
+	def forward(self, X):
+		X = self.relu1(self.conv1(X))
+		X = self.relu2(self.conv2(X))
+		return self.linear(self.flatten(X))
