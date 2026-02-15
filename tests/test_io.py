@@ -645,6 +645,30 @@ def test_extract_loci_seq_alphabet(loci_seqs):
 	assert_array_almost_equal(X, expanded_loci_seqs)
 
 
+def test_extract_loci_int(loci_seqs):
+	loci = "tests/data/test_int.bed"
+	fasta = "tests/data/test_int_chroms.fa"
+
+	X = extract_loci(loci, fasta, alphabet=['A', 'G', 'C', 'T'], in_window=10)
+
+	assert X.shape == (5, 4, 10)
+	assert X.dtype == torch.int8
+	assert X.sum() == 50
+	assert_array_almost_equal(X[:, [0, 2, 1, 3]], loci_seqs)
+
+	X = extract_loci(loci, fasta, alphabet=['A', 'C', 'G', 'T', 'Z'],
+		in_window=10)
+
+	assert X.shape == (5, 5, 10)
+	assert X.dtype == torch.int8
+	assert X.sum() == 50
+
+	expanded_loci_seqs = numpy.concatenate([loci_seqs, numpy.zeros([5, 1, 10])],
+		axis=1)
+
+	assert_array_almost_equal(X, expanded_loci_seqs)
+	
+
 def test_extract_loci_seq_N(loci2_seqs):
 	loci = "tests/data/test2.bed"
 	fasta = "tests/data/test.fa"

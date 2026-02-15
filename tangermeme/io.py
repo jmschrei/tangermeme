@@ -124,7 +124,7 @@ def _interleave_loci(loci, chroms=None, summits=False):
 			
 			df['start'] = mid - w // 2
 			df['end'] = mid + w // 2
-			df = df.drop(columns=['summit'], axis=1)
+			df = df.drop(columns=['summit'])
 		
 		# If filtering chromosomes, remove loci on unallowed chromosomes
 		if chroms is not None:
@@ -407,10 +407,10 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 	if isinstance(sequences, str):
 		sequences = pyfaidx.Fasta(sequences)
 		for key, value in sequences.items():
-			chrom_lengths[key] = len(value)
+			chrom_lengths[str(key)] = len(value)
 	else:
 		for key, value in sequences.items():
-			chrom_lengths[key] = sequences[key].shape[-1]
+			chrom_lengths[str(key)] = sequences[key].shape[-1]
 
 
 	# Create the exclusion zones from the exclusion lists, if provided
@@ -433,13 +433,13 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		end = mid + max(out_width, in_width) + max_jitter
 
 		# Does it fall off the end of a chromosome?
-		if start < 0 or end >= chrom_lengths[chrom]:
+		if start < 0 or end >= chrom_lengths[str(chrom)]:
 			kept_mask.append(False)
 			continue
 
 		if exclusion_zones is not None:
 			s, e = start // 100, end // 100 + 1
-			if exclusion_zones[chrom][s:e].any():
+			if exclusion_zones[str(chrom)][s:e].any():
 				kept_mask.append(False)
 				continue
 
@@ -448,7 +448,7 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		end = mid + out_width + max_jitter + (out_window % 2)
 
 		if signals is not None:
-			signal = _extract_locus_signal(signals, chrom, start, end)
+			signal = _extract_locus_signal(signals, str(chrom), start, end)
 
 			if min_counts is not None and signal[target_idx].sum() < min_counts:
 				kept_mask.append(False)
@@ -465,14 +465,14 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		end = mid + in_width + max_jitter + (in_window % 2)
 
 		if in_signals is not None:
-			in_signal = _extract_locus_signal(in_signals, chrom, start, end)
+			in_signal = _extract_locus_signal(in_signals, str(chrom), start, end)
 			in_signals_.append(in_signal)
 
 		# Extract a window of sequence using the input size
 		if isinstance(sequences, dict):
-			seq = sequences[chrom][:, start:end]
+			seq = sequences[str(chrom)][:, start:end]
 		else:
-			seq = one_hot_encode(sequences[chrom][start:end].seq.upper(),
+			seq = one_hot_encode(sequences[str(chrom)][start:end].seq.upper(),
 				alphabet=alphabet, ignore=ignore)
 
 		kept_mask.append(True)

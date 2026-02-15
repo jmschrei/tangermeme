@@ -37,8 +37,10 @@ def X0():
 
 
 def test_edit_distance_one(X):
-	X_one = _edit_distance_one(X[0], 0, -1)
-
+	X_ = X[0].repeat(X.shape[-1]*X[0].shape[0], 1, 1).numpy(force=True)
+	_edit_distance_one(X_, 0, X_.shape[-1])
+	X_one = torch.from_numpy(X_)
+	
 	assert X_one.dtype == torch.int8
 	assert X_one.shape == (40, 4, 10)
 	assert X_one.sum() == 400
@@ -87,7 +89,10 @@ def test_edit_distance_one(X):
 
 
 def test_edit_distance_one_start_end(X):
-	X_one = _edit_distance_one(X[0], 2, 5)
+	start, end = 2, 5
+	X_ = X[0].repeat((end-start)*X[0].shape[0], 1, 1).numpy(force=True)
+	_edit_distance_one(X_, start, end)
+	X_one = torch.from_numpy(X_)
 	assert X_one.shape == (12, 4, 10)
 
 	assert_array_almost_equal(X_one, [

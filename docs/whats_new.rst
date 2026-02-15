@@ -6,6 +6,18 @@ Release History
 ===============
 
 
+Version 1.0.3
+=============
+
+Highlights
+----------
+
+	- Sped up `saturation_mutagenesis` moderately by replacing `_edit_distance_one` with a numba function.
+	- Fixed a bug in `saturation_mutagenesis` when the sequence passed in is not on the CPU.
+	- Removed the upper bound on numpy requirements, so people can use numpy >= 2.0.0
+	- Added in a `only_warn` option to `_validate_input` and `deep_lift_shap` to override warnings if needed.
+
+
 Version 1.0.2
 =============
 

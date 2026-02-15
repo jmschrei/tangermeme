@@ -8,97 +8,112 @@ import torch
 from tqdm import tqdm
 
 
-def _validate_input(X, name, shape=None, dtype=None, min_value=None,
-	max_value=None, ohe=False, ohe_dim=1, allow_N=False):
-	"""An internal function for validating properties of the input.
+def _warn_or_raise(error, message, only_warn):
+	if only_warn:
+		print("Warning: {}".format(message))
+	else:
+		raise error(message)
 
+def _validate_input(X, name, shape=None, dtype=None, min_value=None,
+	max_value=None, ohe=False, ohe_dim=1, allow_N=False, only_warn=False):
+	"""An internal function for validating properties of the input.
+	
 	This function will take in an object and verify characteristics of it, such
 	as the type, the datatype of the elements, its shape, etc. If any of these
-	characteristics are not met, an error will be raised.
-
-
+	characteristics are not met, a warning or error will be raised.
+	
+	
 	Parameters
 	----------
 	X: torch.Tensor
 		The object to be verified.
-
+	
 	name: str
 		The name to reference the tensor by if an error is raised.
-
+	
 	shape: tuple or None, optional
 		The shape the tensor must have. If a -1 is provided at any axis, that
 		position is ignored.  If not provided, no check is performed. Default is
 		None.
-
+	
 	dtype: torch.dtype or None, optional
 		The dtype the tensor must have. If not provided, no check is performed.
 		Default is None.
-
+	
 	min_value: float or None, optional
 		The minimum value that can be in the tensor, inclusive. If None, no
 		check is performed. Default is None.
-
+	
 	max_value: float or None, optional
 		The maximum value that can be in the tensor, inclusive. If None, no
 		check is performed. Default is None.
-
+	
 	ohe: bool, optional
 		Whether the input must be a one-hot encoding, i.e., only consist of
 		zeroes and ones. Default is False.
-
+	
 	allow_N: bool, optional
 		Whether to allow the return of the character 'N' in the sequence, i.e.
 		if pwm at a position is all 0's return N. Default is False.
-
-
+	
+	only_warn: bool, optional
+		Whether to only warn when a violation is recorded instead of raise a
+		terminating error. This allows users to indicate that they know what they
+		are doing. Default is False.
+	
+	
 	Returns
+	-------
 	X: torch.Tensor
 		The same object, unmodified, for convenience.
 	"""
-
+	
 	if not isinstance(X, torch.Tensor):
-		raise ValueError("{} must be a torch.Tensor object".format(name))
-
+		_warn_or_raise(ValueError, "{} must be a torch.Tensor object".format(
+			name), only_warn)
+	
 	if shape is not None:
+		msg = "{} has shape {} but must have shape {}".format(
+			name, X.shape, shape) 
+		
 		if len(shape) != len(X.shape):
-			raise ValueError("{} has shape {} but must have shape {}".format(name, 
-				X.shape, shape))
-
+			_warn_or_raise(ValueError, msg, only_warn)
+	
 		for i in range(len(shape)):
 			if shape[i] != -1 and shape[i] != X.shape[i]:
-				raise ValueError("{} has shape {} but must have shape {}".format(name,
-					X.shape, shape))
-
-
+				_warn_or_raise(ValueError, msg, only_warn)
+	
 	if dtype is not None and X.dtype != dtype:
-		raise ValueError("{} has dtype {} but must have dtype {}".format(name, X.dtype, 
-			dtype))
-
+		_warn_or_raise(ValueError, "{} has dtype {} but must have dtype {}".format(
+			name, X.dtype, dtype), only_warn)
+	
 	if min_value is not None and X.min() < min_value:
-		raise ValueError("{} cannot have a value below {}".format(name,
-			min_value))
-
+		_warn_or_raise(ValueError, "{} cannot have a value below {}".format(
+			name, min_value), only_warn)
+	
 	if max_value is not None and X.max() > max_value:
 		raise ValueError("{} cannot have a value above {}".format(name,
-			max_value))
-
+			max_value), only_warn)
+	
 	if ohe:
 		values = torch.unique(X)
+		msg = "{} must be one-hot encoded.".format(name)
+		
 		if len(values) != 2:
-			raise ValueError("{} must be one-hot encoded.".format(name))
-
+			_warn_or_raise(ValueError, msg, only_warn)
+	
 		if not all(values == torch.tensor([0, 1], device=X.device)):
-			raise ValueError("{} must be one-hot encoded.".format(name))
-
+			_warn_or_raise(ValueError, msg, only_warn)
+	
 		if allow_N:
 			if not torch.all(torch.sum(X, axis=ohe_dim) <= 1):
-				raise ValueError("{} must be one-hot encoded.".format(name) +
-					"and contain unknown characters as all-zeroes.")
+				_warn_or_raise(ValueError, msg + "and contain unknown" \
+					" characters as all-zeroes.", only_warn)
 		else:
 			if not torch.all(X.sum(axis=ohe_dim) == 1):
-				raise ValueError("{} must be one-hot encoded ".format(name) +
-					"and cannot have unknown characters.")				
-
+				_warn_or_raise(ValueError, msg + "and cannot have unknown" \
+					" characters.", only_warn)			
+	
 	return X
 
 

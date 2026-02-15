@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='tangermeme',
-    version='1.0.2',
+    version='1.0.3',
     author='Jacob Schreiber',
     author_email='jmschreiber91@gmail.com',
     packages=['tangermeme'],
@@ -10,7 +10,7 @@ setup(
     license='LICENSE.txt',
     description='Biological sequence analysis for the modern age.',
     install_requires=[
-        "numpy >= 1.14.2, <= 2.0.1",
+        "numpy >= 1.14.2",
         "scipy >= 1.0.0",
         "pandas >= 1.3.3",
         "torch >= 1.9.0",

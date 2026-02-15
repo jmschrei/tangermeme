@@ -201,8 +201,8 @@ def _maxpool(module, grad_input, grad_output):
 def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 	references=dinucleotide_shuffle, n_shuffles=20, return_references=False, 
 	hypothetical=False, warning_threshold=0.001, additional_nonlinear_ops=None,
-	print_convergence_deltas=False, raw_outputs=False, dtype=None, device='cuda',
-	random_state=None, verbose=False):
+	print_convergence_deltas=False, raw_outputs=False, only_warn=False, 
+	dtype=None, device='cuda', random_state=None, verbose=False):
 	"""Calculate attributions for a set of sequences using DeepLIFT/SHAP.
 
 	This function will calculate the DeepLIFT/SHAP attributions on a set of
@@ -314,6 +314,11 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 		the multipliers for each example-reference pair -- or the processed
 		attribution values. Default is False.
 
+	only_warn: bool, optional
+		Whether to only warn when a violation is recorded instead of raise a
+		terminating error. This allows users to indicate that they know what they
+		are doing. Default is False.
+
 	dtype: str or torch.dtype or None, optional
 		The dtype to use with mixed precision autocasting. If None, use the dtype of
 		the *model*. This allows you to use int8 to represent large data sets and
@@ -346,7 +351,7 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 		`return_references = True`. 
 	"""
 
-	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True)
+	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, only_warn=only_warn)
 	
 	_NON_LINEAR_OPS = {
 		torch.nn.ReLU: _nonlinear,
@@ -400,7 +405,7 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 	attributions, references_, Xi, rj, attr_ = [], [], [], [], []
 	if isinstance(references, torch.Tensor):
 		_validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
-			X.shape[2]), ohe=True, allow_N=False, ohe_dim=-2)
+			X.shape[2]), ohe=True, allow_N=False, ohe_dim=-2, only_warn=only_warn)
 		n_shuffles = references.shape[1]
 
 	n, z = X.shape[0] * n_shuffles, 0
