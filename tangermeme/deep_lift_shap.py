@@ -80,15 +80,17 @@ def hypothetical_attributions(multipliers, X, references):
 	return (projected_contribs,)
 
 
-def _register_hooks(module): 
+def _register_hooks(module):
 	if len(module._backward_hooks) > 0:
 		return
 	if not isinstance(module, tuple(module._NON_LINEAR_OPS.keys())):
 		return
 
+	# store I/O pairs keyed by id(grad)
+	module._grad_context = {} 
+
 	module.handles = []
 	module.handles.append(module.register_forward_hook(_f_hook))
-	module.handles.append(module.register_forward_pre_hook(_fp_hook))
 	module.handles.append(module.register_full_backward_hook(_b_hook))
 
 
@@ -96,21 +98,37 @@ def _clear_hooks(module):
 	if hasattr(module, "handles") and len(module.handles) > 0:
 		for handle in module.handles:
 			handle.remove()
-
 		del module.handles
 
-
-def _fp_hook(module, inputs): 
-	module.input = inputs[0].clone().detach()
+	if hasattr(module, "_grad_context"):
+		module._grad_context.clear()
+		del module._grad_context
 
 
 def _f_hook(module, inputs, outputs):
-	module.output = outputs.clone().detach()
+	if not outputs.requires_grad:
+		return
+
+	captured_input = inputs[0].clone().detach()
+	captured_output = outputs.clone().detach()
+
+	# store I/O with unique identifier - leave grad untouched
+	def _store_context_for_backward(grad):
+		module._grad_context[id(grad)] = (captured_input, captured_output)
+
+	outputs.register_hook(_store_context_for_backward)
 
 
 def _b_hook(module, grad_input, grad_output):
-	return module._NON_LINEAR_OPS[type(module)](module, grad_input, 
-		grad_output)
+	grad_id = id(grad_output[0])
+	context = module._grad_context.pop(grad_id, None)
+
+	# fallback for safety
+	if context is None:
+		return grad_input
+
+	module.input, module.output = context
+	return module._NON_LINEAR_OPS[type(module)](module, grad_input, grad_output)
 
 
 def _nonlinear(module, grad_input, grad_output):

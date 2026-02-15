@@ -27,6 +27,12 @@ from .toy_models import Scatter
 from .toy_models import ConvDense
 from .toy_models import ConvPoolDense
 from .toy_models import SmallDeepSEA
+from .toy_models import SharedReluModel
+from .toy_models import MultipleSharedActivationsModel
+from .toy_models import SharedPoolModel
+from .toy_models import ResidualModel
+from .toy_models import SharedSeparateModel
+from .toy_models import SeparateModel
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -1130,11 +1136,84 @@ def test_captum_deep_lift_shap_args(X, references):
 	assert_array_almost_equal(X_attr0, X_attr1)
 
 
-	X_attr0 = deep_lift_shap(model, X, args=(alpha, beta), 
+	X_attr0 = deep_lift_shap(model, X, args=(alpha, beta),
 		references=references, device='cpu', random_state=0)
-	X_attr1 = _captum_deep_lift_shap(model, X, args=(alpha, beta), 
+	X_attr1 = _captum_deep_lift_shap(model, X, args=(alpha, beta),
 		references=references, device='cpu', random_state=0)
 
 	assert X_attr0.shape == X_attr1.shape
 	assert X_attr0.dtype == X_attr1.dtype
 	assert_array_almost_equal(X_attr0, X_attr1)
+
+
+###
+
+
+def test_deep_lift_shap_shared_relu(X):
+	torch.manual_seed(0)
+	model = SharedReluModel()
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0,
+			warning_threshold=1e-4)
+
+
+def test_deep_lift_shap_multiple_shared_activations(X):
+	torch.manual_seed(0)
+	model = MultipleSharedActivationsModel()
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0,
+			warning_threshold=1e-4)
+
+
+def test_deep_lift_shap_shared_pool(X):
+	torch.manual_seed(0)
+	model = SharedPoolModel()
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0,
+			warning_threshold=1e-4)
+
+
+def test_deep_lift_shap_shared_module_cleanup(X):
+	torch.manual_seed(0)
+	model = SharedReluModel()
+
+	X_attr = deep_lift_shap(model, X[:2], device='cpu', random_state=0)
+
+	for module in model.modules():
+		assert not hasattr(module, '_input_stack')
+		assert not hasattr(module, '_output_stack')
+		assert not hasattr(module, 'handles')
+
+
+def test_deep_lift_shap_shared_vs_separate_modules(X):
+	torch.manual_seed(0)
+
+	shared_model = SharedSeparateModel()
+	separate_model = SeparateModel()
+
+	separate_model.conv1.load_state_dict(shared_model.conv1.state_dict())
+	separate_model.conv2.load_state_dict(shared_model.conv2.state_dict())
+	separate_model.linear.load_state_dict(shared_model.linear.state_dict())
+
+	X_attr_shared = deep_lift_shap(shared_model, X[:4], device='cpu',
+		random_state=0)
+	X_attr_separate = deep_lift_shap(separate_model, X[:4], device='cpu',
+		random_state=0)
+
+	assert_array_almost_equal(X_attr_shared, X_attr_separate, decimal=5)
+
+
+def test_deep_lift_shap_residual(X):
+	torch.manual_seed(0)
+	model = ResidualModel()
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0,
+			warning_threshold=1e-4)
