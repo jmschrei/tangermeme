@@ -132,6 +132,8 @@ Note that for multi-task models a target must be set to calculate attributions f
 Given a predictive model and a set of known motifs, a common question is to ask what motifs affect the model's predictions. Rather than trying to scan these motifs against the genome and averaging predictions at all sites -- which is challenging and computationally costly -- you can simply substitute in the motif of interest into a background set of sequences and see what the difference in predictions is. Because `tangermeme` aims to be assumption-free, these functions take in a batch of examples that you specify, and return the predictions before and after adding the motif in for each example. If the model is multi-task, `y_before` and `y_after` will be a tuple of outputs. If the model is multi-input, additional inputs can be specified as a tuple passed into `args`. 
 
 ```python
+from tangermeme.marginalize import marginalize
+
 y_before, y_after = marginalize(model, X, "CTCAGTGATG")
 ```
 
@@ -155,6 +157,8 @@ attr_before, attr_after = marginalize(model, X, "CTCAGTGATG", func=deep_lift_sha
 The conceptual opposite of marginalization is ablation; rather than adding information to a sequence in the form of a motif, you remove information from it by shuffling out a portion of the sequence. This function will handle shuffling (or dinucleotide shuffling) the given number of times and returns the predictions for each shuffle. 
 
 ```python
+from tangermeme.ablate import ablate
+
 y_before, y_after = ablate(model, X, 995, 1005)
 ```
 
@@ -167,6 +171,8 @@ As you might expect, if we shuffle a sequence that has the GATA motif in the mid
 Motifs do not occur in isolation in the genome and so, frequently, we want to measure how these motifs interact with each other and how this changes across different spacings. This function takes in a set of motifs and either a fixed distance or one distance for each adjacent pair of motifs, returning the predictions before and after insertion of the full set of motifs.
 
 ```python
+from tangermeme.space import space
+
 y_before, y_after = space(model, X, ["CTCAGTGATG", "CTCAGTGATG"], spacing=10)
 ```
 
@@ -251,6 +257,9 @@ The TF-MoDISco seqlet calling algorithm is also implemented. See the seqlet tuto
 Because seqlets are called entirely based on attributions, it is sometimes unclear whether the sequence content is similar to any known motif. Now, you can use `annotate_seqlets` to match seqlets to a motif database using TOMTOM! By default this will give you the nearest motif match for each seqlet but can give you any number of matches you want.
 
 ```python
+from tangermeme.annotate import annotate_seqlets
+from tangermeme.io import read_meme
+
 motifs = read_meme("motifs.meme.txt")
 motif_idxs, motif_pvalues = annotate_seqlets(X, seqlets, motifs)
 ```
