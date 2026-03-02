@@ -33,6 +33,10 @@ from .toy_models import SharedPoolModel
 from .toy_models import ResidualModel
 from .toy_models import SharedSeparateModel
 from .toy_models import SeparateModel
+from .toy_models import TwoBranchConcatModel
+from .toy_models import TwoBranchAddModel
+from .toy_models import DeepResidualModel
+from .toy_models import SharedBranchModel
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -1218,3 +1222,51 @@ def test_deep_lift_shap_residual(X):
 		warnings.simplefilter("error", category=RuntimeWarning)
 		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0,
 			warning_threshold=1e-4)
+
+
+def test_deep_lift_shap_two_branch_concat(X):
+	torch.manual_seed(0)
+	model = TwoBranchConcatModel()
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0,
+			warning_threshold=1e-4)
+
+	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_two_branch_add(X):
+	torch.manual_seed(0)
+	model = TwoBranchAddModel()
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0,
+			warning_threshold=1e-4)
+
+	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_deep_residual(X):
+	torch.manual_seed(0)
+	model = DeepResidualModel()
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0,
+			warning_threshold=1e-4)
+
+	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_shared_branch(X):
+	torch.manual_seed(0)
+	model = SharedBranchModel()
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0,
+			warning_threshold=1e-4)
+
+	assert X_attr.shape == X.shape
