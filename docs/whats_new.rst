@@ -6,6 +6,54 @@ Release History
 ===============
 
 
+Version 1.0.3
+=============
+
+Highlights
+----------
+
+	- Sped up `saturation_mutagenesis` moderately by replacing `_edit_distance_one` with a numba function.
+	- Fixed a bug in `saturation_mutagenesis` when the sequence passed in is not on the CPU.
+	- Removed the upper bound on numpy requirements, so people can use numpy >= 2.0.0
+	- Added in a `only_warn` option to `_validate_input` and `deep_lift_shap` to override warnings if needed.
+
+
+Version 1.0.2
+=============
+
+Highlights
+----------
+
+	- Fixed `extract_matching_loci` not respecting the `chrom` parameter
+
+
+Version 1.0.1
+=============
+
+Highlights
+----------
+
+	- The slowest unit tests have been refocused, bringing total unit test time from ~75s to ~33s.
+
+
+deep_lift_shap
+--------------
+
+	- Add conversion to model dtype to improve usability, and appropriate unit test.
+
+
+design
+------
+
+	- Changed `greedy_substitution` without `y` to not make a pseudo target and instead truly just try to maximize predictions. In principle, the pseudo target works identically, but can lead to overflow of values in some settings and is generally less precise.
+
+
+
+match
+-----
+
+	- Set default n_jobs from -1 to 1 to avoid Child Process Errors on small tasks.
+
 
 Version 1.0.0
 =============

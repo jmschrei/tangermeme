@@ -362,7 +362,7 @@ def test_greedy_substitution_no_y(X):
 	X_hat = greedy_substitution(model, X, device='cpu', max_iter=15)
 	y_hat = predict(model, X_hat, device='cpu')
 
-	assert_array_almost_equal(y_hat, [[-0.085115]])
+	assert_array_almost_equal(y_hat, [[-0.01224]])
 
 
 ###
