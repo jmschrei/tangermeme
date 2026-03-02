@@ -1162,8 +1162,9 @@ def test_deep_lift_shap_shared_module_cleanup(X):
 	X_attr = deep_lift_shap(model, X[:2], device='cpu', random_state=0)
 
 	for module in model.modules():
-		assert not hasattr(module, '_input_stack')
-		assert not hasattr(module, '_output_stack')
+		assert not hasattr(module, '_io_pairs')
+		assert not hasattr(module, '_fwd_counter')
+		assert not hasattr(module, '_bw_idx')
 		assert not hasattr(module, 'handles')
 
 
