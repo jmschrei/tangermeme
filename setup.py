@@ -18,7 +18,6 @@ setup(
         "pyfaidx >= 0.7.2.1",
         "tqdm >= 4.64.1",
         "numba >= 0.55.1",
-        "logomaker",
         "joblib >= 1.3.2",
         "scikit-learn >= 1.2.2",
         "matplotlib",

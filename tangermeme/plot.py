@@ -4,13 +4,21 @@
 import torch
 import numpy
 import pandas
-import logomaker
+
+import matplotlib
+import matplotlib.collections as mc
 
 from matplotlib import pyplot as plt
 from matplotlib.colors import ListedColormap
-import matplotlib
+from matplotlib.path import Path
+from matplotlib.font_manager import FontProperties
+from matplotlib.textpath import TextPath
+from matplotlib.transforms import Bbox
+from functools import lru_cache
 
 from .deep_lift_shap import deep_lift_shap
+
+import numpy as np
 
 
 #plot_logo helper functions for placing annotations
@@ -76,9 +84,30 @@ def place_new_bar(box, box_list, y_step=None, n_tracks=4, show_extra=True):
     return box, steps_down_taken
 
 
+@lru_cache(maxsize=4)
+def _base_path(char):
+    fp = FontProperties(family='monospace', weight='bold')
+    tp = TextPath((0, 0), char, size=1, prop=fp)
+    bbox = tp.get_extents()
+    verts = (tp.vertices - [bbox.x0, bbox.y0]) / [bbox.width, bbox.height]
+    return verts, tp.codes.copy()
+
+
+def get_glyph_path(char, x, y, width, height, flip=False):
+    verts, codes = _base_path(char)
+    v = verts.copy()
+    v[:, 0] = v[:, 0] * width + x
+    if flip:
+        v[:, 1] = (1 - v[:, 1]) * height + y
+    else:
+        v[:, 1] = v[:, 1] * height + y
+    return Path(v, codes)
+
+
 def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None, 
-	end=None, ylim=None, spacing=4, n_tracks=4, score_key='score', 
-	show_extra=True, show_score=True, annot_cmap="Set1"):
+	end=None, ylim=None, spacing=4, n_tracks=4, alphabet=["A", "C", "G", "T"],
+	min_height_pct=0.02, score_key='score', show_extra=True, show_score=True, 
+	annot_cmap="Set1"):
 	"""Make a logo plot and optionally annotate it.
 
 	This function will take in a matrix of weights for each character in a
@@ -90,8 +119,6 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
 	contents described below in the parameters section. These annotations will
 	be displayed underneath the characters in a manner that tries to avoid
 	overlap across annotations.
-
-	This function is largely a thin-wrapper around logomaker.
 
 
 	Parameters
@@ -179,25 +206,64 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
 	# Main glyph plotting code
 	###
 
-
+	if isinstance(X_attr, torch.Tensor): 
+		X_attr = X_attr.numpy(force=True)
+		
 	if start is not None and end is not None:
 		X_attr = X_attr[:, start:end]
-
+	
 	if ax is None:
 		ax = plt.gca()
-
-	df = pandas.DataFrame(X_attr.T, columns=['A', 'C', 'G', 'T'])
-	df.index.name = 'pos'
-
-	logo = logomaker.Logo(df, ax=ax)
-	logo.style_spines(visible=False)
-
-	if color is not None:
-		alpha = numpy.array(['A', 'C', 'G', 'T'])
-		seq = ''.join(alpha[numpy.abs(df.values).argmax(axis=1)])
-		logo.style_glyphs_in_sequence(sequence=seq, color=color)
-
-
+	
+	if color is None:
+		color = {
+			'G': [1, .65, 0],
+			'T': [1, 0, 0],
+			'C': [0, 0, 1],
+			'A': [0, .5, 0]
+		}
+	elif isinstance(color, str):
+		color = {char: color for char in alphabet}
+	elif isinstance(color, dict):
+		pass # Use the dictionary
+	else:
+		raise ValueError("`color` must be string, dictionary, or None.")
+	
+	paths, facecolors = [], []
+	
+	threshold = 0.0
+	if min_height_pct is not None:
+		threshold = np.abs(X_attr).max() * min_height_pct
+	
+	for pos in range(X_attr.shape[-1]):
+		heights = X_attr[:, pos]
+		order = np.argsort(heights)
+		y_pos, y_neg = 0.0, 0.0
+	
+		for idx in order:
+			h = heights[idx]
+			if abs(h) < threshold:
+				continue
+	
+			if h > 0:
+				paths.append(get_glyph_path(alphabet[idx], pos, y_pos, 0.95, h))
+				facecolors.append(color[alphabet[idx]])
+				y_pos += h
+			else:
+				y_neg += h
+				facecolors.append(color[alphabet[idx]])
+				paths.append(get_glyph_path(alphabet[idx], pos, y_neg, 0.95, -h, flip=True))
+	
+	pos_total = np.sum(np.where(X_attr > 0, X_attr, 0), axis=0).max()
+	neg_total = np.sum(np.where(X_attr < 0, X_attr, 0), axis=0).min()
+	
+	col = mc.PathCollection(paths, facecolors=facecolors, edgecolors='none', lw=0)
+	ax.add_collection(col)
+	ax.set_xlim(-0.1, X_attr.shape[-1])
+	ax.set_ylim(neg_total, pos_total)
+	ax.spines[['top', 'right', 'bottom']].set_visible(False)
+	
+	
 	###
 	# Handling potentially overlapping annotations
 	###
@@ -324,7 +390,7 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
 					for bar_box in bars_box_objects:
 							bar_box.set_color((0,0,0))
 
-	return logo
+	return ax
 
 
 def plot_categorical_scatter(X, colors=None, **kwargs):

@@ -8,7 +8,7 @@ import pandas
 from .io import read_meme
 from .utils import _validate_input
 
-from memelite import tomtom
+from memelite.tomtom import tomtom
 
 
 def annotate_seqlets(X, seqlets, motifs, n_nearest=1, n_jobs=-1, **kwargs):
