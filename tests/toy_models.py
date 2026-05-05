@@ -121,3 +121,181 @@ class SmallDeepSEA(torch.nn.Module):
 		X = X.reshape(X.shape[0], -1)
 		X = self.relu3(self.linear1(X))
 		return self.linear2(X)
+
+
+class SharedReluModel(torch.nn.Module):
+	def __init__(self):
+		super(SharedReluModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (5,))
+		self.conv2 = torch.nn.Conv1d(8, 4, (3,))
+		self.shared_relu = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(376, 1)
+
+	def forward(self, X):
+		X = self.shared_relu(self.conv1(X))
+		X = self.shared_relu(self.conv2(X))
+		X = self.flatten(X)
+		return self.linear(X)
+
+
+class MultipleSharedActivationsModel(torch.nn.Module):
+	def __init__(self):
+		super(MultipleSharedActivationsModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (5,), padding='same')
+		self.conv2 = torch.nn.Conv1d(8, 8, (3,), padding='same')
+		self.conv3 = torch.nn.Conv1d(8, 4, (3,), padding='same')
+		self.shared_relu = torch.nn.ReLU()
+		self.shared_tanh = torch.nn.Tanh()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(400, 1)
+
+	def forward(self, X):
+		X = self.shared_relu(self.conv1(X))
+		X = self.shared_tanh(X)
+		X = self.shared_relu(self.conv2(X))
+		X = self.shared_tanh(X)
+		X = self.shared_relu(self.conv3(X))
+		X = self.flatten(X)
+		return self.linear(X)
+
+
+class SharedPoolModel(torch.nn.Module):
+	def __init__(self):
+		super(SharedPoolModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.conv2 = torch.nn.Conv1d(8, 8, (3,), padding='same')
+		self.shared_relu = torch.nn.ReLU()
+		self.shared_pool = torch.nn.MaxPool1d(2)
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(200, 1)
+
+	def forward(self, X):
+		X = self.shared_pool(self.shared_relu(self.conv1(X)))
+		X = self.shared_pool(self.shared_relu(self.conv2(X)))
+		X = self.flatten(X)
+		return self.linear(X)
+
+
+class ResidualModel(torch.nn.Module):
+	def __init__(self):
+		super(ResidualModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 4, (3,), padding='same')
+		self.relu1 = torch.nn.ReLU()
+		self.conv2 = torch.nn.Conv1d(4, 4, (3,), padding='same')
+		self.relu2 = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(400, 1)
+
+	def forward(self, X):
+		residual = X
+		X = self.relu1(self.conv1(X))
+		X = self.conv2(X)
+		X = self.relu2(X + residual)
+		return self.linear(self.flatten(X))
+
+
+class SharedSeparateModel(torch.nn.Module):
+	def __init__(self):
+		super(SharedSeparateModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.conv2 = torch.nn.Conv1d(8, 4, (3,), padding='same')
+		self.shared_relu = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(400, 1)
+
+	def forward(self, X):
+		X = self.shared_relu(self.conv1(X))
+		X = self.shared_relu(self.conv2(X))
+		return self.linear(self.flatten(X))
+
+
+class SeparateModel(torch.nn.Module):
+	def __init__(self):
+		super(SeparateModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.conv2 = torch.nn.Conv1d(8, 4, (3,), padding='same')
+		self.relu1 = torch.nn.ReLU()
+		self.relu2 = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(400, 1)
+
+	def forward(self, X):
+		X = self.relu1(self.conv1(X))
+		X = self.relu2(self.conv2(X))
+		return self.linear(self.flatten(X))
+
+
+class TwoBranchConcatModel(torch.nn.Module):
+	def __init__(self):
+		super(TwoBranchConcatModel, self).__init__()
+		self.conv_a = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.relu_a = torch.nn.ReLU()
+		self.conv_b = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.relu_b = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(1600, 1)
+
+	def forward(self, X):
+		a = self.relu_a(self.conv_a(X))
+		b = self.relu_b(self.conv_b(X))
+		X = torch.cat([a, b], dim=1)
+		return self.linear(self.flatten(X))
+
+
+class TwoBranchAddModel(torch.nn.Module):
+	def __init__(self):
+		super(TwoBranchAddModel, self).__init__()
+		self.conv_a = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.relu_a = torch.nn.ReLU()
+		self.conv_b = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.relu_b = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(800, 1)
+
+	def forward(self, X):
+		a = self.relu_a(self.conv_a(X))
+		b = self.relu_b(self.conv_b(X))
+		X = a + b
+		return self.linear(self.flatten(X))
+
+
+class DeepResidualModel(torch.nn.Module):
+	def __init__(self):
+		super(DeepResidualModel, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.relu1 = torch.nn.ReLU()
+		self.conv2 = torch.nn.Conv1d(8, 8, (3,), padding='same')
+		self.relu2 = torch.nn.ReLU()
+		self.conv3 = torch.nn.Conv1d(8, 8, (3,), padding='same')
+		self.relu3 = torch.nn.ReLU()
+		self.conv4 = torch.nn.Conv1d(8, 8, (3,), padding='same')
+		self.relu4 = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(800, 1)
+
+	def forward(self, X):
+		X = self.relu1(self.conv1(X))
+		residual = X
+		X = self.relu2(self.conv2(X))
+		X = self.relu3(X + residual)
+		residual = X
+		X = self.conv3(X)
+		X = self.relu4(X + residual)
+		return self.linear(self.flatten(X))
+
+
+class SharedBranchModel(torch.nn.Module):
+	def __init__(self):
+		super(SharedBranchModel, self).__init__()
+		self.conv_a = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.conv_b = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.shared_relu = torch.nn.ReLU()
+		self.flatten = torch.nn.Flatten()
+		self.linear = torch.nn.Linear(1600, 1)
+
+	def forward(self, X):
+		a = self.shared_relu(self.conv_a(X))
+		b = self.shared_relu(self.conv_b(X))
+		X = torch.cat([a, b], dim=1)
+		return self.linear(self.flatten(X))

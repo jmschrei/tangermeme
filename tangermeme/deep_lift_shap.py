@@ -80,15 +80,17 @@ def hypothetical_attributions(multipliers, X, references):
 	return (projected_contribs,)
 
 
-def _register_hooks(module): 
+def _register_hooks(module):
 	if len(module._backward_hooks) > 0:
 		return
 	if not isinstance(module, tuple(module._NON_LINEAR_OPS.keys())):
 		return
 
+	module._io_pairs = {}
+	module._fwd_counter = 0
+
 	module.handles = []
 	module.handles.append(module.register_forward_hook(_f_hook))
-	module.handles.append(module.register_forward_pre_hook(_fp_hook))
 	module.handles.append(module.register_full_backward_hook(_b_hook))
 
 
@@ -96,21 +98,50 @@ def _clear_hooks(module):
 	if hasattr(module, "handles") and len(module.handles) > 0:
 		for handle in module.handles:
 			handle.remove()
-
 		del module.handles
 
-
-def _fp_hook(module, inputs): 
-	module.input = inputs[0].clone().detach()
+	if hasattr(module, "_io_pairs"):
+		module._io_pairs.clear()
+		del module._io_pairs
+	if hasattr(module, "_fwd_counter"):
+		del module._fwd_counter
+	if hasattr(module, "_bw_idx"):
+		del module._bw_idx
 
 
 def _f_hook(module, inputs, outputs):
-	module.output = outputs.clone().detach()
+	if not outputs.requires_grad:
+		return
+
+	idx = module._fwd_counter
+	module._fwd_counter += 1
+	module._io_pairs[idx] = (
+		inputs[0].clone().detach(),
+		outputs.clone().detach(),
+	)
+
+	def _tag_backward(grad):
+		module._bw_idx = idx
+
+	outputs.register_hook(_tag_backward)
 
 
 def _b_hook(module, grad_input, grad_output):
-	return module._NON_LINEAR_OPS[type(module)](module, grad_input, 
-		grad_output)
+	idx = getattr(module, '_bw_idx', None)
+	if idx is None:
+		return grad_input
+
+	del module._bw_idx
+	io_pair = module._io_pairs.pop(idx, None)
+
+	if io_pair is None:
+		return grad_input
+
+	module.input, module.output = io_pair
+	result = module._NON_LINEAR_OPS[type(module)](module, grad_input, grad_output)
+	del module.input
+	del module.output
+	return result
 
 
 def _nonlinear(module, grad_input, grad_output):
@@ -130,7 +161,7 @@ def _nonlinear(module, grad_input, grad_output):
 	delta = delta_out / delta_in
 	idxs = torch.abs(delta_in) < 1e-6
 
-	return (torch.where(idxs, grad_input[0], grad_output[0] * delta),)
+	return (torch.where(idxs, grad_input[0], (grad_output[0] * delta).to(grad_input[0].dtype)),)
 
 
 def _softmax(module, grad_input, grad_output):
@@ -150,7 +181,7 @@ def _softmax(module, grad_input, grad_output):
 	delta = delta_out / delta_in
 	idxs = torch.abs(delta_in) < 1e-6
 
-	grad_input_unnorm = torch.where(idxs, grad_input[0], grad_output[0] * delta)
+	grad_input_unnorm = torch.where(idxs, grad_input[0], (grad_output[0] * delta).to(grad_input[0].dtype))
 
 	n = grad_input[0].numel()
 	new_grad_inp = grad_input_unnorm - grad_input_unnorm.sum() * 1 / n
@@ -194,7 +225,7 @@ def _maxpool(module, grad_input, grad_output):
 	unpool_delta = torch.cat([unpool_delta_, unpool_delta_])
 	idxs = torch.abs(delta_in) < 1e-7
 
-	new_grad_inp = torch.where(idxs, grad_input[0], unpool_delta / delta_in)
+	new_grad_inp = torch.where(idxs, grad_input[0], (unpool_delta / delta_in).to(grad_input[0].dtype))
 	return (new_grad_inp,)
 
 
@@ -399,9 +430,9 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 	except Exception as e:
 		model.apply(_clear_hooks)
 		raise(e)
-	
+
 	# Begin DeepLIFT procedure
-	
+
 	attributions, references_, Xi, rj, attr_ = [], [], [], [], []
 	if isinstance(references, torch.Tensor):
 		_validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
@@ -439,7 +470,7 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 			# batch of examples and the batch of references and running the
 			# forward and backward passes that have been modified by the above
 			# hooks. In a try-except block to make sure we remove hooks if an
-			# error is raised. 
+			# error is raised.
 			try:
 				X_ = torch.cat([_X, _references])
 
@@ -457,12 +488,12 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 				# Check that the prediction-difference-from-reference is equal to
 				# the sum of the attributions
 				output_diff = torch.sub(*torch.chunk(y, 2))
-				input_diff = torch.sum((_X - _references) * multipliers, 
+				input_diff = torch.sum((_X - _references) * multipliers,
 					dim=(1, 2))
 				convergence_deltas = abs(output_diff - input_diff)
 
 				if torch.any(convergence_deltas > warning_threshold):
-					warnings.warn("Convergence deltas too high: " +   
+					warnings.warn("Convergence deltas too high: " +
 						str(convergence_deltas), RuntimeWarning)
 
 				if print_convergence_deltas:
