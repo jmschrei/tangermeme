@@ -246,30 +246,6 @@ def test_predict_raises_args(X, alpha, beta, device):
 		args=(alpha, beta[:5]), device=device)
 
 
-def test_predict_flattendense_16bit_str(X, device):
-	torch.manual_seed(0)
-	model = FlattenDense().to(device)
-	y = predict(model, X, batch_size=8, dtype='float16', device=device)
-
-	assert y.shape == (64, 3)
-	assert y.dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-
-	assert_array_almost_equal(y[:8], [
-		[ 0.1928,  0.2788, -0.1000],
-        [-0.0505,  0.0174, -0.1751],
-        [-0.1408,  0.0105,  0.0673],
-        [-0.2375, -0.0069,  0.0835],
-        [ 0.0442, -0.0692, -0.1565],
-        [-0.3489, -0.0876, -0.2994],
-        [-0.3894, -0.1332, -0.3717],
-        [-0.3682,  0.5173, -0.4089]], 3)
-
-	assert_array_almost_equal(y, model(X.to(device)).cpu().detach(), 3)
-	assert_array_almost_equal(y, predict(model, X, batch_size=1, device=device), 3)
-	assert_array_almost_equal(y, predict(model, X, batch_size=64, device=device), 3)
-
-
 def test_predict_flattendense_16bit(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense().to(device)
@@ -558,6 +534,7 @@ def test_predict_conv_fp16(X, cuda_device):
 
 	assert y.shape == (64, 12, 98)
 	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:2, :2, :4].float(), [
 		[[-0.2712, -0.5317, -0.3735, -0.4053],
 		 [-0.2988,  0.0980, -0.1013, -0.2561]],
@@ -573,6 +550,7 @@ def test_predict_conv_bf16(X, cuda_device):
 
 	assert y.shape == (64, 12, 98)
 	assert y.dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:2, :2, :4].float(), [
 		[[-0.2715, -0.5312, -0.3750, -0.4062],
 		 [-0.2988,  0.0977, -0.1016, -0.2559]],
@@ -622,8 +600,11 @@ def test_predict_convdense_fp16(X, cuda_device):
 	y = predict(model, X, batch_size=2, dtype=torch.float16, device=cuda_device)
 
 	assert len(y) == 2
+	assert y[0].shape == (64, 12, 98)
+	assert y[1].shape == (64, 3)
 	assert y[0].dtype == torch.float16
 	assert y[1].dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[0][:2, :2, :4].float(), [
 		[[-0.7759,  0.0397, -0.8799, -1.0186],
 		 [ 0.0947,  0.2042, -0.2301, -0.3147]],
@@ -643,8 +624,11 @@ def test_predict_convdense_bf16(X, cuda_device):
 	y = predict(model, X, batch_size=2, dtype=torch.bfloat16, device=cuda_device)
 
 	assert len(y) == 2
+	assert y[0].shape == (64, 12, 98)
+	assert y[1].shape == (64, 3)
 	assert y[0].dtype == torch.bfloat16
 	assert y[1].dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[0][:2, :2, :4].float(), [
 		[[-0.7773,  0.0400, -0.8789, -1.0234],
 		 [ 0.0942,  0.2041, -0.2314, -0.3145]],
@@ -665,6 +649,7 @@ def test_predict_residual_conv_fp16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[-0.4900],
 		[ 0.0663],
@@ -679,6 +664,7 @@ def test_predict_residual_conv_bf16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[-0.4883],
 		[ 0.0664],
@@ -693,6 +679,7 @@ def test_predict_transformer_fp16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[-0.5059],
 		[ 0.7588],
@@ -707,6 +694,7 @@ def test_predict_transformer_bf16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[-0.5039],
 		[ 0.7578],
@@ -721,6 +709,7 @@ def test_predict_conv2d_expand_fp16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[ 0.0658],
 		[ 0.0003],
@@ -735,6 +724,7 @@ def test_predict_conv2d_expand_bf16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[ 0.0659],
 		[ 0.0002],
@@ -749,6 +739,7 @@ def test_predict_custom_linear_fp16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[-0.0962],
 		[ 0.2407],
@@ -763,6 +754,7 @@ def test_predict_custom_linear_bf16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[-0.0967],
 		[ 0.2412],
@@ -777,6 +769,7 @@ def test_predict_custom_sqrt_fp16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[-0.2020],
 		[-0.1216],
@@ -791,6 +784,7 @@ def test_predict_custom_sqrt_bf16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[-0.2002],
 		[-0.1240],
@@ -805,6 +799,7 @@ def test_predict_dilated_conv_fp16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[0.0682],
 		[0.0574],
@@ -819,6 +814,7 @@ def test_predict_dilated_conv_bf16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[0.0679],
 		[0.0574],
@@ -833,6 +829,7 @@ def test_predict_conv_batch_norm_fp16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[ 0.0439],
 		[-0.0023],
@@ -847,6 +844,7 @@ def test_predict_conv_batch_norm_bf16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[ 0.0439],
 		[-0.0020],
@@ -861,6 +859,7 @@ def test_predict_conv_layer_norm_fp16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[ 0.2172],
 		[ 0.3096],
@@ -875,6 +874,7 @@ def test_predict_conv_layer_norm_bf16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[ 0.2168],
 		[ 0.3105],
@@ -889,6 +889,7 @@ def test_predict_multi_activation_fp16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[0.0712],
 		[0.0853],
@@ -903,6 +904,7 @@ def test_predict_multi_activation_bf16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[0.0703],
 		[0.0854],
@@ -917,6 +919,7 @@ def test_predict_dropout_conv_fp16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[ 0.0921],
 		[ 0.1210],
@@ -931,6 +934,7 @@ def test_predict_dropout_conv_bf16(X, cuda_device):
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[:4].float(), [
 		[ 0.0923],
 		[ 0.1211],
@@ -945,8 +949,11 @@ def test_predict_multi_input_multi_output_fp16(X, alpha, beta, cuda_device):
 		dtype=torch.float16, device=cuda_device)
 
 	assert len(y) == 2
+	assert y[0].shape == (64, 12, 98)
+	assert y[1].shape == (64, 3)
 	assert y[0].dtype == torch.float16
 	assert y[1].dtype == torch.float16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[0][:2, :3, :4].float(), [
 		[[ 1.4922,  1.2324,  1.3906,  1.3584],
 		 [ 1.4648,  1.8613,  1.6621,  1.5078],
@@ -969,8 +976,11 @@ def test_predict_multi_input_multi_output_bf16(X, alpha, beta, cuda_device):
 		dtype=torch.bfloat16, device=cuda_device)
 
 	assert len(y) == 2
+	assert y[0].shape == (64, 12, 98)
+	assert y[1].shape == (64, 3)
 	assert y[0].dtype == torch.bfloat16
 	assert y[1].dtype == torch.bfloat16
+	assert next(model.parameters()).dtype == torch.float32
 	assert_array_almost_equal(y[0][:2, :3, :4].float(), [
 		[[ 1.4922,  1.2344,  1.3906,  1.3594],
 		 [ 1.4688,  1.8594,  1.6641,  1.5078],

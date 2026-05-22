@@ -737,8 +737,21 @@ def test_deep_lift_shap_linear(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000, -0.0562,  0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000,  0.0970,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0124, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000, -0.0000,  0.0000,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0495, -0.0000, -0.0000, -0.0207, -0.0280, -0.0184,  0.0326,  0.0000,  0.0357]],
+
+		[[-0.0000,  0.0000,  0.0177, -0.0000,  0.0027,  0.0000,  0.0168,  0.0000, -0.0000, -0.0092],
+		 [ 0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0136, -0.0000,  0.0000, -0.0000,  0.0353, -0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0122,  0.0000, -0.0000, -0.0000,  0.0083, -0.0053,  0.0000]]], 4)
 
 
 def test_deep_lift_shap_linear_bias(X, device):
@@ -753,8 +766,21 @@ def test_deep_lift_shap_linear_bias(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000, -0.0505,  0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000,  0.0934,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0117, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000, -0.0000,  0.0000,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0477, -0.0000, -0.0000, -0.0212, -0.0250, -0.0182,  0.0317,  0.0000,  0.0349]],
+
+		[[-0.0000,  0.0000,  0.0136, -0.0000,  0.0016,  0.0000,  0.0150,  0.0000, -0.0000, -0.0073],
+		 [ 0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0130, -0.0000,  0.0000, -0.0000,  0.0285, -0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0104,  0.0000, -0.0000, -0.0000,  0.0070, -0.0041,  0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv(X, device):
@@ -768,8 +794,21 @@ def test_deep_lift_shap_conv(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.9025, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.1260, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0379, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.6341, -0.0000, -0.0000, -0.0966, -0.1356, -0.1817, -0.1439, -0.0000, -0.3838]],
+
+		[[ 0.0000,  0.0000,  0.4590,  0.0000,  0.6733, -0.0000,  0.5197, -0.0000, -0.0000,  0.3142],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.3457, -0.0000, -0.0000, -0.0000,  0.0731, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.2266, -0.0000, -0.0000, -0.0000, -0.3457, -0.1228, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv_dilated(X, device):
@@ -783,8 +822,21 @@ def test_deep_lift_shap_conv_dilated(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.5778,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000],
+		 [-0.0000, -0.0000,  0.0112, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1658, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.1592, -0.0000, -0.0000,  0.0564, -0.2365, -0.1947, -0.2984, -0.0000,  0.0283]],
+
+		[[ 0.0000,  0.0000,  0.3452,  0.0000,  0.3758,  0.0000,  0.7259,  0.0000,  0.0000,  0.6784],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.2153, -0.0000, -0.0000, -0.0000, -0.0166, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.1370, -0.0000, -0.0000, -0.0000, -0.0588, -0.0551, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv_stride(X, device):
@@ -798,8 +850,21 @@ def test_deep_lift_shap_conv_stride(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.0998, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.2351, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0290, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.2509, -0.0000,  0.0000, -0.0655, -0.1500, -0.0718, -0.0009, -0.0000, -0.0680]],
+
+		[[ 0.0000,  0.0000,  0.0049, -0.0000, -0.0378,  0.0000,  0.1322, -0.0000, -0.0000, -0.1232],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0254, -0.0000,  0.0000, -0.0000, -0.0873,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000,  0.0000, -0.1044,  0.0000, -0.0000, -0.0000,  0.0755, -0.0991, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv_bias(X, device):
@@ -813,8 +878,21 @@ def test_deep_lift_shap_conv_bias(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-4)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.8116, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.1397, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0176, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.5924, -0.0000, -0.0000, -0.1294, -0.2071, -0.2220, -0.2076, -0.0000, -0.4544]],
+
+		[[ 0.0000,  0.0000,  0.4262,  0.0000,  0.5746, -0.0000,  0.3762, -0.0000, -0.0000,  0.3317],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.3874, -0.0000, -0.0000, -0.0000,  0.2103, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.3004, -0.0000, -0.0000, -0.0000, -0.4046, -0.2499, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv_padding(X, device):
@@ -834,6 +912,19 @@ def test_deep_lift_shap_conv_padding(X, device):
 		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=threshold)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000,  0.0000,  0.7698, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.3090, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0379, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.4021, -0.0000, -0.0000, -0.0966, -0.1356, -0.1817, -0.1439, -0.0000, -0.3838]],
+
+		[[-0.0000,  0.0000,  0.3432,  0.0000,  0.6733, -0.0000,  0.5197, -0.0000, -0.0000,  0.3142],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.2294, -0.0000, -0.0000, -0.0000,  0.0731, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.2165, -0.0000, -0.0000, -0.0000, -0.3457, -0.1228, -0.0000]]], 4)
+
 
 def test_deep_lift_shap_conv_padding_same(X, device):
 	torch.manual_seed(0)
@@ -847,8 +938,21 @@ def test_deep_lift_shap_conv_padding_same(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000, -0.0000,  0.0002, -0.0000, -0.0000,  0.0000, -0.0000, -0.0000,  0.0000],
+		 [-0.0000, -0.0000,  0.0012, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000, -0.0006, -0.0000],
+		 [ 0.0000, -0.0000,  0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000,  0.0000,  0.0000],
+		 [ 0.0000,  0.0130,  0.0000,  0.0000, -0.0099, -0.0026, -0.0080,  0.0025,  0.0000, -0.0021]],
+
+		[[-0.0000,  0.0000, -0.0049, -0.0000, -0.0027,  0.0000,  0.0167,  0.0000, -0.0000,  0.0043],
+		 [ 0.0000, -0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000,  0.0000, -0.0000, -0.0000],
+		 [ 0.0000, -0.0031, -0.0000,  0.0000,  0.0000, -0.0019, -0.0000,  0.0000,  0.0000,  0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0123, -0.0000, -0.0000, -0.0000, -0.0069, -0.0056, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_max_pool(X, device):
@@ -861,8 +965,21 @@ def test_deep_lift_shap_max_pool(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000,  0.2000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000,  0.2000, -0.0000],
+		 [ 0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0500, -0.0000,  0.0000, -0.5500, -0.7000, -0.4500, -0.1000, -0.0000,  0.1000]],
+
+		[[-0.0000, -0.0000,  0.3000, -0.0000,  0.3000, -0.0000, -0.2000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000,  0.2000, -0.0000, -0.0000, -0.0000, -0.0500, -0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.5500, -0.0000, -0.0000, -0.0000,  0.1500, -0.3500, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv_relu_pool(X, device):
@@ -877,8 +994,21 @@ def test_deep_lift_shap_conv_relu_pool(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.1021, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0643, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1375, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0408, -0.0000, -0.0000, -0.1820, -0.1912, -0.1507, -0.2448, -0.0000, -0.1143]],
+
+		[[ 0.0000,  0.0000,  0.0591,  0.0000,  0.3041, -0.0000,  0.0826, -0.0000, -0.0000,  0.0267],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0806, -0.0000, -0.0000, -0.0000,  0.0403, -0.0000,  0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0013, -0.0000, -0.0000, -0.0000, -0.1534, -0.2105, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv_tanh_pool(X, device):
@@ -893,8 +1023,21 @@ def test_deep_lift_shap_conv_tanh_pool(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000, -0.0000,  0.1069, -0.0000, -0.0000,  0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0354, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.2147, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0738, -0.0000, -0.0000, -0.3306, -0.4012, -0.2828, -0.4270, -0.0000, -0.1415]],
+
+		[[ 0.0000,  0.0000,  0.0031, -0.0000,  0.2630, -0.0000,  0.0245, -0.0000, -0.0000, -0.0002],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0908, -0.0000, -0.0000, -0.0000,  0.1219, -0.0000,  0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0304, -0.0000, -0.0000, -0.0000, -0.1598, -0.2506, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv_elu_pool(X, device):
@@ -909,8 +1052,21 @@ def test_deep_lift_shap_conv_elu_pool(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000,  0.0000,  0.1168, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0512, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.2202, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0742, -0.0000, -0.0000, -0.3211, -0.3888, -0.2736, -0.4213, -0.0000, -0.1462]],
+
+		[[ 0.0000,  0.0000,  0.0247, -0.0000,  0.2891, -0.0000,  0.0166, -0.0000, -0.0000, -0.0036],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0936, -0.0000, -0.0000, -0.0000,  0.1040, -0.0000,  0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0296, -0.0000, -0.0000, -0.0000, -0.1684, -0.2534, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv_relu_pool_relu(X, device):
@@ -926,8 +1082,21 @@ def test_deep_lift_shap_conv_relu_pool_relu(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.1021, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0643, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1375, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0408, -0.0000, -0.0000, -0.1820, -0.1912, -0.1507, -0.2448, -0.0000, -0.1143]],
+
+		[[ 0.0000,  0.0000,  0.0591,  0.0000,  0.3041, -0.0000,  0.0826, -0.0000, -0.0000,  0.0267],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0806, -0.0000, -0.0000, -0.0000,  0.0403, -0.0000,  0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0013, -0.0000, -0.0000, -0.0000, -0.1534, -0.2105, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_relu_conv_relu_pool_relu(X, device):
@@ -944,8 +1113,21 @@ def test_deep_lift_shap_relu_conv_relu_pool_relu(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000,  0.0000,  0.1021, -0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0643, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1375, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0408, -0.0000, -0.0000, -0.1820, -0.1912, -0.1507, -0.2448, -0.0000, -0.1143]],
+
+		[[-0.0000,  0.0000,  0.0591, -0.0000,  0.3041, -0.0000,  0.0826, -0.0000, -0.0000,  0.0267],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0806, -0.0000, -0.0000, -0.0000,  0.0403,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0013, -0.0000, -0.0000, -0.0000, -0.1534, -0.2105, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_relu_conv_pool_relu(X, device):
@@ -961,8 +1143,21 @@ def test_deep_lift_shap_relu_conv_pool_relu(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000,  0.0000,  0.1021, -0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0643, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1375, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0408, -0.0000, -0.0000, -0.1820, -0.1912, -0.1507, -0.2448, -0.0000, -0.1143]],
+
+		[[-0.0000,  0.0000,  0.0591, -0.0000,  0.3041, -0.0000,  0.0826, -0.0000, -0.0000,  0.0267],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0806, -0.0000, -0.0000, -0.0000,  0.0403,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0013, -0.0000, -0.0000, -0.0000, -0.1534, -0.2105, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_relu_conv_pool_relu_relu(X, device):
@@ -979,8 +1174,21 @@ def test_deep_lift_shap_relu_conv_pool_relu_relu(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000,  0.0000,  0.1021, -0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0643, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1375, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0408, -0.0000, -0.0000, -0.1820, -0.1912, -0.1507, -0.2448, -0.0000, -0.1143]],
+
+		[[-0.0000,  0.0000,  0.0591, -0.0000,  0.3041, -0.0000,  0.0826, -0.0000, -0.0000,  0.0267],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0806, -0.0000, -0.0000, -0.0000,  0.0403,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0013, -0.0000, -0.0000, -0.0000, -0.1534, -0.2105, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv_relu_tanh_pool(X, device):
@@ -996,8 +1204,21 @@ def test_deep_lift_shap_conv_relu_tanh_pool(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.0922, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0539, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1299, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0344, -0.0000, -0.0000, -0.1765, -0.1837, -0.1488, -0.2312, -0.0000, -0.1048]],
+
+		[[ 0.0000,  0.0000,  0.0408,  0.0000,  0.2812, -0.0000,  0.1009, -0.0000, -0.0000,  0.0331],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0769, -0.0000, -0.0000, -0.0000,  0.0481, -0.0000,  0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0038, -0.0000, -0.0000, -0.0000, -0.1424, -0.2023, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv_relu_pool_linear(X, device):
@@ -1013,8 +1234,21 @@ def test_deep_lift_shap_conv_relu_pool_linear(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.0011, -0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000],
+		 [-0.0000,  0.0000, -0.0010, -0.0000, -0.0000,  0.0000, -0.0000, -0.0000,  0.0024, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000, -0.0000,  0.0000,  0.0000],
+		 [-0.0000,  0.0009, -0.0000,  0.0000, -0.0076, -0.0049, -0.0026, -0.0039, -0.0000, -0.0029]],
+
+		[[-0.0000, -0.0000,  0.0086,  0.0000,  0.0153,  0.0000,  0.0036,  0.0000, -0.0000, -0.0041],
+		 [ 0.0000, -0.0000, -0.0000,  0.0000, -0.0000,  0.0000, -0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0006, -0.0000, -0.0000, -0.0000, -0.0054, -0.0000,  0.0000,  0.0000,  0.0000],
+		 [ 0.0000,  0.0000,  0.0000,  0.0021, -0.0000, -0.0000, -0.0000, -0.0028, -0.0025,  0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv_relu_pool_linear_linear(X, device):
@@ -1031,8 +1265,21 @@ def test_deep_lift_shap_conv_relu_pool_linear_linear(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000, -0.0000, -0.0013,  0.0000, -0.0000, -0.0000,  0.0000,  0.0000,  0.0000],
+		 [ 0.0000, -0.0000, -0.0010,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0009, -0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0000, -0.0000,  0.0000, -0.0000, -0.0000,  0.0000, -0.0000],
+		 [ 0.0000,  0.0002,  0.0000, -0.0000, -0.0002, -0.0020, -0.0013, -0.0047, -0.0000, -0.0009]],
+
+		[[ 0.0000,  0.0000, -0.0074, -0.0000, -0.0044, -0.0000,  0.0029,  0.0000,  0.0000,  0.0001],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000,  0.0000,  0.0000],
+		 [-0.0000, -0.0011,  0.0000,  0.0000,  0.0000, -0.0014, -0.0000, -0.0000, -0.0000,  0.0000],
+		 [-0.0000, -0.0000,  0.0000, -0.0016,  0.0000, -0.0000, -0.0000, -0.0004,  0.0009, -0.0000]]], 4)
 
 
 def test_deep_lift_shap_conv_relu_pool_linear_relu_linear(X, device):
@@ -1050,8 +1297,21 @@ def test_deep_lift_shap_conv_relu_pool_linear_relu_linear(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000, -0.0000, -0.0001, -0.0000, -0.0000,  0.0000,  0.0000,  0.0000,  0.0000],
+		 [-0.0000,  0.0000, -0.0010, -0.0000, -0.0000,  0.0000, -0.0000, -0.0000,  0.0003,  0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000,  0.0000,  0.0000],
+		 [ 0.0000,  0.0004, -0.0000,  0.0000, -0.0017, -0.0009, -0.0004, -0.0014, -0.0000, -0.0012]],
+
+		[[-0.0000, -0.0000, -0.0031,  0.0000, -0.0002,  0.0000,  0.0016,  0.0000,  0.0000, -0.0006],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000, -0.0000,  0.0000,  0.0000],
+		 [ 0.0000, -0.0004, -0.0000,  0.0000, -0.0000,  0.0001, -0.0000, -0.0000, -0.0000,  0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0001, -0.0000, -0.0000, -0.0000, -0.0000,  0.0001, -0.0000]]], 4)
 
 
 ###
@@ -1159,10 +1419,12 @@ def test_captum_deep_lift_shap_args(X, references, device):
 ###
 # Tests for additional architectures.
 #
-# Models that DeepLIFT cannot reason about correctly (Transformer with
-# self-attention, BatchNorm, LayerNorm) are intentionally absent here. See
-# claude_comments/gpu_inconsistencies.md / dls_unsupported_ops.md for
-# the rationale.
+# Models whose layers have no rule in `deep_lift_shap._NON_LINEAR_OPS` are
+# intentionally absent here: Transformer (MultiheadAttention/softmax + LayerNorm),
+# ConvBatchNorm (BatchNorm1d), and ConvLayerNorm (LayerNorm). DLS would silently
+# treat those layers as linear and the rescale rule's convergence guarantee
+# would not hold, so a regression test against hardcoded values would be
+# meaningless. Add a model here once its layers gain a registered rule.
 
 
 def test_deep_lift_shap_residual_conv(X, references, device):
