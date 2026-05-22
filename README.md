@@ -17,9 +17,35 @@ Please see the documentation and tutorials linked at the top of this README for 
 
 ## Installation
 
-`pip install tangermeme`
+```bash
+pip install tangermeme
+```
 
-If PyTorch is already installed, this should take less than five minutes. If PyTorch needs to be installed, this command should do so but may cause the installation to take up to ten minutes. The majority of time will be spend resolving dependencies.
+Or, with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add tangermeme
+```
+
+If PyTorch is already installed, this should take less than five minutes. If PyTorch needs to be installed, this command should do so but may cause the installation to take up to ten minutes. The majority of time will be spent resolving dependencies. `uv` is significantly faster than `pip` at this resolution step.
+
+Optional extras:
+
+- `tangermeme[plot]` — install matplotlib for the plotting helpers in `tangermeme.plot`.
+- `tangermeme[docs]` — install jupyter/nbconvert for running the tutorial notebooks.
+
+### Development install
+
+Contributors should clone the repository and use `uv` to create a reproducible environment from `uv.lock`:
+
+```bash
+git clone https://github.com/jmschrei/tangermeme.git
+cd tangermeme
+uv sync --extra dev
+uv run pytest -m "not cmd"
+```
+
+This installs the package in editable mode along with the testing toolchain (`pytest`, `captum`, `ruff`, `build`, `twine`, plus `matplotlib` so plotting tests work).
 
 ## Roadmap
 
