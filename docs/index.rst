@@ -61,11 +61,8 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    tutorials/Tutorial_B5_Variant_Effect.ipynb
    tutorials/Tutorial_B6_Design.ipynb
    tutorials/Tutorial_B7_Cartesian_Product.ipynb
-   tutorials/Tutorial_B8_Seqlets.ipynb
    tutorials/Tutorial_C1_IO_and_Data_Loading.ipynb
    tutorials/Tutorial_C2_Plotting.ipynb
-   tutorials/Tutorial_D1_FIMO.ipynb
-   tutorials/Tutorial_D2_TOMTOM.ipynb
 
 .. toctree::
    :maxdepth: 1
@@ -98,14 +95,16 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
 
    api/ablate.rst
    api/annotate.rst
+   api/deep_lift_shap.rst
    api/design.rst
    api/ersatz.rst
    api/io.rst
-   api/ism.rst
    api/marginalize.rst
    api/match.rst
+   api/plot.rst
    api/predict.rst
    api/product.rst
+   api/saturation_mutagenesis.rst
    api/seqlet.rst
    api/space.rst
    api/utils.rst

@@ -17,12 +17,16 @@
 
 # -- Project information -----------------------------------------------------
 
+from importlib.metadata import version as _pkg_version
+
 project = 'tangermeme'
 copyright = '2024, Jacob Schreiber'
 author = 'Jacob Schreiber'
 
-# The full version, including alpha/beta/rc tags
-release = 'v0.1.0'
+# The full version, including alpha/beta/rc tags. Sourced from the installed
+# package metadata so it stays in sync with tangermeme/__init__.py.
+release = _pkg_version('tangermeme')
+version = '.'.join(release.split('.')[:2])
 
 
 # -- General configuration ---------------------------------------------------
