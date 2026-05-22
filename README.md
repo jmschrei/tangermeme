@@ -32,7 +32,7 @@ If PyTorch is already installed, this should take less than five minutes. If PyT
 Optional extras:
 
 - `tangermeme[plot]` — install matplotlib for the plotting helpers in `tangermeme.plot`.
-- `tangermeme[docs]` — install jupyter/nbconvert for running the tutorial notebooks.
+- `tangermeme[docs]` — install the Sphinx toolchain (sphinx, sphinx-rtd-theme, nbsphinx, jupyter, nbconvert) for building the documentation site locally.
 
 ### Development install
 
