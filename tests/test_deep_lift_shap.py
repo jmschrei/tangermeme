@@ -19,6 +19,7 @@ from tangermeme.ersatz import dinucleotide_shuffle
 from tangermeme.deep_lift_shap import hypothetical_attributions
 from tangermeme.deep_lift_shap import deep_lift_shap
 from tangermeme.deep_lift_shap import _captum_deep_lift_shap
+from tangermeme.deep_lift_shap import _nonlinear
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense
@@ -27,6 +28,15 @@ from .toy_models import Scatter
 from .toy_models import ConvDense
 from .toy_models import ConvPoolDense
 from .toy_models import SmallDeepSEA
+from .toy_models import ResidualConv
+from .toy_models import Conv2DExpand
+from .toy_models import CustomLinear
+from .toy_models import CustomSqrt
+from .toy_models import CustomSqrtModule
+from .toy_models import DilatedConv
+from .toy_models import MultiActivation
+from .toy_models import DropoutConv
+from .toy_models import MultiInputMultiOutput
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -1144,3 +1154,288 @@ def test_captum_deep_lift_shap_args(X, references, device):
 	assert X_attr0.shape == X_attr1.shape
 	assert X_attr0.dtype == X_attr1.dtype
 	assert_array_almost_equal(X_attr0, X_attr1)
+
+
+###
+# Tests for additional architectures.
+#
+# Models that DeepLIFT cannot reason about correctly (Transformer with
+# self-attention, BatchNorm, LayerNorm) are intentionally absent here. See
+# claude_comments/gpu_inconsistencies.md / dls_unsupported_ops.md for
+# the rationale.
+
+
+def test_deep_lift_shap_residual_conv(X, references, device):
+	torch.manual_seed(0)
+	model = ResidualConv()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[-0.0409, -0.0000, -0.0000, -0.0443],
+		 [-0.0000,  0.0000, -0.0201,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000, -0.0394,  0.0000,  0.0000]],
+
+		[[-0.0000,  0.0000, -0.0313, -0.0000],
+		 [-0.0345,  0.0000, -0.0000,  0.0000],
+		 [ 0.0000, -0.0089,  0.0000,  0.0000],
+		 [ 0.0000, -0.0000,  0.0000,  0.0414]]], 4)
+
+
+def test_deep_lift_shap_conv2d_expand(X, references, device):
+	torch.manual_seed(0)
+	model = Conv2DExpand()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[ 0.0086,  0.0000,  0.0000,  0.0043],
+		 [-0.0000, -0.0000,  0.0059, -0.0000],
+		 [-0.0000, -0.0000,  0.0000, -0.0000],
+		 [ 0.0000,  0.0119, -0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0029, -0.0000],
+		 [ 0.0016, -0.0000,  0.0000,  0.0000],
+		 [-0.0000, -0.0079,  0.0000, -0.0000],
+		 [ 0.0000,  0.0000, -0.0000,  0.0036]]], 4)
+
+
+def test_deep_lift_shap_custom_linear(X, references, device):
+	"""A linear torch.autograd.Function does not need registration; attribution
+	flows through it via the standard gradient chain rule."""
+	torch.manual_seed(0)
+	model = CustomLinear()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[-0.0177, -0.0000,  0.0000, -0.0008],
+		 [-0.0000,  0.0000,  0.0220, -0.0000],
+		 [ 0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0033,  0.0000,  0.0000]],
+
+		[[-0.0000, -0.0000,  0.0011, -0.0000],
+		 [-0.0083, -0.0000,  0.0000, -0.0000],
+		 [ 0.0000, -0.0334,  0.0000, -0.0000],
+		 [-0.0000, -0.0000,  0.0000,  0.0266]]], 4)
+
+
+def test_deep_lift_shap_custom_sqrt(X, references, device):
+	"""A nonlinear custom op is registered via additional_nonlinear_ops so
+	DeepLIFT can apply its rescale rule to it."""
+	torch.manual_seed(0)
+	model = CustomSqrt()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0,
+		additional_nonlinear_ops={CustomSqrtModule: _nonlinear})
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[-0.0020,  0.0000, -0.0000, -0.0030],
+		 [-0.0000,  0.0000,  0.0033,  0.0000],
+		 [ 0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000,  0.0005, -0.0000,  0.0000]],
+
+		[[-0.0000, -0.0000, -0.0001, -0.0000],
+		 [-0.0029,  0.0000,  0.0000,  0.0000],
+		 [ 0.0000, -0.0042,  0.0000, -0.0000],
+		 [-0.0000,  0.0000, -0.0000,  0.0072]]], 4)
+
+
+def test_deep_lift_shap_dilated_conv(X, references, device):
+	torch.manual_seed(0)
+	model = DilatedConv()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[ 0.0000, -0.0000, -0.0000, -0.0008],
+		 [ 0.0000,  0.0000, -0.0004,  0.0000],
+		 [ 0.0000, -0.0000,  0.0000,  0.0000],
+		 [-0.0000,  0.0016,  0.0000, -0.0000]],
+
+		[[-0.0000, -0.0000, -0.0024, -0.0000],
+		 [ 0.0004, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000, -0.0016,  0.0000,  0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0006]]], 4)
+
+
+def test_deep_lift_shap_multi_activation(X, references, device):
+	torch.manual_seed(0)
+	model = MultiActivation()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[-0.0007,  0.0000,  0.0000, -0.0001],
+		 [ 0.0000, -0.0000, -0.0009, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0005,  0.0000, -0.0000]],
+
+		[[-0.0000,  0.0000,  0.0001,  0.0000],
+		 [ 0.0009, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0016, -0.0000,  0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0006]]], 4)
+
+
+def test_deep_lift_shap_dropout_conv(X, references, device):
+	torch.manual_seed(0)
+	model = DropoutConv()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[ 0.0038,  0.0000, -0.0000,  0.0013],
+		 [ 0.0000, -0.0000,  0.0232, -0.0000],
+		 [-0.0000,  0.0000, -0.0000, -0.0000],
+		 [ 0.0000, -0.0016, -0.0000,  0.0000]],
+
+		[[ 0.0000,  0.0000, -0.0021,  0.0000],
+		 [ 0.0031,  0.0000,  0.0000, -0.0000],
+		 [-0.0000,  0.0062, -0.0000, -0.0000],
+		 [ 0.0000, -0.0000,  0.0000,  0.0008]]], 4)
+
+
+def test_deep_lift_shap_multi_input_multi_output(X, references, device):
+	"""MIMO has a tuple output; LambdaWrapper picks one scalar-per-example
+	target so DLS can attribute against it."""
+	torch.manual_seed(0)
+	model = LambdaWrapper(MultiInputMultiOutput(),
+		lambda model, X: model(X)[1][:, 0:1])
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[ 0.0411, -0.0000,  0.0000, -0.0138],
+		 [-0.0000,  0.0000,  0.0011, -0.0000],
+		 [-0.0000,  0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0129, -0.0000, -0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0156, -0.0000],
+		 [-0.0300,  0.0000,  0.0000, -0.0000],
+		 [ 0.0000,  0.0258, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000, -0.0000, -0.0028]]], 4)
+
+
+###
+# Activation sweep: confirm every entry in deep_lift_shap._NON_LINEAR_OPS that
+# is a pointwise activation actually receives the rescale rule when wired into
+# a residual block. GLU is excluded because it halves the channel count and
+# would not fit a same-shape residual stream.
+
+
+# Each entry is (activation_class, expected X_attr[0, :, :4]) so the sweep is
+# both a smoke test for hook registration and a regression test for the
+# numerical output through that activation.
+_ACTIVATION_SWEEP = [
+	(torch.nn.ReLU, [
+		[-0.0409, -0.0000, -0.0000, -0.0443],
+		[-0.0000,  0.0000, -0.0201,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0394,  0.0000,  0.0000]]),
+	(torch.nn.ReLU6, [
+		[-0.0409, -0.0000, -0.0000, -0.0443],
+		[-0.0000,  0.0000, -0.0201,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0394,  0.0000,  0.0000]]),
+	(torch.nn.RReLU, [
+		[-0.0414, -0.0000, -0.0000, -0.0455],
+		[-0.0000,  0.0000, -0.0180,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0396,  0.0000,  0.0000]]),
+	(torch.nn.SELU, [
+		[-0.0450, -0.0000, -0.0000, -0.0528],
+		[-0.0000,  0.0000, -0.0067,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0409,  0.0000,  0.0000]]),
+	(torch.nn.CELU, [
+		[-0.0432, -0.0000, -0.0000, -0.0490],
+		[-0.0000,  0.0000, -0.0124,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0402,  0.0000,  0.0000]]),
+	(torch.nn.GELU, [
+		[-0.0415, -0.0000, -0.0000, -0.0448],
+		[-0.0000,  0.0000, -0.0171,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0391,  0.0000,  0.0000]]),
+	(torch.nn.SiLU, [
+		[-0.0416, -0.0000, -0.0000, -0.0447],
+		[-0.0000,  0.0000, -0.0162,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0389,  0.0000,  0.0000]]),
+	(torch.nn.Mish, [
+		[-0.0419, -0.0000, -0.0000, -0.0457],
+		[-0.0000,  0.0000, -0.0159,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0394,  0.0000,  0.0000]]),
+	(torch.nn.ELU, [
+		[-0.0432, -0.0000, -0.0000, -0.0490],
+		[-0.0000,  0.0000, -0.0124,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0402,  0.0000,  0.0000]]),
+	(torch.nn.LeakyReLU, [
+		[-0.0409, -0.0000, -0.0000, -0.0444],
+		[-0.0000,  0.0000, -0.0200,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0394,  0.0000,  0.0000]]),
+	(torch.nn.Sigmoid, [
+		[-0.0411, -0.0000, -0.0000, -0.0418],
+		[-0.0000,  0.0000, -0.0165,  0.0000],
+		[ 0.0000, -0.0000,  0.0000,  0.0000],
+		[ 0.0000, -0.0376,  0.0000,  0.0000]]),
+	(torch.nn.Tanh, [
+		[-0.0436, -0.0000, -0.0000, -0.0490],
+		[-0.0000,  0.0000, -0.0106,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0399,  0.0000,  0.0000]]),
+	(torch.nn.Softplus, [
+		[-0.0417, -0.0000, -0.0000, -0.0445],
+		[-0.0000,  0.0000, -0.0155,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0388,  0.0000,  0.0000]]),
+	(torch.nn.Softshrink, [
+		[-0.0398, -0.0000, -0.0000, -0.0401],
+		[-0.0000,  0.0000, -0.0195,  0.0000],
+		[ 0.0000, -0.0000,  0.0000,  0.0000],
+		[ 0.0000, -0.0376,  0.0000,  0.0000]]),
+	(torch.nn.LogSigmoid, [
+		[-0.0420, -0.0000, -0.0000, -0.0443],
+		[-0.0000,  0.0000, -0.0138,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0384,  0.0000,  0.0000]]),
+	(torch.nn.PReLU, [
+		[-0.0415, -0.0000, -0.0000, -0.0456],
+		[-0.0000,  0.0000, -0.0178,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0396,  0.0000,  0.0000]]),
+]
+
+
+@pytest.mark.parametrize("activation,expected", _ACTIVATION_SWEEP,
+	ids=[a.__name__ for a, _ in _ACTIVATION_SWEEP])
+def test_deep_lift_shap_residual_conv_activation(X, references, device,
+		activation, expected):
+	torch.manual_seed(0)
+	model = ResidualConv(activation=activation)
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[0, :, :4], expected, 4)

@@ -32,3 +32,24 @@ import torch
 )
 def device(request):
     return request.param
+
+
+@pytest.fixture(
+    params=[
+        pytest.param(
+            "cuda",
+            marks=[
+                pytest.mark.gpu,
+                pytest.mark.skipif(
+                    not torch.cuda.is_available(),
+                    reason="CUDA is not available on this machine",
+                ),
+            ],
+        ),
+    ]
+)
+def cuda_device(request):
+    """Like `device`, but only yields 'cuda'. Use for tests that exercise
+    low-precision (fp16/bf16) autocast paths which torch only supports on GPU.
+    """
+    return request.param
