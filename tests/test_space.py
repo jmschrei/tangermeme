@@ -45,11 +45,11 @@ def beta():
 
 ##
 
-def test_space_summodel(X):
+def test_space_summodel(X, device):
 	torch.manual_seed(0)
 	model = SumModel()
 	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, device='cpu')
+		batch_size=5, device=device)
 
 	assert y_before.shape == (64, 4)
 	assert y_before.dtype == torch.float32
@@ -78,16 +78,16 @@ def test_space_summodel(X):
         [22., 28., 32., 18.]])
 
 	y_before2, y_after2 = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		batch_size=64, device='cpu')
+		batch_size=64, device=device)
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)	
 
 
-def test_space_flattendense(X):
+def test_space_flattendense(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, device='cpu')
+		batch_size=5, device=device)
 
 	assert y_before.shape == (64, 3)
 	assert y_before.dtype == torch.float32
@@ -114,16 +114,16 @@ def test_space_flattendense(X):
         [-0.4935,  0.6714, -0.3008]], 4)
 
 	y_before2, y_after2 = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		batch_size=64, device='cpu')
+		batch_size=64, device=device)
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)
 
 
-def test_space_conv(X):
+def test_space_conv(X, device):
 	torch.manual_seed(0)
 	model = Conv()
 	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		start=0, batch_size=5, device='cpu')
+		start=0, batch_size=5, device=device)
 
 	assert y_before.shape == (64, 12, 98)
 	assert y_before.dtype == torch.float32
@@ -168,16 +168,16 @@ def test_space_conv(X):
           -0.3111,  0.4644,  0.1406]]], 4)
 
 	y_before2, y_after2 = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		start=0, batch_size=64, device='cpu')
+		start=0, batch_size=64, device=device)
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)
 
 
-def test_space_scatter(X):
+def test_space_scatter(X, device):
 	torch.manual_seed(0)
 	model = Scatter()
 	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		start=0, batch_size=8, device='cpu')
+		start=0, batch_size=8, device=device)
 
 	assert y_before.shape == (64, 100, 4)
 	assert y_before.dtype == torch.float32
@@ -238,16 +238,16 @@ def test_space_scatter(X):
          [0., 1., 0., 0.]]], 4)
 
 	y_before2, y_after2 = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		start=0, batch_size=64, device='cpu')
+		start=0, batch_size=64, device=device)
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)
 
 
-def test_space_convdense(X):
+def test_space_convdense(X, device):
 	torch.manual_seed(0)
 	model = ConvDense()
 	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		start=0, batch_size=2, device='cpu')
+		start=0, batch_size=2, device=device)
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 12, 98)
@@ -298,11 +298,11 @@ def test_space_convdense(X):
         [-0.2042,  0.1904,  0.2121]], 4)
 
 
-def test_space_convdense_batch_size(X):
+def test_space_convdense_batch_size(X, device):
 	torch.manual_seed(0)
 	model = ConvDense()
 	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		batch_size=68, device='cpu')
+		batch_size=68, device=device)
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 12, 98)
@@ -313,61 +313,61 @@ def test_space_convdense_batch_size(X):
 	assert y_after[1].shape == (64, 1, 3)
 
 
-def test_space_scatter_batch_size(X):
+def test_space_scatter_batch_size(X, device):
 	torch.manual_seed(0)
 	model = Scatter()
 	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		batch_size=68, device='cpu')
+		batch_size=68, device=device)
 
 	assert y_before.shape == (64, 100, 4)
 	assert y_after.shape == (64, 1, 100, 4)
 
 
-def test_space_raises_shape(X):
+def test_space_raises_shape(X, device):
 	torch.manual_seed(0)
 	model = Scatter()
 	assert_raises(ValueError, space, model, X[0], ["ACGTC", "ACC"], [[0]], 
-		device='cpu')
+		device=device)
 	assert_raises(ValueError, space, model, X[:, 0], ["ACGTC", "ACC"], [[0]],
-		device='cpu')
+		device=device)
 	assert_raises(ValueError, space, model, X.unsqueeze(0), ["ACGTC", "ACC"], 
-		[[0]], device='cpu')
+		[[0]], device=device)
 
 
-def test_space_raises_args(X, alpha, beta):
+def test_space_raises_args(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], [[0, 1]], 
-		batch_size=2, device='cpu')
+		batch_size=2, device=device)
 	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], -5, 
-		batch_size=2, device='cpu')
+		batch_size=2, device=device)
 	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], [-3], 
-		batch_size=2, device='cpu')
+		batch_size=2, device=device)
 	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], [], 
-		batch_size=2, device='cpu')
+		batch_size=2, device=device)
 	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], [1500], 
-		batch_size=2, device='cpu')
+		batch_size=2, device=device)
 
 	assert_raises(TypeError, space, model, X, ["ACGTC", "ACC"], [[0]], 
-		batch_size=2, args=5, device='cpu')
+		batch_size=2, args=5, device=device)
 	assert_raises(AttributeError, space, model, X, ["ACGTC", "ACC"], [[0]], 
-		batch_size=2, args=(5,), device='cpu')
+		batch_size=2, args=(5,), device=device)
 	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], [[0]], 
-		batch_size=2, args=alpha, device='cpu')
+		batch_size=2, args=alpha, device=device)
 	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], [[0]],
-		batch_size=2, args=(alpha[:5],), device='cpu')
+		batch_size=2, args=(alpha[:5],), device=device)
 	assert_raises(ValueError, space, model, X, ["ACGTC", "ACC"], [[0]], 
-		batch_size=2, args=(alpha, beta[:5]), device='cpu')
+		batch_size=2, args=(alpha, beta[:5]), device=device)
 
 
 ###
 
 
-def test_space_deep_lift_shap(X):
+def test_space_deep_lift_shap(X, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y_before, y_after = space(model, X[:2], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		batch_size=5, func=deep_lift_shap, device=device, n_shuffles=3, 
 		random_state=0)
 
 	assert y_before.shape == (2, 4, 100)
@@ -397,17 +397,17 @@ def test_space_deep_lift_shap(X):
          [-5.4217e-04,  0.0000e+00,  0.0000e+00,  0.0000e+00]]], 4)
 
 	y_before2, y_after2 = space(model, X[:8], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=64, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		batch_size=64, func=deep_lift_shap, device=device, n_shuffles=3, 
 		random_state=0)
 	assert_array_almost_equal(y_before, y_before2[:2], 4)
 	assert_array_almost_equal(y_after, y_after2[:2], 4)
 
 
-def test_space_deep_lift_shap_flattendense(X):
+def test_space_deep_lift_shap_flattendense(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 	y_before, y_after = space(model, X[:8], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		batch_size=5, func=deep_lift_shap, device=device, n_shuffles=3, 
 		random_state=0)
 
 	assert y_before.shape == (8, 4, 100)
@@ -457,23 +457,23 @@ def test_space_deep_lift_shap_flattendense(X):
          [-0.0168,  0.0000, -0.0000,  0.0000, -0.0000]]], 4)
 
 	y_before2, y_after2 = space(model, X[:8], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=64, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		batch_size=64, func=deep_lift_shap, device=device, n_shuffles=3, 
 		random_state=0)
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)
 
 
-def test_space_deep_lift_shap_vs_attribute(X):
+def test_space_deep_lift_shap_vs_attribute(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 	y_before, y_after = space(model, X[:8], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		batch_size=5, func=deep_lift_shap, device=device, n_shuffles=3, 
 		random_state=0)
 
-	y_before0 = deep_lift_shap(model, X[:8], device='cpu', n_shuffles=3, 
+	y_before0 = deep_lift_shap(model, X[:8], device=device, n_shuffles=3, 
 		random_state=0)
 	y_after0 = deep_lift_shap(model, multisubstitute(X[:8], ["ACGTC", "GAGA"], 
-		1), device='cpu', n_shuffles=3, random_state=0)
+		1), device=device, n_shuffles=3, random_state=0)
 
 	assert y_before.shape == (8, 4, 100)
 	assert y_before.dtype == torch.float32
@@ -484,15 +484,15 @@ def test_space_deep_lift_shap_vs_attribute(X):
 	assert_array_almost_equal(y_after[:, 0], y_after0, 4)
 
 
-def test_space_deep_lift_shap_alpha(X, alpha):
+def test_space_deep_lift_shap_alpha(X, alpha, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	y_before0, y_after0 = space(model, X[:8], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		batch_size=5, func=deep_lift_shap, device=device, n_shuffles=3, 
 		random_state=0)
 	y_before1, y_after1 = space(model, X[:8], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		batch_size=5, func=deep_lift_shap, device=device, n_shuffles=3, 
 		random_state=0, args=(alpha,))
 
 	assert y_before0.shape == (8, 4, 100)
@@ -504,15 +504,15 @@ def test_space_deep_lift_shap_alpha(X, alpha):
 	assert_array_almost_equal(y_after0, y_after1, 4)
 
 
-def test_space_deep_lift_shap_alpha_beta(X, alpha, beta):
+def test_space_deep_lift_shap_alpha_beta(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	y_before0, y_after0 = space(model, X[:8], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		batch_size=5, func=deep_lift_shap, device=device, n_shuffles=3, 
 		random_state=0)
 	y_before1, y_after1 = space(model, X[:8], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		batch_size=5, func=deep_lift_shap, device=device, n_shuffles=3, 
 		random_state=0, args=(alpha, beta))
 
 	assert y_before0.shape == (8, 4, 100)
@@ -526,15 +526,15 @@ def test_space_deep_lift_shap_alpha_beta(X, alpha, beta):
 		y_after1, 4)
 
 
-def test_space_deep_lift_shap_n_shuffles(X):
+def test_space_deep_lift_shap_n_shuffles(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	y_before0, y_after0 = space(model, X[:8], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		batch_size=5, func=deep_lift_shap, device=device, n_shuffles=3, 
 		random_state=0)
 	y_before1, y_after1 = space(model, X[:8], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=10, 
+		batch_size=5, func=deep_lift_shap, device=device, n_shuffles=10, 
 		random_state=0)
 
 	assert y_before0.shape == (8, 4, 100)
@@ -590,12 +590,12 @@ def test_space_deep_lift_shap_n_shuffles(X):
          [-0.0000, -0.0000,  0.0000,  0.0287]]], 4)
 
 
-def test_space_deep_lift_shap_hypothetical(X):
+def test_space_deep_lift_shap_hypothetical(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	y_before, y_after = space(model, X[:8], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		batch_size=5, func=deep_lift_shap, device=device, n_shuffles=3, 
 		hypothetical=True, random_state=0)
 
 	assert y_before.shape == (8, 4, 100)
@@ -625,19 +625,19 @@ def test_space_deep_lift_shap_hypothetical(X):
          [-0.0712, -0.0237,  0.0141,  0.0161]]], 4)
 
 	y_before1, y_after1 = space(model, X[:8], ["ACGTC", "GAGA"], [[1]], 
-		batch_size=5, func=deep_lift_shap, device='cpu', n_shuffles=3, 
+		batch_size=5, func=deep_lift_shap, device=device, n_shuffles=3, 
 		additional_func_kwargs={'hypothetical': True}, random_state=0)
 
 	assert_array_almost_equal(y_before, y_before1, 4)
 	assert_array_almost_equal(y_after, y_after1, 4)
 
 
-def test_space_deep_lift_shap_raises(X):
+def test_space_deep_lift_shap_raises(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	assert_raises(TypeError, space, model, X, ["ACGTC", "GAGA"], [[1]], 
-		func=deep_lift_shap, device='cpu', 
+		func=deep_lift_shap, device=device, 
 		additional_func_kwargs={'device': 'cpu'})
 	assert_raises(TypeError, space, model, X, ["ACGTC", "GAGA"], [[1]], 
-		func=deep_lift_shap, device='cpu', end=10)
+		func=deep_lift_shap, device=device, end=10)

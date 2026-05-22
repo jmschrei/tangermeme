@@ -57,9 +57,9 @@ def deletions():
 ###
 
 
-def test_substitution_effect(X, substitutions):
+def test_substitution_effect(X, substitutions, device):
 	model = SmallDeepSEA()
-	y, y_var = substitution_effect(model, X, substitutions, device='cpu')
+	y, y_var = substitution_effect(model, X, substitutions, device=device)
 
 	assert y.shape == (3, 1)
 	assert y_var.shape == (3, 1)
@@ -68,9 +68,9 @@ def test_substitution_effect(X, substitutions):
 	assert_array_almost_equal(y_var, [[-0.0835], [-0.0963], [-0.0644]], 4)
 
 
-def test_substitution_effect_summodel(X, substitutions):
+def test_substitution_effect_summodel(X, substitutions, device):
 	model = SumModel()
-	y, y_var = substitution_effect(model, X, substitutions, device='cpu')
+	y, y_var = substitution_effect(model, X, substitutions, device=device)
 
 	assert y.shape == (3, 4)
 	assert y_var.shape == (3, 4)
@@ -91,9 +91,9 @@ def test_substitution_effect_summodel(X, substitutions):
 ###
 
 
-def test_deletion_effect(X_del, deletions):
+def test_deletion_effect(X_del, deletions, device):
 	model = SmallDeepSEA()
-	y, y_var = deletion_effect(model, X_del, deletions, device='cpu')
+	y, y_var = deletion_effect(model, X_del, deletions, device=device)
 
 	assert y.shape == (3, 1)
 	assert y_var.shape == (3, 1)
@@ -102,9 +102,9 @@ def test_deletion_effect(X_del, deletions):
 	assert_array_almost_equal(y_var, [[-0.0814], [-0.0852], [-0.0940]], 4)
 
 
-def test_deletion_effect_summodel(X_del, substitutions):
+def test_deletion_effect_summodel(X_del, substitutions, device):
 	model = SumModel()
-	y, y_var = deletion_effect(model, X_del, substitutions, device='cpu')
+	y, y_var = deletion_effect(model, X_del, substitutions, device=device)
 
 	assert y.shape == (3, 4)
 	assert y_var.shape == (3, 4)
@@ -127,9 +127,9 @@ def test_deletion_effect_summodel(X_del, substitutions):
 ###
 
 
-def test_insertion_effect(X, substitutions):
+def test_insertion_effect(X, substitutions, device):
 	model = SmallDeepSEA()
-	y, y_var = insertion_effect(model, X, substitutions, device='cpu')
+	y, y_var = insertion_effect(model, X, substitutions, device=device)
 
 	assert y.shape == (3, 1)
 	assert y_var.shape == (3, 1)
@@ -138,9 +138,9 @@ def test_insertion_effect(X, substitutions):
 	assert_array_almost_equal(y_var, [[-0.0676], [-0.1054], [-0.0644]], 4)
 
 
-def test_insertion_effect_summodel(X, substitutions):
+def test_insertion_effect_summodel(X, substitutions, device):
 	model = SumModel()
-	y, y_var = insertion_effect(model, X, substitutions, device='cpu')
+	y, y_var = insertion_effect(model, X, substitutions, device=device)
 
 	assert y.shape == (3, 4)
 	assert y_var.shape == (3, 4)

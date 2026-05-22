@@ -48,10 +48,10 @@ def beta():
 
 ##
 
-def test_ablate_summodel(X):
+def test_ablate_summodel(X, device):
 	torch.manual_seed(0)
 	model = SumModel()
-	y_before, y_after = ablate(model, X, 46, 54, batch_size=5, device='cpu')
+	y_before, y_after = ablate(model, X, 46, 54, batch_size=5, device=device)
 
 	assert y_before.shape == (64, 4)
 	assert y_before.dtype == torch.float32
@@ -85,16 +85,16 @@ def test_ablate_summodel(X):
 		assert_array_almost_equal(y_before, y_after[:, 0])
 
 	y_before2, y_after2 = ablate(model, X, 0, -1, batch_size=1, 
-		device='cpu')
+		device=device)
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)	
 
 
-def test_ablate_flattendense(X):
+def test_ablate_flattendense(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	y_before, y_after = ablate(model, X, 46, 54, random_state=0, batch_size=8, 
-		device='cpu')
+		device=device)
 
 	assert y_before.shape == (64, 3)
 	assert y_before.dtype == torch.float32
@@ -136,19 +136,19 @@ def test_ablate_flattendense(X):
          [-0.3568,  0.6863, -0.2673]]], 4)
 
 	y_before2, y_after2 = ablate(model, X, 0, -1, batch_size=1, 
-		device='cpu')
+		device=device)
 	assert_array_almost_equal(y_before, y_before2, 4)
 	assert_raises(AssertionError, assert_array_almost_equal, y_after, y_after2)
 
 
-def test_ablate_flattendense_alpha_beta(X, alpha, beta):
+def test_ablate_flattendense_alpha_beta(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 
 	y_before, y_after = ablate(model, X, 46, 54, random_state=0, batch_size=8,
-		args=(alpha, beta), device='cpu')
+		args=(alpha, beta), device=device)
 	y_before0, y_after0 = ablate(model, X, 46, 54, random_state=0, batch_size=8,
-		device='cpu')
+		device=device)
 
 	assert y_before.shape == (64, 3)
 	assert y_before.dtype == torch.float32
@@ -169,11 +169,11 @@ def test_ablate_flattendense_alpha_beta(X, alpha, beta):
          [0.4228, 0.4150, 0.4888]]], 4)
 
 
-def test_ablate_conv(X):
+def test_ablate_conv(X, device):
 	torch.manual_seed(0)
 	model = Conv()
 	y_before, y_after = ablate(model, X, 46, 54, random_state=0, batch_size=8, 
-		device='cpu')
+		device=device)
 
 	assert y_before.shape == (64, 12, 98)
 	assert y_before.dtype == torch.float32
@@ -219,11 +219,11 @@ def test_ablate_conv(X):
 			y_before[:, :, 35:60], y_after[:, i, :, 35:60])
 
 
-def test_ablate_scatter(X):
+def test_ablate_scatter(X, device):
 	torch.manual_seed(0)
 	model = Scatter()
 	y_before, y_after = ablate(model, X, 46, 54, random_state=0, batch_size=8, 
-		device='cpu')
+		device=device)
 
 	assert y_before.shape == (64, 100, 4)
 	assert y_before.dtype == torch.float32
@@ -311,11 +311,11 @@ def test_ablate_scatter(X):
           [0., 0., 1., 0.]]]], 4)
 
 
-def test_ablate_convdense(X):
+def test_ablate_convdense(X, device):
 	torch.manual_seed(0)
 	model = ConvDense()
 	y_before, y_after = ablate(model, X, 46, 54, random_state=0, batch_size=2, 
-		device='cpu', n=3)
+		device=device, n=3)
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 12, 98)
@@ -381,12 +381,12 @@ def test_ablate_convdense(X):
          [-0.1027, -0.1353, -0.0634]]], 4)
 
 
-def test_ablate_convdense_alpha(X, alpha):
+def test_ablate_convdense_alpha(X, alpha, device):
 	torch.manual_seed(0)
 	model = ConvDense()
 
 	y_before, y_after = ablate(model, X, 46, 54, random_state=0, 
-		args=(alpha[:, :, None],), n=3, batch_size=2, device='cpu')
+		args=(alpha[:, :, None],), n=3, batch_size=2, device=device)
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 12, 98)
@@ -452,17 +452,17 @@ def test_ablate_convdense_alpha(X, alpha):
          [-0.1027, -0.1353, -0.0634]]], 4)
 
 
-def test_ablate_convdense_batch_size(X, alpha):
+def test_ablate_convdense_batch_size(X, alpha, device):
 	torch.manual_seed(0)
 	model = ConvDense()
 	y_before0, y_after0 = ablate(model, X, 46, 54, random_state=0, 
-		args=(alpha[:, :, None],), batch_size=1, n=4, device='cpu')
+		args=(alpha[:, :, None],), batch_size=1, n=4, device=device)
 
 	y_before1, y_after1 = ablate(model, X, 46, 54, random_state=0, 
-		args=(alpha[:, :, None],), batch_size=5, n=4, device='cpu')
+		args=(alpha[:, :, None],), batch_size=5, n=4, device=device)
 
 	y_before2, y_after2 = ablate(model, X, 46, 54, random_state=0, 
-		args=(alpha[:, :, None],), batch_size=68, n=4, device='cpu')
+		args=(alpha[:, :, None],), batch_size=68, n=4, device=device)
 
 	assert len(y_before0) == len(y_before1) == len(y_before2) == 2
 	assert len(y_after0) == len(y_after1) == len(y_after2) == 2
@@ -498,45 +498,45 @@ def test_ablate_convdense_batch_size(X, alpha):
 	assert_array_almost_equal(y_after0[1], y_after2[1])
 
 
-def test_ablate_raises_shape(X, alpha):
+def test_ablate_raises_shape(X, alpha, device):
 	torch.manual_seed(0)
 	model = ConvDense()
 
-	assert_raises(ValueError, ablate, model, X[0], 46, 54, device='cpu')
-	assert_raises(ValueError, ablate, model, X[:, 0], 46, 54, device='cpu')
+	assert_raises(ValueError, ablate, model, X[0], 46, 54, device=device)
+	assert_raises(ValueError, ablate, model, X[:, 0], 46, 54, device=device)
 	assert_raises(ValueError, ablate, model, X.unsqueeze(0), 46, 54, 
-		device='cpu')
+		device=device)
 
 	assert_raises(ValueError, ablate, model, X, 46, 54, args=(alpha[:2],), 
-		device='cpu')
+		device=device)
 	assert_raises(ValueError, ablate, model, X, 46, 54, args=alpha, 
-		device='cpu')
+		device=device)
 	assert_raises(ValueError, ablate, model, X, 46, 54, args=(alpha[:2, None],),
-		device='cpu')
+		device=device)
 
 
-def test_ablate_raises_args(X, alpha, beta):
+def test_ablate_raises_args(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 
-	assert_raises(ValueError, ablate, model, X, -6, 5, device='cpu')
-	assert_raises(ValueError, ablate, model, X, 7, 5, device='cpu')
-	assert_raises(ValueError, ablate, model, X, 7, 5000, device='cpu')
-	assert_raises(ValueError, ablate, model, X, 5, 10, args=alpha, device='cpu')
+	assert_raises(ValueError, ablate, model, X, -6, 5, device=device)
+	assert_raises(ValueError, ablate, model, X, 7, 5, device=device)
+	assert_raises(ValueError, ablate, model, X, 7, 5000, device=device)
+	assert_raises(ValueError, ablate, model, X, 5, 10, args=alpha, device=device)
 	assert_raises(ValueError, ablate, model, X, 5, 10, args=(alpha[:5],), 
-		device='cpu')
+		device=device)
 	assert_raises(ValueError, ablate, model, X, 5, 10, args=(alpha, beta[:5]), 
-		device='cpu')
+		device=device)
 
 
 ###
 
 
-def test_ablate_deep_lift_shap(X):
+def test_ablate_deep_lift_shap(X, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y_before, y_after = ablate(model, X[:2], 45, 55, func=deep_lift_shap, 
-		batch_size=1, n=2, n_shuffles=3, device='cpu', random_state=0)
+		batch_size=1, n=2, n_shuffles=3, device=device, random_state=0)
 
 	assert y_before.shape == (2, 4, 100)
 	assert y_before.dtype == torch.float32
@@ -578,16 +578,16 @@ def test_ablate_deep_lift_shap(X):
           [-0.0000e+00, -0.0000e+00,  4.6053e-04,  0.0000e+00]]]], 4)
 
 	y_before2, y_after2 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		batch_size=64, n=2, n_shuffles=3, device='cpu', random_state=0)
+		batch_size=64, n=2, n_shuffles=3, device=device, random_state=0)
 	assert_array_almost_equal(y_before, y_before2[:2], 4)
 	assert_array_almost_equal(y_after, y_after2[:2], 4)
 
 
-def test_ablate_deep_lift_shap_flattendense(X):
+def test_ablate_deep_lift_shap_flattendense(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 	y_before, y_after = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		n=3, n_shuffles=5, device='cpu', random_state=0)
+		n=3, n_shuffles=5, device=device, random_state=0)
 
 	assert y_before.shape == (8, 4, 100)
 	assert y_before.dtype == torch.float32
@@ -627,24 +627,24 @@ def test_ablate_deep_lift_shap_flattendense(X):
           [-0.0000,  0.0000, -0.0046,  0.0000]]]], 4)
 
 	y_before2, y_after2 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		n=3, n_shuffles=5, batch_size=64, device='cpu', random_state=0)
+		n=3, n_shuffles=5, batch_size=64, device=device, random_state=0)
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)
 
 
-def test_ablate_deep_lift_shap_vs_attribute(X):
+def test_ablate_deep_lift_shap_vs_attribute(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 	y_before, y_after = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		n=3, n_shuffles=5, device='cpu', random_state=0)
+		n=3, n_shuffles=5, device=device, random_state=0)
 	y_after = y_after.reshape(-1, *y_after.shape[2:])
 
 	X1 = shuffle(X[:8], start=45, end=55, n=3, random_state=0).reshape(-1, 
 		*X.shape[1:])
 
-	y_before0 = deep_lift_shap(model, X[:8], n_shuffles=5, device='cpu', 
+	y_before0 = deep_lift_shap(model, X[:8], n_shuffles=5, device=device, 
 		random_state=0)
-	y_after0 = deep_lift_shap(model, X1, n_shuffles=5, device='cpu', 
+	y_after0 = deep_lift_shap(model, X1, n_shuffles=5, device=device, 
 		random_state=0)
 
 	assert y_before.shape == (8, 4, 100)
@@ -656,14 +656,14 @@ def test_ablate_deep_lift_shap_vs_attribute(X):
 	assert_array_almost_equal(y_after, y_after0, 4)
 
 
-def test_ablate_deep_lift_shap_alpha(X, alpha):
+def test_ablate_deep_lift_shap_alpha(X, alpha, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	y_before0, y_after0 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		n=3, n_shuffles=5, device='cpu', random_state=0)
+		n=3, n_shuffles=5, device=device, random_state=0)
 	y_before1, y_after1 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		n=3, n_shuffles=5, args=(alpha,), device='cpu', random_state=0)
+		n=3, n_shuffles=5, args=(alpha,), device=device, random_state=0)
 
 	assert y_before0.shape == (8, 4, 100)
 	assert y_before0.dtype == torch.float32
@@ -674,14 +674,14 @@ def test_ablate_deep_lift_shap_alpha(X, alpha):
 	assert_array_almost_equal(y_after0, y_after1, 4)
 
 
-def test_ablate_deep_lift_shap_alpha_beta(X, alpha, beta):
+def test_ablate_deep_lift_shap_alpha_beta(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	y_before0, y_after0 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		n=3, n_shuffles=5, device='cpu', random_state=0)
+		n=3, n_shuffles=5, device=device, random_state=0)
 	y_before1, y_after1 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		n=3, n_shuffles=5, args=(alpha, beta), device='cpu', random_state=0)
+		n=3, n_shuffles=5, args=(alpha, beta), device=device, random_state=0)
 
 	assert y_before0.shape == (8, 4, 100)
 	assert y_before0.dtype == torch.float32
@@ -694,14 +694,14 @@ def test_ablate_deep_lift_shap_alpha_beta(X, alpha, beta):
 		y_after1, 4)
 
 
-def test_ablate_deep_lift_shap_n_shuffles(X):
+def test_ablate_deep_lift_shap_n_shuffles(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	y_before0, y_after0 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		n_shuffles=2, device='cpu', random_state=0)
+		n_shuffles=2, device=device, random_state=0)
 	y_before1, y_after1 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		n_shuffles=10, device='cpu', random_state=0)
+		n_shuffles=10, device=device, random_state=0)
 
 	assert y_before0.shape == (8, 4, 100)
 	assert y_before0.dtype == torch.float32
@@ -778,12 +778,12 @@ def test_ablate_deep_lift_shap_n_shuffles(X):
           [-0.0000, -0.0000,  0.0000]]]], 4)
 
 
-def test_ablate_deep_lift_shap_hypothetical(X):
+def test_ablate_deep_lift_shap_hypothetical(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	y_before, y_after = ablate(model, X[:8], 44, 55, func=deep_lift_shap, n=3,
-		n_shuffles=5, hypothetical=True, device='cpu', random_state=0)
+		n_shuffles=5, hypothetical=True, device=device, random_state=0)
 
 	assert y_before.shape == (8, 4, 100)
 	assert y_before.dtype == torch.float32
@@ -824,17 +824,17 @@ def test_ablate_deep_lift_shap_hypothetical(X):
 
 	y_before1, y_after1 = ablate(model, X[:8], 44, 55, func=deep_lift_shap, 
 		n=3, n_shuffles=5, additional_func_kwargs={'hypothetical': True}, 
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 
 	assert_array_almost_equal(y_before, y_before1, 4)
 	assert_array_almost_equal(y_after, y_after1, 4)
 
 
-def test_ablate_deep_lift_shap_raises(X):
+def test_ablate_deep_lift_shap_raises(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	assert_raises(TypeError, ablate, model, X, 44, 55, n=3, func=deep_lift_shap, 
-		device='cpu', additional_func_kwargs={'device': 'cpu'}, n_shuffles=5)
+		device=device, additional_func_kwargs={'device': 'cpu'}, n_shuffles=5)
 	assert_raises(TypeError, ablate, model, X, 44, 55, n=3, func=deep_lift_shap,
-		device='cpu', end=10)
+		device=device, end=10)

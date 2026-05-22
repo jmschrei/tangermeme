@@ -45,11 +45,11 @@ def beta():
 
 ##
 
-def test_marginalize_summodel(X):
+def test_marginalize_summodel(X, device):
 	torch.manual_seed(0)
 	model = SumModel()
 	y_before, y_after = marginalize(model, X, "ACGTC", batch_size=5, 
-		device='cpu')
+		device=device)
 
 	assert y_before.shape == (64, 4)
 	assert y_before.dtype == torch.float32
@@ -78,16 +78,16 @@ def test_marginalize_summodel(X):
         [20., 30., 30., 20.]])
 
 	y_before2, y_after2 = marginalize(model, X, "ACGTC", batch_size=64, 
-		device='cpu')
+		device=device)
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)	
 
 
-def test_marginalize_flattendense(X):
+def test_marginalize_flattendense(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	y_before, y_after = marginalize(model, X, "ACGTC", batch_size=8, 
-		device='cpu')
+		device=device)
 
 	assert y_before.shape == (64, 3)
 	assert y_before.dtype == torch.float32
@@ -114,16 +114,16 @@ def test_marginalize_flattendense(X):
         [-0.4546,  0.6714, -0.4246]], 4)
 
 	y_before2, y_after2 = marginalize(model, X, "ACGTC", batch_size=64, 
-		device='cpu')
+		device=device)
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)
 
 
-def test_marginalize_conv(X):
+def test_marginalize_conv(X, device):
 	torch.manual_seed(0)
 	model = Conv()
 	y_before, y_after = marginalize(model, X, "ACGTC", start=0, batch_size=8, 
-		device='cpu')
+		device=device)
 
 	assert y_before.shape == (64, 12, 98)
 	assert y_before.dtype == torch.float32
@@ -168,16 +168,16 @@ def test_marginalize_conv(X):
            0.1603,  0.2667,  0.1406]]], 4)
 
 	y_before2, y_after2 = marginalize(model, X, "ACGTC", start=0, batch_size=64, 
-		device='cpu')
+		device=device)
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)
 
 
-def test_marginalize_scatter(X):
+def test_marginalize_scatter(X, device):
 	torch.manual_seed(0)
 	model = Scatter()
 	y_before, y_after = marginalize(model, X, "ACGTC", start=0, batch_size=8, 
-		device='cpu')
+		device=device)
 
 	assert y_before.shape == (64, 100, 4)
 	assert y_before.dtype == torch.float32
@@ -238,16 +238,16 @@ def test_marginalize_scatter(X):
          [0., 1., 0., 0.]]], 4)
 
 	y_before2, y_after2 = marginalize(model, X, "ACGTC", start=0, batch_size=64, 
-		device='cpu')
+		device=device)
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)
 
 
-def test_marginalize_convdense(X):
+def test_marginalize_convdense(X, device):
 	torch.manual_seed(0)
 	model = ConvDense()
 	y_before, y_after = marginalize(model, X, "ACGTC", start=0, batch_size=2, 
-		device='cpu')
+		device=device)
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 12, 98)
@@ -299,11 +299,11 @@ def test_marginalize_convdense(X):
         [-0.2601,  0.1425,  0.2126]], 4)
 
 
-def test_marginalize_convdense_batch_size(X):
+def test_marginalize_convdense_batch_size(X, device):
 	torch.manual_seed(0)
 	model = ConvDense()
 	y_before, y_after = marginalize(model, X, "ACGTC", batch_size=68, 
-		device='cpu')
+		device=device)
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 12, 98)
@@ -314,49 +314,49 @@ def test_marginalize_convdense_batch_size(X):
 	assert y_after[1].shape == (64, 3)
 
 
-def test_marginalize_scatter_batch_size(X):
+def test_marginalize_scatter_batch_size(X, device):
 	torch.manual_seed(0)
 	model = Scatter()
 	y_before, y_after = marginalize(model, X, "ACGTC", batch_size=68, 
-		device='cpu')
+		device=device)
 
 	assert y_before.shape == (64, 100, 4)
 	assert y_after.shape == (64, 100, 4)
 
 
-def test_marginalize_raises_shape(X):
+def test_marginalize_raises_shape(X, device):
 	torch.manual_seed(0)
 	model = Scatter()
-	assert_raises(ValueError, marginalize, model, X[0], "ACGTC", device='cpu')
+	assert_raises(ValueError, marginalize, model, X[0], "ACGTC", device=device)
 	assert_raises(ValueError, marginalize, model, X[:, 0], "ACGTC", 
-		device='cpu')
+		device=device)
 	assert_raises(ValueError, marginalize, model, X.unsqueeze(0), "ACGTC", 
-		device='cpu')
+		device=device)
 
 
-def test_marginalize_raises_args(X, alpha, beta):
+def test_marginalize_raises_args(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	assert_raises(TypeError, marginalize, model, X, "ACGTC", batch_size=2, 
-		args=5, device='cpu')
+		args=5, device=device)
 	assert_raises(AttributeError, marginalize, model, X, "ACGTC",  batch_size=2, 
-		args=(5,), device='cpu')
+		args=(5,), device=device)
 	assert_raises(ValueError, marginalize, model, X, "ACGTC", batch_size=2, 
-		args=alpha, device='cpu')
+		args=alpha, device=device)
 	assert_raises(ValueError, marginalize, model, X, "ACGTC", batch_size=2, 
-		args=(alpha[:5],), device='cpu')
+		args=(alpha[:5],), device=device)
 	assert_raises(ValueError, marginalize, model, X, "ACGTC", batch_size=2, 
-		args=(alpha, beta[:5]), device='cpu')
+		args=(alpha, beta[:5]), device=device)
 
 
 ###
 
 
-def test_marginalize_deep_lift_shap(X):
+def test_marginalize_deep_lift_shap(X, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y_before, y_after = marginalize(model, X[:2], "ACGTC", func=deep_lift_shap, 
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 
 	assert y_before.shape == (2, 4, 100)
 	assert y_before.dtype == torch.float32
@@ -385,16 +385,16 @@ def test_marginalize_deep_lift_shap(X):
          [ 0.0000e+00,  0.0000e+00, -0.0000e+00,  2.8622e-05]]], 4)
 
 	y_before2, y_after2 = marginalize(model, X[:8], "ACGTC", 
-		func=deep_lift_shap, batch_size=64, device='cpu', random_state=0)
+		func=deep_lift_shap, batch_size=64, device=device, random_state=0)
 	assert_array_almost_equal(y_before, y_before2[:2], 4)
 	assert_array_almost_equal(y_after, y_after2[:2], 4)
 
 
-def test_marginalize_deep_lift_shap_flattendense(X):
+def test_marginalize_deep_lift_shap_flattendense(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 	y_before, y_after = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 
 	assert y_before.shape == (8, 4, 100)
 	assert y_before.dtype == torch.float32
@@ -443,20 +443,20 @@ def test_marginalize_deep_lift_shap_flattendense(X):
          [-0.0000,  0.0000,  0.0000,  0.0255, -0.0000]]], 4)
 
 	y_before2, y_after2 = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		batch_size=64, device='cpu', random_state=0)
+		batch_size=64, device=device, random_state=0)
 	assert_array_almost_equal(y_before, y_before2)
 	assert_array_almost_equal(y_after, y_after2)
 
 
-def test_marginalize_deep_lift_shap_vs_attribute(X):
+def test_marginalize_deep_lift_shap_vs_attribute(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 	y_before, y_after = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 
-	y_before0 = deep_lift_shap(model, X[:8], device='cpu', random_state=0)
+	y_before0 = deep_lift_shap(model, X[:8], device=device, random_state=0)
 	y_after0 = deep_lift_shap(model, substitute(X[:8], "ACGTC"), 
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 
 	assert y_before.shape == (8, 4, 100)
 	assert y_before.dtype == torch.float32
@@ -467,14 +467,14 @@ def test_marginalize_deep_lift_shap_vs_attribute(X):
 	assert_array_almost_equal(y_after, y_after0, 4)
 
 
-def test_marginalize_deep_lift_shap_alpha(X, alpha):
+def test_marginalize_deep_lift_shap_alpha(X, alpha, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	y_before0, y_after0 = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 	y_before1, y_after1 = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		device='cpu', random_state=0, args=(alpha,))
+		device=device, random_state=0, args=(alpha,))
 
 	assert y_before0.shape == (8, 4, 100)
 	assert y_before0.dtype == torch.float32
@@ -485,14 +485,14 @@ def test_marginalize_deep_lift_shap_alpha(X, alpha):
 	assert_array_almost_equal(y_after0, y_after1, 4)
 
 
-def test_marginalize_deep_lift_shap_alpha_beta(X, alpha, beta):
+def test_marginalize_deep_lift_shap_alpha_beta(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	y_before0, y_after0 = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 	y_before1, y_after1 = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		device='cpu', random_state=0, args=(alpha, beta))
+		device=device, random_state=0, args=(alpha, beta))
 
 	assert y_before0.shape == (8, 4, 100)
 	assert y_before0.dtype == torch.float32
@@ -505,14 +505,14 @@ def test_marginalize_deep_lift_shap_alpha_beta(X, alpha, beta):
 		y_after1, 4)
 
 
-def test_marginalize_deep_lift_shap_n_shuffles(X):
+def test_marginalize_deep_lift_shap_n_shuffles(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	y_before0, y_after0 = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		n_shuffles=2, device='cpu', random_state=0)
+		n_shuffles=2, device=device, random_state=0)
 	y_before1, y_after1 = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		n_shuffles=10, device='cpu', random_state=0)
+		n_shuffles=10, device=device, random_state=0)
 
 	assert y_before0.shape == (8, 4, 100)
 	assert y_before0.dtype == torch.float32
@@ -567,12 +567,12 @@ def test_marginalize_deep_lift_shap_n_shuffles(X):
          [-0.0000, -0.0000,  0.0000,  0.0307]]], 4)
 
 
-def test_marginalize_deep_lift_shap_hypothetical(X):
+def test_marginalize_deep_lift_shap_hypothetical(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	y_before, y_after = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		hypothetical=True, device='cpu', random_state=0)
+		hypothetical=True, device=device, random_state=0)
 
 	assert y_before.shape == (8, 4, 100)
 	assert y_before.dtype == torch.float32
@@ -601,18 +601,18 @@ def test_marginalize_deep_lift_shap_hypothetical(X):
          [-0.0712, -0.0148,  0.0085,  0.0282]]], 4)
 
 	y_before1, y_after1 = marginalize(model, X[:8], "ACGTC", func=deep_lift_shap, 
-		additional_func_kwargs={'hypothetical': True}, device='cpu', 
+		additional_func_kwargs={'hypothetical': True}, device=device, 
 		random_state=0)
 
 	assert_array_almost_equal(y_before, y_before1, 4)
 	assert_array_almost_equal(y_after, y_after1, 4)
 
 
-def test_marginalize_deep_lift_shap_raises(X):
+def test_marginalize_deep_lift_shap_raises(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	assert_raises(TypeError, marginalize, model, X, "ACGTC", func=deep_lift_shap,
-		device='cpu', additional_func_kwargs={'device': 'cpu'})
+		device=device, additional_func_kwargs={'device': 'cpu'})
 	assert_raises(TypeError, marginalize, model, X, "ACGTC", 
-		func=deep_lift_shap, device='cpu', end=10)
+		func=deep_lift_shap, device=device, end=10)

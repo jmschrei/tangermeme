@@ -75,8 +75,8 @@ def test_validate_input_max_value():
 	_validate_input(X, "X", max_value=0.0)
 
 
-def test_validate_input_ohe():
-	X = random_one_hot((1, 4, 10), random_state=0)
+def test_validate_input_ohe(device):
+	X = random_one_hot((1, 4, 10), random_state=0).to(device)
 
 	_validate_input(X, "X", ohe=True, ohe_dim=1)
 	_validate_input(X.type(torch.float64), "X", ohe=True, ohe_dim=1)
@@ -108,8 +108,8 @@ def test_validate_input_ohe():
 	assert_raises(IndexError, _validate_input, X, "X", ohe=True, ohe_dim=1)
 
 
-def test_validate_input_allow_N():
-	X = random_one_hot((2, 4, 10), random_state=0)
+def test_validate_input_allow_N(device):
+	X = random_one_hot((2, 4, 10), random_state=0).to(device)
 	_validate_input(X, "X", ohe=True, ohe_dim=1)
 
 	X[0, :, 0] = 0
@@ -131,7 +131,7 @@ def test_validate_input_allow_N():
 	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1,
 		allow_N=True)
 
-	X = random_one_hot((2, 4, 10), random_state=0).float()
+	X = random_one_hot((2, 4, 10), random_state=0).float().to(device)
 	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
 
 	X[0, 1, 0] = 0.5
@@ -607,7 +607,7 @@ def test_unchunk_raises():
 ###
 
 
-def test_extract_signal():
+def test_extract_signal(device):
 	loci = pandas.DataFrame({
 		'example_idxs': [0, 0, 1, 2],
 		'start': [1, 9, 2, 4],
@@ -615,12 +615,12 @@ def test_extract_signal():
 	})
 
 	X = numpy.random.RandomState(0).randn(3, 1, 15)
-	X = torch.from_numpy(X)
+	X = torch.from_numpy(X).to(device)
 
 	y = extract_signal(loci, X)
 	
 	assert y.shape == (4, 1)
-	assert_array_almost_equal(y, [[ 5.3088  ],
+	assert_array_almost_equal(y.cpu(), [[ 5.3088  ],
                   [ 2.891628],
                   [-0.253532],
                   [-0.917093]])

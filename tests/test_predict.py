@@ -43,10 +43,10 @@ def beta():
 ##
 
 
-def test_predict_summodel(X):
+def test_predict_summodel(X, device):
 	torch.manual_seed(0)
-	model = SumModel()
-	y = predict(model, X, batch_size=8, device='cpu')
+	model = SumModel().to(device)
+	y = predict(model, X, batch_size=8, device=device)
 
 	assert y.shape == (64, 4)
 	assert y.dtype == torch.float32
@@ -61,15 +61,15 @@ def test_predict_summodel(X):
         [26., 20., 21., 33.],
         [21., 28., 31., 20.]])
 
-	assert_array_almost_equal(y, model(X))
-	assert_array_almost_equal(y, predict(model, X, batch_size=1, device='cpu'))
-	assert_array_almost_equal(y, predict(model, X, batch_size=64, device='cpu'))
+	assert_array_almost_equal(y, model(X.to(device)).cpu())
+	assert_array_almost_equal(y, predict(model, X, batch_size=1, device=device))
+	assert_array_almost_equal(y, predict(model, X, batch_size=64, device=device))
 
 
-def test_predict_flattendense(X):
+def test_predict_flattendense(X, device):
 	torch.manual_seed(0)
-	model = FlattenDense()
-	y = predict(model, X, batch_size=8, device='cpu')
+	model = FlattenDense().to(device)
+	y = predict(model, X, batch_size=8, device=device)
 
 	assert y.shape == (64, 3)
 	assert y.dtype == torch.float32
@@ -84,15 +84,15 @@ def test_predict_flattendense(X):
         [-0.3894, -0.1332, -0.3717],
         [-0.3682,  0.5173, -0.4089]], 4)
 
-	assert_array_almost_equal(y, model(X).detach())	
-	assert_array_almost_equal(y, predict(model, X, batch_size=1, device='cpu'))
-	assert_array_almost_equal(y, predict(model, X, batch_size=64, device='cpu'))
+	assert_array_almost_equal(y, model(X.to(device)).cpu().detach())
+	assert_array_almost_equal(y, predict(model, X, batch_size=1, device=device))
+	assert_array_almost_equal(y, predict(model, X, batch_size=64, device=device))
 
 
-def test_predict_conv(X):
+def test_predict_conv(X, device):
 	torch.manual_seed(0)
-	model = Conv()
-	y = predict(model, X, batch_size=8, device='cpu')
+	model = Conv().to(device)
+	y = predict(model, X, batch_size=8, device=device)
 
 	assert y.shape == (64, 12, 98)
 	assert y.dtype == torch.float32
@@ -116,15 +116,15 @@ def test_predict_conv(X):
          [-0.0027,  0.4644,  0.1406, -0.1111, -0.3111,  0.4644,  0.1810,
            0.1603,  0.2667,  0.1406]]], 4)
 
-	assert_array_almost_equal(y, model(X).detach())	
-	assert_array_almost_equal(y, predict(model, X, batch_size=1, device='cpu'))
-	assert_array_almost_equal(y, predict(model, X, batch_size=64, device='cpu'))
+	assert_array_almost_equal(y, model(X.to(device)).cpu().detach())
+	assert_array_almost_equal(y, predict(model, X, batch_size=1, device=device))
+	assert_array_almost_equal(y, predict(model, X, batch_size=64, device=device))
 
 
-def test_predict_scatter(X):
+def test_predict_scatter(X, device):
 	torch.manual_seed(0)
-	model = Scatter()
-	y = predict(model, X, batch_size=8, device='cpu')
+	model = Scatter().to(device)
+	y = predict(model, X, batch_size=8, device=device)
 
 	assert y.shape == (64, 100, 4)
 	assert y.dtype == torch.float32
@@ -157,15 +157,15 @@ def test_predict_scatter(X):
          [1., 0., 0., 0.],
          [0., 0., 1., 0.]]], 4)
 
-	assert_array_almost_equal(y, model(X).detach())	
-	assert_array_almost_equal(y, predict(model, X, batch_size=1, device='cpu'))
-	assert_array_almost_equal(y, predict(model, X, batch_size=64, device='cpu'))
+	assert_array_almost_equal(y, model(X.to(device)).cpu().detach())
+	assert_array_almost_equal(y, predict(model, X, batch_size=1, device=device))
+	assert_array_almost_equal(y, predict(model, X, batch_size=64, device=device))
 
 
-def test_predict_convdense(X):
+def test_predict_convdense(X, device):
 	torch.manual_seed(0)
-	model = ConvDense()
-	y = predict(model, X, batch_size=2, device='cpu')
+	model = ConvDense().to(device)
+	y = predict(model, X, batch_size=2, device=device)
 
 	assert len(y) == 2
 	assert y[0].shape == (64, 12, 98)
@@ -192,10 +192,10 @@ def test_predict_convdense(X):
         [-0.2375, -0.0069,  0.0835]], 4)
 
 
-def test_predict_convdense_batch_size(X):
+def test_predict_convdense_batch_size(X, device):
 	torch.manual_seed(0)
-	model = ConvDense()
-	y = predict(model, X, batch_size=64, device='cpu')
+	model = ConvDense().to(device)
+	y = predict(model, X, batch_size=64, device=device)
 
 	assert len(y) == 2
 	assert y[0].shape == (64, 12, 98)
@@ -205,40 +205,40 @@ def test_predict_convdense_batch_size(X):
 	assert y[1].dtype == torch.float32
 
 
-def test_predict_batch_size(X):
+def test_predict_batch_size(X, device):
 	torch.manual_seed(0)
-	model = Scatter()
-	y = predict(model, X, batch_size=68, device='cpu')
+	model = Scatter().to(device)
+	y = predict(model, X, batch_size=68, device=device)
 	assert y.shape == (64, 100, 4)
 
 
-def test_predict_raises_shape(X):
+def test_predict_raises_shape(X, device):
 	torch.manual_seed(0)
-	model = Scatter()
-	assert_raises(RuntimeError, predict, model, X[0], device='cpu')
-	assert_raises(RuntimeError, predict, model, X[:, 0], device='cpu')
-	assert_raises(RuntimeError, predict, model, X.unsqueeze(0), device='cpu')
+	model = Scatter().to(device)
+	assert_raises(RuntimeError, predict, model, X[0], device=device)
+	assert_raises(RuntimeError, predict, model, X[:, 0], device=device)
+	assert_raises(RuntimeError, predict, model, X.unsqueeze(0), device=device)
 
 
-def test_predict_raises_args(X, alpha, beta):
+def test_predict_raises_args(X, alpha, beta, device):
 	torch.manual_seed(0)
-	model = FlattenDense()
-	assert_raises(TypeError, predict, model, X, batch_size=2, args=5, 
-		device='cpu')
-	assert_raises(AttributeError, predict, model, X, batch_size=2, args=(5,), 
-		device='cpu')
-	assert_raises(ValueError, predict, model, X, batch_size=2, 
-		args=alpha, device='cpu')
-	assert_raises(ValueError, predict, model, X, batch_size=2, 
-		args=(alpha[:5],), device='cpu')
-	assert_raises(ValueError, predict, model, X, batch_size=2, 
-		args=(alpha, beta[:5]), device='cpu')
+	model = FlattenDense().to(device)
+	assert_raises(TypeError, predict, model, X, batch_size=2, args=5,
+		device=device)
+	assert_raises(AttributeError, predict, model, X, batch_size=2, args=(5,),
+		device=device)
+	assert_raises(ValueError, predict, model, X, batch_size=2,
+		args=alpha, device=device)
+	assert_raises(ValueError, predict, model, X, batch_size=2,
+		args=(alpha[:5],), device=device)
+	assert_raises(ValueError, predict, model, X, batch_size=2,
+		args=(alpha, beta[:5]), device=device)
 
 
-def test_predict_flattendense_16bit_str(X):
+def test_predict_flattendense_16bit_str(X, device):
 	torch.manual_seed(0)
-	model = FlattenDense()
-	y = predict(model, X, batch_size=8, dtype='float16', device='cpu')
+	model = FlattenDense().to(device)
+	y = predict(model, X, batch_size=8, dtype='float16', device=device)
 
 	assert y.shape == (64, 3)
 	assert y.dtype == torch.float16
@@ -254,15 +254,15 @@ def test_predict_flattendense_16bit_str(X):
         [-0.3894, -0.1332, -0.3717],
         [-0.3682,  0.5173, -0.4089]], 3)
 
-	assert_array_almost_equal(y, model(X).detach(), 3)
-	assert_array_almost_equal(y, predict(model, X, batch_size=1, device='cpu'), 3)
-	assert_array_almost_equal(y, predict(model, X, batch_size=64, device='cpu'), 3)
+	assert_array_almost_equal(y, model(X.to(device)).cpu().detach(), 3)
+	assert_array_almost_equal(y, predict(model, X, batch_size=1, device=device), 3)
+	assert_array_almost_equal(y, predict(model, X, batch_size=64, device=device), 3)
 
 
-def test_predict_flattendense_16bit(X):
+def test_predict_flattendense_16bit(X, device):
 	torch.manual_seed(0)
-	model = FlattenDense()
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device='cpu')
+	model = FlattenDense().to(device)
+	y = predict(model, X, batch_size=8, dtype=torch.float16, device=device)
 
 	assert y.shape == (64, 3)
 	assert y.dtype == torch.float16
@@ -278,6 +278,6 @@ def test_predict_flattendense_16bit(X):
         [-0.3894, -0.1332, -0.3717],
         [-0.3682,  0.5173, -0.4089]], 3)
 
-	assert_array_almost_equal(y, model(X).detach(), 3)
-	assert_array_almost_equal(y, predict(model, X, batch_size=1, device='cpu'), 3)
-	assert_array_almost_equal(y, predict(model, X, batch_size=64, device='cpu'), 3)
+	assert_array_almost_equal(y, model(X.to(device)).cpu().detach(), 3)
+	assert_array_almost_equal(y, predict(model, X, batch_size=1, device=device), 3)
+	assert_array_almost_equal(y, predict(model, X, batch_size=64, device=device), 3)

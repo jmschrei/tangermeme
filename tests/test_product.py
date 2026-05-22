@@ -46,11 +46,11 @@ def beta():
 ###
 
 
-def test_apply_pairwise_predict_flattendense_alpha(X, alpha, beta):
+def test_apply_pairwise_predict_flattendense_alpha(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	y0 = predict(model, X[:5], device='cpu').unsqueeze(1)
-	y = apply_pairwise(predict, model, X[:5], args=(alpha[:5],), device='cpu')
+	y0 = predict(model, X[:5], device=device).unsqueeze(1)
+	y = apply_pairwise(predict, model, X[:5], args=(alpha[:5],), device=device)
 	assert y.shape == (5, 5, 3)
 	assert y.dtype == torch.float32
 	assert_array_almost_equal(y, y0 + alpha[:5][None, :])
@@ -68,7 +68,7 @@ def test_apply_pairwise_predict_flattendense_alpha(X, alpha, beta):
 		 [1.8171, 1.8849, 1.6924]]], 4)
 
 
-	y = apply_pairwise(predict, model, X[:5], args=(alpha[5:10],), device='cpu')
+	y = apply_pairwise(predict, model, X[:5], args=(alpha[5:10],), device=device)
 	assert y.shape == (5, 5, 3)
 	assert y.dtype == torch.float32
 	assert_array_almost_equal(y, y0 + alpha[5:10][None, :])
@@ -86,14 +86,14 @@ def test_apply_pairwise_predict_flattendense_alpha(X, alpha, beta):
 		 [ 0.3601,  0.4280,  0.2355]]], 4)
 
 
-def test_apply_pairwise_predict_flattendense_beta(X, alpha, beta):
+def test_apply_pairwise_predict_flattendense_beta(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	alpha = torch.zeros(X.shape[0], 1)
 
-	y0 = predict(model, X[:5], device='cpu').unsqueeze(1)
+	y0 = predict(model, X[:5], device=device).unsqueeze(1)
 	y = apply_pairwise(predict, model, X[:5], args=(alpha[:1].repeat(5, 1), 
-		beta[:5]), device='cpu')
+		beta[:5]), device=device)
 	
 	assert y.shape == (5, 5, 3)
 	assert y.dtype == torch.float32
@@ -113,7 +113,7 @@ def test_apply_pairwise_predict_flattendense_beta(X, alpha, beta):
 
 
 	y = apply_pairwise(predict, model, X[:5], args=(alpha[:1].repeat(5, 1), 
-		beta[5:10]), device='cpu')
+		beta[5:10]), device=device)
 
 	assert y.shape == (5, 5, 3)
 	assert y.dtype == torch.float32
@@ -132,12 +132,12 @@ def test_apply_pairwise_predict_flattendense_beta(X, alpha, beta):
           [ 0.0126, -0.0043,  0.0437]]], 4)
 
 
-def test_apply_pairwise_predict_flattendense_alpha_beta(X, alpha, beta):
+def test_apply_pairwise_predict_flattendense_alpha_beta(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	y0 = predict(model, X[:5], device='cpu').unsqueeze(1)
+	y0 = predict(model, X[:5], device=device).unsqueeze(1)
 	y = apply_pairwise(predict, model, X[:5], args=(alpha[:5], beta[:5]), 
-		device='cpu')
+		device=device)
 
 	assert y.shape == (5, 5, 3)
 	assert y.dtype == torch.float32
@@ -156,12 +156,12 @@ def test_apply_pairwise_predict_flattendense_alpha_beta(X, alpha, beta):
          [1.8239, 1.8826, 1.7160]]], 4)
 
 
-def test_apply_pairwise_predict_convdense_alpha(X, alpha):
+def test_apply_pairwise_predict_convdense_alpha(X, alpha, device):
 	torch.manual_seed(0)
 	model = ConvDense()
 
 	y = apply_pairwise(predict, model, X[:5], args=(alpha[:5, :, None],), 
-		batch_size=2, device='cpu')
+		batch_size=2, device=device)
 
 	assert len(y) == 2
 	assert y[0].shape == (5, 5, 12, 98)
@@ -217,12 +217,12 @@ def test_apply_pairwise_predict_convdense_alpha(X, alpha):
 ###
 
 
-def test_apply_product_marginalize_flattendense_alpha(X, alpha, beta):
+def test_apply_product_marginalize_flattendense_alpha(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	y0_before, y0_after = marginalize(model, X, 'ACGTGC', device='cpu')
+	y0_before, y0_after = marginalize(model, X, 'ACGTGC', device=device)
 	y_before, y_after = apply_product(marginalize, model, X, motif='ACGTGC', 
-		args=(alpha[:5],), device='cpu')
+		args=(alpha[:5],), device=device)
 
 	assert y_before.shape == (64, 5, 3)
 	assert y_before.dtype == torch.float32
@@ -258,14 +258,14 @@ def test_apply_product_marginalize_flattendense_alpha(X, alpha, beta):
 
 
 
-def test_apply_product_marginalize_flattendense_beta(X, beta):
+def test_apply_product_marginalize_flattendense_beta(X, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	alpha = torch.zeros(X.shape[0], 1)
 
-	y0_before, y0_after = marginalize(model, X, 'ACGTGC', device='cpu')
+	y0_before, y0_after = marginalize(model, X, 'ACGTGC', device=device)
 	y_before, y_after = apply_product(marginalize, model, X, motif='ACGTGC', 
-		args=(alpha[:1], beta[:5]), device='cpu')
+		args=(alpha[:1], beta[:5]), device=device)
 	y_before, y_after = y_before[:, 0], y_after[:, 0]
 
 	assert y_before.shape == (64, 5, 3)
@@ -301,12 +301,12 @@ def test_apply_product_marginalize_flattendense_beta(X, beta):
 		 [-0.1252, -0.0355, -0.0523]]], 4)
 
 
-def test_apply_product_marginalize_flattendense_alpha_beta(X, alpha, beta):
+def test_apply_product_marginalize_flattendense_alpha_beta(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	y0_before, y0_after = marginalize(model, X, 'ACGTGC', device='cpu')
+	y0_before, y0_after = marginalize(model, X, 'ACGTGC', device=device)
 	y_before, y_after = apply_product(marginalize, model, X, motif='ACGTGC', 
-		args=(alpha[:5], beta[:4]), device='cpu')
+		args=(alpha[:5], beta[:4]), device=device)
 
 	assert y_before.shape == (64, 5, 4, 3)
 	assert y_before.dtype == torch.float32
@@ -361,11 +361,11 @@ def test_apply_product_marginalize_flattendense_alpha_beta(X, alpha, beta):
 		  [0.5554, 0.4442, 0.4650]]]], 4)
 
 
-def test_apply_product_marginalize_convdense_alpha(X, alpha):
+def test_apply_product_marginalize_convdense_alpha(X, alpha, device):
 	torch.manual_seed(0)
 	model = ConvDense()
 	y_before, y_after = apply_product(marginalize, model, X, motif="ACGTGC", 
-		start=0, args=(alpha[:5, :, None],), batch_size=2, device='cpu')
+		start=0, args=(alpha[:5, :, None],), batch_size=2, device=device)
 
 	assert len(y_before) == 2
 	assert y_before[0].shape == (64, 5, 12, 98)
@@ -471,14 +471,14 @@ def test_apply_product_marginalize_convdense_alpha(X, alpha):
 ###
 
 
-def test_apply_product_space_flattendense_alpha(X, alpha, beta):
+def test_apply_product_space_flattendense_alpha(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], [[3]], 
-		device='cpu')
+		device=device)
 	y_before, y_after = apply_product(space, model, X, 
 		motifs=['ACGTGC', 'TGTT'], spacing=[[3]], args=(alpha[:5],), 
-		device='cpu')
+		device=device)
 
 	assert y_before.shape == (64, 5, 3)
 	assert y_before.dtype == torch.float32
@@ -515,16 +515,16 @@ def test_apply_product_space_flattendense_alpha(X, alpha, beta):
 		 [1.8404, 1.7830, 1.7235]]], 4)
 
 
-def test_apply_product_space_flattendense_beta(X, alpha, beta):
+def test_apply_product_space_flattendense_beta(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	alpha = torch.zeros(X.shape[0], 1)
 
 	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], [[3]], 
-		device='cpu')
+		device=device)
 	y_before, y_after = apply_product(space, model, X, 
 		motifs=['ACGTGC', 'TGTT'], spacing=[[3]], args=(alpha[:1], beta[:5]), 
-		device='cpu')
+		device=device)
 	y_before, y_after = y_before[:, 0], y_after[:, 0]
 
 	assert y_before.shape == (64, 5, 3)
@@ -561,14 +561,14 @@ def test_apply_product_space_flattendense_beta(X, alpha, beta):
 		 [-0.0235, -0.0732, -0.1247]]], 4)
 
 
-def test_apply_product_space_flattendense_alpha_beta(X, alpha, beta):
+def test_apply_product_space_flattendense_alpha_beta(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	y0_before, y0_after = space(model, X, ['ACGTGC', 'TGTT'], [[3]], 
-		device='cpu')
+		device=device)
 	y_before, y_after = apply_product(space, model, X, 
 		motifs=['ACGTGC', 'TGTT'], spacing=[[3]], args=(alpha[:4], beta[:5]), 
-		device='cpu')
+		device=device)
 
 	assert y_before.shape == (64, 4, 5, 3)
 	assert y_before.dtype == torch.float32
@@ -631,12 +631,12 @@ def test_apply_product_space_flattendense_alpha_beta(X, alpha, beta):
           [0.3767, 0.3269, 0.2755]]]], 4)
 
 
-def test_apply_product_space_convdense_alpha(X, alpha):
+def test_apply_product_space_convdense_alpha(X, alpha, device):
   torch.manual_seed(0)
   model = ConvDense()
   y_before, y_after = apply_product(space, model, X, motifs=["ACGTGC", "TGGTT"], 
   	spacing=[[3]], start=0, args=(alpha[:5, :, None],), batch_size=2, 
-  	device='cpu')
+  	device=device)
 
   assert len(y_before) == 2
   assert y_before[0].shape == (64, 5, 12, 98)

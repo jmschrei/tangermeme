@@ -46,12 +46,12 @@ def motifs():
 ###
 
 
-def test_screen():
+def test_screen(device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [10]
 
-	X_hat = screen(model, (4, 100), y, device='cpu', max_iter=1, random_state=0)
+	X_hat = screen(model, (4, 100), y, device=device, max_iter=1, random_state=0)
 
 	assert X_hat.shape == (1, 4, 100)
 	assert X_hat.dtype == torch.int8
@@ -65,13 +65,13 @@ def test_screen():
          [0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]]
 	])
 
-	y_hat = predict(model, X_hat, device='cpu')
+	y_hat = predict(model, X_hat, device=device)
 
 	assert_array_almost_equal(y_hat, [[-0.054611]])
 
 	##
 
-	X_hat = screen(model, (4, 100), y, device='cpu', max_iter=10, random_state=0)
+	X_hat = screen(model, (4, 100), y, device=device, max_iter=10, random_state=0)
 
 	assert X_hat.shape == (1, 4, 100)
 	assert X_hat.dtype == torch.int8
@@ -84,17 +84,17 @@ def test_screen():
          [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1]]
 	])
 
-	y_hat = predict(model, X_hat, device='cpu')
+	y_hat = predict(model, X_hat, device=device)
 
 	assert_array_almost_equal(y_hat, [[-0.03848]])
 
 
-def test_screen_summodel():
+def test_screen_summodel(device):
 	torch.manual_seed(0)
 	model = SumModel()
 	y = [10, 0, 0, 0]
 
-	X_hat = screen(model, (4, 10), y, device='cpu', max_iter=25, random_state=0)
+	X_hat = screen(model, (4, 10), y, device=device, max_iter=25, random_state=0)
 
 	assert X_hat.shape == (1, 4, 10)
 	assert X_hat.dtype == torch.int8
@@ -107,17 +107,17 @@ def test_screen_summodel():
          [0, 0, 0, 0, 0, 0, 0, 1, 1, 0]]
 	])
 
-	y_hat = predict(model, X_hat, device='cpu')
+	y_hat = predict(model, X_hat, device=device)
 
 	assert_array_almost_equal(y_hat, [[7., 0., 1., 2.]])
 
 
-def test_screen_n_best():
+def test_screen_n_best(device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [10]
 	
-	X_hat = screen(model, (4, 100), y, device='cpu', n_best=7, 
+	X_hat = screen(model, (4, 100), y, device=device, n_best=7, 
 		max_iter=10, random_state=0)
 
 	assert X_hat.shape == (7, 4, 100)
@@ -140,7 +140,7 @@ def test_screen_n_best():
          [0, 0, 0, 0, 0, 1, 0, 1, 0, 0],
          [0, 0, 1, 1, 1, 0, 0, 0, 1, 0]]])
 
-	y_hat = predict(model, X_hat, device='cpu')
+	y_hat = predict(model, X_hat, device=device)
 
 	assert_array_almost_equal(y_hat, [
 		[-0.0385],
@@ -153,17 +153,17 @@ def test_screen_n_best():
 	], 4)
 
 
-def test_screen_no_y():
+def test_screen_no_y(device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 
-	X_hat = screen(model, (4, 100), device='cpu', random_state=0, max_iter=15)
-	y_hat = predict(model, X_hat, device='cpu')
+	X_hat = screen(model, (4, 100), device=device, random_state=0, max_iter=15)
+	y_hat = predict(model, X_hat, device=device)
 
 	assert_array_almost_equal(y_hat, [[-0.085115]])
 
 
-def test_screen_custom_func():
+def test_screen_custom_func(device):
 	torch.manual_seed(0)
 	def onlyAs(shape, random_state):
 		return random_one_hot(shape, probs=[1.0, 0.0, 0.0, 0.0])
@@ -171,7 +171,7 @@ def test_screen_custom_func():
 	model = SmallDeepSEA()
 	y = [10]
 	
-	X_hat = screen(model, (4, 100), y, device='cpu', max_iter=10, 
+	X_hat = screen(model, (4, 100), y, device=device, max_iter=10, 
 		random_state=0, func=onlyAs)
 
 	assert X_hat.shape == (1, 4, 100)
@@ -185,17 +185,17 @@ def test_screen_custom_func():
          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]
 	])
 
-	y_hat = predict(model, X_hat, device='cpu')
+	y_hat = predict(model, X_hat, device=device)
 
 	assert_array_almost_equal(y_hat, [[-0.0841]], 4)
 
 
-def test_screen_custom_kwargs():
+def test_screen_custom_kwargs(device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [10]
 	
-	X_hat = screen(model, (4, 100), y, device='cpu', max_iter=1, 
+	X_hat = screen(model, (4, 100), y, device=device, max_iter=1, 
 		additional_func_kwargs={'probs': [1, 0, 0, 0]})
 
 	assert X_hat.shape == (1, 4, 100)
@@ -209,60 +209,60 @@ def test_screen_custom_kwargs():
          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]
 	])
 
-	y_hat = predict(model, X_hat, device='cpu')
+	y_hat = predict(model, X_hat, device=device)
 
 	assert_array_almost_equal(y_hat, [[-0.0841]], 4)
 
 
-def test_screen_raises():
+def test_screen_raises(device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [[0.5]]
 	
-	assert_raises(RuntimeError, screen, model, (5, 100), y, device='cpu')
-	assert_raises(ValueError, screen, model, (1, 4, 100), y, device='cpu')
-	assert_raises(ValueError, screen, model, (100,), y, device='cpu')
+	assert_raises(RuntimeError, screen, model, (5, 100), y, device=device)
+	assert_raises(ValueError, screen, model, (1, 4, 100), y, device=device)
+	assert_raises(ValueError, screen, model, (100,), y, device=device)
 
 
 ###
 
 
-def test_greedy_substitution(X, motifs):
+def test_greedy_substitution(X, motifs, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [[10]]
 
-	X_hat = greedy_substitution(model, X, y, motifs, device='cpu', max_iter=1)
+	X_hat = greedy_substitution(model, X, y, motifs, device=device, max_iter=1)
 
 	assert X_hat.shape == (1, 4, 100)
 	assert X_hat.dtype == torch.int8
 	assert X_hat.sum(dim=1).min() == 1
 	assert all(torch.unique(X_hat) == torch.tensor([0, 1], dtype=torch.int8))
 
-	y_hat = predict(model, X_hat, device='cpu')
+	y_hat = predict(model, X_hat, device=device)
 
 	assert_array_almost_equal(y_hat, [[-0.058557]])
 
 	##
 
-	X_hat = greedy_substitution(model, X, y, motifs, device='cpu', max_iter=4)
+	X_hat = greedy_substitution(model, X, y, motifs, device=device, max_iter=4)
 
 	assert X_hat.shape == (1, 4, 100)
 	assert X_hat.dtype == torch.int8
 	assert X_hat.sum(dim=1).min() == 1
 	assert all(torch.unique(X_hat) == torch.tensor([0, 1], dtype=torch.int8))
 	
-	y_hat = predict(model, X_hat, device='cpu')
+	y_hat = predict(model, X_hat, device=device)
 
 	assert_array_almost_equal(y_hat, [[-0.018134]])
 
 
-def test_greedy_nucleotide_substitution(X):
+def test_greedy_nucleotide_substitution(X, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [[10]]
 
-	X_hat = greedy_substitution(model, X, y, device='cpu', max_iter=1)
+	X_hat = greedy_substitution(model, X, y, device=device, max_iter=1)
 
 	assert X_hat.shape == (1, 4, 100)
 	assert X_hat.dtype == torch.int8
@@ -270,13 +270,13 @@ def test_greedy_nucleotide_substitution(X):
 	assert all(torch.unique(X_hat) == torch.tensor([0, 1], dtype=torch.int8))
 	assert abs(X_hat - X).sum() == 2
 
-	y_hat = predict(model, X_hat, device='cpu')
+	y_hat = predict(model, X_hat, device=device)
 
 	assert_array_almost_equal(y_hat, [[-0.076893]])
 
 	##
 
-	X_hat = greedy_substitution(model, X, y, device='cpu', max_iter=4)
+	X_hat = greedy_substitution(model, X, y, device=device, max_iter=4)
 
 	assert X_hat.shape == (1, 4, 100)
 	assert X_hat.dtype == torch.int8
@@ -284,27 +284,27 @@ def test_greedy_nucleotide_substitution(X):
 	assert all(torch.unique(X_hat) == torch.tensor([0, 1], dtype=torch.int8))
 	assert abs(X_hat - X).sum() == 8
 	
-	y_hat = predict(model, X_hat, device='cpu')
+	y_hat = predict(model, X_hat, device=device)
 
 	assert_array_almost_equal(y_hat, [[-0.057514]])
 
 
-def test_greedy_nucleotide_substitution_only_As(X):
+def test_greedy_nucleotide_substitution_only_As(X, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	motifs = ['A']
 	y = [[10]]
 
-	X_hat = greedy_substitution(model, X, y, motifs, device='cpu', max_iter=1, 
+	X_hat = greedy_substitution(model, X, y, motifs, device=device, max_iter=1, 
 		reverse_complement=False)
 	assert X_hat.sum(dim=(0, -1))[0] == X.sum(dim=(0, -1))[0] + 1
 
-	X_hat = greedy_substitution(model, X, y, motifs, device='cpu', max_iter=4, 
+	X_hat = greedy_substitution(model, X, y, motifs, device=device, max_iter=4, 
 		reverse_complement=False)
 	assert X_hat.sum(dim=(0, -1))[0] == X.sum(dim=(0, -1))[0] + 4
 
 
-def test_greedy_substitution_input_mask(X):
+def test_greedy_substitution_input_mask(X, device):
 	torch.manual_seed(0)
 	input_mask = torch.zeros(100, dtype=bool)
 	input_mask[54:58] = True
@@ -312,7 +312,7 @@ def test_greedy_substitution_input_mask(X):
 	model = SmallDeepSEA()
 	y = [[10]]
 
-	X_hat = greedy_substitution(model, X, y, device='cpu', input_mask=input_mask,
+	X_hat = greedy_substitution(model, X, y, device=device, input_mask=input_mask,
 		max_iter=4)
 
 	assert_array_almost_equal(X[:, :, :54], X_hat[:, :, :54])
@@ -320,7 +320,7 @@ def test_greedy_substitution_input_mask(X):
 	assert abs(X[:, :, 54:58] - X_hat[:, :, 54:58]).sum() == 6
 
 
-def test_greedy_substitution_output_mask(X):
+def test_greedy_substitution_output_mask(X, device):
 	torch.manual_seed(0)
 	output_mask = torch.zeros(4, dtype=bool)
 	output_mask[3] = True
@@ -328,13 +328,13 @@ def test_greedy_substitution_output_mask(X):
 	model = SumModel()
 	y = [[10, 10000, -26, 100]]
 
-	X_hat = greedy_substitution(model, X, y, device='cpu', output_mask=output_mask,
+	X_hat = greedy_substitution(model, X, y, device=device, output_mask=output_mask,
 		max_iter=101)
 
 	assert all(X_hat.sum(dim=(0, 2)) == torch.tensor([0, 0, 0, 100]))
 
 
-def test_greedy_substitution_reverse_complement(X):
+def test_greedy_substitution_reverse_complement(X, device):
 	torch.manual_seed(0)
 	output_mask = torch.zeros(4, dtype=bool)
 	output_mask[3] = True
@@ -342,7 +342,7 @@ def test_greedy_substitution_reverse_complement(X):
 	model = SmallDeepSEA()
 	y = [[10]]
 
-	X_hat = greedy_substitution(model, X, y, ['A', 'C'], device='cpu', max_iter=101,
+	X_hat = greedy_substitution(model, X, y, ['A', 'C'], device=device, max_iter=101,
 		reverse_complement=False)
 
 	n_count = X.sum(dim=(0, 2))
@@ -354,13 +354,13 @@ def test_greedy_substitution_reverse_complement(X):
 	assert n_count[3] > n_hat_count[3]
 
 
-def test_greedy_substitution_no_y(X):
+def test_greedy_substitution_no_y(X, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [[10]]
 
-	X_hat = greedy_substitution(model, X, device='cpu', max_iter=15)
-	y_hat = predict(model, X_hat, device='cpu')
+	X_hat = greedy_substitution(model, X, device=device, max_iter=15)
+	y_hat = predict(model, X_hat, device=device)
 
 	assert_array_almost_equal(y_hat, [[-0.01224]])
 
@@ -368,12 +368,12 @@ def test_greedy_substitution_no_y(X):
 ###
 
 
-def test_greedy_marginalize(X_marg, motifs):
+def test_greedy_marginalize(X_marg, motifs, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [[10.0]]
 
-	X_hat = greedy_marginalize(model, X_marg, y, motifs, device='cpu', max_iter=1)
+	X_hat = greedy_marginalize(model, X_marg, y, motifs, device=device, max_iter=1)
 
 	assert X_hat.shape == (4, 12)
 	assert X_hat.dtype == torch.int8
