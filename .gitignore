@@ -20,6 +20,9 @@ MANIFEST
 *.fai
 tests/data/r
 
+# Working notes (per-module reviews, package overviews, etc.)
+claude_comments/
+
 # OS-generated files
 .DS_Store
 .Spotlight-V100

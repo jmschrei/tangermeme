@@ -20,7 +20,7 @@
 from importlib.metadata import version as _pkg_version
 
 project = 'tangermeme'
-copyright = '2024, Jacob Schreiber'
+copyright = '2024-2026, Jacob Schreiber'
 author = 'Jacob Schreiber'
 
 # The full version, including alpha/beta/rc tags. Sourced from the installed
