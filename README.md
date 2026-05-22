@@ -2,7 +2,7 @@
 
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/tangermeme?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=ORANGE&left_text=downloads)](https://pepy.tech/projects/tangermeme) [![Unit Tests](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml/badge.svg)](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml) [![Documentation Status](https://readthedocs.org/projects/tangermeme/badge/?version=latest)](https://tangermeme.readthedocs.io/en/latest/?badge=latest)
 
-[[preprint](https://www.biorxiv.org/content/10.1101/2025.08.08.669296v2)][[docs](https://tangermeme.readthedocs.io/en/latest/index.html)][[tutorials](https://github.com/jmschrei/tangermeme/tree/main/docs/tutorials)][[vignettes](https://github.com/jmschrei/tangermeme/tree/main/docs/vignettes)]
+[[preprint](https://www.biorxiv.org/content/10.1101/2025.08.08.669296v2)][[docs](https://tangermeme.readthedocs.io/en/latest/index.html)][[tutorials](https://github.com/jmschrei/tangermeme/tree/main/docs/tutorials)][[vignettes](https://github.com/jmschrei/tangermeme/tree/main/docs/vignettes)][[release notes](https://tangermeme.readthedocs.io/en/latest/whats_new.html)]
 
 > [!NOTE] 
 > If you use tangermeme in your work, please consider citing the [preprint](https://www.biorxiv.org/content/10.1101/2025.08.08.669296v2). Citations allow me to continue developing software like this for the community. 
@@ -17,9 +17,34 @@ Please see the documentation and tutorials linked at the top of this README for 
 
 ## Installation
 
-`pip install tangermeme`
+```bash
+pip install tangermeme
+```
 
-If PyTorch is already installed, this should take less than five minutes. If PyTorch needs to be installed, this command should do so but may cause the installation to take up to ten minutes. The majority of time will be spend resolving dependencies.
+Or, with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add tangermeme
+```
+
+If PyTorch is already installed, this should take less than five minutes. If PyTorch needs to be installed, this command should do so but may cause the installation to take up to ten minutes. The majority of time will be spent resolving dependencies. `uv` is significantly faster than `pip` at this resolution step.
+
+Optional extras:
+
+- `tangermeme[docs]` — install the Sphinx toolchain (sphinx, sphinx-rtd-theme, nbsphinx, jupyter, nbconvert) for building the documentation site locally.
+
+### Development install
+
+Contributors should clone the repository and use `uv` to create a reproducible environment from `uv.lock`:
+
+```bash
+git clone https://github.com/jmschrei/tangermeme.git
+cd tangermeme
+uv sync --extra dev
+uv run pytest -m "not cmd"
+```
+
+This installs the package in editable mode along with the testing toolchain (`pytest`, `captum`, `ruff`, `build`, `twine`).
 
 ## Roadmap
 

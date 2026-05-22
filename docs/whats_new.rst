@@ -6,6 +6,52 @@ Release History
 ===============
 
 
+Version 1.1.0
+=============
+
+Highlights
+----------
+
+	- Migrated the build/install workflow from ``setup.py`` to ``pyproject.toml`` with the hatchling build backend.
+	- Added first-class support for `uv <https://docs.astral.sh/uv/>`_ for development and reproducible environments. ``uv sync --extra dev`` now sets up the contributor environment from ``uv.lock``.
+	- End users can still ``pip install tangermeme`` exactly as before. The wheel and sdist are standard PyPI artifacts; the migration is invisible at install time.
+
+Packaging
+---------
+
+	- The minimum supported Python version is now 3.10. The CI matrix runs on 3.10, 3.11, 3.12, and 3.13.
+	- Dependency floors have been tightened to reflect what the code actually uses, replacing pre-2022 minima inherited from the original ``setup.py``:
+
+		- ``numpy >= 1.23``
+		- ``scipy >= 1.10``
+		- ``pandas >= 2.0``
+		- ``torch >= 2.0``
+		- ``scikit-learn >= 1.3``
+		- ``numba >= 0.58``
+		- ``pybigtools >= 0.2``
+		- ``memelite >= 0.2``
+
+	- New ``[dev]`` extra bundles the contributor toolchain (``pytest``, ``captum``, ``ruff``, ``build``, ``twine``).
+	- New ``[docs]`` extra bundles the Sphinx documentation toolchain. ReadTheDocs now installs via this extra instead of a separate ``docs/requirements.txt`` file.
+	- The package version is now sourced dynamically from ``tangermeme/__init__.py`` so the literal lives in one place.
+
+CI / Tooling
+------------
+
+	- The GitHub Actions workflow now uses ``astral-sh/setup-uv`` with caching, reducing matrix install time by roughly an order of magnitude.
+	- The ``flake8`` CI step (whose checks were already commented out) has been removed; ``ruff`` is available via the ``[dev]`` extra for contributors who want to lint locally.
+	- A ``[tool.pytest.ini_options]`` block registers the ``cmd`` marker and pins the ``not cmd`` default so the documented test invocation works without command-line flags.
+
+Documentation
+-------------
+
+	- ``docs/conf.py`` now sources the displayed version from the installed package metadata rather than a hard-coded literal.
+	- ``docs/api/variant_effect.rst`` has been updated to reference the current function names (``substitution_effect``, ``deletion_effect``, ``insertion_effect``).
+	- ``docs/api/ism.rst`` has been renamed to ``docs/api/saturation_mutagenesis.rst`` to match the actual module name.
+	- ``docs/api/deep_lift_shap.rst``, ``docs/api/plot.rst``, and ``docs/api/saturation_mutagenesis.rst`` are now included in the API toctree.
+	- Removed stale references to ``Tutorial_B8_Seqlets``, ``Tutorial_D1_FIMO``, and ``Tutorial_D2_TOMTOM`` from ``docs/index.rst``.
+
+
 Version 1.0.3
 =============
 
@@ -285,14 +331,16 @@ utils
 match
 -----
 
-	- Implemented updates to substantially reduce memory use and runtime of extract_matching_loci. This was mainly achieved by
-	1) Avoid using io.extract_loci, which one hot encodes all loci into a single large tensor. Instead, the locus sequences are extracted one by one, keeping only one in memory at a time. The N and GC percentages are calculated directly from the sequence, and only those values are stored.
-	2) Calculate genome wide N and GC percentages by taking slices of the chromosomal DNA sequences and using the count method of python strings. This is significantly faster than the previous approach using numpy isin, and avoids keeping several copies of the sequence in memory at the same time.
+	- Implemented updates to substantially reduce memory use and runtime of extract_matching_loci. This was mainly achieved by:
+
+		1. Avoid using io.extract_loci, which one hot encodes all loci into a single large tensor. Instead, the locus sequences are extracted one by one, keeping only one in memory at a time. The N and GC percentages are calculated directly from the sequence, and only those values are stored.
+		2. Calculate genome wide N and GC percentages by taking slices of the chromosomal DNA sequences and using the count method of python strings. This is significantly faster than the previous approach using numpy isin, and avoids keeping several copies of the sequence in memory at the same time.
 
 	- Various other changes:
-	1) Counts from regions that cannot be extracted from a provided bigwig file (such as for a missing chromosome) are now set to nan rather than 0. This will effect the threshold value used for filtering background regions.
-	2) Small change to the binning strategy for gc values, which could mean that matching loci generated in a previous version will not be reproduced exactly in all cases, even when using the same random seed.
-	3) Enable the handling of 'N' in sequences or [0,0,0,0], i.e. an ambiguous genomic positions. Updated the `characters()` and the `_validate_input()` in `utils` module to enable this.
+
+		1. Counts from regions that cannot be extracted from a provided bigwig file (such as for a missing chromosome) are now set to nan rather than 0. This will effect the threshold value used for filtering background regions.
+		2. Small change to the binning strategy for gc values, which could mean that matching loci generated in a previous version will not be reproduced exactly in all cases, even when using the same random seed.
+		3. Enable the handling of 'N' in sequences or [0,0,0,0], i.e. an ambiguous genomic positions. Updated the ``characters()`` and the ``_validate_input()`` in ``utils`` module to enable this.
 
 
 Version 0.2.3
@@ -355,9 +403,9 @@ Highlights
 
 
 deep_lift_shap
--------------
-	
-	- Added in a stand-alone implementation of deep_lift_shap 
+--------------
+
+	- Added in a stand-alone implementation of deep_lift_shap
 	- This implementation resolves several issues with Captum, e.g., with pooling layers
 	- Allows batching of example-reference pairs across examples (so batch_size can be > than n_shuffles)
 	- Allows batch_size to be much smaller than n_shuffles with the results aggregated once all references have been processed to allow large models to be run
@@ -375,7 +423,7 @@ marginalize
 ------------
 
 	- Change the signature to take in an optional function that gets applied before/after the substitution, default is predict
-	- Change the signature to take in **kwargs that get passed into the optional function
+	- Change the signature to take in ``**kwargs`` that get passed into the optional function
 	- Change the signature to take in `additional_func_kwargs` that is an alternative and safer way to pass arguments into the function
 
 
@@ -383,7 +431,7 @@ ablate
 ------
 
 	- Change the signature to take in an optional function that gets applied before/after the ablation, default is predict
-	- Change the signature to take in **kwargs that get passed into the optional function
+	- Change the signature to take in ``**kwargs`` that get passed into the optional function
 	- Change the signature to take in `additional_func_kwargs` that is an alternative and safer way to pass arguments into the function
 
 
@@ -391,7 +439,7 @@ space
 ------
 
 	- Change the signature to take in an optional function that gets applied before/after the substitutions, default is predict
-	- Change the signature to take in **kwargs that get passed into the optional function
+	- Change the signature to take in ``**kwargs`` that get passed into the optional function
 	- Change the signature to take in `additional_func_kwargs` that is an alternative and safer way to pass arguments into the function
 
 
@@ -400,13 +448,13 @@ variant_effect
 
 	- Change the name of `marginal_substitution_effect` to `substitution_effect`
 	- Change the API of `substitution_effect` to take in a tensor of original sequences and a tensor of substitutions
-	- Change the API of `substitution_effect` to take in an optional function and **kwargs and `additional_func_kwargs` to pass into `func`
+	- Change the API of `substitution_effect` to take in an optional function and ``**kwargs`` and ``additional_func_kwargs`` to pass into ``func``
 	- Change the name of `marginal_deletion_effect` to `deletion_effect`
 	- Change the API of `deletion_effect` to take in a tensor of original sequences and a tensor of deletions
-	- Change the API of `deletion_effect` to take in an optional function and **kwargs and `additional_func_kwargs` to pass into `func`
+	- Change the API of `deletion_effect` to take in an optional function and ``**kwargs`` and ``additional_func_kwargs`` to pass into ``func``
 	- Change the name of `marginal_insertion_effect` to `insertion_effect`
 	- Change the API of `insertion_effect` to take in a tensor of original sequences and a tensor of insertions
-	- Change the API of `insertion_effect` to take in an optional function and **kwargs and `additional_func_kwargs` to pass into `func`
+	- Change the API of `insertion_effect` to take in an optional function and ``**kwargs`` and ``additional_func_kwargs`` to pass into ``func``
 
 
 seqlet

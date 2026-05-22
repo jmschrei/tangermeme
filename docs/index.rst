@@ -17,12 +17,36 @@ tangermeme
 
 tangermeme is a Python package that implements the basic operations necessary to perform sophisticated genomic analyses using machine learning models. Essentially, tangermeme aims to implement everything except for the model that you'd like to use, including I/O, identifying matched region sets, altering sequences (e.g., inserting a motif or scrambling out a motif), running marginalization experiments, and annotating regions. These functions are meant to be used by themselves but also can easily be built on top of if you'd like to customize your analyses. 
 
-Another way of looking at tangermeme is that, if the MEME suite is meant to do sequence analyses when you have nly biological sequences (or maybe priors derived from experimental data), tangermeme is meant to do sequence analyses when you have these sequences *and* a predictive machine learning model. How does motif discovery or annotation differ when you have attribution values highlighting nucleotides based on how important they are to the predictions? Accordingly, tangermeme implements several command-line tools that are similar to those in the MEME suite, such as FIMO/TOMTOM/MEME, but also extends the capabilities of these tools to handle attributions, and implements new methods that answer additional questions.
+Another way of looking at tangermeme is that, if the MEME suite is meant to do sequence analyses when you have only biological sequences (or maybe priors derived from experimental data), tangermeme is meant to do sequence analyses when you have these sequences *and* a predictive machine learning model. How does motif discovery or annotation differ when you have attribution values highlighting nucleotides based on how important they are to the predictions? Accordingly, tangermeme implements several command-line tools that are similar to those in the MEME suite, such as FIMO/TOMTOM/MEME, but also extends the capabilities of these tools to handle attributions, and implements new methods that answer additional questions.
 
 Installation
 ============
 
-`pip install tangermeme`
+.. code-block:: bash
+
+    pip install tangermeme
+
+Or, with `uv <https://docs.astral.sh/uv/>`_:
+
+.. code-block:: bash
+
+    uv add tangermeme
+
+Optional extras:
+
+- ``tangermeme[docs]`` — install the Sphinx toolchain for building this documentation site locally.
+
+Development install
+-------------------
+
+Contributors should clone the repository and use ``uv`` to create a reproducible environment from ``uv.lock``:
+
+.. code-block:: bash
+
+    git clone https://github.com/jmschrei/tangermeme.git
+    cd tangermeme
+    uv sync --extra dev
+    uv run pytest -m "not cmd"
 
 
 Thank You
@@ -61,11 +85,8 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    tutorials/Tutorial_B5_Variant_Effect.ipynb
    tutorials/Tutorial_B6_Design.ipynb
    tutorials/Tutorial_B7_Cartesian_Product.ipynb
-   tutorials/Tutorial_B8_Seqlets.ipynb
    tutorials/Tutorial_C1_IO_and_Data_Loading.ipynb
    tutorials/Tutorial_C2_Plotting.ipynb
-   tutorials/Tutorial_D1_FIMO.ipynb
-   tutorials/Tutorial_D2_TOMTOM.ipynb
 
 .. toctree::
    :maxdepth: 1
@@ -98,14 +119,16 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
 
    api/ablate.rst
    api/annotate.rst
+   api/deep_lift_shap.rst
    api/design.rst
    api/ersatz.rst
    api/io.rst
-   api/ism.rst
    api/marginalize.rst
    api/match.rst
+   api/plot.rst
    api/predict.rst
    api/product.rst
+   api/saturation_mutagenesis.rst
    api/seqlet.rst
    api/space.rst
    api/utils.rst
