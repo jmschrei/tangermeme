@@ -31,8 +31,7 @@ Packaging
 		- ``pybigtools >= 0.2``
 		- ``memelite >= 0.2``
 
-	- ``matplotlib`` has moved from a base dependency to an optional ``[plot]`` extra to match the guarded import in ``tangermeme.plot``. Users who plot should install with ``pip install 'tangermeme[plot]'``.
-	- New ``[dev]`` extra bundles the contributor toolchain (``pytest``, ``captum``, ``ruff``, ``build``, ``twine``, plus ``matplotlib``).
+	- New ``[dev]`` extra bundles the contributor toolchain (``pytest``, ``captum``, ``ruff``, ``build``, ``twine``).
 	- New ``[docs]`` extra bundles the Sphinx documentation toolchain. ReadTheDocs now installs via this extra instead of a separate ``docs/requirements.txt`` file.
 	- The package version is now sourced dynamically from ``tangermeme/__init__.py`` so the literal lives in one place.
 

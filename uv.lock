@@ -3736,6 +3736,7 @@ name = "tangermeme"
 source = { editable = "." }
 dependencies = [
     { name = "joblib" },
+    { name = "matplotlib" },
     { name = "memelite" },
     { name = "numba" },
     { name = "numpy" },
@@ -3755,7 +3756,6 @@ dependencies = [
 dev = [
     { name = "build" },
     { name = "captum" },
-    { name = "matplotlib" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "twine" },
@@ -3763,16 +3763,12 @@ dev = [
 docs = [
     { name = "jinja2" },
     { name = "jupyter" },
-    { name = "matplotlib" },
     { name = "nbconvert" },
     { name = "nbsphinx" },
     { name = "sphinx", version = "8.1.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "sphinx", version = "9.0.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "sphinx", version = "9.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "sphinx-rtd-theme" },
-]
-plot = [
-    { name = "matplotlib" },
 ]
 
 [package.metadata]
@@ -3782,9 +3778,7 @@ requires-dist = [
     { name = "jinja2", marker = "extra == 'docs'", specifier = ">=3.1.3" },
     { name = "joblib", specifier = ">=1.3" },
     { name = "jupyter", marker = "extra == 'docs'", specifier = ">=1.0" },
-    { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.7" },
-    { name = "matplotlib", marker = "extra == 'docs'", specifier = ">=3.7" },
-    { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.7" },
+    { name = "matplotlib", specifier = ">=3.7" },
     { name = "memelite", specifier = ">=0.2" },
     { name = "nbconvert", marker = "extra == 'docs'", specifier = ">=7.0" },
     { name = "nbsphinx", marker = "extra == 'docs'", specifier = ">=0.9" },
@@ -3803,7 +3797,7 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.65" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=4.0" },
 ]
-provides-extras = ["dev", "docs", "plot"]
+provides-extras = ["dev", "docs"]
 
 [[package]]
 name = "terminado"

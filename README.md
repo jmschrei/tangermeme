@@ -31,7 +31,6 @@ If PyTorch is already installed, this should take less than five minutes. If PyT
 
 Optional extras:
 
-- `tangermeme[plot]` — install matplotlib for the plotting helpers in `tangermeme.plot`.
 - `tangermeme[docs]` — install the Sphinx toolchain (sphinx, sphinx-rtd-theme, nbsphinx, jupyter, nbconvert) for building the documentation site locally.
 
 ### Development install
@@ -45,7 +44,7 @@ uv sync --extra dev
 uv run pytest -m "not cmd"
 ```
 
-This installs the package in editable mode along with the testing toolchain (`pytest`, `captum`, `ruff`, `build`, `twine`, plus `matplotlib` so plotting tests work).
+This installs the package in editable mode along with the testing toolchain (`pytest`, `captum`, `ruff`, `build`, `twine`).
 
 ## Roadmap
 

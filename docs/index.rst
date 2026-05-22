@@ -34,7 +34,6 @@ Or, with `uv <https://docs.astral.sh/uv/>`_:
 
 Optional extras:
 
-- ``tangermeme[plot]`` — install matplotlib for the plotting helpers in ``tangermeme.plot``.
 - ``tangermeme[docs]`` — install the Sphinx toolchain for building this documentation site locally.
 
 Development install
