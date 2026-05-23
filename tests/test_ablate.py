@@ -13,7 +13,9 @@ from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
 
 from tangermeme.ablate import ablate
+from tangermeme.ablate import ablate_annotations
 from tangermeme.ersatz import shuffle
+from tangermeme.ersatz import dinucleotide_shuffle
 from tangermeme.ersatz import substitute
 from tangermeme.deep_lift_shap import deep_lift_shap
 
@@ -834,7 +836,214 @@ def test_ablate_deep_lift_shap_raises(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
-	assert_raises(TypeError, ablate, model, X, 44, 55, n=3, func=deep_lift_shap, 
+	assert_raises(TypeError, ablate, model, X, 44, 55, n=3, func=deep_lift_shap,
 		device=device, additional_func_kwargs={'device': 'cpu'}, n_shuffles=5)
 	assert_raises(TypeError, ablate, model, X, 44, 55, n=3, func=deep_lift_shap,
 		device=device, end=10)
+
+
+###
+
+
+def test_ablate_negative_end(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	y_before0, y_after0 = ablate(model, X, 10, -5, random_state=0,
+		batch_size=8, device=device)
+	y_before1, y_after1 = ablate(model, X, 10, 96, random_state=0,
+		batch_size=8, device=device)
+
+	assert_array_almost_equal(y_before0, y_before1, 4)
+	assert_array_almost_equal(y_after0, y_after1, 4)
+
+
+def test_ablate_n_equals_1(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	y_before, y_after = ablate(model, X, 46, 54, random_state=0, n=1,
+		batch_size=8, device=device)
+
+	assert y_before.shape == (64, 3)
+	assert y_before.dtype == torch.float32
+	assert y_after.shape == (64, 1, 3)
+	assert y_after.dtype == torch.float32
+
+
+def test_ablate_batch_size_one_remainder(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	y_before0, y_after0 = ablate(model, X, 46, 54, random_state=0, n=3,
+		batch_size=63, device=device)
+	y_before1, y_after1 = ablate(model, X, 46, 54, random_state=0, n=3,
+		batch_size=64, device=device)
+
+	assert y_before0.shape == (64, 3)
+	assert y_after0.shape == (64, 3, 3)
+	assert_array_almost_equal(y_before0, y_before1, 4)
+	assert_array_almost_equal(y_after0, y_after1, 4)
+
+
+def test_ablate_random_state_object(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	rs = numpy.random.RandomState(0)
+	y_before0, y_after0 = ablate(model, X, 46, 54, random_state=rs,
+		batch_size=8, device=device)
+
+	y_before1, y_after1 = ablate(model, X, 46, 54, random_state=0,
+		batch_size=8, device=device)
+
+	assert_array_almost_equal(y_before0, y_before1, 4)
+	assert_array_almost_equal(y_after0, y_after1, 4)
+
+
+def test_ablate_random_state_none_nondeterministic(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	y_before0, y_after0 = ablate(model, X, 46, 54, random_state=None,
+		batch_size=8, device=device)
+	y_before1, y_after1 = ablate(model, X, 46, 54, random_state=None,
+		batch_size=8, device=device)
+
+	assert_array_almost_equal(y_before0, y_before1, 4)
+	assert_raises(AssertionError, assert_array_almost_equal, y_after0,
+		y_after1, 4)
+
+
+def test_ablate_dinucleotide_shuffle(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	y_before, y_after = ablate(model, X, 20, 80,
+		shuffle_fn=dinucleotide_shuffle, random_state=0, n=5, batch_size=8,
+		device=device)
+
+	assert y_before.shape == (64, 3)
+	assert y_before.dtype == torch.float32
+	assert y_after.shape == (64, 5, 3)
+	assert y_after.dtype == torch.float32
+
+	_, y_after_default = ablate(model, X, 20, 80, random_state=0, n=5,
+		batch_size=8, device=device)
+	assert_raises(AssertionError, assert_array_almost_equal, y_after,
+		y_after_default, 4)
+
+
+def test_ablate_additional_func_kwargs_random_state_collision(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	y_before0, _ = ablate(model, X[:8], 45, 55, func=deep_lift_shap,
+		n=2, n_shuffles=3, device=device, random_state=0)
+
+	y_before1, _ = ablate(model, X[:8], 45, 55, func=deep_lift_shap,
+		n=2, n_shuffles=3, device=device, random_state=0,
+		additional_func_kwargs={'random_state': 1})
+
+	assert_raises(AssertionError, assert_array_almost_equal, y_before0,
+		y_before1, 4)
+
+	y_direct = deep_lift_shap(model, X[:8], n_shuffles=3, device=device,
+		random_state=1)
+	assert_array_almost_equal(y_before1, y_direct, 4)
+
+
+def test_ablate_annotations_basic(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	annotations = torch.tensor([[0, 10, 20], [3, 40, 50], [3, 60, 80]])
+
+	y_befores, y_afters = ablate_annotations(model, X, annotations,
+		random_state=0, n=3, batch_size=8, device=device)
+
+	assert y_befores.shape == (3, 1, 3)
+	assert y_afters.shape == (3, 1, 3, 3)
+	assert y_befores.dtype == torch.float32
+	assert y_afters.dtype == torch.float32
+
+	for i, (idx, start, end) in enumerate(annotations):
+		yb, ya = ablate(model, X[idx:idx+1], start=int(start),
+			end=int(end), random_state=0, n=3, batch_size=8, device=device)
+		assert_array_almost_equal(y_befores[i], yb, 4)
+		assert_array_almost_equal(y_afters[i], ya, 4)
+
+
+def test_ablate_annotations_multihead(X, device):
+	torch.manual_seed(0)
+	model = ConvDense()
+	annotations = torch.tensor([[0, 10, 20], [3, 40, 50]])
+
+	y_befores, y_afters = ablate_annotations(model, X, annotations,
+		random_state=0, n=3, batch_size=2, device=device)
+
+	assert isinstance(y_befores, list)
+	assert isinstance(y_afters, list)
+	assert len(y_befores) == 2
+	assert len(y_afters) == 2
+
+	assert y_befores[0].shape == (2, 1, 12, 98)
+	assert y_befores[1].shape == (2, 1, 3)
+	assert y_afters[0].shape == (2, 1, 3, 12, 98)
+	assert y_afters[1].shape == (2, 1, 3, 3)
+
+	assert y_befores[0].dtype == torch.float32
+	assert y_befores[1].dtype == torch.float32
+	assert y_afters[0].dtype == torch.float32
+	assert y_afters[1].dtype == torch.float32
+
+	for i, (idx, start, end) in enumerate(annotations):
+		yb, ya = ablate(model, X[idx:idx+1], start=int(start),
+			end=int(end), random_state=0, n=3, batch_size=2, device=device)
+		assert_array_almost_equal(y_befores[0][i], yb[0], 4)
+		assert_array_almost_equal(y_befores[1][i], yb[1], 4)
+		assert_array_almost_equal(y_afters[0][i], ya[0], 4)
+		assert_array_almost_equal(y_afters[1][i], ya[1], 4)
+
+
+def test_ablate_annotations_kwargs(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	annotations = torch.tensor([[0, 10, 20], [3, 40, 50]])
+
+	y_befores0, y_afters0 = ablate_annotations(model, X, annotations,
+		random_state=0, n=4, batch_size=3, device=device)
+	y_befores1, y_afters1 = ablate_annotations(model, X, annotations,
+		random_state=0, n=4, batch_size=8, device=device)
+	y_befores2, y_afters2 = ablate_annotations(model, X, annotations,
+		random_state=1, n=4, batch_size=3, device=device)
+
+	assert y_afters0.shape == (2, 1, 4, 3)
+
+	assert_array_almost_equal(y_befores0, y_befores1, 4)
+	assert_array_almost_equal(y_afters0, y_afters1, 4)
+
+	assert_array_almost_equal(y_befores0, y_befores2, 4)
+	assert_raises(AssertionError, assert_array_almost_equal, y_afters0,
+		y_afters2, 4)
+
+
+def test_ablate_annotations_func(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	annotations = torch.tensor([[0, 45, 55], [3, 45, 55]])
+
+	y_befores, y_afters = ablate_annotations(model, X, annotations,
+		func=deep_lift_shap, n=2, n_shuffles=3, device=device,
+		random_state=0)
+
+	assert y_befores.shape == (2, 1, 4, 100)
+	assert y_afters.shape == (2, 1, 2, 4, 100)
+	assert y_befores.dtype == torch.float32
+	assert y_afters.dtype == torch.float32
+
+	for i, (idx, start, end) in enumerate(annotations):
+		yb, ya = ablate(model, X[idx:idx+1], start=int(start),
+			end=int(end), func=deep_lift_shap, n=2, n_shuffles=3,
+			device=device, random_state=0)
+		assert_array_almost_equal(y_befores[i], yb, 4)
+		assert_array_almost_equal(y_afters[i], ya, 4)
