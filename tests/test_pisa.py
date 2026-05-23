@@ -428,25 +428,60 @@ def test_pisa_args(X, device):
 	assert_array_almost_equal(X_attr0, X_attr1)
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr2)
 
+	# Regression values reflect args (alpha, beta) being threaded
+	# through every shuffle iteration. Prior to the fix in pisa.py for
+	# the _args generator-exhaustion and the n_outputs probe, args were
+	# silently dropped after iter 0, so the previously-pinned values
+	# captured the buggy behavior.
 	assert_array_almost_equal(X_attr2[:2, :, :10], [
-		[[ 0.0000,  0.0000, -0.0000, -0.0209, -0.0000,  0.0000,  0.0000,
+		[[ 0.0000,  0.0000, -0.0000, -0.0205, -0.0000,  0.0000,  0.0000,
            0.0000, -0.0000,  0.0000],
-         [ 0.0000,  0.0000,  0.0080,  0.0000, -0.0000,  0.0000, -0.0000,
-          -0.0000, -0.0081,  0.0000],
+         [ 0.0000,  0.0000,  0.0078,  0.0000, -0.0000,  0.0000, -0.0000,
+          -0.0000, -0.0079,  0.0000],
          [ 0.0000,  0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000,
            0.0000,  0.0000,  0.0000],
-         [-0.0000, -0.0160,  0.0000,  0.0000,  0.0245, -0.0336,  0.0200,
-           0.0050,  0.0000, -0.0085]],
+         [-0.0000, -0.0157,  0.0000,  0.0000,  0.0241, -0.0329,  0.0196,
+           0.0049,  0.0000, -0.0084]],
 
-        [[-0.0000, -0.0000, -0.0090, -0.0000, -0.0092,  0.0000,  0.0087,
-           0.0000, -0.0000,  0.0079],
-         [ 0.0000,  0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000,
-          -0.0000, -0.0000,  0.0000],
-         [-0.0000,  0.0018, -0.0000, -0.0000, -0.0000,  0.0322, -0.0000,
-           0.0000,  0.0000,  0.0000],
-         [-0.0000, -0.0000,  0.0000,  0.0265,  0.0000, -0.0000,  0.0000,
-          -0.0006,  0.0063, -0.0000]]
+        [[ 0.0000,  0.0000,  0.0113,  0.0000,  0.0098, -0.0000, -0.0111,
+          -0.0000,  0.0000, -0.0105],
+         [ 0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000,  0.0000,
+           0.0000,  0.0000, -0.0000],
+         [ 0.0000, -0.0044,  0.0000,  0.0000,  0.0000, -0.0422,  0.0000,
+          -0.0000, -0.0000, -0.0000],
+         [ 0.0000,  0.0000, -0.0000, -0.0336, -0.0000,  0.0000, -0.0000,
+           0.0006, -0.0094,  0.0000]]
 	], 4)
+
+
+def test_pisa_args_preserved_across_shuffles(X, device):
+	# pisa rebinds `_args` to a generator-from-itself on every shuffle
+	# iteration, which exhausts after the first batch. Any model whose
+	# forward requires the extra arg (no default) then raises TypeError
+	# on iter >= 1. Verify the args are still threaded through on every
+	# shuffle.
+
+	class RequiresArg(torch.nn.Module):
+		def __init__(self):
+			super().__init__()
+			self.dense = torch.nn.Linear(100 * 4, 1)
+
+		def forward(self, X, alpha):
+			# `alpha` has no default; calling forward without it raises
+			# TypeError.
+			return self.dense(X.reshape(X.shape[0], -1)) + alpha
+
+	torch.manual_seed(0)
+	model = RequiresArg()
+	alpha = torch.randn(X.shape[0], 1)
+
+	# n_shuffles=2 is enough to trigger the second iteration where _args
+	# has been exhausted.
+	X_attr = pisa(model, X, args=(alpha,), n_shuffles=2, device=device,
+		random_state=0)
+
+	# pisa output shape: (n_examples, n_outputs, alphabet, length).
+	assert X_attr.shape == (X.shape[0], 1, X.shape[1], X.shape[2])
 
 
 def test_pisa_raises(references, device):
