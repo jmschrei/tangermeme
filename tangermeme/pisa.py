@@ -88,9 +88,10 @@ def pisa(model, X, args=None, batch_size=32, references=dinucleotide_shuffle,
 
     hypothetical: bool, optional
         Whether to return attributions for all possible characters at each
-        position or only for the character that is actually at the sequence.
-        Practically, whether to return the returned attributions from captum
-        with the one-hot encoded sequence. Default is False.
+        position (`True`) or only for the character that is actually in the
+        sequence (`False`). When `False`, the per-character attributions are
+        multiplied by the one-hot encoded input so that only the observed
+        character has a non-zero attribution at each position. Default is False.
 
     warning_threshold: float, optional
         A threshold on the convergence delta that will always raise a warning
@@ -134,16 +135,16 @@ def pisa(model, X, args=None, batch_size=32, references=dinucleotide_shuffle,
     Returns
     -------
     attributions: torch.tensor
-        If `raw_outputs=False` (default), the attribution values with shape
-        equal to `X`. If `raw_outputs=True`, the multipliers for each example-
-        reference pair with shape equal to `(X.shape[0], n_shuffles, X.shape[1],
-        X.shape[2])`. 
+        If `raw_outputs=False` (default), the per-output attribution values
+        with shape `(X.shape[0], n_outputs, X.shape[1], X.shape[2])`. If
+        `raw_outputs=True`, the multipliers for each example-reference pair
+        with shape `(X.shape[0], n_shuffles, n_outputs, X.shape[1], X.shape[2])`.
 
     references: torch.tensor, optional
         The references used for each input sequence, with the shape
         (n_input_sequences, n_shuffles, 4, length). Only returned if
-        `return_references = True`. 
-    """    
+        `return_references = True`.
+    """
 
     _validate_input(X, "X", shape=(-1, -1, -1), ohe=True)
 
@@ -275,7 +276,7 @@ def pisa(model, X, args=None, batch_size=32, references=dinucleotide_shuffle,
             # Discard the accumulated graph
             torch.autograd.grad(y[:1, :1].sum(), x, retain_graph=False)[0]
 
-            # Keep the multpliers across each output
+            # Keep the multipliers across each output
             multipliers.append(torch.cat(_multipliers, dim=0))
 
         attr = torch.stack(multipliers, dim=0)

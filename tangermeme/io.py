@@ -239,19 +239,19 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 	This function will take in a set of loci, sequences, and optionally signals,
 	and return the sequences and signals at each of the loci. Each of these
 	parameters can be a filename, which is loaded internally, or an appropriate
-	Python object (see below for details). The nomenclature `in/out` refer to
-	he expected inputs and outputs of the downstream machine learning model, 
+	Python object (see below for details). The nomenclature `in/out` refers to
+	the expected inputs and outputs of the downstream machine learning model,
 	not this function.
 
 	For each locus a sequence window of size `in_window` will be extracted from
-	the sequences file and each of the `input_signals` files if provided, and
+	the sequences file and each of the `in_signals` files if provided, and
 	a window of size `out_window` will be extracted from each of the `signals`
 	files if provided. These windows are centered at the middle of the provided
-	regions but all be of the same size, regardless of the size of the peak.
+	regions but will all be of the same size, regardless of the size of the peak.
 
 	If `max_jitter` is provided, it will expand the windows for both the input
 	and output. The results are not actually jittered, but this expanded window
-	allows for downstream data generators to created jittered data while
+	allows for downstream data generators to create jittered data while
 	reducing the memory footprint of the returned data.
 
 	There are a few reasons that the returned elements may not match one-to-one
@@ -263,8 +263,8 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		- (2) If any of the loci fall on chromosomes not in a provided list,
 		they will be removed.
 
-		- (3) If min_counts or max_counts are specified and the locus has a 
-		number of counts not in those boundaries.
+		- (3) If min_counts or max_counts are specified and the locus has a
+		number of counts not in those boundaries, the locus will be removed.
 
 	If exclusion lists are provided, they will be used to filter out loci that
 	fall in 100bp chunks that also include any of the regions in any of the
@@ -273,7 +273,7 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 
 		chr7    108    234
 
-	loci will be removed if and of their bp fall within chr7 100 300.
+	loci will be removed if any of their bp fall within chr7 100 300.
  
 
 	Parameters
@@ -287,7 +287,7 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 
 	sequences: str or dictionary
 		Either the path to a fasta file to read from or a dictionary where the
-		keys are the unique set of chromosoms and the values are one-hot
+		keys are the unique set of chromosomes and the values are one-hot
 		encoded sequences as numpy arrays or memory maps.
 
 	signals: list of strs or list of dictionaries or None, optional
@@ -296,14 +296,14 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		set of unique chromosomes and the values are numpy arrays or memory
 		maps. If None, no signal tensor is returned. Default is None.
 
-	input_signals: list of strs or list of dictionaries or None, optional
+	in_signals: list of strs or list of dictionaries or None, optional
 		A list of filepaths to bigwig files, where each filepath will be read
 		using pybigtools, or a list of dictionaries where the keys are the same
 		set of unique chromosomes and the values are numpy arrays or memory
-		maps. If None, no tensor is returned. Default is None. 
+		maps. If None, no tensor is returned. Default is None.
 
 	chroms: list or None, optional
-		A set of chromosomes to extact loci from. Loci in other chromosomes
+		A set of chromosomes to extract loci from. Loci in other chromosomes
 		in the locus file are ignored. If None, all loci are used. Default is
 		None.
 
@@ -383,17 +383,17 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		the second dimension is in the same order as the list of signal files.
 		If no signal files are given, this is not returned.
 
-	in_signals: torch.tensor, shape=(n, len(in_signals),out_window+2*max_jitter)
+	in_signals: torch.tensor, shape=(n, len(in_signals), in_window+2*max_jitter)
 		The extracted in signals where the first dimension is in the same order
 		as loci in the locus file after optional filtering by chromosome and
 		the second dimension is in the same order as the list of in signal files.
 		If no in signal files are given, this is not returned.
-	
+
 	kept_mask: torch.tensor, shape=(n0,), dtype=bool
 		A boolean vector of length equal to the number of pre-filtered peaks, with
-		entries being True if they were kept and False if they were filted out.
+		entries being True if they were kept and False if they were filtered out.
 		Applying this mask to the complete set of interleaved peaks will yield
-		the returned values. Only returned if `return_idxs=True`.
+		the returned values. Only returned if `return_mask=True`.
 	"""
 
 	seqs, signals_, in_signals_ = [], [], []
@@ -501,13 +501,34 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 	return y_return[0] if len(y_return) == 1 else y_return
 
 
-def one_hot_to_fasta(X, filename, mode='w', headers=None, 
+def one_hot_to_fasta(X, filename, mode='w', headers=None,
 	alphabet=['A', 'C', 'G', 'T']):
 	"""Write out one-hot encoded sequences to a FASTA file.
-	
-	This function will take a set of one-hot encoded sequences and convert them to
-	characters and write them out in FASTA format. If headers are provided for
-	each sequence, these are used, otherwise the numeric index is used.
+
+	This function will take a set of one-hot encoded sequences and convert them
+	to characters and write them out in FASTA format. If headers are provided
+	for each sequence, these are used, otherwise the numeric index is used.
+
+
+	Parameters
+	----------
+	X: torch.Tensor, shape=(-1, len(alphabet), length)
+		A set of one-hot encoded sequences to write out.
+
+	filename: str
+		The path to the FASTA file to write to.
+
+	mode: str, optional
+		The file mode to open `filename` with, e.g. 'w' to overwrite or 'a' to
+		append. Default is 'w'.
+
+	headers: list of str or None, optional
+		A list of one header per sequence in `X`. If None, the numeric index of
+		each sequence is used as its header. Default is None.
+
+	alphabet: set or tuple or list, optional
+		A pre-defined alphabet where the ordering of the symbols is the same as
+		the index into the one-hot encoding. Default is ['A', 'C', 'G', 'T'].
 	"""
 	
 	with open(filename, mode=mode) as outfile:
@@ -539,7 +560,11 @@ def read_meme(filename, n_motifs=None):
 	Parameters
 	----------
 	filename: str
-		The filename of the MEME-formatted file to read in
+		The filename of the MEME-formatted file to read in.
+
+	n_motifs: int or None, optional
+		If provided, stop reading after this many motifs have been parsed. If
+		None, read all motifs in the file. Default is None.
 
 
 	Returns
@@ -564,6 +589,7 @@ def read_vcf(filename):
 	Parameters
 	----------
 	filename: str
+		The path to the VCF-formatted file to read in.
 
 
 	Returns

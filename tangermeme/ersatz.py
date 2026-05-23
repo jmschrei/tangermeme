@@ -20,7 +20,7 @@ def insert(X, motif, start=None, alphabet=list("ACGT")):
 	This function will take in a tensor of one-hot encoded sequences or a string
 	that can be one-hot encoded and insert the motif into the defined 
 	position. It will then return a copy of the data with the insertion, 
-	leaving the  original data unperturbed.
+	leaving the original data unperturbed.
 
 	Importantly, an *insertion* means that the entire original sequence is still
 	present, albeit in two halves with the inserted motif in the middle.
@@ -32,24 +32,24 @@ def insert(X, motif, start=None, alphabet=list("ACGT")):
 	If the motif is a string, it will be one-hot encoded according to the
 	alphabet that is provided. If a motif with batch size of 1 is provided, 
 	the same motif will be inserted into all sequences. If a motif with a 
-	batch size equal to that of X is provided, there will be  1-1 correspondance 
-	between the motifs and the sequence, i.e., that motif at index 5 will be 
+	batch size equal to that of X is provided, there will be 1-1 correspondence
+	between the motifs and the sequence, i.e., the motif at index 5 will be
 	substituted into the sequence at index 5.
 
 
 	Parameters
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to have a motif substituted into.
+		A one-hot encoded set of sequences to have a motif inserted into.
 
 	motif: torch.tensor, shape=(-1, len(alphabet), motif_length)
-		A one-hot encoded version of a short motif to substitute into the set of
+		A one-hot encoded version of a short motif to insert into the set of
 		sequences.
 
 	start: int or None, optional
-		The starting position of where to substitute the motif. If None,
-		substitute the motif into the middle of the sequence such that the 
-		middle of the motif occurs at the middle of the sequence. Default is 
+		The starting position of where to insert the motif. If None,
+		insert the motif into the middle of the sequence such that the
+		middle of the motif occurs at the middle of the sequence. Default is
 		None.
 
 	alphabet: set or tuple or list, optional
@@ -63,8 +63,8 @@ def insert(X, motif, start=None, alphabet=list("ACGT")):
 
 	Returns
 	-------
-	Y: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences that each have the motif substituted
+	Y: torch.tensor, shape=(-1, len(alphabet), length + motif_length)
+		A one-hot encoded set of sequences that each have the motif inserted
 		at the same position.
 	"""
 
@@ -92,7 +92,7 @@ def substitute(X, motif, start=None, alphabet=list("ACGT"), ignore=["N"]):
 	This function will take in a tensor of one-hot encoded sequences or a string
 	that can be one-hot encoded and will substitute a motif at a defined 
 	position. It will then return a copy of the data with the substitution, 
-	leaving the  original data unperturbed.
+	leaving the original data unperturbed.
 
 	Importantly, a *substitution* means that part of the original sequence will
 	be missing. Specifically, if we have an original sequence AAAAAACCCCAAAAAA 
@@ -104,8 +104,8 @@ def substitute(X, motif, start=None, alphabet=list("ACGT"), ignore=["N"]):
 	If the motif is a string, it will be one-hot encoded according to the
 	alphabet that is provided. If a motif with batch size of 1 is provided, 
 	the same motif will be substituted into all sequences. If a motif with a 
-	batch size equal to that of X is provided, there will be  1-1 correspondance 
-	between the motifs and the sequence, i.e., that motif at index 5 will be 
+	batch size equal to that of X is provided, there will be 1-1 correspondence
+	between the motifs and the sequence, i.e., the motif at index 5 will be
 	substituted into the sequence at index 5.
 
 	Finally, if all-zeros positions are present in a motif -- or if a string
@@ -183,12 +183,12 @@ def substitute(X, motif, start=None, alphabet=list("ACGT"), ignore=["N"]):
 
 def multisubstitute(X, motifs, spacing, start=None, alphabet=list("ACGT"),
 	ignore=["N"]):
-	"""Substitute a set of motif into sequences with provided spacings.
+	"""Substitute a set of motifs into sequences with provided spacings.
 
-	This function will take in a list of tensors of one-hot encoded sequences 
-	or of strings that can be one-hot encoded and will substitute the motifs 
-	into the sequences given the provided spacings. It will then return a copy 
-	of the data with the substitutions leaving the  original data unperturbed.
+	This function will take in a list of tensors of one-hot encoded sequences
+	or of strings that can be one-hot encoded and will substitute the motifs
+	into the sequences given the provided spacings. It will then return a copy
+	of the data with the substitutions, leaving the original data unperturbed.
 
 	This function is largely just a wrapper around the substitute function,
 	calling it multiple times and figuring out the exact positioning internally.
@@ -196,8 +196,8 @@ def multisubstitute(X, motifs, spacing, start=None, alphabet=list("ACGT"),
 	If the motif is a string, it will be one-hot encoded according to the
 	alphabet that is provided. If a motif with batch size of 1 is provided, 
 	the same motifs will be substituted into all sequences. If a motif with a 
-	batch size equal to that of X is provided, there will be  1-1 correspondance 
-	between the motifs and the sequence, i.e., that motif at index 5 will be 
+	batch size equal to that of X is provided, there will be 1-1 correspondence
+	between the motifs and the sequence, i.e., the motif at index 5 will be
 	substituted into the sequence at index 5.
 
 
@@ -207,7 +207,7 @@ def multisubstitute(X, motifs, spacing, start=None, alphabet=list("ACGT"),
 		A one-hot encoded set of sequences to have a motif substituted into.
 
 	motifs: list of torch.tensor, shape=(-1, len(alphabet), motif_length)
-		A list of strings or of one-hot encoded version of a short motif to 
+		A list of strings or of one-hot encoded versions of short motifs to
 		substitute into the set of sequences.
 
 	spacing: list or int
@@ -217,10 +217,9 @@ def multisubstitute(X, motifs, spacing, start=None, alphabet=list("ACGT"),
 		distance after the $i$-th motif that the $i+1$-th motif begins.
 
 	start: int or None, optional
-		The starting position of where to substitute the motifs. If None,
-		substitute the motif into the middle of the sequence such that the 
-		middle of the motif occurs at the middle of the sequence. Default is 
-		None.
+		The starting position of where to substitute the motifs. If None, the
+		full motif arrangement is centered such that its midpoint coincides
+		with the middle of the sequence. Default is None.
 
 	alphabet : set or tuple or list, optional
 		A pre-defined alphabet where the ordering of the symbols is the same
@@ -294,7 +293,7 @@ def delete(X, start, end):
 	Parameters
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to have a motif substituted into.
+		A one-hot encoded set of sequences to have a portion deleted from.
 
 	start: int
 		The starting position to remove, inclusive.
@@ -515,29 +514,24 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 
 	Parameters
 	----------
-	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to be shuffled.
+	X: torch.tensor, shape=(len(alphabet), length)
+		A single one-hot encoded sequence to be shuffled.
 
-	start: int, optional
-		The starting position of where to randomize the sequence, inclusive.
-		Default is 0, shuffling the entire sequence.
+	n_shuffles: int, optional
+		The number of shuffled sequences to produce. Default is 1.
 
-	end: int, optional
-		The ending position of where to randomize the sequence, not inclusive.
-		Default is -1, shuffling the entire sequence.
+	random_state: int or None, optional
+		The random seed to use when generating shuffles. If None, draw a new
+		seed at random. Default is None.
 
-	n: int, optional
-		The number of times to shuffle that region. Default is 1.
-
-	random_state: int, numpy.random.RandomState, or None, optional
-		Whether to use a specific random seed when generating the shuffle,
-		to ensure reproducibility. If None, do not use a reproducible seed.
-		Default is None.
+	verbose: bool, optional
+		Whether to print a warning when at least one position is identical
+		across all shuffles. Default is False.
 
 
 	Returns
 	-------
-	shuffled_sequences: torch.tensor, shape=(n, k, -1)
+	shuffled_sequences: torch.tensor, shape=(n_shuffles, len(alphabet), length)
 		The shuffled sequences.
 	"""
 
@@ -614,9 +608,9 @@ def dinucleotide_shuffle(X, start=0, end=-1, n=20, random_state=None,
 		The number of times to shuffle that region. Default is 20.
 
 	random_state: int or None, optional
-		Whether to use a specific random seed when generating the random insert,
+		Whether to use a specific random seed when generating the shuffle,
 		to ensure reproducibility. If None, do not use a reproducible seed.
-		Unlike other methods, cannot be a numpy.random.RandomState object. 
+		Unlike other methods, cannot be a numpy.random.RandomState object.
 		Default is None.
 
 

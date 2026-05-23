@@ -44,7 +44,7 @@ def _loci_coords_generator(loci_df, width = None):
 	return g if width is None else _resize_coords_generator(g, width)
 
 def _valid_locus(chrom, start, end, chrom_sizes):
-	"""Returns a bool telling whehter the specificed locus is valid, i.e the `chrom`
+	"""Returns a bool telling whether the specified locus is valid, i.e., the `chrom`
 	is found in the `chrom_sizes` dictionary and `start` and `end` are within bounds."""
 	return (chrom in chrom_sizes) and (start >= 0) and (end <= chrom_sizes[chrom])
 
@@ -174,7 +174,7 @@ def _char_perc_from_coords(fasta, coords, chars, num_regions=-1, buffer=False, v
 		Should only be set to true if there are many regions
 		on the same chromosome, such as when calculating GC content for
 		an entire chromosome. It is not recommend to use buffering if
-		calculating char pecentages for only peak regions, but if done
+		calculating char percentages for only peak regions, but if done
 		anyway for some reason, the peaks should be sorted by chromosome.
 		If set to false, will instead only load the sequence for a single
 		region at a time into memory. Default is False.
@@ -197,17 +197,16 @@ def _char_perc_from_coords(fasta, coords, chars, num_regions=-1, buffer=False, v
 	return perc
 
 def _counts_from_coords(bigwig, coords, num_regions=-1, buffer=False, verbose=False):
-	"""An internal function returning the percentage of `chars` for each sequence
-	with `coords` extracted from the `fasta` file.
+	"""An internal function returning the summed signal in each region of `coords`
+	extracted from the `bigwig` file.
 
-	This method will take in a `fasta` file and return the percentage of `chars`
-	in the sequences extracted from the fasta file and defined by the list of `coords`.
-	This is usually used to calculate GC percentage but can also be used to calculate
-	the percentage of N's.
+	This method will take in a `bigwig` file and return the summed signal in
+	each region defined by `coords`. If signal cannot be extracted from a
+	region, NaN is returned for that region.
 
 	Parameters
 	----------
-	fasta: str
+	bigwig: str
 		The path to a bigwig file to extract counts from.
 
 	coords: list, tuple or generator of such
@@ -432,8 +431,8 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 		will be different each time. Default is None.
 
 	n_jobs: integer, optional
-		Number of parallel processes to use for extracting background gc content.
-		-1 means use all available CPUs. Default is -1.
+		Number of parallel processes to use for extracting background GC content.
+		-1 means use all available CPUs. Default is 1.
 
 	verbose: bool, optional
 		Whether to print display bars and diagnostics to ensure that the

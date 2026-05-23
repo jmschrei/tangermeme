@@ -21,7 +21,7 @@ def annotate_seqlets(X, seqlets, motifs, n_nearest=1, n_jobs=-1, **kwargs):
 	provided threshold, an index of -1 is returned.
 
 	The computation is independent for each seqlet, so ordering of seqlets
-	should not matter, not should running this function on a subset of seqlets
+	should not matter, nor should running this function on a subset of seqlets
 	versus the full set.
 
 
@@ -107,7 +107,7 @@ def count_annotations(X, dtype=torch.uint8, shape=None, dim=None):
 	dim: None, 0, or 1, optional
 		Whether to aggregate the counts along one of the axes. If set to None,
 		the full count matrix will be returned. If set to 0 the first dimension
-		is summed over, returning the number of occurences of each annotation. 
+		is summed over, returning the number of occurrences of each annotation.
 		If set to 1, the second dimension is summed over, returning the number
 		of annotations per example. Default is None. 
 
@@ -190,9 +190,9 @@ def pairwise_annotations(X, dtype=torch.int64, unique=True, symmetric=True, shap
 
 	unique: bool, optional
 		Whether to count only unique pairs within each example or each instance.
-		For example, if set to True, an example with 3 instances of KL4 would
+		For example, if set to True, an example with 3 instances of KLF4 would
 		contribute only a single KLF4-KLF4 interaction to the matrix, whereas
-		if set to True, would contribute many. Default is True.
+		if set to False, would contribute many. Default is True.
 
 	symmetric: bool, optional
 		Whether to return a symmetric matrix or one where the row is the first
@@ -206,10 +206,10 @@ def pairwise_annotations(X, dtype=torch.int64, unique=True, symmetric=True, shap
 
 	Returns
 	-------
-	y: torch.Tensor, shape=(max(example_idx), max(motif_idx))
-		A sparse tensor where each row is an example and each column is an
-		annotation and the values within are the number of times each annotation
-		appears in each example.
+	y: torch.Tensor, shape=(max(motif_idx), max(motif_idx))
+		A tensor where each row and column corresponds to an annotation index
+		and the values within are the number of times that pair of annotations
+		appears in the same example.
 	"""
 
 	if isinstance(X, (list, tuple)):
@@ -258,7 +258,7 @@ def pairwise_annotations(X, dtype=torch.int64, unique=True, symmetric=True, shap
 
 def pairwise_annotations_spacing(X, max_distance=100, dtype=torch.uint8, 
 	symmetric=True, shape=None):
-	"""Finds the number of times each annotation pairs happens at each distance.
+	"""Finds the number of times each annotation pair occurs at each distance.
 
 	This function takes in a tensor of (example_idx, annotation_idx, start, end) 
 	tuples and returns a tensor of counts where the first two dimensions are 
@@ -303,10 +303,11 @@ def pairwise_annotations_spacing(X, max_distance=100, dtype=torch.uint8,
 
 	Returns
 	-------
-	y: torch.Tensor, shape=(max(example_idx), max(motif_idx))
-		A sparse tensor where each row is an example and each column is an
-		annotation and the values within are the number of times each annotation
-		appears in each example.
+	y: torch.Tensor, shape=(max(motif_idx), max(motif_idx), max_distance)
+		A tensor where the first two dimensions are annotation indices and the
+		third dimension is the spacing between the pair, and the values within
+		are the count of the number of times that pair of annotations is found
+		with that spacing.
 	"""
 
 	if isinstance(X, (list, tuple)):

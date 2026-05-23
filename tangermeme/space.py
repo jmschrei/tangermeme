@@ -32,10 +32,10 @@ def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
 		inputs must be specified in the `args` parameter.
 
 	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to have a motif inserted into.
+		A one-hot encoded set of sequences to have motifs inserted into.
 
 	motifs: list of torch.tensor, shape=(-1, len(alphabet), motif_length)
-		A list of strings or of one-hot encoded version of a short motif to 
+		A list of strings or of one-hot encoded versions of short motifs to
 		substitute into the set of sequences.
 
 	spacing: torch.Tensor, shape=(-1, len(motifs)-1)
@@ -47,9 +47,9 @@ def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
 		between the second and third motif, etc. 
 
 	start: int or None, optional
-		The starting position of where to insert the motif. If None, insert the
-		motif into the middle of the sequence such that the middle of the motif
-		occurs at the middle of the sequence. Default is None.
+		The starting position of where to insert the first motif. If None, the
+		full motif arrangement is centered such that its midpoint coincides with
+		the middle of the sequence. Default is None.
 
 	alphabet : set or tuple or list, optional
 		A pre-defined alphabet where the ordering of the symbols is the same
@@ -81,14 +81,14 @@ def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
 
 	Returns
 	-------
-	y_befores: torch.Tensor or list of torch.Tensors
-		The predictions from the model before inserting the motif in. If the
+	y_before: torch.Tensor or list of torch.Tensors
+		The predictions from the model before inserting the motifs in. If the
 		output from the model's forward function is a single tensor, it will
 		return that. If the model outputs a list of tensors, it will return
 		those.
 
 	y_afters: torch.Tensor or list of torch.Tensors
-		The predictions from the model after inserting the motif in. If the
+		The predictions from the model after inserting the motifs in. If the
 		output from the model's forward function is a single tensor, it will
 		return that. If the model outputs a list of tensors, it will return
 		those.

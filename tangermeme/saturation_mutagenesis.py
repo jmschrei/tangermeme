@@ -1,4 +1,4 @@
-# ism.py
+# saturation_mutagenesis.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import numba
@@ -119,7 +119,7 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1,
 		Default is 0.
 	
 	end: int, optional
-		The end of where to to make perturbations to the sequence. If end is
+		The end of where to make perturbations to the sequence. If end is
 		positive, it is non-inclusive. If end is negative, it is inclusive.
 		Default is -1, meaning the entire sequence.
 	
@@ -133,7 +133,7 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1,
 	
 	hypothetical: bool, optional
 		Whether to return attributions for all possible characters at each
-		position or only for the character that is actually at the sequence.
+		position or only for the character that is actually in the sequence.
 		Only matters when `raw_outputs=False`. Default is False.
 	
 	raw_outputs: bool, optional
@@ -158,9 +158,10 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1,
 	Returns
 	-------
 	attr: torch.Tensor
-		Processed attribution values as the z-score normalized difference
-		between the difference in predictions for the original sequence and
-		the perturbed sequences.
+		Processed attribution values. For each example and each position, the
+		difference between the model's prediction on the perturbed sequence and
+		on the original sequence is computed, then mean-subtracted across the
+		alphabet axis so the values at each position are centered on zero.
 	
 	-- or, if raw_outputs=True --
 	

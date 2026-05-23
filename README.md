@@ -7,7 +7,7 @@
 > [!NOTE] 
 > If you use tangermeme in your work, please consider citing the [preprint](https://www.biorxiv.org/content/10.1101/2025.08.08.669296v2). Citations allow me to continue developing software like this for the community. 
 
-Training sequence-based (sometimes called sequence-to-function or S2F) machine learning models has become widespread when studying genomics. But, what have these models learned, and what do we even do with them after training? `tangermeme` aims to provide robust and easy-to-use tools for the what-to-do-after-training question. `tangermeme` implements many atomic sequence operations such as adding a motif to a sequence or shuffling it out, efficient tools for applying predictive models to these sequences, methods for dissecting what these predictive models have learned, and tools for designing new sequences using these models. `tangermeme` aims to be assumption free: models can be multi-input or multi-output, functions do not assume a distance and instead return the raw predictions, and when loss functions are necessary they can be supplied by the user. Although we will provide best practices for how to use these functions, our hope is that being assumption-free makes adaptation of tangermeme into your settings as frictionless as possible. All functions are unit-tested and implemented with both compute- and memory-efficient in mind. Finally, although the library was built with operations on DNA sequences in mind, all functions are extensible to any alphabet.
+Training sequence-based (sometimes called sequence-to-function or S2F) machine learning models has become widespread when studying genomics. But, what have these models learned, and what do we even do with them after training? `tangermeme` aims to provide robust and easy-to-use tools for the what-to-do-after-training question. `tangermeme` implements many atomic sequence operations such as adding a motif to a sequence or shuffling it out, efficient tools for applying predictive models to these sequences, methods for dissecting what these predictive models have learned, and tools for designing new sequences using these models. `tangermeme` aims to be assumption free: models can be multi-input or multi-output, functions do not assume a distance and instead return the raw predictions, and when loss functions are necessary they can be supplied by the user. Although we will provide best practices for how to use these functions, our hope is that being assumption-free makes adaptation of tangermeme into your settings as frictionless as possible. All functions are unit-tested and implemented with both compute- and memory-efficiency in mind. Finally, although the library was built with operations on DNA sequences in mind, all functions are extensible to any alphabet.
 
 Please see the documentation and tutorials linked at the top of this README for more extensive documentation. If you only read one vignette, read THIS ONE: [Inspecting what Cis-Regulatory Features a Model has Learned](https://tangermeme.readthedocs.io/en/latest/vignettes/Inspecting_What_Cis-Regulatory_Features_a_Model_Has_Learned.html).
 
@@ -210,7 +210,7 @@ By running this function across several spacings one can, for instance, measure 
 Given an observed sequence a simple question is "what positions are driving model predictions?" One simple way to answer this question is through saturation mutagenesis, i.e., compare the predictions on the original sequence with that of sequences that comprehensively each contain one mutation with respect to that original sequence. This is another form of attribution method that is conceptually similar to deep mutational scanning but using a predictive model instead of running an experiment. In a region with an AP-1 motif, we can run ISM on Beluga and look at AP-1 factor tasks to identify that the AP-1 motif is what is driving the predictions.
 
 ```python
-from tangermeme.ism import saturation_mutagenesis
+from tangermeme.saturation_mutagenesis import saturation_mutagenesis
 
 X_attr = saturation_mutagenesis(model, X)
 ```
@@ -233,7 +233,7 @@ substitutions = torch.tensor([
 ])
 
 y, y_var = substitution_effect(model, X, substitutions)
-````
+```
 
 When using a BPNet model that predicts GATA2 binding, we can see that a single substitution encoded at this position in the example seems to knock out predicted signal in the middle of the window entirely. Quite a strong effect.
 
@@ -251,7 +251,7 @@ y, y_var = insertion_effect(model, X, insertions)
 
 #### Design
 
-Given a trained predictive model, one can try to design a sequence that has desired attributions. Specifically, one can try to design a sequence that causes the model to give desired predictions.
+Given a trained predictive model, one can try to design a sequence that causes the model to give desired predictions.
 
 Currently, the only design algorithm implemented in tangermeme is a greedy substitution algorithm that will try every given motif at every position each iteration, and take the motif + position combo that yields predictions closest to the desired output from the model.
 

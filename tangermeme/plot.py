@@ -155,7 +155,7 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
 			sequence. Default is None.
 
 	end: int or None, optional
-			The end of the sequence to visuaize. Must be non-negative and cannot be
+			The end of the sequence to visualize. Must be non-negative and cannot be
 			longer than the length of `X_attr`. If `start` is provided, `end` must 
 			be larger. If None, visualize the full sequence. Default is None.
 
@@ -291,7 +291,7 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
 			y_offset_bars=ax.get_ylim()[0]/8
 			y_offset_labels = 0
 
-			#deterrmine label text size and line width according to figure size
+			#determine label text size and line width according to figure size
 			bbox = ax.get_position()
 			fig_width, fig_height = ax.get_figure().get_size_inches()
 			width_in = bbox.width * fig_width
@@ -461,7 +461,7 @@ def plot_attributions(models, X, func=deep_lift_shap, attribute_kwargs=None,
 		One or a set of models to apply to the sequence/s.
 	
 	X: torch.Tensor, shape=(-1, len(alphabet), -1) or (len(alphabet), -1)
-		One or more sequences 
+		One or more sequences to calculate attributions for and visualize.
 
 	func: func, optional
 		The attribution function to use. Default is deep_lift_shap.
@@ -470,7 +470,7 @@ def plot_attributions(models, X, func=deep_lift_shap, attribute_kwargs=None,
 		Arguments to pass into `func`. Default is None.
 	
 	plot_kwargs: dict or None, optional
-		Arguments to pass into `func`. Default is None.
+		Arguments to pass into `plot_logo`. Default is None.
 
 	layout: 2-tuple or None, optional
 		A layout of the subplots, the first two numbers passed into

@@ -16,9 +16,9 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 	"""Apply a function before and after substituting a motif into sequences.
 
 	A marginalization experiment is one where a function is applied before
-	and after substituting something into a set of sequences. It is named as 
-	such because the sequences are meant to be background sequences and
-	difference in output before and after the substitution represent the
+	and after substituting something into a set of sequences. It is named as
+	such because the sequences are meant to be background sequences and the
+	difference in output before and after the substitution represents the
 	"marginal" effect of adding that something into the sequences. When you are
 	adding a motif to the sequence, the difference in output can be interpreted 
 	as the effect that motif has on the function in isolation.
@@ -26,7 +26,7 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 	By default, `marginalize` will apply the `predict` function to `X` before
 	and after substituting in a one-hot encoded version of `motif`. However,
 	one can pass in any function, including `deep_lift_shap` or even
-	`saturated_mutagenesis`. These functions may have additional arguments
+	`saturation_mutagenesis`. These functions may have additional arguments
 	and those can be passed into `marginalize` as-is and will be passed along
 	to the function. If any arguments would have had the same name as those
 	used by this function, you can use the `additional_func_kwargs` input to
@@ -141,7 +141,7 @@ def marginalize_annotations(model, X, X0, annotations, **kwargs):
 		the end position (0-indexed, not inclusive).
 
 	kwargs: arguments
-		Additional optional arguments to pass into the `ablate` function.
+		Additional optional arguments to pass into the `marginalize` function.
 
 	
 	Returns
