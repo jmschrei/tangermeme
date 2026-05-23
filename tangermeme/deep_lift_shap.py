@@ -1,15 +1,17 @@
 # deep_lift_shap.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import contextlib
+import warnings
+
 import torch
 import torch.nn.functional as F
 
-import warnings
-
 from tqdm import trange
 
-from .utils import _validate_input
+from ._compat import _autocast_supported, _resolve_device
 from .ersatz import dinucleotide_shuffle
+from .utils import _validate_input
 
 
 def hypothetical_attributions(multipliers, X, references):
@@ -199,10 +201,10 @@ def _maxpool(module, grad_input, grad_output):
 
 
 def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
-	references=dinucleotide_shuffle, n_shuffles=20, return_references=False, 
+	references=dinucleotide_shuffle, n_shuffles=20, return_references=False,
 	hypothetical=False, warning_threshold=0.001, additional_nonlinear_ops=None,
-	print_convergence_deltas=False, raw_outputs=False, only_warn=False, 
-	dtype=None, device='cuda', random_state=None, verbose=False):
+	print_convergence_deltas=False, raw_outputs=False, only_warn=False,
+	dtype=None, device=None, random_state=None, verbose=False):
 	"""Calculate attributions for a set of sequences using DeepLIFT/SHAP.
 
 	This function will calculate the DeepLIFT/SHAP attributions on a set of
@@ -325,14 +327,14 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 		the *model*. This allows you to use int8 to represent large data sets and
 		only convert batches to the higher precision, saving memory. Default is None.
 
-	device: str or torch.device, optional
+	device: str or torch.device or None, optional
 		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+		None, use CUDA when available and fall back to CPU otherwise. Default
+		is None.
 
 	random_state: int or None or numpy.random.RandomState, optional
 		The random seed to use to ensure determinism. If None, the
-		process is not deterministic. Default is None. 
+		process is not deterministic. Default is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar. Default is False.
@@ -344,7 +346,7 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 		If `raw_outputs=False` (default), the attribution values with shape
 		equal to `X`. If `raw_outputs=True`, the multipliers for each example-
 		reference pair with shape equal to `(X.shape[0], n_shuffles, X.shape[1],
-		X.shape[2])`. 
+		X.shape[2])`.
 
 	references: torch.tensor, optional
 		The references used for each input sequence, with the shape
@@ -377,10 +379,12 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 		torch.nn.Softmax: _softmax
 	}
 
+	device = _resolve_device(device)
+
 	if dtype is None:
 		try:
 			dtype = next(model.parameters()).dtype
-		except:
+		except (StopIteration, AttributeError):
 			dtype = torch.float32
 	elif isinstance(dtype, str):
 		dtype = getattr(torch, dtype)
@@ -390,6 +394,8 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 	if additional_nonlinear_ops is not None:
 		for key, value in additional_nonlinear_ops.items():
 			_NON_LINEAR_OPS[key] = value
+
+	use_autocast = _autocast_supported(device, dtype)
 
 	model = model.to(device).eval()
 	for module in model.modules():
@@ -444,9 +450,14 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 			try:
 				X_ = torch.cat([_X, _references])
 
+				if use_autocast:
+					autocast_ctx = torch.autocast(device_type=device.type, dtype=dtype)
+				else:
+					autocast_ctx = contextlib.nullcontext()
+
 				# Calculate the gradients using the rescale rule
 				with torch.autograd.set_grad_enabled(True):
-					with torch.autocast(device_type=device, dtype=dtype):
+					with autocast_ctx:
 						if _args is not None:
 							_args = (torch.cat([arg, arg]) for arg in _args)
 							y = model(X_, *_args)[:, target]
@@ -520,8 +531,8 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 
 
 def _captum_deep_lift_shap(model, X, args=None, target=0, batch_size=32,
-	references=dinucleotide_shuffle, n_shuffles=20,  return_references=False, 
-	hypothetical=False, device='cuda', random_state=None, verbose=False):
+	references=dinucleotide_shuffle, n_shuffles=20,  return_references=False,
+	hypothetical=False, device=None, random_state=None, verbose=False):
 	"""Calculate attributions using DeepLift/Shap and a given model. 
 
 	This function will calculate DeepLift/Shap attributions on a set of
@@ -591,14 +602,14 @@ def _captum_deep_lift_shap(model, X, args=None, target=0, batch_size=32,
 		multiplied by the one-hot encoded input so that only the observed
 		character has a non-zero attribution at each position. Default is False.
 
-	device: str or torch.device, optional
+	device: str or torch.device or None, optional
 		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+		None, use CUDA when available and fall back to CPU otherwise. Default
+		is None.
 
 	random_state: int or None or numpy.random.RandomState, optional
 		The random seed to use to ensure determinism. If None, the
-		process is not deterministic. Default is None. 
+		process is not deterministic. Default is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar. Default is False.
@@ -618,6 +629,7 @@ def _captum_deep_lift_shap(model, X, args=None, target=0, batch_size=32,
 
 	from captum.attr import DeepLiftShap as CaptumDeepLiftShap
 
+	device = _resolve_device(device)
 	model = model.to(device).eval()
 
 	attributions = []
