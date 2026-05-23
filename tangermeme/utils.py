@@ -128,23 +128,54 @@ def _validate_input(
 	if ohe:
 		values = torch.unique(X)
 		msg = "{} must be one-hot encoded.".format(name)
-		
-		if len(values) != 2:
+
+		# Values must be a subset of {0, 1}. Previously this enforced
+		# `len(unique) == 2`, which incorrectly rejected all-zero
+		# (all-N) inputs that contain only the value 0.
+		if not torch.all((values == 0) | (values == 1)):
 			_warn_or_raise(ValueError, msg, only_warn)
-	
-		if not all(values == torch.tensor([0, 1], device=X.device)):
-			_warn_or_raise(ValueError, msg, only_warn)
-	
+
 		if allow_N:
 			if not torch.all(torch.sum(X, axis=ohe_dim) <= 1):
-				_warn_or_raise(ValueError, msg + "and contain unknown" \
+				_warn_or_raise(ValueError, msg + " and contain unknown"
 					" characters as all-zeroes.", only_warn)
 		else:
 			if not torch.all(X.sum(axis=ohe_dim) == 1):
-				_warn_or_raise(ValueError, msg + "and cannot have unknown" \
-					" characters.", only_warn)			
-	
+				_warn_or_raise(ValueError, msg + " and cannot have unknown"
+					" characters.", only_warn)
+
 	return X
+
+
+def validate_input(
+	X: torch.Tensor,
+	name: str = "input",
+	shape: tuple[int, ...] | None = None,
+	dtype: torch.dtype | None = None,
+	min_value: float | None = None,
+	max_value: float | None = None,
+	ohe: bool = False,
+	ohe_dim: int = 1,
+	allow_N: bool = False,
+	only_warn: bool = False,
+) -> torch.Tensor:
+	"""Public wrapper around the input-validation routine.
+
+	Forwards every argument to `_validate_input`. Use this when you want to
+	pre-flight your own tensor against the same shape / dtype / one-hot /
+	value-range checks the library applies internally; with `only_warn=True`
+	you can get a non-raising mode that emits a `TangermemeWarning` instead.
+
+	The underscored `_validate_input` is retained as an alias for backward
+	compatibility with code (including tests and tutorials) that already
+	imports it.
+	"""
+
+	return _validate_input(
+		X, name, shape=shape, dtype=dtype, min_value=min_value,
+		max_value=max_value, ohe=ohe, ohe_dim=ohe_dim, allow_N=allow_N,
+		only_warn=only_warn,
+	)
 
 
 def _cast_as_tensor(

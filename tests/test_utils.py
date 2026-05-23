@@ -4,9 +4,12 @@
 import numpy
 import torch
 import pandas
+import pytest
 
 
 from tangermeme.utils import _validate_input
+from tangermeme.utils import validate_input
+from tangermeme.utils import TangermemeWarning
 from tangermeme.utils import characters
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import reverse_complement
@@ -139,6 +142,32 @@ def test_validate_input_allow_N(device):
 	X[0, 1, 0] = 0.5
 	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1,
 		allow_N=True)
+
+
+def test_validate_input_all_zero_with_allow_N(device):
+	# An all-zero tensor represents a sequence where every position is
+	# unknown (N). With allow_N=True this is a valid one-hot encoding
+	# and must not be rejected. The previous len(unique(X)) == 2 check
+	# tripped on this case because unique returned just [0].
+	X = torch.zeros(1, 4, 5, dtype=torch.int8).to(device)
+	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
+
+	# Without allow_N, every position must have exactly one 1; an all-N
+	# input must still raise.
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1)
+
+
+def test_public_validate_input_wrapper(device):
+	# The public validate_input forwards to the internal helper.
+	X = random_one_hot((2, 4, 10), random_state=0).to(device)
+	validate_input(X, "X", ohe=True, ohe_dim=1)
+
+	# Bad input raises as expected.
+	assert_raises(ValueError, validate_input, X + 0.5, "X", ohe=True)
+
+	# only_warn=True surfaces a TangermemeWarning instead of raising.
+	with pytest.warns(TangermemeWarning):
+		validate_input(X + 0.5, "X", ohe=True, only_warn=True)
 
 
 ##
