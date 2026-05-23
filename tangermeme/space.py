@@ -1,6 +1,11 @@
 # space.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
 import numpy
 import torch
 
@@ -14,8 +19,18 @@ from .predict import predict
 from tqdm import tqdm
 
 
-def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
-	func=predict, additional_func_kwargs=None, verbose=False, **kwargs):
+def space(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	motifs: list[torch.Tensor | str],
+	spacing: torch.Tensor | numpy.ndarray | list,
+	start: int | None = None,
+	alphabet: list[str] = ['A', 'C', 'G', 'T'],
+	func: Callable[..., Any] = predict,
+	additional_func_kwargs: dict | None = None,
+	verbose: bool = False,
+	**kwargs: Any,
+) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
 	"""Runs a single spacing experiment and returns predictions.
 
 	Given a predictive model, a set of motifs to insert and the spacings

@@ -3,9 +3,13 @@
 # https://www.biorxiv.org/content/10.1101/2025.04.07.647613v2
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
+from typing import Any
 
+import numpy
 import torch
 
 from tqdm import trange
@@ -21,11 +25,23 @@ from tangermeme.deep_lift_shap import _clear_hooks, _register_hooks
 from tangermeme.deep_lift_shap import hypothetical_attributions
 
 
-def pisa(model, X, args=None, batch_size=32, references=dinucleotide_shuffle,
-    n_shuffles=20, return_references=False, hypothetical=False,
-    warning_threshold=0.001, additional_nonlinear_ops=None,
-    print_convergence_deltas=False, raw_outputs=False, device=None,
-    random_state=None, verbose=False):
+def pisa(
+    model: torch.nn.Module,
+    X: torch.Tensor,
+    args: tuple | None = None,
+    batch_size: int = 32,
+    references: Callable[..., Any] | torch.Tensor = dinucleotide_shuffle,
+    n_shuffles: int = 20,
+    return_references: bool = False,
+    hypothetical: bool = False,
+    warning_threshold: float = 0.001,
+    additional_nonlinear_ops: dict | None = None,
+    print_convergence_deltas: bool = False,
+    raw_outputs: bool = False,
+    device: str | torch.device | None = None,
+    random_state: int | numpy.random.RandomState | None = None,
+    verbose: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """An implementation of Pairwise Influence by Sequence Attribution (PISA).
     
     PISA is a method for deciphering how each input in an example influences

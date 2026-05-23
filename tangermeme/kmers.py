@@ -1,6 +1,8 @@
 # kmers.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
 import numpy
 import torch
 import scipy
@@ -13,7 +15,11 @@ key_type = numba.types.int64
 value_type = numba.types.float64
 
 
-def kmers(X, k, scores=None):
+def kmers(
+	X: torch.Tensor,
+	k: int,
+	scores: torch.Tensor | None = None,
+) -> scipy.sparse.csr_matrix:
 	"""Extract all k-mers found in a sequence, optionally weighted by a score.
 
 	This function will count the number of k-mers found in each sequence and
@@ -157,8 +163,16 @@ def _fast_extract_gkmers(X, min_k, max_k, max_gap, max_len, max_entries):
 
 
 
-def gapped_kmers(X, scores=None, min_k=4, max_k=8, max_gap=2, max_len=10, 
-	max_gkmers=10, max_pos=None):
+def gapped_kmers(
+	X: torch.Tensor,
+	scores: torch.Tensor | None = None,
+	min_k: int = 4,
+	max_k: int = 8,
+	max_gap: int = 2,
+	max_len: int = 10,
+	max_gkmers: int = 10,
+	max_pos: int | None = None,
+) -> scipy.sparse.csr_matrix:
 	"""Extract gapped k-mers from sequences and optionally scores.
 
 	This function will extract the gapped k-mers from a set of sequences that

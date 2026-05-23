@@ -7,12 +7,15 @@ here is implementation detail that the public functions in `predict`,
 `deep_lift_shap`, `pisa`, `design`, `product`, and `saturation_mutagenesis`
 share."""
 
+from __future__ import annotations
+
 import contextlib
+from collections.abc import Iterator
 
 import torch
 
 
-def _resolve_device(device):
+def _resolve_device(device: str | torch.device | None) -> torch.device:
 	"""Resolve a user-supplied device argument to a concrete `torch.device`.
 
 	If `device` is None, return `'cuda'` when CUDA is available and `'cpu'`
@@ -30,7 +33,10 @@ def _resolve_device(device):
 	return torch.device(device)
 
 
-def _autocast_supported(device, dtype):
+def _autocast_supported(
+	device: torch.device | str,
+	dtype: torch.dtype | None,
+) -> bool:
 	"""Return True when `torch.autocast` is meaningful for this combination.
 
 	`torch.autocast(device_type='cpu', dtype=torch.float32)` raises on
@@ -54,7 +60,10 @@ def _autocast_supported(device, dtype):
 
 
 @contextlib.contextmanager
-def _preserve_model_state(model, device):
+def _preserve_model_state(
+	model: torch.nn.Module,
+	device: torch.device,
+) -> Iterator[None]:
 	"""Move a model to `device` for the duration of a `with` block, then
 	restore its original device and training mode on exit.
 

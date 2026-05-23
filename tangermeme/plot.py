@@ -1,6 +1,11 @@
 # plot.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
 import torch
 import numpy
 import pandas
@@ -23,17 +28,22 @@ import numpy as np
 
 #plot_logo helper functions for placing annotations
 
-def check_box_overlap(box1, box2):
+def check_box_overlap(box1: Bbox, box2: Bbox) -> bool:
 	"""Check if annotation label text boxes overlap."""
 	return not(box1.x0>=box2.x1 or box2.x0>=box1.x1 or box1.y0>=box2.y1 or box2.y0>=box1.y1)
 
 
-def check_box_overlap_bar(box1, box2):
+def check_box_overlap_bar(box1: Bbox, box2: Bbox) -> bool:
 	"""Check if annotation bars overlap."""
 	return not(box1.x0>=box2.x1 or box2.x0>=box1.x1 or box1.y0!=box2.y0)
 
 
-def place_new_box(box, box_list, n_tracks=4, show_extra=True):
+def place_new_box(
+	box: Bbox,
+	box_list: list[Bbox],
+	n_tracks: int = 4,
+	show_extra: bool = True,
+) -> tuple[Bbox, int]:
     """Place annotation text so that it does not overlap with existing text."""
     box_height = box.y1 - box.y0
     box.y0 -= box_height
@@ -64,7 +74,13 @@ def place_new_box(box, box_list, n_tracks=4, show_extra=True):
     return box, steps_down_taken
 
 
-def place_new_bar(box, box_list, y_step=None, n_tracks=4, show_extra=True):
+def place_new_bar(
+	box: Bbox,
+	box_list: list[Bbox],
+	y_step: float | None = None,
+	n_tracks: int = 4,
+	show_extra: bool = True,
+) -> tuple[Bbox, int]:
     """
     Find a position for a new annotation bar such that it does not overlap with previously plotted bars.
     """
@@ -93,7 +109,14 @@ def _base_path(char):
     return verts, tp.codes.copy()
 
 
-def get_glyph_path(char, x, y, width, height, flip=False):
+def get_glyph_path(
+	char: str,
+	x: float,
+	y: float,
+	width: float,
+	height: float,
+	flip: bool = False,
+) -> Path:
     verts, codes = _base_path(char)
     v = verts.copy()
     v[:, 0] = v[:, 0] * width + x
@@ -104,10 +127,23 @@ def get_glyph_path(char, x, y, width, height, flip=False):
     return Path(v, codes)
 
 
-def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None, 
-	end=None, ylim=None, spacing=4, n_tracks=4, alphabet=["A", "C", "G", "T"],
-	min_height_pct=0.02, score_key='score', show_extra=True, show_score=True, 
-	annot_cmap="Set1"):
+def plot_logo(
+	X_attr: torch.Tensor | numpy.ndarray,
+	ax: matplotlib.axes.Axes | None = None,
+	color: str | dict | None = None,
+	annotations: pandas.DataFrame | None = None,
+	start: int | None = None,
+	end: int | None = None,
+	ylim: tuple[float, float] | None = None,
+	spacing: float = 4,
+	n_tracks: int = 4,
+	alphabet: list[str] = ["A", "C", "G", "T"],
+	min_height_pct: float = 0.02,
+	score_key: str = 'score',
+	show_extra: bool = True,
+	show_score: bool = True,
+	annot_cmap: str = "Set1",
+) -> matplotlib.axes.Axes:
 	"""Make a logo plot and optionally annotate it.
 
 	This function will take in a matrix of weights for each character in a
@@ -393,7 +429,11 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
 	return ax
 
 
-def plot_categorical_scatter(X, colors=None, **kwargs):
+def plot_categorical_scatter(
+	X: pandas.DataFrame,
+	colors: dict | None = None,
+	**kwargs: Any,
+) -> matplotlib.axes.Axes:
 	"""A scatterplot of category weights across a seq, useful for attributions.
 	
 	Frequently, when you calculate attributions you are considering a sequence
@@ -430,8 +470,14 @@ def plot_categorical_scatter(X, colors=None, **kwargs):
 		plt.scatter(pos[idxs], X.sum(axis=0)[idxs], c=[c[i]], **kwargs)
 
 
-def plot_attributions(models, X, func=deep_lift_shap, attribute_kwargs=None, 
-	plot_kwargs=None, layout=None):
+def plot_attributions(
+	models: torch.nn.Module | list[torch.nn.Module],
+	X: torch.Tensor,
+	func: Callable[..., Any] = deep_lift_shap,
+	attribute_kwargs: dict | None = None,
+	plot_kwargs: dict | None = None,
+	layout: tuple[int, int] | None = None,
+) -> tuple[matplotlib.figure.Figure, torch.Tensor]:
 	"""A convenience function for calculating and then plotting attributions.
 	
 	This function will use one or more models and calculate attributions on one or
@@ -529,7 +575,12 @@ def plot_attributions(models, X, func=deep_lift_shap, attribute_kwargs=None,
 	
 	return axs, X_attrs
 
-def plot_pwm(pwm, name=None, alphabet=['A', 'C', 'G', 'T'], eps=1e-7):
+def plot_pwm(
+	pwm: torch.Tensor | numpy.ndarray,
+	name: str | None = None,
+	alphabet: list[str] = ['A', 'C', 'G', 'T'],
+	eps: float = 1e-7,
+) -> None:
 	"""Plots an information-content weighted PWM and its reverse complement.
 
 	This function takes in a PWM, where the sum across all values in the

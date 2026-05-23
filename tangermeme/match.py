@@ -7,6 +7,8 @@ Provides functions for the calculation of GC-content genome-wide and the
 sampling of GC-matched negatives.
 """
 
+from __future__ import annotations
+
 import numpy
 import pandas
 import pyfaidx
@@ -367,9 +369,20 @@ def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 	return gc_perc
 
 
-def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000, 
-	max_n_perc=0.1, gc_bin_width=0.02, bigwig=None, signal_beta=0.5, 
-	chroms=None, random_state=None, n_jobs=1, verbose=False):
+def extract_matching_loci(
+	loci: str | pandas.DataFrame,
+	fasta: str,
+	in_window: int = 2114,
+	out_window: int = 1000,
+	max_n_perc: float = 0.1,
+	gc_bin_width: float = 0.02,
+	bigwig: str | None = None,
+	signal_beta: float = 0.5,
+	chroms: list[str] | None = None,
+	random_state: int | numpy.random.RandomState | None = None,
+	n_jobs: int = 1,
+	verbose: bool = False,
+) -> pandas.DataFrame:
 	"""Extract matching loci given a fasta file.
 
 	This function takes in a set of loci (a bed file or a pandas dataframe in

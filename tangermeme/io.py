@@ -2,6 +2,8 @@
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 # Code adapted from Alex Tseng, Avanti Shrikumar, and Ziga Avsec
 
+from __future__ import annotations
+
 import warnings
 
 import numpy
@@ -233,11 +235,26 @@ def _extract_locus_signal(signals, chrom, start, end):
 	return values
 
 
-def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None, 
-	in_window=2114, out_window=1000, max_jitter=0, min_counts=None,
-	max_counts=None, target_idx=0, n_loci=None, summits=False,
-	alphabet=['A', 'C', 'G', 'T'], ignore=['N'], exclusion_lists=None, 
-	return_mask=False, verbose=False):
+def extract_loci(
+	loci: str | list[str] | pandas.DataFrame | list[pandas.DataFrame],
+	sequences: str | pyfaidx.Fasta | dict,
+	signals: list | None = None,
+	in_signals: list | None = None,
+	chroms: list[str] | None = None,
+	in_window: int = 2114,
+	out_window: int = 1000,
+	max_jitter: int = 0,
+	min_counts: float | None = None,
+	max_counts: float | None = None,
+	target_idx: int = 0,
+	n_loci: int | None = None,
+	summits: bool = False,
+	alphabet: list[str] = ['A', 'C', 'G', 'T'],
+	ignore: list[str] = ['N'],
+	exclusion_lists: list | None = None,
+	return_mask: bool = False,
+	verbose: bool = False,
+) -> tuple:
 	"""Extract sequence and signal information for each provided locus.
 
 	This function will take in a set of loci, sequences, and optionally signals,
@@ -505,8 +522,13 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 	return y_return[0] if len(y_return) == 1 else y_return
 
 
-def one_hot_to_fasta(X, filename, mode='w', headers=None,
-	alphabet=['A', 'C', 'G', 'T']):
+def one_hot_to_fasta(
+	X: torch.Tensor | numpy.ndarray,
+	filename: str,
+	mode: str = 'w',
+	headers: list[str] | None = None,
+	alphabet: list[str] = ['A', 'C', 'G', 'T'],
+) -> None:
 	"""Write out one-hot encoded sequences to a FASTA file.
 
 	This function will take a set of one-hot encoded sequences and convert them
@@ -550,7 +572,7 @@ def one_hot_to_fasta(X, filename, mode='w', headers=None,
 			outfile.write("\n")
 
 
-def read_meme(filename, n_motifs=None):
+def read_meme(filename: str, n_motifs: int | None = None) -> dict[str, torch.Tensor]:
 	"""Read a MEME file and return a dictionary of PWMs.
 
 	This method takes in the filename of a MEME-formatted file to read in
@@ -582,7 +604,7 @@ def read_meme(filename, n_motifs=None):
 	return motifs
 
 
-def read_vcf(filename):
+def read_vcf(filename: str) -> pandas.DataFrame:
 	"""Read a VCF file into a pandas DataFrame
 
 	This function takes in the name of a file that is VCF formatted and returns

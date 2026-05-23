@@ -1,6 +1,8 @@
 # saturation_mutagenesis.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
 import numba
 import torch
 
@@ -75,9 +77,20 @@ def _edit_distance_one(X, start, end):
 
 
 
-def saturation_mutagenesis(model, X, args=None, start=0, end=-1,
-	batch_size=32, target=None, hypothetical=False, raw_outputs=False,
-	dtype=None, device=None, verbose=False):
+def saturation_mutagenesis(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	args: tuple | None = None,
+	start: int = 0,
+	end: int = -1,
+	batch_size: int = 32,
+	target: int | slice | None = None,
+	hypothetical: bool = False,
+	raw_outputs: bool = False,
+	dtype: str | torch.dtype | None = None,
+	device: str | torch.device | None = None,
+	verbose: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
 	"""Performs in-silico saturation mutagenesis on a set of sequences.
 	
 	This function will perform in-silico saturation mutagenesis on a set of 
