@@ -1,6 +1,12 @@
 # variant_effect.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+import numpy
 import torch
 
 from .utils import _cast_as_tensor
@@ -10,8 +16,15 @@ from .ersatz import insert
 from .predict import predict
 
 
-def substitution_effect(model, X, substitutions, args=None, func=predict, 
-	additional_func_kwargs=None, **kwargs):
+def substitution_effect(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	substitutions: torch.Tensor | numpy.ndarray,
+	args: tuple | None = None,
+	func: Callable[..., Any] = predict,
+	additional_func_kwargs: dict | None = None,
+	**kwargs: Any,
+) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
 	"""Apply a function before and after including one or more substitutions.
 
 	This function will calculate the effect that substitutions have on the
@@ -100,8 +113,16 @@ def substitution_effect(model, X, substitutions, args=None, func=predict,
 	return y_before, y_after
 
 
-def deletion_effect(model, X, deletions, left=False, args=None, func=predict,
-	additional_func_kwargs=None, **kwargs):
+def deletion_effect(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	deletions: torch.Tensor | numpy.ndarray,
+	left: bool = False,
+	args: tuple | None = None,
+	func: Callable[..., Any] = predict,
+	additional_func_kwargs: dict | None = None,
+	**kwargs: Any,
+) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
 	"""Apply a function before and after deleting characters from a sequence.
 
 	This function will calculate the effect that deletions have on the
@@ -224,8 +245,16 @@ def deletion_effect(model, X, deletions, left=False, args=None, func=predict,
 	return y_before, y_after
 
 
-def insertion_effect(model, X, insertions, left=False, args=None, func=predict,
-	additional_func_kwargs=None, **kwargs):
+def insertion_effect(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	insertions: torch.Tensor | numpy.ndarray,
+	left: bool = False,
+	args: tuple | None = None,
+	func: Callable[..., Any] = predict,
+	additional_func_kwargs: dict | None = None,
+	**kwargs: Any,
+) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
 	"""Apply a function before and after inserting characters into a sequence.
 
 	This function will calculate the effect that insertions have on the
