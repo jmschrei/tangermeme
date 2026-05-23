@@ -4,10 +4,13 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 
-import torch
 import warnings
 
+import torch
+
 from tqdm import trange
+
+from ._compat import _resolve_device
 from .ersatz import dinucleotide_shuffle
 
 from tangermeme.predict import predict
@@ -18,10 +21,10 @@ from tangermeme.deep_lift_shap import _clear_hooks, _register_hooks
 from tangermeme.deep_lift_shap import hypothetical_attributions
 
 
-def pisa(model, X, args=None, batch_size=32, references=dinucleotide_shuffle, 
-    n_shuffles=20, return_references=False, hypothetical=False, 
-    warning_threshold=0.001, additional_nonlinear_ops=None, 
-    print_convergence_deltas=False, raw_outputs=False, device='cuda', 
+def pisa(model, X, args=None, batch_size=32, references=dinucleotide_shuffle,
+    n_shuffles=20, return_references=False, hypothetical=False,
+    warning_threshold=0.001, additional_nonlinear_ops=None,
+    print_convergence_deltas=False, raw_outputs=False, device=None,
     random_state=None, verbose=False):
     """An implementation of Pairwise Influence by Sequence Attribution (PISA).
     
@@ -119,10 +122,10 @@ def pisa(model, X, args=None, batch_size=32, references=dinucleotide_shuffle,
         the multipliers for each example-reference pair -- or the processed
         attribution values. Default is False.
 
-    device: str or torch.device, optional
+    device: str or torch.device or None, optional
         The device to move the model and batches to when making predictions. If
-        set to 'cuda' without a GPU, this function will crash and must be set
-        to 'cpu'. Default is 'cuda'. 
+        None, use CUDA when available and fall back to CPU otherwise. Default
+        is None.
 
     random_state: int or None or numpy.random.RandomState, optional
         The random seed to use to ensure determinism. If None, the
@@ -177,6 +180,7 @@ def pisa(model, X, args=None, batch_size=32, references=dinucleotide_shuffle,
         for key, value in additional_nonlinear_ops.items():
             _NON_LINEAR_OPS[key] = value
 
+    device = _resolve_device(device)
     model = model.to(device).eval()
     for module in model.modules():
         module._NON_LINEAR_OPS = _NON_LINEAR_OPS
