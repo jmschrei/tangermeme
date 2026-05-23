@@ -423,10 +423,17 @@ def extract_loci(
 	if signals is None and in_signals is None:
 		out_width = 0
 
-	# Extract the length of each chromosome
+	# Extract the length of each chromosome. Track whether we opened the
+	# fasta ourselves so we know whether we are allowed to close it on
+	# exit; a caller-provided pyfaidx.Fasta is theirs to manage.
 	chrom_lengths = {}
+	opened_fasta = False
 	if isinstance(sequences, str):
 		sequences = pyfaidx.Fasta(sequences)
+		opened_fasta = True
+		for key, value in sequences.items():
+			chrom_lengths[str(key)] = len(value)
+	elif isinstance(sequences, pyfaidx.Fasta):
 		for key, value in sequences.items():
 			chrom_lengths[str(key)] = len(value)
 	else:
@@ -502,7 +509,7 @@ def extract_loci(
 		if n_loci is not None and len(seqs) == n_loci:
 			break 
 
-	if not isinstance(sequences, dict):
+	if opened_fasta:
 		sequences.close()
 		
 	# Figure out how to format the outputs depending on the provided parameters
