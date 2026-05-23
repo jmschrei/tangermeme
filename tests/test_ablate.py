@@ -1108,3 +1108,44 @@ def test_ablate_annotations_empty(X, device):
 
 	assert_raises(ValueError, ablate_annotations, model, X, annotations,
 		device=device)
+
+
+def test_ablate_returns_named_tuple(X, device):
+	# AblateResult should support both positional unpacking and named
+	# field access.
+	from tangermeme.results import PerturbationResult
+
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	result = ablate(model, X, start=10, end=20, n=2, device=device,
+		random_state=0)
+
+	# Positional / tuple-style unpacking still works.
+	y_before, y_after = result
+	assert torch.equal(y_before, result[0])
+	assert torch.equal(y_after, result[1])
+
+	# Attribute access works.
+	assert torch.equal(result.y_before, y_before)
+	assert torch.equal(result.y_after, y_after)
+
+	# Still a tuple subclass.
+	assert isinstance(result, tuple)
+	assert isinstance(result, PerturbationResult)
+
+
+def test_ablate_annotations_returns_named_tuple(X, device):
+	from tangermeme.results import PerturbationAnnotationsResult
+
+	torch.manual_seed(0)
+	model = FlattenDense()
+	annotations = torch.tensor([[0, 5, 10], [1, 5, 10]], dtype=torch.int64)
+
+	result = ablate_annotations(model, X, annotations, n=2, device=device,
+		random_state=0)
+
+	y_befores, y_afters = result
+	assert torch.equal(result.y_befores, y_befores)
+	assert torch.equal(result.y_afters, y_afters)
+	assert isinstance(result, PerturbationAnnotationsResult)
