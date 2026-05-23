@@ -422,3 +422,54 @@ def test_saturation_mutagenesis_sum_model(X, device):
 		 [[4, 1, 3, 2],
 		  [4, 2, 2, 2],
 		  [3, 2, 3, 2]]]])
+
+
+###
+
+
+def test_saturation_mutagenesis_verbose(X0, device):
+	model = SmallDeepSEA(1)
+
+	X_attr0 = saturation_mutagenesis(model, X0, device=device, verbose=False)
+	X_attr1 = saturation_mutagenesis(model, X0, device=device, verbose=True)
+
+	assert_array_almost_equal(X_attr0, X_attr1)
+
+
+def test_saturation_mutagenesis_args(X0, device):
+	torch.manual_seed(0)
+	model = FlattenDense(seq_len=100, n_outputs=1)
+
+	alpha = torch.randn(2, 1)
+	y0_with, y_hat_with = saturation_mutagenesis(model, X0, args=(alpha,),
+		raw_outputs=True, device=device)
+	y0_without, y_hat_without = saturation_mutagenesis(model, X0,
+		raw_outputs=True, device=device)
+
+	assert y0_with.shape == y0_without.shape
+	assert y_hat_with.shape == y_hat_without.shape
+
+
+def test_saturation_mutagenesis_identity_recovers_y0(X0, device):
+	model = SmallDeepSEA(1)
+
+	y0, y_hat = saturation_mutagenesis(model, X0, raw_outputs=True,
+		device=device)
+
+	# For each (example, position), the substitution that keeps the original
+	# base must equal y0 for that example.
+	for i in range(X0.shape[0]):
+		for pos in range(X0.shape[-1]):
+			orig_base = int(X0[i, :, pos].argmax())
+			assert_array_almost_equal(
+				y_hat[i, orig_base, pos], y0[i], 4)
+
+
+def test_saturation_mutagenesis_zero_where_X_zero(X0, device):
+	model = SmallDeepSEA(1)
+	X_attr = saturation_mutagenesis(model, X0, device=device,
+		hypothetical=False)
+
+	# Non-hypothetical attribution masks by X, so zeros stay zero.
+	zero_mask = (X0 == 0)
+	assert torch.all(X_attr[zero_mask] == 0)
