@@ -10,6 +10,10 @@ import pytest
 from tangermeme.utils import _validate_input
 from tangermeme.utils import validate_input
 from tangermeme.utils import TangermemeWarning
+from tangermeme.utils import set_seed
+from tangermeme.utils import gc_content
+from tangermeme.utils import entropy
+from tangermeme.utils import information_content
 from tangermeme.utils import characters
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import reverse_complement
@@ -744,3 +748,92 @@ def test_example_to_fasta_coords_window():
 	# example start=10 -> 135, end=20 -> 145.
 	assert int(out['start'].iloc[0]) == 135
 	assert int(out['end'].iloc[0]) == 145
+
+
+##
+
+
+def test_set_seed_is_deterministic():
+	# After calling set_seed with the same seed twice, all RNGs should
+	# produce identical sequences.
+	import random
+
+	set_seed(0)
+	a_py = random.random()
+	a_np = numpy.random.rand()
+	a_torch = torch.rand(1).item()
+
+	set_seed(0)
+	b_py = random.random()
+	b_np = numpy.random.rand()
+	b_torch = torch.rand(1).item()
+
+	assert a_py == b_py
+	assert a_np == b_np
+	assert a_torch == b_torch
+
+	set_seed(1)
+	c_torch = torch.rand(1).item()
+	assert a_torch != c_torch
+
+
+def test_gc_content_basic():
+	# Build a tensor where the first sequence is all-A (GC=0), the second
+	# all-G (GC=1), the third half C / half T (GC=0.5).
+	X = torch.zeros(3, 4, 4, dtype=torch.float32)
+	X[0, 0, :] = 1  # AAAA
+	X[1, 2, :] = 1  # GGGG
+	X[2, 1, :2] = 1  # CC..
+	X[2, 3, 2:] = 1  # ..TT
+
+	gc = gc_content(X)
+	assert gc.shape == (3,)
+	assert float(gc[0]) == 0.0
+	assert float(gc[1]) == 1.0
+	assert float(gc[2]) == 0.5
+
+
+def test_gc_content_all_N_is_zero():
+	X = torch.zeros(1, 4, 5, dtype=torch.float32)
+	gc = gc_content(X)
+	assert float(gc[0]) == 0.0
+
+
+def test_entropy_uniform_is_log2_4():
+	# A perfectly uniform PWM has entropy = log2(4) = 2 bits per position.
+	X = torch.full((1, 4, 3), 0.25)
+	H = entropy(X)
+	assert H.shape == (1, 3)
+	assert_array_almost_equal(H, [[2.0, 2.0, 2.0]], 4)
+
+
+def test_entropy_one_hot_is_zero():
+	X = torch.zeros(1, 4, 3)
+	X[0, 0, 0] = 1.0
+	X[0, 1, 1] = 1.0
+	X[0, 2, 2] = 1.0
+	H = entropy(X)
+	assert_array_almost_equal(H, [[0.0, 0.0, 0.0]], 4)
+
+
+def test_entropy_all_N_column_is_zero():
+	X = torch.zeros(1, 4, 1)
+	H = entropy(X)
+	assert float(H[0, 0]) == 0.0
+
+
+def test_information_content_complementary_to_entropy():
+	X = torch.full((1, 4, 3), 0.25)
+	IC = information_content(X)
+	assert_array_almost_equal(IC, [[0.0, 0.0, 0.0]], 4)
+
+	X = torch.zeros(1, 4, 3)
+	X[0, 0, :] = 1.0
+	IC = information_content(X)
+	assert_array_almost_equal(IC, [[2.0, 2.0, 2.0]], 4)
+
+
+def test_information_content_all_N_is_zero():
+	X = torch.zeros(1, 4, 1)
+	IC = information_content(X)
+	assert float(IC[0, 0]) == 0.0

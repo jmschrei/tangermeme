@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import random
 import warnings
 from typing import Any
 
@@ -856,3 +857,148 @@ def extract_signal(
 		Y[i] = X[idx, :, start:end].sum(dim=-1)
 
 	return Y
+
+
+def set_seed(seed: int) -> None:
+	"""Seed every RNG that tangermeme code paths might touch.
+
+	Calls `random.seed`, `numpy.random.seed`, `torch.manual_seed`, and
+	`torch.cuda.manual_seed_all`. This is a convenience for the common
+	case where a notebook or script wants "one seed for everything";
+	functions that accept a `random_state=` keyword still take precedence
+	when one is provided.
+
+	Parameters
+	----------
+	seed: int
+		The seed to use for all RNGs.
+	"""
+
+	random.seed(seed)
+	numpy.random.seed(seed)
+	torch.manual_seed(seed)
+	if torch.cuda.is_available():
+		torch.cuda.manual_seed_all(seed)
+
+
+def gc_content(
+	X: torch.Tensor,
+	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
+) -> torch.Tensor:
+	"""Compute the GC content of one-hot encoded sequences.
+
+	The GC content is the fraction of positions whose character is either
+	G or C. Positions that are all-N (sum == 0 along the alphabet axis)
+	are excluded from both numerator and denominator. If a sequence has
+	zero non-N positions its GC content is reported as 0.
+
+	Parameters
+	----------
+	X: torch.Tensor, shape=(-1, len(alphabet), length)
+		A one-hot encoded set of sequences.
+
+	alphabet: list[str] or tuple[str, ...], optional
+		The alphabet whose ordering matches `X`'s second axis. Used only
+		to locate G and C; the rest of the alphabet is ignored. Default
+		is ['A', 'C', 'G', 'T'].
+
+
+	Returns
+	-------
+	gc: torch.Tensor, shape=(-1,)
+		The GC content of each sequence, as a float in [0, 1].
+	"""
+
+	_validate_input(X, "X", shape=(-1, len(alphabet), -1), ohe=True, allow_N=True)
+
+	gc_idxs = [i for i, c in enumerate(alphabet) if c in ('G', 'C')]
+	if len(gc_idxs) == 0:
+		raise ValueError("Alphabet {} does not contain G or C; gc_content "
+			"is only defined for alphabets containing both.".format(alphabet))
+
+	X_float = X.float()
+	non_n = X_float.sum(dim=1)  # (-1, length)
+	gc = X_float[:, gc_idxs].sum(dim=(1, 2))
+	total = non_n.sum(dim=-1)
+	return torch.where(total > 0, gc / total.clamp(min=1), torch.zeros_like(gc))
+
+
+def entropy(
+	X: torch.Tensor,
+	eps: float = 1e-9,
+) -> torch.Tensor:
+	"""Compute the Shannon entropy (in bits) at each position.
+
+	Each position is treated as a probability distribution over the
+	alphabet axis. `X` may already be a PWM (probabilities) or a one-hot
+	encoding; columns are renormalized to sum to 1 before the entropy
+	is computed. Columns whose values sum to 0 contribute zero entropy.
+
+	Parameters
+	----------
+	X: torch.Tensor, shape=(-1, alphabet, length)
+		The input PWM or one-hot encoding.
+
+	eps: float, optional
+		A small constant added under the log to avoid log(0). Default
+		is 1e-9.
+
+
+	Returns
+	-------
+	H: torch.Tensor, shape=(-1, length)
+		The per-position entropy in bits.
+	"""
+
+	X_float = X.float()
+	col_sum = X_float.sum(dim=1, keepdim=True)
+	probs = X_float / col_sum.clamp(min=eps)
+	zero_col = (col_sum.squeeze(1) == 0)
+
+	H = -(probs * torch.log2(probs + eps)).sum(dim=1)
+	H[zero_col] = 0.0
+	return H
+
+
+def information_content(
+	X: torch.Tensor,
+	alphabet_size: int | None = None,
+	eps: float = 1e-9,
+) -> torch.Tensor:
+	"""Compute per-position information content (in bits).
+
+	Information content is `log2(alphabet_size) - entropy`. Columns
+	that sum to zero are reported as 0 (rather than the maximum,
+	`log2(alphabet_size)`) so all-N positions do not appear informative.
+
+	Parameters
+	----------
+	X: torch.Tensor, shape=(-1, alphabet, length)
+		The input PWM or one-hot encoding.
+
+	alphabet_size: int or None, optional
+		The size of the alphabet to use when computing the maximum
+		entropy. If None, use `X.shape[1]`. Default is None.
+
+	eps: float, optional
+		A small constant for numerical stability in the entropy
+		computation. Default is 1e-9.
+
+
+	Returns
+	-------
+	IC: torch.Tensor, shape=(-1, length)
+		The per-position information content in bits.
+	"""
+
+	if alphabet_size is None:
+		alphabet_size = X.shape[1]
+
+	X_float = X.float()
+	col_sum = X_float.sum(dim=1, keepdim=True)
+	zero_col = (col_sum.squeeze(1) == 0)
+
+	max_h = float(numpy.log2(alphabet_size))
+	IC = max_h - entropy(X_float, eps=eps)
+	IC[zero_col] = 0.0
+	return IC
