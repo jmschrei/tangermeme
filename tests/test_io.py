@@ -14,6 +14,10 @@ from tangermeme.io import _extract_locus_signal
 
 from tangermeme.io import read_meme
 from tangermeme.io import extract_loci
+from tangermeme.io import read_vcf
+from tangermeme.io import one_hot_to_fasta
+
+from tangermeme.utils import one_hot_encode
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -932,6 +936,86 @@ def test_read_meme_n_motifs():
 	assert all(isinstance(pwm, torch.Tensor) for pwm in motifs.values())
 
 	assert all([key in motifs.keys() for key in keys])
+
+
+def test_read_meme_file_not_found():
+	assert_raises(FileNotFoundError, read_meme,
+		"tests/data/this_file_does_not_exist.meme")
+
+
+###
+
+
+def test_read_vcf_basic():
+	vcf = read_vcf("tests/data/test.vcf")
+
+	assert isinstance(vcf, pandas.DataFrame)
+	assert list(vcf.columns) == ["CHROM", "POS", "ID", "REF", "ALT", "QUAL",
+		"FILTER", "INFO", "FORMAT"]
+	assert len(vcf) > 0
+
+
+def test_read_vcf_drops_sample_columns():
+	vcf = read_vcf("tests/data/test.vcf")
+
+	assert vcf.shape[1] == 9
+	assert "NA00001" not in vcf.columns
+	assert "NA00002" not in vcf.columns
+
+
+###
+
+
+def test_one_hot_to_fasta_basic(tmp_path):
+	X = torch.stack([
+		one_hot_encode('ACGT' * 25),
+		one_hot_encode('GCGC' * 25),
+	])
+
+	path = tmp_path / "out.fa"
+	one_hot_to_fasta(X, str(path))
+
+	contents = path.read_text()
+	assert "ACGT" in contents
+	assert "GCGC" in contents
+	# default headers are sequence indices
+	assert "0" in contents
+	assert "1" in contents
+
+
+def test_one_hot_to_fasta_headers(tmp_path):
+	X = torch.stack([
+		one_hot_encode('A' * 100),
+		one_hot_encode('C' * 100),
+	])
+
+	path = tmp_path / "out.fa"
+	one_hot_to_fasta(X, str(path), headers=["seq_a", "seq_c"])
+
+	contents = path.read_text()
+	assert "seq_a" in contents
+	assert "seq_c" in contents
+
+
+def test_one_hot_to_fasta_headers_length_mismatch(tmp_path):
+	X = torch.stack([
+		one_hot_encode('A' * 10),
+		one_hot_encode('C' * 10),
+	])
+
+	path = tmp_path / "out.fa"
+	assert_raises(IndexError, one_hot_to_fasta, X, str(path), headers=["only_one"])
+
+
+###
+
+
+def test_interleave_loci_empty_dataframe():
+	df = pandas.DataFrame({'chrom': [], 'start': [], 'end': []})
+	result = _interleave_loci(df)
+
+	assert len(result) == 0
+	assert list(result.columns) == ['chrom', 'start', 'end']
 
 
 

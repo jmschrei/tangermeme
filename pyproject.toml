@@ -96,4 +96,5 @@ testpaths = ["tests"]
 addopts = "-m 'not cmd'"
 markers = [
     "cmd: tests that invoke command-line entry points",
+    "gpu: tests that run on GPU (auto-skipped when CUDA is unavailable)",
 ]

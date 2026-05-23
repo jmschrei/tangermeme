@@ -19,6 +19,7 @@ from tangermeme.ersatz import dinucleotide_shuffle
 from tangermeme.deep_lift_shap import hypothetical_attributions
 from tangermeme.deep_lift_shap import deep_lift_shap
 from tangermeme.deep_lift_shap import _captum_deep_lift_shap
+from tangermeme.deep_lift_shap import _nonlinear
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense
@@ -27,6 +28,15 @@ from .toy_models import Scatter
 from .toy_models import ConvDense
 from .toy_models import ConvPoolDense
 from .toy_models import SmallDeepSEA
+from .toy_models import ResidualConv
+from .toy_models import Conv2DExpand
+from .toy_models import CustomLinear
+from .toy_models import CustomSqrt
+from .toy_models import CustomSqrtModule
+from .toy_models import DilatedConv
+from .toy_models import MultiActivation
+from .toy_models import DropoutConv
+from .toy_models import MultiInputMultiOutput
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -194,13 +204,13 @@ class LambdaWrapper(torch.nn.Module):
 		return self._forward(self.model, X, *args)
 
 
-def test_deep_lift_shap(X):
+def test_deep_lift_shap(X, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 
-	X_attr1 = deep_lift_shap(model, X[:4], device='cpu', n_shuffles=3, 
+	X_attr1 = deep_lift_shap(model, X[:4], device=device, n_shuffles=3, 
 		random_state=0, batch_size=1)
-	X_attr2 = deep_lift_shap(model, X[:4], device='cpu', n_shuffles=3, 
+	X_attr2 = deep_lift_shap(model, X[:4], device=device, n_shuffles=3, 
 		random_state=0, batch_size=4)
 
 	assert X_attr1.shape == X[:4].shape
@@ -229,25 +239,28 @@ def test_deep_lift_shap(X):
          [-0.0000, -0.0000, -0.0003,  0.0000, -0.0000]]], 4)
 
 
-def test_deep_lift_shap_convergence(X):
+def test_deep_lift_shap_convergence(X, device):
+	# fp32 attribution residuals on CUDA are a few orders of magnitude larger
+	# than on CPU, so the convergence threshold is loosened for the cuda pass.
+	threshold = 1e-7 if device == "cpu" else 1e-4
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
 
-		deep_lift_shap(model, X[:4], device='cpu', n_shuffles=3, random_state=0,
-			warning_threshold=1e-7)
+		deep_lift_shap(model, X[:4], device=device, n_shuffles=3, random_state=0,
+			warning_threshold=threshold)
 
-		assert_raises(RuntimeWarning, deep_lift_shap, model, X[:4], 
-			device='cpu', n_shuffles=3, random_state=0, warning_threshold=1e-10)
+		assert_raises(RuntimeWarning, deep_lift_shap, model, X[:4],
+			device=device, n_shuffles=3, random_state=0, warning_threshold=1e-10)
 
 
-def test_deep_lift_shap_hypothetical(X):
+def test_deep_lift_shap_hypothetical(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
-	X_attr = deep_lift_shap(model, X, hypothetical=True, device='cpu', 
+	X_attr = deep_lift_shap(model, X, hypothetical=True, device=device, 
 		random_state=0)
 
 	assert X_attr.shape == X.shape
@@ -273,15 +286,15 @@ def test_deep_lift_shap_hypothetical(X):
           -0.0032,  0.0031, -0.0088]]], 4)
 
 
-def test_deep_lift_shap_independence(X):
+def test_deep_lift_shap_independence(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
-	X_attr = deep_lift_shap(model, X, device='cpu', random_state=0)
-	X_attr0 = deep_lift_shap(model, X[0:1], device='cpu', random_state=0)
-	X_attr1 = deep_lift_shap(model, X[5:6], device='cpu', random_state=0)
-	X_attr2 = deep_lift_shap(model, X[8:10], device='cpu', random_state=0)
-	X_attr3 = deep_lift_shap(model, X[0:10], device='cpu', random_state=0)
+	X_attr = deep_lift_shap(model, X, device=device, random_state=0)
+	X_attr0 = deep_lift_shap(model, X[0:1], device=device, random_state=0)
+	X_attr1 = deep_lift_shap(model, X[5:6], device=device, random_state=0)
+	X_attr2 = deep_lift_shap(model, X[8:10], device=device, random_state=0)
+	X_attr3 = deep_lift_shap(model, X[0:10], device=device, random_state=0)
 
 	assert_array_almost_equal(X_attr[0:1], X_attr0)
 	assert_array_almost_equal(X_attr[5:6], X_attr1)
@@ -293,30 +306,30 @@ def test_deep_lift_shap_independence(X):
 		X_attr3[:2])
 
 
-def test_deep_lift_shap_random_state(X):
+def test_deep_lift_shap_random_state(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
-	X_attr0 = deep_lift_shap(model, X, device='cpu', random_state=0)
-	X_attr1 = deep_lift_shap(model, X[0:10], device='cpu', random_state=1)
-	X_attr2 = deep_lift_shap(model, X[0:10], device='cpu', random_state=2)
+	X_attr0 = deep_lift_shap(model, X, device=device, random_state=0)
+	X_attr1 = deep_lift_shap(model, X[0:10], device=device, random_state=1)
+	X_attr2 = deep_lift_shap(model, X[0:10], device=device, random_state=2)
 
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr1)
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr2)
 
 
-def test_deep_lift_shap_reference_tensor(X):
+def test_deep_lift_shap_reference_tensor(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	references = shuffle(X, n=20, random_state=0)
 
-	X_attr0 = deep_lift_shap(model, X, references=references, device='cpu', 
+	X_attr0 = deep_lift_shap(model, X, references=references, device=device, 
 		random_state=0)
 	X_attr1 = deep_lift_shap(model, X[0:10], references=references[:10], 
-		device='cpu', random_state=1)
+		device=device, random_state=1)
 	X_attr2 = deep_lift_shap(model, X[0:10], references=references[:10], 
-		device='cpu', random_state=2)
+		device=device, random_state=2)
 
 	assert_array_almost_equal(X_attr0[:10], X_attr1)
 	assert_array_almost_equal(X_attr0[:10], X_attr2)
@@ -340,16 +353,16 @@ def test_deep_lift_shap_reference_tensor(X):
           -0.0055,  0.0078, -0.0000]]], 4)
 
 
-def test_deep_lift_shap_batch_size(X):
+def test_deep_lift_shap_batch_size(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
-	X_attr0 = deep_lift_shap(model, X, device='cpu', random_state=0)
-	X_attr1 = deep_lift_shap(model, X, batch_size=1, device='cpu', 
+	X_attr0 = deep_lift_shap(model, X, device=device, random_state=0)
+	X_attr1 = deep_lift_shap(model, X, batch_size=1, device=device, 
 		random_state=0)
-	X_attr2 = deep_lift_shap(model, X, batch_size=100000, device='cpu', 
+	X_attr2 = deep_lift_shap(model, X, batch_size=100000, device=device, 
 		random_state=0)
-	X_attr3 = deep_lift_shap(model, X, batch_size=20, device='cpu', 
+	X_attr3 = deep_lift_shap(model, X, batch_size=20, device=device, 
 		random_state=0)
 
 	assert_array_almost_equal(X_attr0, X_attr1)
@@ -357,39 +370,39 @@ def test_deep_lift_shap_batch_size(X):
 	assert_array_almost_equal(X_attr0, X_attr3)
 
 
-def test_deep_lift_shap_n_shuffles(X):
+def test_deep_lift_shap_n_shuffles(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
-	X_attr0 = deep_lift_shap(model, X, n_shuffles=1, device='cpu', 
+	X_attr0 = deep_lift_shap(model, X, n_shuffles=1, device=device, 
 		random_state=0)
-	X_attr1 = deep_lift_shap(model, X, n_shuffles=1, batch_size=1, device='cpu', 
+	X_attr1 = deep_lift_shap(model, X, n_shuffles=1, batch_size=1, device=device, 
 		random_state=0)
 	X_attr2 = deep_lift_shap(model, X, n_shuffles=30, batch_size=100000, 
-		device='cpu', random_state=2)
+		device=device, random_state=2)
 	X_attr3 = deep_lift_shap(model, X, n_shuffles=30, batch_size=1, 
-		device='cpu', random_state=2)
+		device=device, random_state=2)
 
 	assert_array_almost_equal(X_attr0, X_attr1)
 	assert_array_almost_equal(X_attr2, X_attr3)
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr3)
 
 
-def test_deep_lift_shap_input_type(X):
+def test_deep_lift_shap_input_type(X, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA(n_outputs=1)
 
-	X_attr0 = deep_lift_shap(model, X, device='cpu', 
+	X_attr0 = deep_lift_shap(model, X, device=device, 
 		n_shuffles=5, random_state=0)
-	X_attr1 = deep_lift_shap(model, X.type(torch.int8), device='cpu', 
+	X_attr1 = deep_lift_shap(model, X.type(torch.int8), device=device, 
 		n_shuffles=5, random_state=0)
-	X_attr2 = deep_lift_shap(model, X.type(torch.int16), device='cpu',
+	X_attr2 = deep_lift_shap(model, X.type(torch.int16), device=device,
 		n_shuffles=5, random_state=0)
-	X_attr3 = deep_lift_shap(model, X.type(torch.float16), device='cpu',
+	X_attr3 = deep_lift_shap(model, X.type(torch.float16), device=device,
 		n_shuffles=5, random_state=0)
-	X_attr4 = deep_lift_shap(model, X.type(torch.bfloat16), device='cpu',
+	X_attr4 = deep_lift_shap(model, X.type(torch.bfloat16), device=device,
 		n_shuffles=5, random_state=0)
-	X_attr5 = deep_lift_shap(model, X.type(torch.int32), device='cpu',
+	X_attr5 = deep_lift_shap(model, X.type(torch.int32), device=device,
 		n_shuffles=5, random_state=0)
 
 	assert_array_almost_equal(X_attr0, X_attr1)
@@ -399,26 +412,26 @@ def test_deep_lift_shap_input_type(X):
 	assert_array_almost_equal(X_attr0, X_attr5)
 	
 
-def test_deep_lift_shap_shuffle_ordering(X):
+def test_deep_lift_shap_shuffle_ordering(X, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	X = X[:1]
 
 	references = dinucleotide_shuffle(X, n=1, random_state=0)
 
-	X_attr0 = deep_lift_shap(model, X, n_shuffles=1, device='cpu', random_state=0)
-	X_attr1 = deep_lift_shap(model, X, device='cpu', references=references)
+	X_attr0 = deep_lift_shap(model, X, n_shuffles=1, device=device, random_state=0)
+	X_attr1 = deep_lift_shap(model, X, device=device, references=references)
 
 	assert_array_almost_equal(X_attr0, X_attr1)
 
 
-def test_deep_lift_shap_raw_output(X):
+def test_deep_lift_shap_raw_output(X, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 
-	X_attr0, refs = deep_lift_shap(model, X, device='cpu', raw_outputs=True, 
+	X_attr0, refs = deep_lift_shap(model, X, device=device, raw_outputs=True, 
 		random_state=0, return_references=True)
-	X_attr1 = deep_lift_shap(model, X, device='cpu', random_state=0)
+	X_attr1 = deep_lift_shap(model, X, device=device, random_state=0)
 
 	assert X_attr0.shape == (16, 20, 4, 100)
 	assert X_attr1.shape == (16, 4, 100)
@@ -474,12 +487,12 @@ def test_deep_lift_shap_raw_output(X):
 	assert_array_almost_equal(X_attr2, X_attr1, 4)
 
 
-def test_deep_lift_shap_return_references(X):
+def test_deep_lift_shap_return_references(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	attr, refs = deep_lift_shap(model, X, n_shuffles=1, return_references=True,
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 
 	assert attr.shape == X.shape
 	assert refs.shape == (16, 1, 4, 100)
@@ -512,21 +525,21 @@ def test_deep_lift_shap_return_references(X):
 
 
 	_, refs2 = deep_lift_shap(model, X, n_shuffles=3, return_references=True,
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 
 	assert_array_almost_equal(refs, refs2[:, 0:1])
 
 
-def test_deep_lift_shap_args(X):
+def test_deep_lift_shap_args(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 	alpha = torch.randn(16, 1)
 	beta = torch.randn(16, 1)
 
-	X_attr0 = deep_lift_shap(model, X, device='cpu', random_state=0)
-	X_attr1 = deep_lift_shap(model, X, args=(alpha,), device='cpu', 
+	X_attr0 = deep_lift_shap(model, X, device=device, random_state=0)
+	X_attr1 = deep_lift_shap(model, X, args=(alpha,), device=device, 
 		random_state=0)
-	X_attr2 = deep_lift_shap(model, X, args=(alpha, beta), device='cpu', 
+	X_attr2 = deep_lift_shap(model, X, args=(alpha, beta), device=device, 
 		random_state=0)
 
 	assert X.shape == X_attr0.shape
@@ -556,50 +569,50 @@ def test_deep_lift_shap_args(X):
            0.0034, -0.0033,  0.0000]]], 4)
 
 
-def test_deep_lift_shap_raises(X, references):
+def test_deep_lift_shap_raises(X, references, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 	alpha = torch.randn(16, 1)
 	beta = torch.randn(16, 1)
 
-	assert_raises(ValueError, deep_lift_shap, model, X[0], device='cpu')
+	assert_raises(ValueError, deep_lift_shap, model, X[0], device=device)
 	assert_raises(ValueError, deep_lift_shap, model, X.unsqueeze(1), 
-		device='cpu')
+		device=device)
 	assert_raises(RuntimeError, deep_lift_shap, model, X, n_shuffles=0, 
-		device='cpu')
-	assert_raises(ValueError, deep_lift_shap, model, X[0], device='cpu')
+		device=device)
+	assert_raises(ValueError, deep_lift_shap, model, X[0], device=device)
 
 	assert_raises(IndexError, deep_lift_shap, model, X, args=(alpha[:10],),
-		device='cpu')
+		device=device)
 	assert_raises(IndexError, deep_lift_shap, model, X, args=(alpha, beta[:3]),
-		device='cpu')
+		device=device)
 	assert_raises(IndexError, deep_lift_shap, model, X, args=(alpha[:5], 
-		beta[:3]), device='cpu')
+		beta[:3]), device=device)
 	assert_raises(IndexError, deep_lift_shap, model, X, args=(alpha, beta[:3]),
-		device='cpu')
+		device=device)
 	
 	assert_raises(ValueError, deep_lift_shap, model, X, 
-		references=references[:10], device='cpu')
+		references=references[:10], device=device)
 	assert_raises(ValueError, deep_lift_shap, model, X, 
-		references=references[:, :, :2], device='cpu')
+		references=references[:, :, :2], device=device)
 	assert_raises(ValueError, deep_lift_shap, model, X, 
-		references=references[:, :, :, :10], device='cpu')
+		references=references[:, :, :, :10], device=device)
 
 
 ### Test a bunch of different models with different configurations/operations
 
 
-def test_deep_lift_shap_flattendense(X):
+def test_deep_lift_shap_flattendense(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
 
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
-		assert_raises(RuntimeWarning, deep_lift_shap, model, X, device='cpu', 
+		assert_raises(RuntimeWarning, deep_lift_shap, model, X, device=device, 
 			random_state=0, warning_threshold=1e-10)
 
 	assert X_attr.shape == X.shape
@@ -625,17 +638,17 @@ def test_deep_lift_shap_flattendense(X):
           -0.0032,  0.0031, -0.0000]]], 4)
 
 
-def test_deep_lift_shap_convdense_dense_wrapper(X):
+def test_deep_lift_shap_convdense_dense_wrapper(X, device):
 	torch.manual_seed(0)
 	model = LambdaWrapper(ConvDense(n_outputs=1), lambda model, X: model(X)[1])
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
 
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
-		assert_raises(RuntimeWarning, deep_lift_shap, model, X, device='cpu', 
+		assert_raises(RuntimeWarning, deep_lift_shap, model, X, device=device, 
 			random_state=0, warning_threshold=1e-8)
 
 	assert X_attr.shape == X.shape
@@ -661,7 +674,7 @@ def test_deep_lift_shap_convdense_dense_wrapper(X):
           -0.0032,  0.0031, -0.0000]]], 4)
 
 
-def test_deep_lift_shap_convdense_conv_wrapper(X):
+def test_deep_lift_shap_convdense_conv_wrapper(X, device):
 	torch.manual_seed(0)
 	model = LambdaWrapper(ConvDense(n_outputs=1), 
 		lambda model, X: model(X)[0].sum(dim=(-1, -2)).unsqueeze(-1))
@@ -669,10 +682,10 @@ def test_deep_lift_shap_convdense_conv_wrapper(X):
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
 
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0, 
 			warning_threshold=1e-4)
 
-		assert_raises(RuntimeWarning, deep_lift_shap, model, X, device='cpu', 
+		assert_raises(RuntimeWarning, deep_lift_shap, model, X, device=device, 
 			random_state=0, warning_threshold=1e-8)
 
 	assert X_attr.shape == X.shape
@@ -712,7 +725,7 @@ class TorchSum(torch.nn.Module):
 			return torch.sum(X, dim=(-1, -2)).unsqueeze(-1)
 
 
-def test_deep_lift_shap_linear(X):
+def test_deep_lift_shap_linear(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -724,11 +737,24 @@ def test_deep_lift_shap_linear(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000, -0.0562,  0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000,  0.0970,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0124, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000, -0.0000,  0.0000,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0495, -0.0000, -0.0000, -0.0207, -0.0280, -0.0184,  0.0326,  0.0000,  0.0357]],
 
-def test_deep_lift_shap_linear_bias(X):
+		[[-0.0000,  0.0000,  0.0177, -0.0000,  0.0027,  0.0000,  0.0168,  0.0000, -0.0000, -0.0092],
+		 [ 0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0136, -0.0000,  0.0000, -0.0000,  0.0353, -0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0122,  0.0000, -0.0000, -0.0000,  0.0083, -0.0053,  0.0000]]], 4)
+
+
+def test_deep_lift_shap_linear_bias(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -740,11 +766,24 @@ def test_deep_lift_shap_linear_bias(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000, -0.0505,  0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000,  0.0934,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0117, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000, -0.0000,  0.0000,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0477, -0.0000, -0.0000, -0.0212, -0.0250, -0.0182,  0.0317,  0.0000,  0.0349]],
 
-def test_deep_lift_shap_conv(X):
+		[[-0.0000,  0.0000,  0.0136, -0.0000,  0.0016,  0.0000,  0.0150,  0.0000, -0.0000, -0.0073],
+		 [ 0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0130, -0.0000,  0.0000, -0.0000,  0.0285, -0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0104,  0.0000, -0.0000, -0.0000,  0.0070, -0.0041,  0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -755,11 +794,24 @@ def test_deep_lift_shap_conv(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.9025, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.1260, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0379, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.6341, -0.0000, -0.0000, -0.0966, -0.1356, -0.1817, -0.1439, -0.0000, -0.3838]],
 
-def test_deep_lift_shap_conv_dilated(X):
+		[[ 0.0000,  0.0000,  0.4590,  0.0000,  0.6733, -0.0000,  0.5197, -0.0000, -0.0000,  0.3142],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.3457, -0.0000, -0.0000, -0.0000,  0.0731, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.2266, -0.0000, -0.0000, -0.0000, -0.3457, -0.1228, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv_dilated(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -770,11 +822,24 @@ def test_deep_lift_shap_conv_dilated(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.5778,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000],
+		 [-0.0000, -0.0000,  0.0112, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1658, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.1592, -0.0000, -0.0000,  0.0564, -0.2365, -0.1947, -0.2984, -0.0000,  0.0283]],
 
-def test_deep_lift_shap_conv_stride(X):
+		[[ 0.0000,  0.0000,  0.3452,  0.0000,  0.3758,  0.0000,  0.7259,  0.0000,  0.0000,  0.6784],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.2153, -0.0000, -0.0000, -0.0000, -0.0166, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.1370, -0.0000, -0.0000, -0.0000, -0.0588, -0.0551, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv_stride(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -785,11 +850,24 @@ def test_deep_lift_shap_conv_stride(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.0998, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.2351, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0290, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.2509, -0.0000,  0.0000, -0.0655, -0.1500, -0.0718, -0.0009, -0.0000, -0.0680]],
 
-def test_deep_lift_shap_conv_bias(X):
+		[[ 0.0000,  0.0000,  0.0049, -0.0000, -0.0378,  0.0000,  0.1322, -0.0000, -0.0000, -0.1232],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0254, -0.0000,  0.0000, -0.0000, -0.0873,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000,  0.0000, -0.1044,  0.0000, -0.0000, -0.0000,  0.0755, -0.0991, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv_bias(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -800,11 +878,27 @@ def test_deep_lift_shap_conv_bias(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-4)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.8116, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.1397, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0176, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.5924, -0.0000, -0.0000, -0.1294, -0.2071, -0.2220, -0.2076, -0.0000, -0.4544]],
 
-def test_deep_lift_shap_conv_padding(X):
+		[[ 0.0000,  0.0000,  0.4262,  0.0000,  0.5746, -0.0000,  0.3762, -0.0000, -0.0000,  0.3317],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.3874, -0.0000, -0.0000, -0.0000,  0.2103, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.3004, -0.0000, -0.0000, -0.0000, -0.4046, -0.2499, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv_padding(X, device):
+	# fp32 attribution residuals on CUDA are a few orders of magnitude larger
+	# than on CPU, so the convergence threshold is loosened for the cuda pass.
+	threshold = 1e-4 if device == "cpu" else 1e-2
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -815,11 +909,24 @@ def test_deep_lift_shap_conv_padding(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
-			warning_threshold=1e-4)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=threshold)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000,  0.0000,  0.7698, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.3090, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0379, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.4021, -0.0000, -0.0000, -0.0966, -0.1356, -0.1817, -0.1439, -0.0000, -0.3838]],
+
+		[[-0.0000,  0.0000,  0.3432,  0.0000,  0.6733, -0.0000,  0.5197, -0.0000, -0.0000,  0.3142],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.2294, -0.0000, -0.0000, -0.0000,  0.0731, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.2165, -0.0000, -0.0000, -0.0000, -0.3457, -0.1228, -0.0000]]], 4)
 
 
-def test_deep_lift_shap_conv_padding_same(X):
+def test_deep_lift_shap_conv_padding_same(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -831,11 +938,24 @@ def test_deep_lift_shap_conv_padding_same(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000, -0.0000,  0.0002, -0.0000, -0.0000,  0.0000, -0.0000, -0.0000,  0.0000],
+		 [-0.0000, -0.0000,  0.0012, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000, -0.0006, -0.0000],
+		 [ 0.0000, -0.0000,  0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000,  0.0000,  0.0000],
+		 [ 0.0000,  0.0130,  0.0000,  0.0000, -0.0099, -0.0026, -0.0080,  0.0025,  0.0000, -0.0021]],
 
-def test_deep_lift_shap_max_pool(X):
+		[[-0.0000,  0.0000, -0.0049, -0.0000, -0.0027,  0.0000,  0.0167,  0.0000, -0.0000,  0.0043],
+		 [ 0.0000, -0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000,  0.0000, -0.0000, -0.0000],
+		 [ 0.0000, -0.0031, -0.0000,  0.0000,  0.0000, -0.0019, -0.0000,  0.0000,  0.0000,  0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0123, -0.0000, -0.0000, -0.0000, -0.0069, -0.0056, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_max_pool(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -845,11 +965,24 @@ def test_deep_lift_shap_max_pool(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000,  0.2000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000,  0.2000, -0.0000],
+		 [ 0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0500, -0.0000,  0.0000, -0.5500, -0.7000, -0.4500, -0.1000, -0.0000,  0.1000]],
 
-def test_deep_lift_shap_conv_relu_pool(X):
+		[[-0.0000, -0.0000,  0.3000, -0.0000,  0.3000, -0.0000, -0.2000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000,  0.2000, -0.0000, -0.0000, -0.0000, -0.0500, -0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.5500, -0.0000, -0.0000, -0.0000,  0.1500, -0.3500, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv_relu_pool(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -861,11 +994,24 @@ def test_deep_lift_shap_conv_relu_pool(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.1021, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0643, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1375, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0408, -0.0000, -0.0000, -0.1820, -0.1912, -0.1507, -0.2448, -0.0000, -0.1143]],
 
-def test_deep_lift_shap_conv_tanh_pool(X):
+		[[ 0.0000,  0.0000,  0.0591,  0.0000,  0.3041, -0.0000,  0.0826, -0.0000, -0.0000,  0.0267],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0806, -0.0000, -0.0000, -0.0000,  0.0403, -0.0000,  0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0013, -0.0000, -0.0000, -0.0000, -0.1534, -0.2105, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv_tanh_pool(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -877,11 +1023,24 @@ def test_deep_lift_shap_conv_tanh_pool(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000, -0.0000,  0.1069, -0.0000, -0.0000,  0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0354, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.2147, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0738, -0.0000, -0.0000, -0.3306, -0.4012, -0.2828, -0.4270, -0.0000, -0.1415]],
 
-def test_deep_lift_shap_conv_elu_pool(X):
+		[[ 0.0000,  0.0000,  0.0031, -0.0000,  0.2630, -0.0000,  0.0245, -0.0000, -0.0000, -0.0002],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0908, -0.0000, -0.0000, -0.0000,  0.1219, -0.0000,  0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0304, -0.0000, -0.0000, -0.0000, -0.1598, -0.2506, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv_elu_pool(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -893,11 +1052,24 @@ def test_deep_lift_shap_conv_elu_pool(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000,  0.0000,  0.1168, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0512, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.2202, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0742, -0.0000, -0.0000, -0.3211, -0.3888, -0.2736, -0.4213, -0.0000, -0.1462]],
 
-def test_deep_lift_shap_conv_relu_pool_relu(X):
+		[[ 0.0000,  0.0000,  0.0247, -0.0000,  0.2891, -0.0000,  0.0166, -0.0000, -0.0000, -0.0036],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0936, -0.0000, -0.0000, -0.0000,  0.1040, -0.0000,  0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0296, -0.0000, -0.0000, -0.0000, -0.1684, -0.2534, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv_relu_pool_relu(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -910,11 +1082,24 @@ def test_deep_lift_shap_conv_relu_pool_relu(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.1021, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0643, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1375, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0408, -0.0000, -0.0000, -0.1820, -0.1912, -0.1507, -0.2448, -0.0000, -0.1143]],
 
-def test_deep_lift_shap_relu_conv_relu_pool_relu(X):
+		[[ 0.0000,  0.0000,  0.0591,  0.0000,  0.3041, -0.0000,  0.0826, -0.0000, -0.0000,  0.0267],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0806, -0.0000, -0.0000, -0.0000,  0.0403, -0.0000,  0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0013, -0.0000, -0.0000, -0.0000, -0.1534, -0.2105, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_relu_conv_relu_pool_relu(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -928,11 +1113,24 @@ def test_deep_lift_shap_relu_conv_relu_pool_relu(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000,  0.0000,  0.1021, -0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0643, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1375, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0408, -0.0000, -0.0000, -0.1820, -0.1912, -0.1507, -0.2448, -0.0000, -0.1143]],
 
-def test_deep_lift_shap_relu_conv_pool_relu(X):
+		[[-0.0000,  0.0000,  0.0591, -0.0000,  0.3041, -0.0000,  0.0826, -0.0000, -0.0000,  0.0267],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0806, -0.0000, -0.0000, -0.0000,  0.0403,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0013, -0.0000, -0.0000, -0.0000, -0.1534, -0.2105, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_relu_conv_pool_relu(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -945,11 +1143,24 @@ def test_deep_lift_shap_relu_conv_pool_relu(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000,  0.0000,  0.1021, -0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0643, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1375, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0408, -0.0000, -0.0000, -0.1820, -0.1912, -0.1507, -0.2448, -0.0000, -0.1143]],
 
-def test_deep_lift_shap_relu_conv_pool_relu_relu(X):
+		[[-0.0000,  0.0000,  0.0591, -0.0000,  0.3041, -0.0000,  0.0826, -0.0000, -0.0000,  0.0267],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0806, -0.0000, -0.0000, -0.0000,  0.0403,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0013, -0.0000, -0.0000, -0.0000, -0.1534, -0.2105, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_relu_conv_pool_relu_relu(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -963,11 +1174,24 @@ def test_deep_lift_shap_relu_conv_pool_relu_relu(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000,  0.0000,  0.1021, -0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0643, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1375, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0408, -0.0000, -0.0000, -0.1820, -0.1912, -0.1507, -0.2448, -0.0000, -0.1143]],
 
-def test_deep_lift_shap_conv_relu_tanh_pool(X):
+		[[-0.0000,  0.0000,  0.0591, -0.0000,  0.3041, -0.0000,  0.0826, -0.0000, -0.0000,  0.0267],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0806, -0.0000, -0.0000, -0.0000,  0.0403,  0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0013, -0.0000, -0.0000, -0.0000, -0.1534, -0.2105, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv_relu_tanh_pool(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -980,11 +1204,24 @@ def test_deep_lift_shap_conv_relu_tanh_pool(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.0922, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0539, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.1299, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0344, -0.0000, -0.0000, -0.1765, -0.1837, -0.1488, -0.2312, -0.0000, -0.1048]],
 
-def test_deep_lift_shap_conv_relu_pool_linear(X):
+		[[ 0.0000,  0.0000,  0.0408,  0.0000,  0.2812, -0.0000,  0.1009, -0.0000, -0.0000,  0.0331],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0769, -0.0000, -0.0000, -0.0000,  0.0481, -0.0000,  0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0038, -0.0000, -0.0000, -0.0000, -0.1424, -0.2023, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv_relu_pool_linear(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -997,11 +1234,24 @@ def test_deep_lift_shap_conv_relu_pool_linear(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000,  0.0000,  0.0011, -0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000],
+		 [-0.0000,  0.0000, -0.0010, -0.0000, -0.0000,  0.0000, -0.0000, -0.0000,  0.0024, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000, -0.0000,  0.0000,  0.0000],
+		 [-0.0000,  0.0009, -0.0000,  0.0000, -0.0076, -0.0049, -0.0026, -0.0039, -0.0000, -0.0029]],
 
-def test_deep_lift_shap_conv_relu_pool_linear_linear(X):
+		[[-0.0000, -0.0000,  0.0086,  0.0000,  0.0153,  0.0000,  0.0036,  0.0000, -0.0000, -0.0041],
+		 [ 0.0000, -0.0000, -0.0000,  0.0000, -0.0000,  0.0000, -0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0006, -0.0000, -0.0000, -0.0000, -0.0054, -0.0000,  0.0000,  0.0000,  0.0000],
+		 [ 0.0000,  0.0000,  0.0000,  0.0021, -0.0000, -0.0000, -0.0000, -0.0028, -0.0025,  0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv_relu_pool_linear_linear(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -1015,11 +1265,24 @@ def test_deep_lift_shap_conv_relu_pool_linear_linear(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
 
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000, -0.0000, -0.0000, -0.0013,  0.0000, -0.0000, -0.0000,  0.0000,  0.0000,  0.0000],
+		 [ 0.0000, -0.0000, -0.0010,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000, -0.0009, -0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0000, -0.0000,  0.0000, -0.0000, -0.0000,  0.0000, -0.0000],
+		 [ 0.0000,  0.0002,  0.0000, -0.0000, -0.0002, -0.0020, -0.0013, -0.0047, -0.0000, -0.0009]],
 
-def test_deep_lift_shap_conv_relu_pool_linear_relu_linear(X):
+		[[ 0.0000,  0.0000, -0.0074, -0.0000, -0.0044, -0.0000,  0.0029,  0.0000,  0.0000,  0.0001],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000,  0.0000,  0.0000],
+		 [-0.0000, -0.0011,  0.0000,  0.0000,  0.0000, -0.0014, -0.0000, -0.0000, -0.0000,  0.0000],
+		 [-0.0000, -0.0000,  0.0000, -0.0016,  0.0000, -0.0000, -0.0000, -0.0004,  0.0009, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_conv_relu_pool_linear_relu_linear(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -1034,51 +1297,64 @@ def test_deep_lift_shap_conv_relu_pool_linear_relu_linear(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device='cpu', random_state=0, 
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :10], [
+		[[ 0.0000,  0.0000, -0.0000, -0.0001, -0.0000, -0.0000,  0.0000,  0.0000,  0.0000,  0.0000],
+		 [-0.0000,  0.0000, -0.0010, -0.0000, -0.0000,  0.0000, -0.0000, -0.0000,  0.0003,  0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0000,  0.0000,  0.0000],
+		 [ 0.0000,  0.0004, -0.0000,  0.0000, -0.0017, -0.0009, -0.0004, -0.0014, -0.0000, -0.0012]],
+
+		[[-0.0000, -0.0000, -0.0031,  0.0000, -0.0002,  0.0000,  0.0016,  0.0000,  0.0000, -0.0006],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000, -0.0000,  0.0000,  0.0000],
+		 [ 0.0000, -0.0004, -0.0000,  0.0000, -0.0000,  0.0001, -0.0000, -0.0000, -0.0000,  0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0001, -0.0000, -0.0000, -0.0000, -0.0000,  0.0001, -0.0000]]], 4)
 
 
 ###
 
 
-def _captum_attribute_comparison(model, X, references):
+def _captum_attribute_comparison(model, X, references, device):
 	torch.manual_seed(0)
 
-	X_attr0 = deep_lift_shap(model, X, references=references, device='cpu', 
+	X_attr0 = deep_lift_shap(model, X, references=references, device=device,
 		random_state=0)
 	X_attr1 = _captum_deep_lift_shap(model, X, references=references,
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 
 	assert X_attr0.shape == X_attr1.shape
 	assert X_attr0.dtype == X_attr1.dtype
 	assert_array_almost_equal(X_attr0, X_attr1, 5)
 
 
-def test_captum_deep_lift_shap_summodel(X, references):
+def test_captum_deep_lift_shap_summodel(X, references, device):
 	model = LambdaWrapper(SumModel(), lambda model, X: model(X)[:, 0:1])
-	_captum_attribute_comparison(model, X, references)
+	_captum_attribute_comparison(model, X, references, device)
 
 
-def test_captum_deep_lift_shap_flattendense(X, references):
-	_captum_attribute_comparison(FlattenDense(n_outputs=1), X, references)
+def test_captum_deep_lift_shap_flattendense(X, references, device):
+	_captum_attribute_comparison(FlattenDense(n_outputs=1), X, references, device)
 
 
-def test_captum_deep_lift_shap_scatter(X, references):
+def test_captum_deep_lift_shap_scatter(X, references, device):
 	model = LambdaWrapper(Scatter(), lambda model, X: model(X)[:, 0, 0:1])
-	_captum_attribute_comparison(model, X, references)
+	_captum_attribute_comparison(model, X, references, device)
 
 
-def test_captum_deep_lift_shap_conv(X, references):
+def test_captum_deep_lift_shap_conv(X, references, device):
 	model = LambdaWrapper(Conv(), lambda model, X: model(X).sum(
 		dim=(-1, -2)).unsqueeze(-1))
-	_captum_attribute_comparison(model, X, references)
+	_captum_attribute_comparison(model, X, references, device)
 
 
 #def test_captum_deep_lift_shap_convpooldense(X, references):
 #	_captum_attribute_comparison(ConvPoolDense(), X, references)
 
 
-def test_captum_deep_lift_shap_batch_size(X, references):
+def test_captum_deep_lift_shap_batch_size(X, references, device):
 	_SumModel = LambdaWrapper(SumModel(), lambda model, X: model(X)[:, 0:1])
 	_Scatter = LambdaWrapper(Scatter(), lambda model, X: model(X)[:, 0, 0:1])
 	_Conv = LambdaWrapper(Conv(), lambda model, X: model(X).sum(dim=1)[:, 0:1])
@@ -1087,16 +1363,16 @@ def test_captum_deep_lift_shap_batch_size(X, references):
 		torch.manual_seed(0)
 
 		X_attr0 = deep_lift_shap(model, X, references=references, 
-			batch_size=1, device='cpu', random_state=0)
+			batch_size=1, device=device, random_state=0)
 		X_attr1 = _captum_deep_lift_shap(model, X, references=references, 
-			batch_size=1, device='cpu', random_state=0)
+			batch_size=1, device=device, random_state=0)
 
 		assert X_attr0.shape == X_attr1.shape
 		assert X_attr0.dtype == X_attr1.dtype
 		assert_array_almost_equal(X_attr0, X_attr1)
 
 
-def test_captum_deep_lift_shap_n_shuffles(X, references):
+def test_captum_deep_lift_shap_n_shuffles(X, references, device):
 	_SumModel = LambdaWrapper(SumModel(), lambda model, X: model(X)[:, 0:1])
 	_Scatter = LambdaWrapper(Scatter(), lambda model, X: model(X)[:, 0, 0:1])
 	_Conv = LambdaWrapper(Conv(), lambda model, X: model(X).sum(dim=1)[:, 0:1])
@@ -1105,25 +1381,25 @@ def test_captum_deep_lift_shap_n_shuffles(X, references):
 		torch.manual_seed(0)
 
 		X_attr0 = deep_lift_shap(model, X[:4], references=references[:4], 
-			n_shuffles=3, batch_size=1, device='cpu', random_state=0)
+			n_shuffles=3, batch_size=1, device=device, random_state=0)
 		X_attr1 = _captum_deep_lift_shap(model, X[:4], references=references[:4],
-			n_shuffles=3, batch_size=1, device='cpu', random_state=0)
+			n_shuffles=3, batch_size=1, device=device, random_state=0)
 
 		assert X_attr0.shape == X_attr1.shape
 		assert X_attr0.dtype == X_attr1.dtype
 		assert_array_almost_equal(X_attr0, X_attr1)
 
 
-def test_captum_deep_lift_shap_args(X, references):
+def test_captum_deep_lift_shap_args(X, references, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 	alpha = torch.randn(16, 1)
 	beta = torch.randn(16, 1)
 
 	X_attr0 = deep_lift_shap(model, X, args=(alpha,), references=references, 
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 	X_attr1 = _captum_deep_lift_shap(model, X, args=(alpha,), 
-		references=references, device='cpu', random_state=0)
+		references=references, device=device, random_state=0)
 
 	assert X_attr0.shape == X_attr1.shape
 	assert X_attr0.dtype == X_attr1.dtype
@@ -1131,10 +1407,378 @@ def test_captum_deep_lift_shap_args(X, references):
 
 
 	X_attr0 = deep_lift_shap(model, X, args=(alpha, beta), 
-		references=references, device='cpu', random_state=0)
+		references=references, device=device, random_state=0)
 	X_attr1 = _captum_deep_lift_shap(model, X, args=(alpha, beta), 
-		references=references, device='cpu', random_state=0)
+		references=references, device=device, random_state=0)
 
 	assert X_attr0.shape == X_attr1.shape
 	assert X_attr0.dtype == X_attr1.dtype
 	assert_array_almost_equal(X_attr0, X_attr1)
+
+
+###
+# Tests for additional architectures.
+#
+# Models whose layers have no rule in `deep_lift_shap._NON_LINEAR_OPS` are
+# intentionally absent here: Transformer (MultiheadAttention/softmax + LayerNorm),
+# ConvBatchNorm (BatchNorm1d), and ConvLayerNorm (LayerNorm). DLS would silently
+# treat those layers as linear and the rescale rule's convergence guarantee
+# would not hold, so a regression test against hardcoded values would be
+# meaningless. Add a model here once its layers gain a registered rule.
+
+
+def test_deep_lift_shap_residual_conv(X, references, device):
+	torch.manual_seed(0)
+	model = ResidualConv()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[-0.0409, -0.0000, -0.0000, -0.0443],
+		 [-0.0000,  0.0000, -0.0201,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000, -0.0394,  0.0000,  0.0000]],
+
+		[[-0.0000,  0.0000, -0.0313, -0.0000],
+		 [-0.0345,  0.0000, -0.0000,  0.0000],
+		 [ 0.0000, -0.0089,  0.0000,  0.0000],
+		 [ 0.0000, -0.0000,  0.0000,  0.0414]]], 4)
+
+
+def test_deep_lift_shap_conv2d_expand(X, references, device):
+	torch.manual_seed(0)
+	model = Conv2DExpand()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[ 0.0086,  0.0000,  0.0000,  0.0043],
+		 [-0.0000, -0.0000,  0.0059, -0.0000],
+		 [-0.0000, -0.0000,  0.0000, -0.0000],
+		 [ 0.0000,  0.0119, -0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0029, -0.0000],
+		 [ 0.0016, -0.0000,  0.0000,  0.0000],
+		 [-0.0000, -0.0079,  0.0000, -0.0000],
+		 [ 0.0000,  0.0000, -0.0000,  0.0036]]], 4)
+
+
+def test_deep_lift_shap_custom_linear(X, references, device):
+	"""A linear torch.autograd.Function does not need registration; attribution
+	flows through it via the standard gradient chain rule."""
+	torch.manual_seed(0)
+	model = CustomLinear()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[-0.0177, -0.0000,  0.0000, -0.0008],
+		 [-0.0000,  0.0000,  0.0220, -0.0000],
+		 [ 0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0033,  0.0000,  0.0000]],
+
+		[[-0.0000, -0.0000,  0.0011, -0.0000],
+		 [-0.0083, -0.0000,  0.0000, -0.0000],
+		 [ 0.0000, -0.0334,  0.0000, -0.0000],
+		 [-0.0000, -0.0000,  0.0000,  0.0266]]], 4)
+
+
+def test_deep_lift_shap_custom_sqrt(X, references, device):
+	"""A nonlinear custom op is registered via additional_nonlinear_ops so
+	DeepLIFT can apply its rescale rule to it."""
+	torch.manual_seed(0)
+	model = CustomSqrt()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0,
+		additional_nonlinear_ops={CustomSqrtModule: _nonlinear})
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[-0.0020,  0.0000, -0.0000, -0.0030],
+		 [-0.0000,  0.0000,  0.0033,  0.0000],
+		 [ 0.0000, -0.0000,  0.0000, -0.0000],
+		 [-0.0000,  0.0005, -0.0000,  0.0000]],
+
+		[[-0.0000, -0.0000, -0.0001, -0.0000],
+		 [-0.0029,  0.0000,  0.0000,  0.0000],
+		 [ 0.0000, -0.0042,  0.0000, -0.0000],
+		 [-0.0000,  0.0000, -0.0000,  0.0072]]], 4)
+
+
+def test_deep_lift_shap_dilated_conv(X, references, device):
+	torch.manual_seed(0)
+	model = DilatedConv()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[ 0.0000, -0.0000, -0.0000, -0.0008],
+		 [ 0.0000,  0.0000, -0.0004,  0.0000],
+		 [ 0.0000, -0.0000,  0.0000,  0.0000],
+		 [-0.0000,  0.0016,  0.0000, -0.0000]],
+
+		[[-0.0000, -0.0000, -0.0024, -0.0000],
+		 [ 0.0004, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000, -0.0016,  0.0000,  0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0006]]], 4)
+
+
+def test_deep_lift_shap_multi_activation(X, references, device):
+	torch.manual_seed(0)
+	model = MultiActivation()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[-0.0007,  0.0000,  0.0000, -0.0001],
+		 [ 0.0000, -0.0000, -0.0009, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0005,  0.0000, -0.0000]],
+
+		[[-0.0000,  0.0000,  0.0001,  0.0000],
+		 [ 0.0009, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0016, -0.0000,  0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0006]]], 4)
+
+
+def test_deep_lift_shap_dropout_conv(X, references, device):
+	torch.manual_seed(0)
+	model = DropoutConv()
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[ 0.0038,  0.0000, -0.0000,  0.0013],
+		 [ 0.0000, -0.0000,  0.0232, -0.0000],
+		 [-0.0000,  0.0000, -0.0000, -0.0000],
+		 [ 0.0000, -0.0016, -0.0000,  0.0000]],
+
+		[[ 0.0000,  0.0000, -0.0021,  0.0000],
+		 [ 0.0031,  0.0000,  0.0000, -0.0000],
+		 [-0.0000,  0.0062, -0.0000, -0.0000],
+		 [ 0.0000, -0.0000,  0.0000,  0.0008]]], 4)
+
+
+def test_deep_lift_shap_multi_input_multi_output(X, references, device):
+	"""MIMO has a tuple output; LambdaWrapper picks one scalar-per-example
+	target so DLS can attribute against it."""
+	torch.manual_seed(0)
+	model = LambdaWrapper(MultiInputMultiOutput(),
+		lambda model, X: model(X)[1][:, 0:1])
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[ 0.0411, -0.0000,  0.0000, -0.0138],
+		 [-0.0000,  0.0000,  0.0011, -0.0000],
+		 [-0.0000,  0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0129, -0.0000, -0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0156, -0.0000],
+		 [-0.0300,  0.0000,  0.0000, -0.0000],
+		 [ 0.0000,  0.0258, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000, -0.0000, -0.0028]]], 4)
+
+
+###
+# Activation sweep: confirm every entry in deep_lift_shap._NON_LINEAR_OPS that
+# is a pointwise activation actually receives the rescale rule when wired into
+# a residual block. GLU is excluded because it halves the channel count and
+# would not fit a same-shape residual stream.
+
+
+# Each entry is (activation_class, expected X_attr[0, :, :4]) so the sweep is
+# both a smoke test for hook registration and a regression test for the
+# numerical output through that activation.
+_ACTIVATION_SWEEP = [
+	(torch.nn.ReLU, [
+		[-0.0409, -0.0000, -0.0000, -0.0443],
+		[-0.0000,  0.0000, -0.0201,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0394,  0.0000,  0.0000]]),
+	(torch.nn.ReLU6, [
+		[-0.0409, -0.0000, -0.0000, -0.0443],
+		[-0.0000,  0.0000, -0.0201,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0394,  0.0000,  0.0000]]),
+	(torch.nn.RReLU, [
+		[-0.0414, -0.0000, -0.0000, -0.0455],
+		[-0.0000,  0.0000, -0.0180,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0396,  0.0000,  0.0000]]),
+	(torch.nn.SELU, [
+		[-0.0450, -0.0000, -0.0000, -0.0528],
+		[-0.0000,  0.0000, -0.0067,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0409,  0.0000,  0.0000]]),
+	(torch.nn.CELU, [
+		[-0.0432, -0.0000, -0.0000, -0.0490],
+		[-0.0000,  0.0000, -0.0124,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0402,  0.0000,  0.0000]]),
+	(torch.nn.GELU, [
+		[-0.0415, -0.0000, -0.0000, -0.0448],
+		[-0.0000,  0.0000, -0.0171,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0391,  0.0000,  0.0000]]),
+	(torch.nn.SiLU, [
+		[-0.0416, -0.0000, -0.0000, -0.0447],
+		[-0.0000,  0.0000, -0.0162,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0389,  0.0000,  0.0000]]),
+	(torch.nn.Mish, [
+		[-0.0419, -0.0000, -0.0000, -0.0457],
+		[-0.0000,  0.0000, -0.0159,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0394,  0.0000,  0.0000]]),
+	(torch.nn.ELU, [
+		[-0.0432, -0.0000, -0.0000, -0.0490],
+		[-0.0000,  0.0000, -0.0124,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0402,  0.0000,  0.0000]]),
+	(torch.nn.LeakyReLU, [
+		[-0.0409, -0.0000, -0.0000, -0.0444],
+		[-0.0000,  0.0000, -0.0200,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0394,  0.0000,  0.0000]]),
+	(torch.nn.Sigmoid, [
+		[-0.0411, -0.0000, -0.0000, -0.0418],
+		[-0.0000,  0.0000, -0.0165,  0.0000],
+		[ 0.0000, -0.0000,  0.0000,  0.0000],
+		[ 0.0000, -0.0376,  0.0000,  0.0000]]),
+	(torch.nn.Tanh, [
+		[-0.0436, -0.0000, -0.0000, -0.0490],
+		[-0.0000,  0.0000, -0.0106,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0399,  0.0000,  0.0000]]),
+	(torch.nn.Softplus, [
+		[-0.0417, -0.0000, -0.0000, -0.0445],
+		[-0.0000,  0.0000, -0.0155,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0388,  0.0000,  0.0000]]),
+	(torch.nn.Softshrink, [
+		[-0.0398, -0.0000, -0.0000, -0.0401],
+		[-0.0000,  0.0000, -0.0195,  0.0000],
+		[ 0.0000, -0.0000,  0.0000,  0.0000],
+		[ 0.0000, -0.0376,  0.0000,  0.0000]]),
+	(torch.nn.LogSigmoid, [
+		[-0.0420, -0.0000, -0.0000, -0.0443],
+		[-0.0000,  0.0000, -0.0138,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0384,  0.0000,  0.0000]]),
+	(torch.nn.PReLU, [
+		[-0.0415, -0.0000, -0.0000, -0.0456],
+		[-0.0000,  0.0000, -0.0178,  0.0000],
+		[ 0.0000, -0.0000, -0.0000,  0.0000],
+		[ 0.0000, -0.0396,  0.0000,  0.0000]]),
+]
+
+
+@pytest.mark.parametrize("activation,expected", _ACTIVATION_SWEEP,
+	ids=[a.__name__ for a, _ in _ACTIVATION_SWEEP])
+def test_deep_lift_shap_residual_conv_activation(X, references, device,
+		activation, expected):
+	torch.manual_seed(0)
+	model = ResidualConv(activation=activation)
+	X_attr = deep_lift_shap(model, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr[0, :, :4], expected, 4)
+
+
+###
+
+
+def test_deep_lift_shap_single_sequence(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	X_attr = deep_lift_shap(model, X[:1], n_shuffles=10, batch_size=3,
+		device=device, random_state=0)
+
+	assert X_attr.shape == (1, 4, 100)
+	assert X_attr.dtype == torch.float32
+
+	X_attr_big = deep_lift_shap(model, X[:1], n_shuffles=10, batch_size=64,
+		device=device, random_state=0)
+	assert_array_almost_equal(X_attr, X_attr_big, 4)
+
+
+def test_deep_lift_shap_print_convergence_deltas(X, device, capsys):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	deep_lift_shap(model, X[:4], n_shuffles=2, batch_size=8, device=device,
+		random_state=0, print_convergence_deltas=True)
+
+	captured = capsys.readouterr()
+	assert captured.out.strip() != ""
+
+
+def test_deep_lift_shap_only_warn(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	refs = shuffle(X, n=2, random_state=0)
+	X_bad = X * 2.0
+
+	assert_raises(ValueError, deep_lift_shap, model, X_bad, references=refs,
+		device=device, random_state=0)
+
+	X_attr = deep_lift_shap(model, X_bad, references=refs, device=device,
+		random_state=0, only_warn=True)
+
+	assert X_attr.shape == X_bad.shape
+
+
+def test_deep_lift_shap_dtype_param(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	X_attr0 = deep_lift_shap(model, X[:4], n_shuffles=2, dtype=torch.float32,
+		device=device, random_state=0)
+	X_attr1 = deep_lift_shap(model, X[:4], n_shuffles=2, dtype="float32",
+		device=device, random_state=0)
+	X_attr2 = deep_lift_shap(model, X[:4], n_shuffles=2, dtype=None,
+		device=device, random_state=0)
+
+	assert X_attr0.dtype == torch.float32
+	assert_array_almost_equal(X_attr0, X_attr1, 4)
+	assert_array_almost_equal(X_attr0, X_attr2, 4)
+
+
+def test_deep_lift_shap_random_state_none_consistency(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	X_attr0 = deep_lift_shap(model, X[:4], n_shuffles=2, device=device,
+		random_state=None)
+	X_attr1 = deep_lift_shap(model, X[:4], n_shuffles=2, device=device,
+		random_state=None)
+
+	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr1)
+
+
+def test_deep_lift_shap_invalid_target(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	assert_raises(IndexError, deep_lift_shap, model, X[:2], target=999,
+		n_shuffles=2, device=device, random_state=0)

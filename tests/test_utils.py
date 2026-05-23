@@ -14,6 +14,8 @@ from tangermeme.utils import random_one_hot
 from tangermeme.utils import chunk
 from tangermeme.utils import unchunk
 from tangermeme.utils import extract_signal
+from tangermeme.utils import pwm_consensus
+from tangermeme.utils import example_to_fasta_coords
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -75,8 +77,8 @@ def test_validate_input_max_value():
 	_validate_input(X, "X", max_value=0.0)
 
 
-def test_validate_input_ohe():
-	X = random_one_hot((1, 4, 10), random_state=0)
+def test_validate_input_ohe(device):
+	X = random_one_hot((1, 4, 10), random_state=0).to(device)
 
 	_validate_input(X, "X", ohe=True, ohe_dim=1)
 	_validate_input(X.type(torch.float64), "X", ohe=True, ohe_dim=1)
@@ -108,8 +110,8 @@ def test_validate_input_ohe():
 	assert_raises(IndexError, _validate_input, X, "X", ohe=True, ohe_dim=1)
 
 
-def test_validate_input_allow_N():
-	X = random_one_hot((2, 4, 10), random_state=0)
+def test_validate_input_allow_N(device):
+	X = random_one_hot((2, 4, 10), random_state=0).to(device)
 	_validate_input(X, "X", ohe=True, ohe_dim=1)
 
 	X[0, :, 0] = 0
@@ -131,7 +133,7 @@ def test_validate_input_allow_N():
 	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1,
 		allow_N=True)
 
-	X = random_one_hot((2, 4, 10), random_state=0).float()
+	X = random_one_hot((2, 4, 10), random_state=0).float().to(device)
 	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
 
 	X[0, 1, 0] = 0.5
@@ -607,7 +609,7 @@ def test_unchunk_raises():
 ###
 
 
-def test_extract_signal():
+def test_extract_signal(device):
 	loci = pandas.DataFrame({
 		'example_idxs': [0, 0, 1, 2],
 		'start': [1, 9, 2, 4],
@@ -615,12 +617,12 @@ def test_extract_signal():
 	})
 
 	X = numpy.random.RandomState(0).randn(3, 1, 15)
-	X = torch.from_numpy(X)
+	X = torch.from_numpy(X).to(device)
 
 	y = extract_signal(loci, X)
 	
 	assert y.shape == (4, 1)
-	assert_array_almost_equal(y, [[ 5.3088  ],
+	assert_array_almost_equal(y.cpu(), [[ 5.3088  ],
                   [ 2.891628],
                   [-0.253532],
                   [-0.917093]])
@@ -629,3 +631,87 @@ def test_extract_signal():
 	assert y[1, 0] == X[0, :, 9:14].sum()
 	assert y[2, 0] == X[1, :, 2:10].sum()
 	assert y[3, 0] == X[2, :, 4:12].sum()
+
+
+###
+
+
+def test_pwm_consensus_basic():
+	pwm = torch.tensor([
+		[0.7, 0.1, 0.1, 0.1],
+		[0.1, 0.7, 0.1, 0.1],
+		[0.1, 0.1, 0.7, 0.1],
+		[0.1, 0.1, 0.1, 0.7],
+	])
+	# pwm_consensus expects shape=(alphabet_len, pwm_len)
+	Y = pwm_consensus(pwm.T)
+
+	assert Y.shape == pwm.T.shape
+	assert int(Y.sum()) == pwm.shape[0]
+	assert_array_almost_equal(Y, torch.eye(4))
+
+
+def test_pwm_consensus_zero_column():
+	pwm = torch.tensor([
+		[0.7, 0.0, 0.1, 0.1],
+		[0.1, 0.0, 0.7, 0.1],
+		[0.1, 0.0, 0.1, 0.7],
+		[0.1, 0.0, 0.1, 0.1],
+	])
+	Y = pwm_consensus(pwm)
+
+	# The all-zero column stays all-zero.
+	assert int(Y[:, 1].sum()) == 0
+	assert int(Y[:, 0].sum()) == 1
+
+
+def test_random_one_hot_with_probs():
+	X = random_one_hot((100, 4, 200), probs=[[1.0, 0.0, 0.0, 0.0]],
+		random_state=0)
+
+	assert X.shape == (100, 4, 200)
+	# every position is the first character
+	assert int(X[:, 0].sum()) == 100 * 200
+	assert int(X[:, 1:].sum()) == 0
+
+
+def test_example_to_fasta_coords_basic():
+	loci_df = pandas.DataFrame({
+		'chrom': ['chr1', 'chr2'],
+		'start': [100, 500],
+		'end': [200, 600],
+	})
+	example_df = pandas.DataFrame({
+		'example_idx': [0, 1, 0],
+		'start': [5, 10, 50],
+		'end': [15, 20, 60],
+		'score': [1.0, 2.0, 3.0],
+	})
+
+	out = example_to_fasta_coords(example_df, loci_df)
+
+	assert list(out.columns) == ['chrom', 'start', 'end', 'score']
+	assert list(out['chrom']) == ['chr1', 'chr2', 'chr1']
+	assert list(out['start']) == [105, 510, 150]
+	assert list(out['end']) == [115, 520, 160]
+	assert list(out['score']) == [1.0, 2.0, 3.0]
+
+
+def test_example_to_fasta_coords_window():
+	loci_df = pandas.DataFrame({
+		'chrom': ['chr1'],
+		'start': [100],
+		'end': [200],
+	})
+	example_df = pandas.DataFrame({
+		'example_idx': [0],
+		'start': [10],
+		'end': [20],
+	})
+
+	out = example_to_fasta_coords(example_df, loci_df, window=50)
+
+	# midpoint of (100, 200) is 150; window=50 centers at 150-25=125;
+	# example start=10 -> 135, end=20 -> 145.
+	assert int(out['start'].iloc[0]) == 135
+	assert int(out['end'].iloc[0]) == 145

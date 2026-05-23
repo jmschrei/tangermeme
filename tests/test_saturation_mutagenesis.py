@@ -222,10 +222,10 @@ def test_attribution_score_target():
 ###
 
 
-def test_saturation_mutagenesis(X0):
+def test_saturation_mutagenesis(X0, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA(5)
-	X_attr = saturation_mutagenesis(model, X0, device='cpu')
+	X_attr = saturation_mutagenesis(model, X0, device=device)
 
 	assert X_attr.shape == (2, 4, 100)
 	assert X_attr.dtype == torch.float32
@@ -242,11 +242,11 @@ def test_saturation_mutagenesis(X0):
          [-0.0000e+00,  0.0000e+00,  0.0000e+00]]], 4)
 
 
-def test_saturation_mutagenesis_hypothetical(X0):
+def test_saturation_mutagenesis_hypothetical(X0, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA(5)
-	X_attr = saturation_mutagenesis(model, X0, hypothetical=True, device='cpu')
-	X_attr2 = saturation_mutagenesis(model, X0, device='cpu')
+	X_attr = saturation_mutagenesis(model, X0, hypothetical=True, device=device)
+	X_attr2 = saturation_mutagenesis(model, X0, device=device)
 
 	assert X_attr.shape == (2, 4, 100)
 	assert X_attr.dtype == torch.float32
@@ -264,11 +264,11 @@ def test_saturation_mutagenesis_hypothetical(X0):
 	assert_array_almost_equal(X_attr * X0, X_attr2, 4)
 
 
-def test_saturation_mutagenesis_start_end(X0):
+def test_saturation_mutagenesis_start_end(X0, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA(5)
-	X_attr = saturation_mutagenesis(model, X0, start=50, end=60, device='cpu')
-	X_attr2 = saturation_mutagenesis(model, X0, device='cpu')
+	X_attr = saturation_mutagenesis(model, X0, start=50, end=60, device=device)
+	X_attr2 = saturation_mutagenesis(model, X0, device=device)
 
 	assert X_attr.shape == (2, 4, 10)
 	assert X_attr.dtype == torch.float32
@@ -286,12 +286,12 @@ def test_saturation_mutagenesis_start_end(X0):
 	assert_array_almost_equal(X_attr, X_attr2[:, :, 50:60], 4)
 
 
-def test_saturation_mutagenesis_start_end_hypothetical(X0):
+def test_saturation_mutagenesis_start_end_hypothetical(X0, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA(5)
 	X_attr = saturation_mutagenesis(model, X0, start=50, end=60, 
-		hypothetical=True, device='cpu')
-	X_attr2 = saturation_mutagenesis(model, X0, hypothetical=True, device='cpu')
+		hypothetical=True, device=device)
+	X_attr2 = saturation_mutagenesis(model, X0, hypothetical=True, device=device)
 
 	assert X_attr.shape == (2, 4, 10)
 	assert X_attr.dtype == torch.float32
@@ -309,23 +309,23 @@ def test_saturation_mutagenesis_start_end_hypothetical(X0):
 	assert_array_almost_equal(X_attr, X_attr2[:, :, 50:60], 4)
 
 
-def test_saturation_mutagenesis_ordering(X0):
+def test_saturation_mutagenesis_ordering(X0, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA(5)
-	X_attr = saturation_mutagenesis(model, X0, device='cpu')
+	X_attr = saturation_mutagenesis(model, X0, device=device)
 
 	assert X_attr.shape == (2, 4, 100)
 	assert X_attr.dtype == torch.float32
 
-	X_attr2 = saturation_mutagenesis(model, X0[1:], device='cpu')
+	X_attr2 = saturation_mutagenesis(model, X0[1:], device=device)
 	assert_array_almost_equal(X_attr[1:, :, :], X_attr2, 2)
 
 
-def test_saturation_mutagenesis_raw_output(X0):
+def test_saturation_mutagenesis_raw_output(X0, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA(5)
 	y0, y_hat = saturation_mutagenesis(model, X0, raw_outputs=True, 
-		device='cpu')
+		device=device)
 
 	assert y0.shape == (2, 5)
 	assert y_hat.shape == (2, 4, 100, 5)
@@ -369,21 +369,21 @@ def test_saturation_mutagenesis_raw_output(X0):
           [ 0.1212, -0.1036, -0.2303, -0.1100, -0.0857]]]], 4)
 
 
-def test_saturation_mutagenesis_equivalence(X0):
+def test_saturation_mutagenesis_equivalence(X0, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA(5)
 
-	X_attr = saturation_mutagenesis(model, X0, hypothetical=True, device='cpu')
+	X_attr = saturation_mutagenesis(model, X0, hypothetical=True, device=device)
 	y0, y_hat = saturation_mutagenesis(model, X0, raw_outputs=True, 
-		device='cpu')
+		device=device)
 
 	attr = _attribution_score(y0, y_hat, None)
 	assert_array_almost_equal(X_attr, attr, 4)
 
 
-def test_saturation_mutagenesis_sum_model(X):
+def test_saturation_mutagenesis_sum_model(X, device):
 	model = SumModel()
-	y0, y_hat = saturation_mutagenesis(model, X, raw_outputs=True, device='cpu')
+	y0, y_hat = saturation_mutagenesis(model, X, raw_outputs=True, device=device)
 
 	assert y0.shape == (2, 4)
 	assert y_hat.shape == (2, 4, 10, 4)
@@ -422,3 +422,54 @@ def test_saturation_mutagenesis_sum_model(X):
 		 [[4, 1, 3, 2],
 		  [4, 2, 2, 2],
 		  [3, 2, 3, 2]]]])
+
+
+###
+
+
+def test_saturation_mutagenesis_verbose(X0, device):
+	model = SmallDeepSEA(1)
+
+	X_attr0 = saturation_mutagenesis(model, X0, device=device, verbose=False)
+	X_attr1 = saturation_mutagenesis(model, X0, device=device, verbose=True)
+
+	assert_array_almost_equal(X_attr0, X_attr1)
+
+
+def test_saturation_mutagenesis_args(X0, device):
+	torch.manual_seed(0)
+	model = FlattenDense(seq_len=100, n_outputs=1)
+
+	alpha = torch.randn(2, 1)
+	y0_with, y_hat_with = saturation_mutagenesis(model, X0, args=(alpha,),
+		raw_outputs=True, device=device)
+	y0_without, y_hat_without = saturation_mutagenesis(model, X0,
+		raw_outputs=True, device=device)
+
+	assert y0_with.shape == y0_without.shape
+	assert y_hat_with.shape == y_hat_without.shape
+
+
+def test_saturation_mutagenesis_identity_recovers_y0(X0, device):
+	model = SmallDeepSEA(1)
+
+	y0, y_hat = saturation_mutagenesis(model, X0, raw_outputs=True,
+		device=device)
+
+	# For each (example, position), the substitution that keeps the original
+	# base must equal y0 for that example.
+	for i in range(X0.shape[0]):
+		for pos in range(X0.shape[-1]):
+			orig_base = int(X0[i, :, pos].argmax())
+			assert_array_almost_equal(
+				y_hat[i, orig_base, pos], y0[i], 4)
+
+
+def test_saturation_mutagenesis_zero_where_X_zero(X0, device):
+	model = SmallDeepSEA(1)
+	X_attr = saturation_mutagenesis(model, X0, device=device,
+		hypothetical=False)
+
+	# Non-hypothetical attribution masks by X, so zeros stay zero.
+	zero_mask = (X0 == 0)
+	assert torch.all(X_attr[zero_mask] == 0)
