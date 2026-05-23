@@ -14,8 +14,8 @@ from .predict import predict
 from tqdm import tqdm
 
 
-def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'], 
-	func=predict, additional_func_kwargs={}, verbose=False, **kwargs):
+def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
+	func=predict, additional_func_kwargs=None, verbose=False, **kwargs):
 	"""Runs a single spacing experiment and returns predictions.
 
 	Given a predictive model, a set of motifs to insert and the spacings
@@ -63,12 +63,13 @@ def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
 		A function to apply before and after making the substitutions. Default 
 		is `predict`.
 
-	additional_func_kwargs: dict, optional
+	additional_func_kwargs: dict or None, optional
 		Additional named arguments to pass into the function when it is called.
-		This is provided as an alternate path to route arguments into the 
+		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. Default is {}.
+		their way into the function. The dict is not modified in place. Default
+		is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar as spacings are evaluated. Default
@@ -94,9 +95,11 @@ def space(model, X, motifs, spacing, start=None, alphabet=['A', 'C', 'G', 'T'],
 		those.
 	"""
 
-	spacing = _validate_input(_cast_as_tensor(spacing, dtype=torch.int32), 
+	spacing = _validate_input(_cast_as_tensor(spacing, dtype=torch.int32),
 		"spacing", shape=(-1, len(motifs)-1))
 	X = _validate_input(X, "X", shape=(-1, len(alphabet), -1))
+
+	additional_func_kwargs = dict(additional_func_kwargs or {})
 
 	y_before = func(model, X, **kwargs, **additional_func_kwargs)
 	y_afters = []
