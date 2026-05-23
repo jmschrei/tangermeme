@@ -86,12 +86,13 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 		A function to apply before and after making the ablation. Default 
 		is `predict`.
 
-	additional_func_kwargs: dict, optional
+	additional_func_kwargs: dict or None, optional
 		Additional named arguments to pass into the function when it is called.
-		This is provided as an alternate path to route arguments into the 
+		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. Default is {}.
+		their way into the function. The dict is not modified in place. Default
+		is None.
 
 	kwargs: optional
 		Additional named arguments that will get passed into the function when
@@ -114,7 +115,7 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 	"""
 
 	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, allow_N=True)
-	additional_func_kwargs = additional_func_kwargs or {}
+	additional_func_kwargs = dict(additional_func_kwargs or {})
 	if 'random_state' in inspect.signature(func).parameters.keys():
 		if 'random_state' not in additional_func_kwargs:
 			additional_func_kwargs['random_state'] = random_state
