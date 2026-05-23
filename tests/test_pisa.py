@@ -892,5 +892,66 @@ def test_pisa_conv_relu_pool_linear_relu_linear(X, device):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+
+###
+
+
+def test_pisa_n_outputs_lt_batch_size(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=3)
+
+	X_attr_big = pisa(model, X, n_shuffles=2, batch_size=32, device=device,
+		random_state=0)
+	X_attr_small = pisa(model, X, n_shuffles=2, batch_size=3, device=device,
+		random_state=0)
+
+	assert X_attr_big.shape == (X.shape[0], 3, 4, 100)
+	assert_array_almost_equal(X_attr_big, X_attr_small, 4)
+
+
+def test_pisa_references_ignores_random_state(X, references, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	X_attr0 = pisa(model, X, references=references, device=device,
+		random_state=0)
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	X_attr1 = pisa(model, X, references=references, device=device,
+		random_state=42)
+
+	assert_array_almost_equal(X_attr0, X_attr1, 4)
+
+
+def test_pisa_hypothetical_vs_projection_equivalence(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	X_attr_proj = pisa(model, X, n_shuffles=3, device=device,
+		random_state=0, hypothetical=False)
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	X_attr_hyp = pisa(model, X, n_shuffles=3, device=device,
+		random_state=0, hypothetical=True)
+
+	# For one-hot X, projecting the hypothetical attributions by X should
+	# recover the non-hypothetical attributions.
+	manual = X_attr_hyp * X.unsqueeze(1)
+	assert_array_almost_equal(X_attr_proj, manual, 4)
+
+
+def test_pisa_model_unchanged_after_call(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	pisa(model, X[:1], n_shuffles=2, device=device, random_state=0)
+
+	for module in model.modules():
+		assert not hasattr(module, "_NON_LINEAR_OPS")
+		if hasattr(module, "handles"):
+			assert len(module.handles) == 0
