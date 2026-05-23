@@ -199,7 +199,7 @@ def plot_logo(X_attr, ax=None, color=None, annotations=None, start=None,
 
 	try:
 			import matplotlib.pyplot as plt
-	except:
+	except ImportError:
 			raise ImportError("Must install matplotlib before using.")
 
 	###
@@ -488,7 +488,7 @@ def plot_attributions(models, X, func=deep_lift_shap, attribute_kwargs=None,
 
 	try:
 		import matplotlib.pyplot as plt
-	except:
+	except ImportError:
 		raise ImportError("Must install matplotlib before using.")
 	
 	
