@@ -737,3 +737,46 @@ def test_apply_product_space_convdense_alpha(X, alpha, device):
 	 [-0.1770, -0.0393,  0.1683],
 	 [-0.1770, -0.0393,  0.1683],
 	 [-0.1770, -0.0393,  0.1683]]], 4)
+
+
+###
+
+
+def test_apply_pairwise_verbose(X, alpha, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	y_quiet = apply_pairwise(predict, model, X[:5], args=(alpha[:5],),
+		device=device, verbose=False)
+	y_loud = apply_pairwise(predict, model, X[:5], args=(alpha[:5],),
+		device=device, verbose=True)
+
+	assert_array_almost_equal(y_quiet, y_loud)
+
+
+def test_apply_pairwise_batch_size_non_divisible(X, alpha, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	# 5 * 5 = 25 pairs, batch_size=8 produces batches 8, 8, 8, 1
+	y0 = apply_pairwise(predict, model, X[:5], args=(alpha[:5],), batch_size=8,
+		device=device)
+	y1 = apply_pairwise(predict, model, X[:5], args=(alpha[:5],), batch_size=32,
+		device=device)
+
+	assert y0.shape == (5, 5, 3)
+	assert_array_almost_equal(y0, y1)
+
+
+def test_apply_product_batch_size_non_divisible(X, alpha, beta, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	# 4 * 3 * 5 = 60 combinations
+	y0 = apply_product(predict, model, X[:4], args=(alpha[:3], beta[:5]),
+		batch_size=7, device=device)
+	y1 = apply_product(predict, model, X[:4], args=(alpha[:3], beta[:5]),
+		batch_size=64, device=device)
+
+	assert y0.shape == (4, 3, 5, 3)
+	assert_array_almost_equal(y0, y1)
