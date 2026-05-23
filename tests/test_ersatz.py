@@ -315,7 +315,7 @@ def test_substitute_raises_length(X):
 def test_substitute_raise_ends(X):
 	assert_raises(ValueError, substitute, X, 'CAGCAT', -2)
 	assert_raises(ValueError, substitute, X, 'CAGCAT', 1000)
-	assert_raises(TypeError, substitute, X, 'CAGCAT', 6.5)
+	assert_raises(IndexError, substitute, X, 'CAGCAT', 6.5)
 	assert_raises(TypeError, substitute, X, 'CAGCAT', 5, 3)
 	assert_raises(TypeError, substitute, X, 'CAGCAT', -5, -1)
 	assert_raises(TypeError, substitute, X, 'CAGCAT', 5, 1000)
@@ -358,7 +358,7 @@ def test_delete(X):
 
 
 
-def test_substitute_raise_ends(X):
+def test_delete_raise_ends(X):
 	assert_raises(ValueError, delete, X, start=-1, end=5)
 	assert_raises(ValueError, delete, X, start=100, end=5)
 	assert_raises(ValueError, delete, X, start=10, end=5)
@@ -767,3 +767,93 @@ def test_dinucleotide_shuffle_raises_N():
 def test_dinucleotide_shuffle_homopolymer():
 	seq_ohe = one_hot_encode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA').unsqueeze(0)
 	assert_raises(ValueError, dinucleotide_shuffle, seq_ohe)
+
+
+###
+
+
+def test_insert_batched_motif(X):
+	X_batch = X.repeat(4, 1, 1)
+	motifs = torch.stack([
+		one_hot_encode('CATCAG'),
+		one_hot_encode('GTGTGT'),
+		one_hot_encode('AAAAAA'),
+		one_hot_encode('TGCATG'),
+	])
+
+	X_insert = insert(X_batch, motifs, start=10)
+
+	assert X_insert.shape[0] == 4
+	assert X_insert.shape[-1] == X.shape[-1] + 6
+
+	assert_array_almost_equal(X_insert[:, :, 10:16], motifs)
+
+
+def test_substitute_end_eq_seq_length(X):
+	motif = 'CATCAG'
+	start = X.shape[-1] - len(motif)
+
+	X_sub = substitute(X, motif, start=start)
+
+	assert X_sub.shape == X.shape
+	assert_array_almost_equal(X_sub[:, :, :start], X[:, :, :start])
+	assert_array_almost_equal(X_sub[:, :, start:],
+		one_hot_encode(motif).unsqueeze(0))
+
+
+def test_substitute_batch_mismatch(X):
+	X_batch = X.repeat(4, 1, 1)
+	motif = torch.stack([
+		one_hot_encode('CATCAG'),
+		one_hot_encode('GTGTGT'),
+		one_hot_encode('AAAAAA'),
+	])
+
+	assert_raises(RuntimeError, substitute, X_batch, motif, 10)
+
+
+def test_multisubstitute_empty_motifs(X):
+	assert_raises(ValueError, multisubstitute, X, [], spacing=[])
+
+
+def test_multisubstitute_single_motif(X):
+	X_sub = multisubstitute(X, ['CATCAG'], spacing=[])
+
+	X_ref = substitute(X, 'CATCAG')
+	assert_array_almost_equal(X_sub, X_ref)
+
+
+def test_multisubstitute_explicit_start_overflow(X):
+	assert_raises(ValueError, multisubstitute, X, ['CATCAG', 'CATCAG'],
+		spacing=0, start=X.shape[-1] - 1)
+
+
+def test_delete_end_eq_seq_length(X):
+	X_del = delete(X, start=0, end=X.shape[-1])
+
+	assert X_del.shape == (X.shape[0], X.shape[1], 0)
+
+
+def test_randomize_n_zero(X):
+	assert_raises(RuntimeError, randomize, X, 5, 10, n=0)
+
+
+def test_shuffle_n_zero(X):
+	assert_raises(RuntimeError, shuffle, X, 5, 10, n=0)
+
+
+def test_shuffle_negative_end_one_off_check(X):
+	L = X.shape[-1]
+
+	s_neg = shuffle(X, 0, -1, random_state=0)
+	s_pos = shuffle(X, 0, L, random_state=0)
+
+	assert_array_almost_equal(s_neg, s_pos)
+
+
+def test_substitute_returns_clone_not_view(X):
+	X_orig = X.clone()
+	X_sub = substitute(X, 'CATCAG', start=5)
+
+	X_sub[0, 0, 5] = 99
+	assert_array_almost_equal(X, X_orig)
