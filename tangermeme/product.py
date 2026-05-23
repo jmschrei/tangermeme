@@ -1,7 +1,11 @@
 # product.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
 import itertools
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import torch
 
@@ -23,8 +27,17 @@ def _apply(func, model, X, args, batch_size, device, verbose,
 	return y
 
 
-def apply_pairwise(func, model, X, args=None, batch_size=32, device=None,
-	additional_func_kwargs=None, verbose=False, **kwargs):
+def apply_pairwise(
+	func: Callable[..., Any],
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	args: Sequence[torch.Tensor] | None = None,
+	batch_size: int = 32,
+	device: str | torch.device | None = None,
+	additional_func_kwargs: dict | None = None,
+	verbose: bool = False,
+	**kwargs: Any,
+) -> torch.Tensor | list[torch.Tensor]:
 	"""Apply a function on the cartesian product between X and args.
 
 	This function will take the provided function and apply it in a batched
@@ -161,8 +174,17 @@ def apply_pairwise(func, model, X, args=None, batch_size=32, device=None,
 	return y
 
 
-def apply_product(func, model, X, args, batch_size=32, device=None,
-	additional_func_kwargs=None, verbose=False, **kwargs):
+def apply_product(
+	func: Callable[..., Any],
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	args: Sequence[torch.Tensor],
+	batch_size: int = 32,
+	device: str | torch.device | None = None,
+	additional_func_kwargs: dict | None = None,
+	verbose: bool = False,
+	**kwargs: Any,
+) -> torch.Tensor | list[torch.Tensor]:
 	"""Apply a function on the cartesian product between X and each args.
 
 	This function will take the provided function and apply it in a batched
