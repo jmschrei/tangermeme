@@ -1,6 +1,10 @@
 # annotate.py
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
+from typing import Any
+
 import numpy
 import torch
 import pandas
@@ -11,7 +15,14 @@ from .utils import _validate_input
 from memelite.tomtom import tomtom
 
 
-def annotate_seqlets(X, seqlets, motifs, n_nearest=1, n_jobs=-1, **kwargs):
+def annotate_seqlets(
+	X: torch.Tensor,
+	seqlets: pandas.DataFrame,
+	motifs: str | dict,
+	n_nearest: int = 1,
+	n_jobs: int = -1,
+	**kwargs: Any,
+) -> tuple[pandas.DataFrame, list[str]]:
 	"""Annotate a set of seqlets according to a motif database using TOMTOM.
 
 	This function takes in a set of seqlets and a motif database and assigns
@@ -78,7 +89,12 @@ def annotate_seqlets(X, seqlets, motifs, n_nearest=1, n_jobs=-1, **kwargs):
 	return torch.from_numpy(idxs).type(torch.int32), torch.from_numpy(p_values)
 
 
-def count_annotations(X, dtype=torch.uint8, shape=None, dim=None):
+def count_annotations(
+	X: torch.Tensor | pandas.DataFrame,
+	dtype: torch.dtype = torch.uint8,
+	shape: tuple[int, ...] | None = None,
+	dim: int | None = None,
+) -> torch.Tensor:
 	"""A method for counting the annotations for each example.
 
 	This function takes in a tensor of (example_idx, annotation_idx) pairs and
@@ -167,7 +183,13 @@ def count_annotations(X, dtype=torch.uint8, shape=None, dim=None):
 	return y
 
 
-def pairwise_annotations(X, dtype=torch.int64, unique=True, symmetric=True, shape=None):
+def pairwise_annotations(
+	X: torch.Tensor | pandas.DataFrame,
+	dtype: torch.dtype = torch.int64,
+	unique: bool = True,
+	symmetric: bool = True,
+	shape: tuple[int, ...] | None = None,
+) -> torch.Tensor:
 	"""Returns the number of times pairs of annotations occur in an example.
 
 	This function takes in a tensor of (example_idx, annotation_idx) pairs and
@@ -256,8 +278,13 @@ def pairwise_annotations(X, dtype=torch.int64, unique=True, symmetric=True, shap
 	return torch.from_numpy(y)
 
 
-def pairwise_annotations_spacing(X, max_distance=100, dtype=torch.uint8, 
-	symmetric=True, shape=None):
+def pairwise_annotations_spacing(
+	X: torch.Tensor | pandas.DataFrame,
+	max_distance: int = 100,
+	dtype: torch.dtype = torch.uint8,
+	symmetric: bool = True,
+	shape: tuple[int, ...] | None = None,
+) -> torch.Tensor:
 	"""Finds the number of times each annotation pair occurs at each distance.
 
 	This function takes in a tensor of (example_idx, annotation_idx, start, end) 
