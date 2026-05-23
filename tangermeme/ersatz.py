@@ -1,17 +1,18 @@
 # ersatz.py
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import warnings
+
 import numba
 import numpy
 import torch
-import pandas
 
 from tqdm import tqdm
-from itertools import compress
 
 from .utils import _validate_input
 from .utils import one_hot_encode
 from .utils import random_one_hot
+from .utils import TangermemeWarning
 
 
 def insert(X, motif, start=None, alphabet=list("ACGT")):
@@ -563,8 +564,9 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 	conserved = shuffled_sequences[:, :, 1:-1].sum(dim=0)
 	if conserved.max() == n_shuffles:
 		if verbose:
-			print("Warning: At least one position in dinucleotide shuffle " +
-				"is identical across all positions.")
+			warnings.warn(
+				"At least one position in dinucleotide shuffle is identical "
+				"across all positions.", TangermemeWarning, stacklevel=2)
 	if conserved.max(dim=0).values.min() == n_shuffles and n_shuffles > 1:
 		raise ValueError("All dinucleotide shuffles yield identical " +
 			"sequences, potentially due to a lack of diversity in sequence.")
