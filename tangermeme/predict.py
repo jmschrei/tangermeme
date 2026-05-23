@@ -1,7 +1,11 @@
 # predict.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
 import contextlib
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import torch
 
@@ -10,8 +14,16 @@ from tqdm import trange
 from ._compat import _autocast_supported, _preserve_model_state, _resolve_device
 
 
-def predict(model, X, args=None, func=None, batch_size=32, dtype=None,
-	device=None, verbose=False):
+def predict(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	args: Sequence[torch.Tensor] | None = None,
+	func: Callable[..., Any] | None = None,
+	batch_size: int = 32,
+	dtype: str | torch.dtype | None = None,
+	device: str | torch.device | None = None,
+	verbose: bool = False,
+) -> torch.Tensor | list[torch.Tensor]:
 	"""Make batched predictions in a memory-efficient manner.
 
 	This function will take a PyTorch model and make predictions from it using
