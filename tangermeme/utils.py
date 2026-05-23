@@ -1,10 +1,14 @@
 # utils.py
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
 import warnings
+from typing import Any
 
 import numpy
 import numba
+import pandas
 import torch
 
 from tqdm import tqdm
@@ -16,14 +20,28 @@ class TangermemeWarning(UserWarning):
 	`warnings.simplefilter('error', TangermemeWarning)`)."""
 
 
-def _warn_or_raise(error, message, only_warn):
+def _warn_or_raise(
+	error: type[Exception],
+	message: str,
+	only_warn: bool,
+) -> None:
 	if only_warn:
 		warnings.warn(message, TangermemeWarning, stacklevel=3)
 	else:
 		raise error(message)
 
-def _validate_input(X, name, shape=None, dtype=None, min_value=None,
-	max_value=None, ohe=False, ohe_dim=1, allow_N=False, only_warn=False):
+def _validate_input(
+	X: torch.Tensor,
+	name: str,
+	shape: tuple[int, ...] | None = None,
+	dtype: torch.dtype | None = None,
+	min_value: float | None = None,
+	max_value: float | None = None,
+	ohe: bool = False,
+	ohe_dim: int = 1,
+	allow_N: bool = False,
+	only_warn: bool = False,
+) -> torch.Tensor:
 	"""An internal function for validating properties of the input.
 	
 	This function will take in an object and verify characteristics of it, such
@@ -129,7 +147,10 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 	return X
 
 
-def _cast_as_tensor(value, dtype=None):
+def _cast_as_tensor(
+	value: Any,
+	dtype: torch.dtype | None = None,
+) -> torch.Tensor | None:
 	"""Cast your input as a torch tensor.
 
 	This function will take some array-like input and cast it as a torch
@@ -177,7 +198,12 @@ def _cast_as_tensor(value, dtype=None):
 			return torch.tensor(value, dtype=dtype)
 
 
-def example_to_fasta_coords(example_df, loci_df, window=None, one_indexed=False):
+def example_to_fasta_coords(
+	example_df: pandas.DataFrame,
+	loci_df: pandas.DataFrame,
+	window: int | None = None,
+	one_indexed: bool = False,
+) -> pandas.DataFrame:
 	"""Converts coordinates within a given example to those in a FASTA file.
 	
 	Many analyses involve extracting windows from the genome and processing them
@@ -277,7 +303,12 @@ def example_to_fasta_coords(example_df, loci_df, window=None, one_indexed=False)
 	return coords_df
 
 
-def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False, allow_N=False):
+def characters(
+	pwm: torch.Tensor | numpy.ndarray,
+	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
+	force: bool = False,
+	allow_N: bool = False,
+) -> str:
 	"""Converts a PWM/one-hot encoding to a string sequence.
 
 	This function takes in a PWM or one-hot encoding and converts it to the
@@ -361,8 +392,15 @@ def _fast_one_hot_encode(X_ohe, seq, mapping):
 		X_ohe[i, idx] = 1
 
 
-def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype=torch.int8, 
-	ignore=['N'], desc=None, verbose=False, **kwargs):
+def one_hot_encode(
+	sequence: str | list[str],
+	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
+	dtype: str | torch.dtype = torch.int8,
+	ignore: list[str] = ['N'],
+	desc: str | None = None,
+	verbose: bool = False,
+	**kwargs: Any,
+) -> torch.Tensor:
 	"""Converts a string or list of characters into a one-hot encoding.
 
 	This function will take in either a string or a list and convert it into a
@@ -434,8 +472,11 @@ def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype=torch.int8,
 	return torch.from_numpy(one_hot_encoding).type(dtype).T
 
 
-def reverse_complement(seq, complement_map={"A": "T", "C": "G", "G": "C", 
-	"T": "A"}, allow_N=True):
+def reverse_complement(
+	seq: str | torch.Tensor,
+	complement_map: dict[str, str] = {"A": "T", "C": "G", "G": "C", "T": "A"},
+	allow_N: bool = True,
+) -> str | torch.Tensor:
 	"""Return the reverse complement of a single sequence.
 
 	This function will take in a single one-hot encoding of a sequence, or a
@@ -493,7 +534,12 @@ def reverse_complement(seq, complement_map={"A": "T", "C": "G", "G": "C",
 	return seq_rc
 
 
-def random_one_hot(shape, probs=None, dtype='int8', random_state=None):
+def random_one_hot(
+	shape: tuple[int, int, int],
+	probs: list | tuple | numpy.ndarray | None = None,
+	dtype: str | numpy.dtype = 'int8',
+	random_state: int | numpy.random.RandomState | None = None,
+) -> torch.Tensor:
 	"""Generate random one-hot encodings. Useful for debugging.
 
 	This function will generate random one-hot encodings where the second to
@@ -558,7 +604,11 @@ def random_one_hot(shape, probs=None, dtype='int8', random_state=None):
 	return torch.from_numpy(ohe)
 
 
-def chunk(X, size=1024, overlap=0):
+def chunk(
+	X: list[torch.Tensor],
+	size: int = 1024,
+	overlap: int = 0,
+) -> torch.Tensor:
 	"""Chunk a set of sequences into overlapping blocks.
 
 	This function will take a set of sequences of variable length and will
@@ -607,7 +657,11 @@ def chunk(X, size=1024, overlap=0):
 		for x in X], dim=0)
 
 
-def unchunk(X, lengths=None, overlap=0):
+def unchunk(
+	X: list | numpy.ndarray | torch.Tensor,
+	lengths: list | numpy.ndarray | torch.Tensor | None = None,
+	overlap: int = 0,
+) -> list[torch.Tensor]:
 	"""Unchunk fixed-length segments back into variable-length sequences.
 
 	After chunking a set of variable length sequences into fixed-length chunks
@@ -688,7 +742,7 @@ def unchunk(X, lengths=None, overlap=0):
 	return y
 	
 
-def pwm_consensus(X):
+def pwm_consensus(X: torch.Tensor | numpy.ndarray) -> torch.Tensor:
 	"""Take in a PWM and return the consensus.
 
 	This function will take in a PWM that encodes the probabilities of each
@@ -724,7 +778,11 @@ def pwm_consensus(X):
 	return Y
 
 
-def extract_signal(loci, X, verbose=False):
+def extract_signal(
+	loci: pandas.DataFrame,
+	X: torch.Tensor | numpy.ndarray,
+	verbose: bool = False,
+) -> torch.Tensor:
 	"""Extracts the signal at coordinates from a tensor of examples.
 
 	This function takes in a dataframe with the first three columns being the
