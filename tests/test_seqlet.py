@@ -317,3 +317,39 @@ def test_recursive_seqlets_p_values(X_contrib):
 	assert seqlets.shape == (24, 5)
 	assert seqlets2.shape == (250, 5)
 	assert seqlets3.shape == (8, 5)
+
+
+###
+
+
+def test_recursive_seqlets_numpy_input(X_contrib):
+	seqlets_torch = recursive_seqlets(X_contrib)
+	seqlets_numpy = recursive_seqlets(X_contrib.numpy())
+
+	assert_array_almost_equal(seqlets_torch.values, seqlets_numpy.values, 4)
+
+
+def test_recursive_seqlets_p_value_sorted(X_contrib):
+	seqlets = recursive_seqlets(X_contrib)
+	assert seqlets['p-value'].is_monotonic_increasing
+
+
+def test_recursive_seqlets_schema_invariants(X_contrib):
+	seqlets = recursive_seqlets(X_contrib)
+	L = X_contrib.shape[-1]
+
+	assert (seqlets['start'] < seqlets['end']).all()
+	assert (seqlets['start'] >= 0).all()
+	assert (seqlets['end'] <= L).all()
+	assert (seqlets['example_idx'] >= 0).all()
+	assert (seqlets['example_idx'] < X_contrib.shape[0]).all()
+
+
+def test_tfmodisco_seqlets_determinism(X_contrib):
+	torch.manual_seed(0)
+	seqlets0 = tfmodisco_seqlets(X_contrib)
+
+	torch.manual_seed(0)
+	seqlets1 = tfmodisco_seqlets(X_contrib)
+
+	assert_array_almost_equal(seqlets0.values, seqlets1.values, 4)
