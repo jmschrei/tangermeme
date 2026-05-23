@@ -994,3 +994,61 @@ def test_predict_multi_input_multi_output_bf16(X, alpha, beta, cuda_device):
 		[-0.0359, -0.2305, -0.0820],
 		[-0.0011, -0.0972,  0.1533],
 		[-0.1797, -0.3789, -0.0310]], 2)
+
+
+###
+
+
+def test_predict_func_identity(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	y_default = predict(model, X, batch_size=8, device=device)
+	y_func = predict(model, X, batch_size=8, device=device, func=lambda y: y)
+
+	assert_array_almost_equal(y_default, y_func)
+
+
+def test_predict_func_projection(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	y_default = predict(model, X, batch_size=8, device=device)
+	y_proj = predict(model, X, batch_size=8, device=device,
+		func=lambda y: y[:, 0])
+
+	assert y_proj.shape == (64,)
+	assert_array_almost_equal(y_proj, y_default[:, 0])
+
+
+def test_predict_verbose(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	y0 = predict(model, X, batch_size=8, device=device, verbose=False)
+	y1 = predict(model, X, batch_size=8, device=device, verbose=True)
+
+	assert_array_almost_equal(y0, y1)
+
+
+def test_predict_empty_X(device):
+	model = FlattenDense()
+	X_empty = torch.zeros((0, 4, 100))
+
+	assert_raises(ValueError, predict, model, X_empty, batch_size=8,
+		device=device)
+
+
+def test_predict_batch_size_zero(X, device):
+	model = FlattenDense()
+
+	assert_raises(ValueError, predict, model, X, batch_size=0, device=device)
+
+
+def test_predict_convdense_returns_list(X, device):
+	torch.manual_seed(0)
+	model = ConvDense()
+	y = predict(model, X, batch_size=8, device=device)
+
+	assert isinstance(y, list)
+	assert len(y) == 2
