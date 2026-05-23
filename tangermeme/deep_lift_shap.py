@@ -1,9 +1,14 @@
 # deep_lift_shap.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
 import contextlib
 import warnings
+from collections.abc import Callable
+from typing import Any
 
+import numpy
 import torch
 import torch.nn.functional as F
 
@@ -14,7 +19,11 @@ from .ersatz import dinucleotide_shuffle
 from .utils import _validate_input
 
 
-def hypothetical_attributions(multipliers, X, references):
+def hypothetical_attributions(
+	multipliers: tuple[torch.Tensor],
+	X: tuple[torch.Tensor],
+	references: tuple[torch.Tensor],
+) -> tuple[torch.Tensor]:
 	"""A function for aggregating contributions into hypothetical attributions.
 
 	When handling categorical data, like one-hot encodings, the gradients
@@ -200,11 +209,26 @@ def _maxpool(module, grad_input, grad_output):
 	return (new_grad_inp,)
 
 
-def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
-	references=dinucleotide_shuffle, n_shuffles=20, return_references=False,
-	hypothetical=False, warning_threshold=0.001, additional_nonlinear_ops=None,
-	print_convergence_deltas=False, raw_outputs=False, only_warn=False,
-	dtype=None, device=None, random_state=None, verbose=False):
+def deep_lift_shap(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	args: tuple | None = None,
+	target: int = 0,
+	batch_size: int = 32,
+	references: Callable[..., Any] | torch.Tensor = dinucleotide_shuffle,
+	n_shuffles: int = 20,
+	return_references: bool = False,
+	hypothetical: bool = False,
+	warning_threshold: float = 0.001,
+	additional_nonlinear_ops: dict | None = None,
+	print_convergence_deltas: bool = False,
+	raw_outputs: bool = False,
+	only_warn: bool = False,
+	dtype: str | torch.dtype | None = None,
+	device: str | torch.device | None = None,
+	random_state: int | numpy.random.RandomState | None = None,
+	verbose: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
 	"""Calculate attributions for a set of sequences using DeepLIFT/SHAP.
 
 	This function will calculate the DeepLIFT/SHAP attributions on a set of
@@ -530,9 +554,20 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 	return attributions
 
 
-def _captum_deep_lift_shap(model, X, args=None, target=0, batch_size=32,
-	references=dinucleotide_shuffle, n_shuffles=20,  return_references=False,
-	hypothetical=False, device=None, random_state=None, verbose=False):
+def _captum_deep_lift_shap(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	args: tuple | None = None,
+	target: int = 0,
+	batch_size: int = 32,
+	references: Callable[..., Any] | torch.Tensor = dinucleotide_shuffle,
+	n_shuffles: int = 20,
+	return_references: bool = False,
+	hypothetical: bool = False,
+	device: str | torch.device | None = None,
+	random_state: int | numpy.random.RandomState | None = None,
+	verbose: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
 	"""Calculate attributions using DeepLift/Shap and a given model. 
 
 	This function will calculate DeepLift/Shap attributions on a set of
