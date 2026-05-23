@@ -144,7 +144,7 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1,
 	dtype: str or torch.dtype or None, optional
 		The dtype to use with mixed precision autocasting. If None, use the dtype of
 		the *model*. This allows you to use int8 to represent large data sets and
-		only convert batches to the higher precision, saving memory. Defailt is None.
+		only convert batches to the higher precision, saving memory. Default is None.
 	
 	device: str or torch.device, optional
 		The device to move the model and batches to when making predictions. If
