@@ -1,16 +1,33 @@
 # ablate.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
-import torch
+from __future__ import annotations
+
 import inspect
+from collections.abc import Callable, Sequence
+from typing import Any
+
+import numpy
+import torch
 
 from .utils import _validate_input
 from .ersatz import shuffle
 from .predict import predict
 
 
-def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None, 
-	random_state=None, func=predict, additional_func_kwargs=None, **kwargs):
+def ablate(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	start: int,
+	end: int,
+	n: int = 20,
+	shuffle_fn: Callable[..., Any] = shuffle,
+	args: Sequence[torch.Tensor] | None = None,
+	random_state: int | numpy.random.RandomState | None = None,
+	func: Callable[..., Any] = predict,
+	additional_func_kwargs: dict | None = None,
+	**kwargs: Any,
+) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
 	"""Make predictions before and after shuffling a region of sequences.
 
 	An ablation experiment is one where a motif (or region of interest) is
@@ -140,7 +157,12 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 	return y_before, y_after
 
 
-def ablate_annotations(model, X, annotations, **kwargs):
+def ablate_annotations(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	annotations: torch.Tensor,
+	**kwargs: Any,
+) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
 	"""Ablate each annotation individually and return the deltas.
 
 	This function takes in a model, a set of sequences, and a set of annotations
