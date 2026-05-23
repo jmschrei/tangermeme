@@ -2,6 +2,8 @@
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 # Code adapted from Alex Tseng, Avanti Shrikumar, and Ziga Avsec
 
+import warnings
+
 import numpy
 import torch
 import pandas
@@ -13,6 +15,7 @@ from tqdm import tqdm
 
 from .utils import one_hot_encode
 from .utils import characters
+from .utils import TangermemeWarning
 
 from memelite.io import read_meme as memelite_read_meme
 
@@ -218,10 +221,11 @@ def _extract_locus_signal(signals, chrom, start, end):
 		else:
 			try:
 				values_ = numpy.array(signal.values(chrom, start, end), dtype=numpy.float32)
-			except:
-				print(f"Warning: {chrom} {start} {end} not " +
-					"valid bigwig indexes. Using zeros instead.")
-				values_ = numpy.zeros(end-start,dtype=numpy.float32)
+			except (RuntimeError, ValueError, KeyError):
+				warnings.warn(
+					f"{chrom} {start} {end} not valid bigwig indexes. "
+					"Using zeros instead.", TangermemeWarning, stacklevel=2)
+				values_ = numpy.zeros(end-start, dtype=numpy.float32)
 				
 		values_ = numpy.nan_to_num(values_)
 		values.append(values_)
