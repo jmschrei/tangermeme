@@ -11,6 +11,7 @@ from tangermeme.ersatz import substitute
 
 from tangermeme.deep_lift_shap import deep_lift_shap
 from tangermeme.marginalize import marginalize
+from tangermeme.marginalize import marginalize_annotations
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense
@@ -614,5 +615,114 @@ def test_marginalize_deep_lift_shap_raises(X, device):
 
 	assert_raises(TypeError, marginalize, model, X, "ACGTC", func=deep_lift_shap,
 		device=device, additional_func_kwargs={'device': 'cpu'})
-	assert_raises(TypeError, marginalize, model, X, "ACGTC", 
+	assert_raises(TypeError, marginalize, model, X, "ACGTC",
 		func=deep_lift_shap, device=device, end=10)
+
+
+###
+
+
+def test_marginalize_returns_tuple_not_list(X, device):
+	model = FlattenDense()
+	result = marginalize(model, X, "ACGTC", batch_size=8, device=device)
+
+	assert isinstance(result, tuple)
+	assert len(result) == 2
+
+
+def test_marginalize_additional_func_kwargs_none(X, device):
+	model = FlattenDense()
+
+	y_before0, y_after0 = marginalize(model, X, "ACGTC", batch_size=8,
+		device=device, additional_func_kwargs=None)
+	y_before1, y_after1 = marginalize(model, X, "ACGTC", batch_size=8,
+		device=device)
+
+	assert_array_almost_equal(y_before0, y_before1, 4)
+	assert_array_almost_equal(y_after0, y_after1, 4)
+
+
+def test_marginalize_annotations_basic(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X0 = X[:5].clone()
+
+	annotations = torch.tensor([
+		[0, 10, 18],
+		[3, 20, 30],
+		[3, 40, 46],
+	], dtype=torch.int64)
+
+	y_befores, y_afters = marginalize_annotations(model, X, X0, annotations,
+		batch_size=8, device=device)
+
+	assert isinstance(y_befores, torch.Tensor)
+	assert isinstance(y_afters, torch.Tensor)
+	assert y_befores.shape == (3, 5, 3)
+	assert y_afters.shape == (3, 5, 3)
+
+	for i, (idx, start, end) in enumerate(annotations):
+		seq = X[idx, :, start:end].unsqueeze(0)
+		yb, ya = marginalize(model, X0, seq, batch_size=8, device=device)
+		assert_array_almost_equal(y_befores[i], yb, 4)
+		assert_array_almost_equal(y_afters[i], ya, 4)
+
+
+def test_marginalize_annotations_multi_output(X, device):
+	torch.manual_seed(0)
+	model = ConvDense()
+	X0 = X[:4].clone()
+
+	annotations = torch.tensor([
+		[0, 10, 18],
+		[3, 40, 46],
+	], dtype=torch.int64)
+
+	y_befores, y_afters = marginalize_annotations(model, X, X0, annotations,
+		batch_size=2, device=device)
+
+	assert isinstance(y_befores, list)
+	assert isinstance(y_afters, list)
+	assert len(y_befores) == 2
+	assert len(y_afters) == 2
+
+	assert y_befores[0].shape == (2, 4, 12, 98)
+	assert y_befores[1].shape == (2, 4, 3)
+	assert y_afters[0].shape == (2, 4, 12, 98)
+	assert y_afters[1].shape == (2, 4, 3)
+
+
+def test_marginalize_annotations_deep_lift_shap(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	X0 = X[:3].clone()
+
+	annotations = torch.tensor([
+		[0, 45, 55],
+		[3, 45, 55],
+	], dtype=torch.int64)
+
+	y_befores, y_afters = marginalize_annotations(model, X, X0, annotations,
+		func=deep_lift_shap, n_shuffles=3, device=device, random_state=0)
+
+	assert y_befores.shape == (2, 3, 4, 100)
+	assert y_afters.shape == (2, 3, 4, 100)
+	assert y_befores.dtype == torch.float32
+	assert y_afters.dtype == torch.float32
+
+
+def test_marginalize_annotations_numpy_array(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X0 = X[:3].clone()
+
+	annotations_np = numpy.array([
+		[0, 10, 18],
+		[3, 40, 46],
+	])
+
+	y_befores, y_afters = marginalize_annotations(model, X, X0, annotations_np,
+		batch_size=8, device=device)
+
+	assert y_befores.shape == (2, 3, 3)
+	assert y_afters.shape == (2, 3, 3)
