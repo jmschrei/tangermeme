@@ -179,6 +179,10 @@ def marginalize_annotations(
 		those.
 	"""
 
+	if len(annotations) == 0:
+		raise ValueError("marginalize_annotations requires at least one "
+			"annotation; got an empty annotations tensor.")
+
 	y_befores, y_afters = [], []
 
 	for idx, start, end in annotations:

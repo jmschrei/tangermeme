@@ -353,3 +353,11 @@ def test_tfmodisco_seqlets_determinism(X_contrib):
 	seqlets1 = tfmodisco_seqlets(X_contrib)
 
 	assert_array_almost_equal(seqlets0.values, seqlets1.values, 4)
+
+
+def test_recursive_seqlets_empty():
+	assert_raises(ValueError, recursive_seqlets, torch.zeros(0, 100))
+
+
+def test_tfmodisco_seqlets_empty():
+	assert_raises(ValueError, tfmodisco_seqlets, torch.zeros(0, 100))

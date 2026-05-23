@@ -279,7 +279,12 @@ def tfmodisco_seqlets(
 		and attribution sum for each seqlet that passes the thresholds.
 	"""
 
-	_validate_input(X_attr, "X_attr", shape=(-1, -1)) 
+	_validate_input(X_attr, "X_attr", shape=(-1, -1))
+
+	if X_attr.shape[0] == 0 or X_attr.shape[1] == 0:
+		raise ValueError("tfmodisco_seqlets requires X_attr to be non-empty; "
+			"got X_attr with shape {}.".format(tuple(X_attr.shape)))
+
 	suppress = int(0.5*window_size) + flank
 
 	X_sum = X_attr.unfold(-1, window_size, 1).sum(dim=-1)
@@ -561,8 +566,12 @@ def recursive_seqlets(
 	elif not isinstance(X, numpy.ndarray):
 		raise ValueError("`X` must be either a torch.Tensor or numpy.ndarray.")
 
+	if X.size == 0:
+		raise ValueError("recursive_seqlets requires X to be non-empty; got "
+			"X with shape {}.".format(tuple(X.shape)))
+
 	columns = ['example_idx', 'start', 'end', 'attribution', 'p-value']
-	seqlets = _recursive_seqlets(X, threshold, min_seqlet_len, max_seqlet_len, 
+	seqlets = _recursive_seqlets(X, threshold, min_seqlet_len, max_seqlet_len,
 		additional_flanks, n_bins)
 	seqlets = pandas.DataFrame(seqlets, columns=columns)
 	return seqlets.sort_values("p-value").reset_index(drop=True)
