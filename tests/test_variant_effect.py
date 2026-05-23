@@ -153,3 +153,55 @@ def test_insertion_effect_summodel(X, substitutions, device):
 		[24., 24., 20., 32.],
         [26., 19., 28., 27.],
         [28., 25., 21., 26.]])
+
+
+###
+
+
+def test_deletion_effect_left(X_del, deletions, device):
+	model = SumModel()
+
+	# left=False trims from the right; left=True trims from the left.
+	y_right, y_var_right = deletion_effect(model, X_del, deletions,
+		left=False, device=device)
+	y_left, y_var_left = deletion_effect(model, X_del, deletions,
+		left=True, device=device)
+
+	# y_before reflects which side was trimmed: right-trim uses [:100],
+	# left-trim uses [-100:].
+	assert_array_almost_equal(y_right, X_del[:, :, :100].sum(dim=-1))
+	assert_array_almost_equal(y_left, X_del[:, :, -100:].sum(dim=-1))
+
+
+def test_insertion_effect_left(X, substitutions, device):
+	model = SumModel()
+
+	y_right, y_var_right = insertion_effect(model, X, substitutions,
+		left=False, device=device)
+	y_left, y_var_left = insertion_effect(model, X, substitutions,
+		left=True, device=device)
+
+	# Both runs return the same y_before (predict on the unmodified X).
+	assert_array_almost_equal(y_right, y_left)
+
+
+def test_substitution_effect_no_variant_for_example(X, device):
+	model = SumModel()
+
+	# Only example 0 has a variant; example 1 and 2 are untouched.
+	substitutions = torch.tensor([[0, 4, 1]])
+	y, y_var = substitution_effect(model, X, substitutions, device=device)
+
+	# example 0 differs, examples 1 and 2 are identical before/after
+	assert_array_almost_equal(y[1], y_var[1])
+	assert_array_almost_equal(y[2], y_var[2])
+	assert_raises(AssertionError, assert_array_almost_equal, y[0], y_var[0])
+
+
+def test_substitution_effect_does_not_mutate_X(X, substitutions, device):
+	model = SumModel()
+	X_before = X.clone()
+	substitution_effect(model, X, substitutions, device=device)
+
+	# substitution_effect clones X internally, so the input is unchanged.
+	assert_array_almost_equal(X, X_before)
