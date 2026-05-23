@@ -591,6 +591,15 @@ def test_randomize_raises_ends(X):
 	assert_raises(ValueError, randomize, X, start=5, end=1000)
 
 
+def test_randomize_full_sequence(X):
+	# `end` is exclusive (matches Python slicing conventions used elsewhere
+	# in ersatz), so end == X.shape[-1] is the "randomize entire sequence"
+	# case and must not raise.
+	X_rand = randomize(X, start=0, end=X.shape[-1], random_state=0)
+	assert X_rand.shape == (1, 1, 4, X.shape[-1])
+	assert X_rand.sum() == X.sum()
+
+
 def test_randomize_raises_probs(X):
 	assert_raises(ValueError, randomize, X, start=5, end=10,
 		probs=[[0.1, 0.8, 0.1]])
