@@ -636,8 +636,53 @@ def test_space_deep_lift_shap_raises(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
-	assert_raises(TypeError, space, model, X, ["ACGTC", "GAGA"], [[1]], 
-		func=deep_lift_shap, device=device, 
+	assert_raises(TypeError, space, model, X, ["ACGTC", "GAGA"], [[1]],
+		func=deep_lift_shap, device=device,
 		additional_func_kwargs={'device': 'cpu'})
-	assert_raises(TypeError, space, model, X, ["ACGTC", "GAGA"], [[1]], 
+	assert_raises(TypeError, space, model, X, ["ACGTC", "GAGA"], [[1]],
 		func=deep_lift_shap, device=device, end=10)
+
+
+###
+
+
+def test_space_pre_encoded_tensor_motifs(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	motif_a = one_hot_encode("ACGTC").unsqueeze(0)
+	motif_b = one_hot_encode("GAGA").unsqueeze(0)
+
+	yb_str, ya_str = space(model, X, ["ACGTC", "GAGA"], [[1]],
+		batch_size=8, device=device)
+	yb_ten, ya_ten = space(model, X, [motif_a, motif_b], [[1]],
+		batch_size=8, device=device)
+
+	assert_array_almost_equal(yb_str, yb_ten, 4)
+	assert_array_almost_equal(ya_str, ya_ten, 4)
+
+
+def test_space_verbose(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	yb0, ya0 = space(model, X, ["ACGTC", "GAGA"], [[1]],
+		batch_size=8, device=device, verbose=False)
+	yb1, ya1 = space(model, X, ["ACGTC", "GAGA"], [[1]],
+		batch_size=8, device=device, verbose=True)
+
+	assert_array_almost_equal(yb0, yb1, 4)
+	assert_array_almost_equal(ya0, ya1, 4)
+
+
+def test_space_multiple_motifs_multiple_spacings(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	motifs = ["ACGTC", "GAGA", "TTTT"]
+	spacing = [[1, 2], [3, 4], [5, 6]]
+
+	yb, ya = space(model, X, motifs, spacing, batch_size=8, device=device)
+
+	assert yb.shape == (64, 3)
+	assert ya.shape == (64, 3, 3)
