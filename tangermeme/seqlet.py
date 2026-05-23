@@ -1,6 +1,8 @@
 # seqlet.py
 # Authors: Jacob Schreiber <jmschreiber91@gmail.com>
-# adapted from code written by Avanti Shrikumar 
+# adapted from code written by Avanti Shrikumar
+
+from __future__ import annotations
 
 import math
 import numpy
@@ -206,9 +208,15 @@ def _isotonic_thresholds(values, null_values, increasing, target_fdr,
 	return values[precisions >= (1 - target_fdr)][0].item()
 
 
-def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2, 
-	min_passing_frac=0.03, max_passing_frac=0.2, 
-	weak_threshold_for_counting_sign=0.8):
+def tfmodisco_seqlets(
+	X_attr: torch.Tensor,
+	window_size: int = 21,
+	flank: int = 10,
+	target_fdr: float = 0.2,
+	min_passing_frac: float = 0.03,
+	max_passing_frac: float = 0.2,
+	weak_threshold_for_counting_sign: float = 0.8,
+) -> pandas.DataFrame:
 	"""Extract seqlets using the procedure from TF-MoDISco.
 
 	Seqlets are contiguous spans of high attribution characters. This method
@@ -452,8 +460,14 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	return seqlets
 
 
-def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25, 
-	additional_flanks=0, n_bins=1000):
+def recursive_seqlets(
+	X: torch.Tensor,
+	threshold: float = 0.01,
+	min_seqlet_len: int = 4,
+	max_seqlet_len: int = 25,
+	additional_flanks: int = 0,
+	n_bins: int = 1000,
+) -> pandas.DataFrame:
 	"""A seqlet caller implementing the recursive seqlet algorithm.
 
 	NOTE: Currently only *positive* seqlets will be identified. The easiest way
