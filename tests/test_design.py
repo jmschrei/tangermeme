@@ -381,3 +381,54 @@ def test_greedy_marginalize(X_marg, motifs, device):
 	assert all(torch.unique(X_hat) == torch.tensor([0, 1], dtype=torch.int8))
 
 
+###
+
+
+def test_screen_random_state_reproducibility(device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	y = [10]
+
+	X_hat0 = screen(model, (4, 100), y, device=device, max_iter=1,
+		random_state=0)
+	X_hat1 = screen(model, (4, 100), y, device=device, max_iter=1,
+		random_state=0)
+
+	assert_array_almost_equal(X_hat0, X_hat1)
+
+
+def test_greedy_substitution_max_iter_default(X, motifs, device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	y = [[10]]
+
+	X_hat = greedy_substitution(model, X, y, motifs, device=device)
+
+	assert_array_almost_equal(X_hat, X)
+
+
+def test_greedy_substitution_tol_no_improvement_stops(X, motifs, device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+
+	y_current = predict(model, X, device=device)
+
+	X_hat = greedy_substitution(model, X, y_current, motifs, device=device,
+		max_iter=10, tol=1e-3)
+
+	assert_array_almost_equal(X_hat, X)
+
+
+def test_greedy_substitution_pre_encoded_motif_tensors(X, device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	y = [[10]]
+
+	motif_tensor = torch.tensor(
+		[[1, 0], [0, 1], [0, 0], [0, 0]], dtype=torch.int8
+	)
+
+	assert_raises(Exception, greedy_substitution, model, X, y, [motif_tensor],
+		device=device, max_iter=1)
+
+
