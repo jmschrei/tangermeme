@@ -20,6 +20,9 @@ from tangermeme.seqlet import recursive_seqlets
 from tangermeme.annotate import annotate_seqlets
 from tangermeme.annotate import count_annotations
 from tangermeme.annotate import pairwise_annotations
+from tangermeme.annotate import pairwise_annotations_spacing
+
+from tangermeme.io import read_meme
 
 
 @pytest.fixture
@@ -221,6 +224,101 @@ def test_pairwise_annotations_raises(annotations):
 	assert_raises(ValueError, pairwise_annotations, annotations - 10)
 	assert_raises(ValueError, pairwise_annotations, annotations.T)
 	assert_raises(ValueError, pairwise_annotations, torch.randn(100, 2))
-	assert_raises(ValueError, pairwise_annotations, torch.cat([annotations, 
+	assert_raises(ValueError, pairwise_annotations, torch.cat([annotations,
 		annotations], dim=1))
-	
+
+
+def test_pairwise_annotations_shape(annotations):
+	y = pairwise_annotations(annotations)
+	assert y.shape == (7, 7)
+
+	y = pairwise_annotations(annotations, shape=20)
+	assert y.shape == (20, 20)
+
+	assert_raises(RuntimeError, pairwise_annotations, annotations, shape=3)
+
+
+def test_pairwise_annotations_self_loops():
+	X = torch.tensor([[0, 0], [0, 0], [0, 0]], dtype=torch.int64)
+	y = pairwise_annotations(X, unique=False)
+	assert int(y[0, 0]) == 3
+
+	y = pairwise_annotations(X, unique=True)
+	assert int(y[0, 0]) == 0
+
+
+def test_count_annotations_dim_with_shape(annotations):
+	X = count_annotations(annotations, dim=0, shape=(30, 30))
+	assert X.shape == (30,)
+
+	X = count_annotations(annotations, dim=1, shape=(30, 30))
+	assert X.shape == (30,)
+
+
+def test_count_annotations_tuple_input_numpy(annotations):
+	X_tensor = count_annotations(annotations)
+
+	np0 = annotations[:, 0].numpy()
+	np1 = annotations[:, 1].numpy()
+	X_list = count_annotations([np0, np1])
+
+	assert_array_almost_equal(X_tensor, X_list)
+
+
+###
+
+
+def test_pairwise_annotations_spacing_basic():
+	# (example_idx, annotation_idx, start, end)
+	X = torch.tensor([
+		[0, 0, 0, 5],
+		[0, 1, 10, 15],
+		[0, 1, 20, 25],
+	], dtype=torch.int64)
+
+	y = pairwise_annotations_spacing(X)
+
+	assert y.shape == (2, 2, 100)
+	assert y.dtype == torch.uint8
+
+	assert int(y[0, 1, 5]) == 1
+	assert int(y[1, 0, 5]) == 1
+	assert int(y[0, 1, 15]) == 1
+	assert int(y[1, 0, 15]) == 1
+	assert int(y[1, 1, 5]) == 1
+
+	assert int(y.sum()) == 5
+
+
+def test_pairwise_annotations_spacing_symmetric_false():
+	X = torch.tensor([
+		[0, 0, 0, 5],
+		[0, 1, 10, 15],
+		[0, 1, 20, 25],
+	], dtype=torch.int64)
+
+	y = pairwise_annotations_spacing(X, symmetric=False)
+
+	assert y.shape == (2, 2, 100)
+
+	assert int(y[0, 1, 5]) == 1
+	assert int(y[1, 0, 5]) == 0
+	assert int(y[0, 1, 15]) == 1
+	assert int(y[1, 0, 15]) == 0
+	assert int(y[1, 1, 5]) == 1
+
+	assert int(y.sum()) == 3
+
+
+###
+
+
+def test_annotate_seqlets_dict_motifs(X, X_contrib):
+	seqlets = recursive_seqlets(X_contrib)
+
+	motifs_dict = read_meme("tests/data/test.meme")
+	idxs_d, pvals_d = annotate_seqlets(X, seqlets, motifs_dict)
+	idxs_s, pvals_s = annotate_seqlets(X, seqlets, "tests/data/test.meme")
+
+	assert_array_almost_equal(idxs_d, idxs_s)
+	assert_array_almost_equal(pvals_d, pvals_s)
