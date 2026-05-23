@@ -11,8 +11,8 @@ from .ersatz import substitute
 from .predict import predict
 
 
-def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'], 
-	func=predict, additional_func_kwargs={}, **kwargs):
+def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
+	func=predict, additional_func_kwargs=None, **kwargs):
 	"""Apply a function before and after substituting a motif into sequences.
 
 	A marginalization experiment is one where a function is applied before
@@ -72,12 +72,13 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 		A function to apply before and after making the substitution. Default 
 		is `predict`.
 
-	additional_func_kwargs: dict, optional
+	additional_func_kwargs: dict or None, optional
 		Additional named arguments to pass into the function when it is called.
-		This is provided as an alternate path to route arguments into the 
+		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. Default is {}.
+		their way into the function. The dict is not modified in place. Default
+		is None.
 
 	kwargs: optional
 		Additional named arguments that will get passed into the function when
@@ -99,7 +100,7 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 	"""
 
 	_validate_input(X, "X", shape=(-1, len(alphabet), -1), ohe=True, allow_N=True)
-	additional_func_kwargs = additional_func_kwargs or {}
+	additional_func_kwargs = dict(additional_func_kwargs or {})
 
 	X_perturb = substitute(X, motif, start=start, alphabet=alphabet)
 	y_before = func(model, X, **kwargs, **additional_func_kwargs)

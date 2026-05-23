@@ -210,7 +210,7 @@ def gapped_kmers(X, scores=None, min_k=4, max_k=8, max_gap=2, max_len=10,
 
 
 	X_idxs = X.argmax(axis=1)
-	if not scores:
+	if scores is None:
 		scores = torch.ones_like(X_idxs)
 
 	if max_pos is None:

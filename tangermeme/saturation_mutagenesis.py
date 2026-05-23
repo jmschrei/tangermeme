@@ -3,7 +3,6 @@
 
 import numba
 import torch
-import itertools
 
 from tqdm import trange
 
@@ -76,9 +75,9 @@ def _edit_distance_one(X, start, end):
 
 
 
-def saturation_mutagenesis(model, X, args=None, start=0, end=-1, 
-	batch_size=32, target=None, hypothetical=False, raw_outputs=False, 
-	dtype=None, device='cuda', verbose=False):
+def saturation_mutagenesis(model, X, args=None, start=0, end=-1,
+	batch_size=32, target=None, hypothetical=False, raw_outputs=False,
+	dtype=None, device=None, verbose=False):
 	"""Performs in-silico saturation mutagenesis on a set of sequences.
 	
 	This function will perform in-silico saturation mutagenesis on a set of 
@@ -146,10 +145,10 @@ def saturation_mutagenesis(model, X, args=None, start=0, end=-1,
 		the *model*. This allows you to use int8 to represent large data sets and
 		only convert batches to the higher precision, saving memory. Default is None.
 	
-	device: str or torch.device, optional
+	device: str or torch.device or None, optional
 		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+		None, use CUDA when available and fall back to CPU otherwise. Default
+		is None.
 	
 	verbose: bool, optional
 		Whether to display a progress bar during predictions. Default is False.

@@ -1,6 +1,8 @@
 # utils.py
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import warnings
+
 import numpy
 import numba
 import torch
@@ -8,9 +10,15 @@ import torch
 from tqdm import tqdm
 
 
+class TangermemeWarning(UserWarning):
+	"""A category for warnings emitted by tangermeme so callers can filter on
+	`tangermeme.utils.TangermemeWarning` specifically (e.g. via
+	`warnings.simplefilter('error', TangermemeWarning)`)."""
+
+
 def _warn_or_raise(error, message, only_warn):
 	if only_warn:
-		print("Warning: {}".format(message))
+		warnings.warn(message, TangermemeWarning, stacklevel=3)
 	else:
 		raise error(message)
 
@@ -96,8 +104,8 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 			name, min_value), only_warn)
 	
 	if max_value is not None and X.max() > max_value:
-		raise ValueError("{} cannot have a value above {}".format(name,
-			max_value), only_warn)
+		_warn_or_raise(ValueError, "{} cannot have a value above {}".format(
+			name, max_value), only_warn)
 	
 	if ohe:
 		values = torch.unique(X)
@@ -390,8 +398,8 @@ def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype=torch.int8,
 
 	Returns
 	-------
-	ohe : numpy.ndarray
-		A binary matrix of shape (alphabet_size, sequence_length) where
+	ohe : torch.Tensor
+		A binary tensor of shape (alphabet_size, sequence_length) where
 		alphabet_size is the number of unique elements in the sequence and
 		sequence_length is the length of the input sequence.
 	"""
@@ -459,7 +467,7 @@ def reverse_complement(seq, complement_map={"A": "T", "C": "G", "G": "C",
 	Returns
 	-------
 	rev_comp: str or torch.Tensor w/ shape (alphabet_size, length)
-		The reverse complemented string or tensor.
+		The reverse complemented string or tensor, matching the type of `seq`.
 	"""
 
 	if isinstance(seq, str):
@@ -506,7 +514,7 @@ def random_one_hot(shape, probs=None, dtype='int8', random_state=None):
 		X is greater than 1, the same probabilities are used for each sequence.
 		The sum of probabilities across the alphabet axis must be equal to 1.
 		If None, use a uniform distribution across the axis specified in shape.
-		Default is [[0.25, 0.25, 0.25, 0.25]].
+		Default is None.
 
 	dtype: str or numpy.dtype, optional
 		The datatype to return the matrix as. Default is 'int8'.

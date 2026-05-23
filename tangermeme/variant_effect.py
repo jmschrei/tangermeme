@@ -2,18 +2,12 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import torch
-import itertools
 
-from .io import extract_loci
-
-from .utils import one_hot_encode
 from .utils import _cast_as_tensor
 
-from .ersatz import delete
 from .ersatz import insert
 
 from .predict import predict
-from .marginalize import marginalize
 
 
 def substitution_effect(model, X, substitutions, args=None, func=predict, 
@@ -71,12 +65,13 @@ def substitution_effect(model, X, substitutions, args=None, func=predict,
 		A function to apply before and after incorporating the substitution. 
 		Default is `predict`.
 
-	additional_func_kwargs: dict, optional
+	additional_func_kwargs: dict or None, optional
 		Additional named arguments to pass into the function when it is called.
-		This is provided as an alternate path to route arguments into the 
+		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. Default is {}.
+		their way into the function. The dict is not modified in place. Default
+		is None.
 
 	kwargs: optional
 		Additional named arguments that will get passed into the function when
@@ -94,7 +89,7 @@ def substitution_effect(model, X, substitutions, args=None, func=predict,
 
 	substitutions = _cast_as_tensor(substitutions)
 
-	additional_func_kwargs = additional_func_kwargs or {}
+	additional_func_kwargs = dict(additional_func_kwargs or {})
 
 	X_var = torch.clone(X)
 	X_var[substitutions[:, 0], :, substitutions[:, 1]] = 0
@@ -179,12 +174,13 @@ def deletion_effect(model, X, deletions, left=False, args=None, func=predict,
 		A function to apply before and after incorporating the deletions.
 		Default is `predict`.
 
-	additional_func_kwargs: dict, optional
+	additional_func_kwargs: dict or None, optional
 		Additional named arguments to pass into the function when it is called.
 		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. Default is {}.
+		their way into the function. The dict is not modified in place. Default
+		is None.
 
 	kwargs: optional
 		Additional named arguments that will get passed into the function when
@@ -202,7 +198,7 @@ def deletion_effect(model, X, deletions, left=False, args=None, func=predict,
 
 	deletions = _cast_as_tensor(deletions)
 
-	additional_func_kwargs = additional_func_kwargs or {}
+	additional_func_kwargs = dict(additional_func_kwargs or {})
 
 	mask = torch.zeros_like(X[:, 0]).type(torch.int32)
 	mask[deletions[:, 0], deletions[:, 1]] = 1
@@ -294,12 +290,13 @@ def insertion_effect(model, X, insertions, left=False, args=None, func=predict,
 		A function to apply before and after incorporating the insertions.
 		Default is `predict`.
 
-	additional_func_kwargs: dict, optional
+	additional_func_kwargs: dict or None, optional
 		Additional named arguments to pass into the function when it is called.
 		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. Default is {}.
+		their way into the function. The dict is not modified in place. Default
+		is None.
 
 	kwargs: optional
 		Additional named arguments that will get passed into the function when
@@ -317,7 +314,7 @@ def insertion_effect(model, X, insertions, left=False, args=None, func=predict,
 
 	insertions = _cast_as_tensor(insertions)
 
-	additional_func_kwargs = additional_func_kwargs or {}
+	additional_func_kwargs = dict(additional_func_kwargs or {})
 	X_var = []
 
 	for i in range(X.shape[0]):

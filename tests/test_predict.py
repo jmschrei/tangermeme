@@ -293,7 +293,7 @@ def test_predict_residual_conv(X, device):
 
 def test_predict_transformer(X, device):
 	torch.manual_seed(0)
-	model = Transformer().to(device)
+	model = Transformer().to(device).eval()
 	y = predict(model, X, batch_size=8, device=device)
 
 	assert y.shape == (64, 1)
@@ -368,7 +368,7 @@ def test_predict_dilated_conv(X, device):
 
 def test_predict_conv_batch_norm(X, device):
 	torch.manual_seed(0)
-	model = ConvBatchNorm().to(device)
+	model = ConvBatchNorm().to(device).eval()
 	y = predict(model, X, batch_size=8, device=device)
 
 	assert y.shape == (64, 1)

@@ -1,14 +1,17 @@
 # predict.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import contextlib
+
 import torch
-import itertools
 
 from tqdm import trange
 
+from ._compat import _autocast_supported, _preserve_model_state, _resolve_device
 
-def predict(model, X, args=None, func=None, batch_size=32, dtype=None, 
-	device='cuda', verbose=False):
+
+def predict(model, X, args=None, func=None, batch_size=32, dtype=None,
+	device=None, verbose=False):
 	"""Make batched predictions in a memory-efficient manner.
 
 	This function will take a PyTorch model and make predictions from it using
@@ -55,10 +58,11 @@ def predict(model, X, args=None, func=None, batch_size=32, dtype=None,
 		the *model*. This allows you to use int8 to represent large data sets and
 		only convert batches to the higher precision, saving memory. Default is None.
 
-	device: str or torch.device, optional
+	device: str or torch.device or None, optional
 		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+		None, use CUDA when available and fall back to CPU otherwise. The model's
+		original device and training mode are restored after the call. Default
+		is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar during predictions. Default is False.
@@ -74,12 +78,12 @@ def predict(model, X, args=None, func=None, batch_size=32, dtype=None,
 		concatenated across all batches.
 	"""
 
-	model = model.to(device).eval()
-	
+	device = _resolve_device(device)
+
 	if dtype is None:
 		try:
 			dtype = next(model.parameters()).dtype
-		except:
+		except (StopIteration, AttributeError):
 			dtype = torch.float32
 	elif isinstance(dtype, str):
 		dtype = getattr(torch, dtype)
@@ -92,8 +96,10 @@ def predict(model, X, args=None, func=None, batch_size=32, dtype=None,
 
 	###
 
+	use_autocast = _autocast_supported(device, dtype)
+
 	y = []
-	with torch.no_grad():
+	with _preserve_model_state(model, device), torch.no_grad():
 		batch_size = min(batch_size, X.shape[0])
 
 		for start in trange(0, X.shape[0], batch_size, disable=not verbose):
@@ -103,7 +109,12 @@ def predict(model, X, args=None, func=None, batch_size=32, dtype=None,
 			if X_.shape[0] == 0:
 				continue
 
-			with torch.autocast(device_type=device, dtype=dtype):
+			if use_autocast:
+				autocast_ctx = torch.autocast(device_type=device.type, dtype=dtype)
+			else:
+				autocast_ctx = contextlib.nullcontext()
+
+			with autocast_ctx:
 				if args is not None:
 					args_ = [a[start:end].type(dtype).to(device) for a in args]
 					y_ = model(X_, *args_)
