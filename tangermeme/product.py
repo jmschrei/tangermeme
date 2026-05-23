@@ -1,27 +1,30 @@
 # product.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
-import torch
 import itertools
+
+import torch
 
 from tqdm import tqdm
 
+from ._compat import _preserve_model_state, _resolve_device
 
-def _apply(func, model, X, args, batch_size, device, verbose, 
+
+def _apply(func, model, X, args, batch_size, device, verbose,
 	additional_func_kwargs, **kwargs):
 	"""An internal function for applying a function to a batch of data."""
 
 	X = torch.stack(X)
 	args = [torch.stack(a) for a in args]
 
-	y = func(model, X, args=args, batch_size=batch_size, device=device, 
+	y = func(model, X, args=args, batch_size=batch_size, device=device,
 		verbose=False, **additional_func_kwargs, **kwargs)
 
 	return y
 
 
-def apply_pairwise(func, model, X, args=None, batch_size=32, device='cuda', 
-	additional_func_kwargs={}, verbose=False, **kwargs):
+def apply_pairwise(func, model, X, args=None, batch_size=32, device=None,
+	additional_func_kwargs=None, verbose=False, **kwargs):
 	"""Apply a function on the cartesian product between X and args.
 
 	This function will take the provided function and apply it in a batched
@@ -56,27 +59,28 @@ def apply_pairwise(func, model, X, args=None, batch_size=32, device='cuda',
 		A one-hot encoded set of sequences to make predictions for.
 
 	args: tuple or list
-		A set of additional arguments to pass into the model. Each element in
-		`args` should be one tensor that is input to the model. The elements do
-		not need to be the same size as each other as a product will be
-		constructed over all of them, as well as with `X`. If you only want
-		to use one value for an argument across all function applications,
-		pass it in as a length-1 tensor.
+		A set of additional arguments, each of which is one input to the model.
+		Unlike `apply_product`, every element in `args` must have the same
+		length and is paired index-wise (so `args[0][i]` is grouped with
+		`args[1][i]`); the cross is taken with `X`, not within `args`. The
+		resulting output has shape `(len(X), len(args[0]), ...)`.
 
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.
 
-	device: str or torch.device
+	device: str or torch.device or None, optional
 		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+		None, use CUDA when available and fall back to CPU otherwise. The
+		model's original device and training mode are restored after the call.
+		Default is None.
 
-	additional_func_kwargs: dict, optional
+	additional_func_kwargs: dict or None, optional
 		Additional named arguments to pass into the function when it is called.
-		This is provided as an alternate path to route arguments into the 
+		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. Default is {}.
+		their way into the function. The dict is not modified in place. Default
+		is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar as examples are processed. Default
@@ -97,28 +101,33 @@ def apply_pairwise(func, model, X, args=None, batch_size=32, device='cuda',
 		concatenated across all batches.
 	"""
 
-	model = model.to(device).eval()
+	device = _resolve_device(device)
+	additional_func_kwargs = dict(additional_func_kwargs or {})
+	# Pass device as a string to downstream `func` to remain back-compatible
+	# with callables that haven't yet been updated to accept torch.device.
+	device_arg = str(device)
 
-	X_, y, args_ = [], [], [[] for _ in args] 
-	for x in tqdm(itertools.product(X, zip(*args)), disable=not verbose):
-		X_.append(x[0])
+	with _preserve_model_state(model, device):
+		X_, y, args_ = [], [], [[] for _ in args]
+		for x in tqdm(itertools.product(X, zip(*args)), disable=not verbose):
+			X_.append(x[0])
 
-		for i, arg in enumerate(x[1]):
-			args_[i].append(arg)
+			for i, arg in enumerate(x[1]):
+				args_[i].append(arg)
 
-		if len(X_) == batch_size:
-			y_ = _apply(func, model, X_, args=args_, batch_size=batch_size, 
-				device=device, verbose=verbose, 
-				additional_func_kwargs=additional_func_kwargs, **kwargs)
-			y.append(y_)
+			if len(X_) == batch_size:
+				y_ = _apply(func, model, X_, args=args_, batch_size=batch_size,
+					device=device_arg, verbose=verbose,
+					additional_func_kwargs=additional_func_kwargs, **kwargs)
+				y.append(y_)
 
-			X_, args_ = [], [[] for _ in args]
-	else:
-		if len(X_) > 0:
-			y_ = _apply(func, model, X_, args=args_, batch_size=batch_size, 
-				device=device, verbose=verbose, 
-				additional_func_kwargs=additional_func_kwargs, **kwargs)
-			y.append(y_)
+				X_, args_ = [], [[] for _ in args]
+		else:
+			if len(X_) > 0:
+				y_ = _apply(func, model, X_, args=args_, batch_size=batch_size,
+					device=device_arg, verbose=verbose,
+					additional_func_kwargs=additional_func_kwargs, **kwargs)
+				y.append(y_)
 
 	Xal = [len(X), len(args[0])]
 
@@ -152,8 +161,8 @@ def apply_pairwise(func, model, X, args=None, batch_size=32, device='cuda',
 	return y
 
 
-def apply_product(func, model, X, args, batch_size=32, device='cuda', 
-	additional_func_kwargs={}, verbose=False, **kwargs):
+def apply_product(func, model, X, args, batch_size=32, device=None,
+	additional_func_kwargs=None, verbose=False, **kwargs):
 	"""Apply a function on the cartesian product between X and each args.
 
 	This function will take the provided function and apply it in a batched
@@ -193,17 +202,19 @@ def apply_product(func, model, X, args, batch_size=32, device='cuda',
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.
 
-	device: str or torch.device
+	device: str or torch.device or None, optional
 		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+		None, use CUDA when available and fall back to CPU otherwise. The
+		model's original device and training mode are restored after the call.
+		Default is None.
 
-	additional_func_kwargs: dict, optional
+	additional_func_kwargs: dict or None, optional
 		Additional named arguments to pass into the function when it is called.
-		This is provided as an alternate path to route arguments into the 
+		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. Default is {}.
+		their way into the function. The dict is not modified in place. Default
+		is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar as examples are processed. Default
@@ -224,28 +235,33 @@ def apply_product(func, model, X, args, batch_size=32, device='cuda',
 		concatenated across all batches.
 	"""
 
-	model = model.to(device).eval()
+	device = _resolve_device(device)
+	additional_func_kwargs = dict(additional_func_kwargs or {})
+	# Pass device as a string to downstream `func` to remain back-compatible
+	# with callables that haven't yet been updated to accept torch.device.
+	device_arg = str(device)
 
-	X_, y, args_ = [], [], [[] for _ in args] 
-	for x in tqdm(itertools.product(X, *args), disable=not verbose):
-		X_.append(x[0])
+	with _preserve_model_state(model, device):
+		X_, y, args_ = [], [], [[] for _ in args]
+		for x in tqdm(itertools.product(X, *args), disable=not verbose):
+			X_.append(x[0])
 
-		for i, arg in enumerate(x[1:]):
-			args_[i].append(arg)
+			for i, arg in enumerate(x[1:]):
+				args_[i].append(arg)
 
-		if len(X_) == batch_size:
-			y_ = _apply(func, model, X_, args=args_, batch_size=batch_size, 
-				device=device, verbose=verbose, 
-				additional_func_kwargs=additional_func_kwargs, **kwargs)
-			y.append(y_)
+			if len(X_) == batch_size:
+				y_ = _apply(func, model, X_, args=args_, batch_size=batch_size,
+					device=device_arg, verbose=verbose,
+					additional_func_kwargs=additional_func_kwargs, **kwargs)
+				y.append(y_)
 
-			X_, args_ = [], [[] for _ in args]
-	else:
-		if len(X_) > 0:
-			y_ = _apply(func, model, X_, args=args_, batch_size=batch_size, 
-				device=device, verbose=verbose,
-				additional_func_kwargs=additional_func_kwargs, **kwargs)
-			y.append(y_)
+				X_, args_ = [], [[] for _ in args]
+		else:
+			if len(X_) > 0:
+				y_ = _apply(func, model, X_, args=args_, batch_size=batch_size,
+					device=device_arg, verbose=verbose,
+					additional_func_kwargs=additional_func_kwargs, **kwargs)
+				y.append(y_)
 
 	Xal = [len(X)] + [len(a) for a in args]
 
