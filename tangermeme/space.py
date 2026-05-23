@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy
 import torch
@@ -19,6 +19,18 @@ from .predict import predict
 from tqdm import tqdm
 
 
+class SpaceResult(NamedTuple):
+	"""Return type of `space`. Positional unpacking
+	`y_before, y_afters = space(...)` still works.
+
+	`y_afters` stacks one entry per spacing combination along axis 1
+	(after the example axis).
+	"""
+
+	y_before: torch.Tensor | list[torch.Tensor]
+	y_afters: torch.Tensor | list[torch.Tensor]
+
+
 def space(
 	model: torch.nn.Module,
 	X: torch.Tensor,
@@ -30,7 +42,7 @@ def space(
 	additional_func_kwargs: dict | None = None,
 	verbose: bool = False,
 	**kwargs: Any,
-) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
+) -> SpaceResult:
 	"""Runs a single spacing experiment and returns predictions.
 
 	Given a predictive model, a set of motifs to insert and the spacings
@@ -134,4 +146,4 @@ def space(
 		y_afters = [torch.stack(y_).transpose(0, 1) for y_ in list(zip(
 			*y_afters))]
 
-	return y_before, y_afters
+	return SpaceResult(y_before=y_before, y_afters=y_afters)
