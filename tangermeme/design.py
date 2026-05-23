@@ -1,8 +1,13 @@
 # design.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
 import time
 import heapq
+from collections.abc import Callable
+from typing import Any
+
 import numba
 import numpy
 import torch
@@ -30,10 +35,24 @@ def _fast_tile_substitute(X, motif, idxs):
 				X[i, k, j+idx] = motif[k, j]
 
 
-def screen(model, shape, y=None, loss=torch.nn.MSELoss(reduction='none'), tol=1e-3,
-	max_iter=-1, args=None, n_best=1, alphabet=['A', 'C', 'G', 'T'],
-	batch_size=32, func=random_one_hot, additional_func_kwargs=None, dtype=None,
-	device=None, random_state=None, verbose=False):
+def screen(
+	model: torch.nn.Module,
+	shape: tuple[int, ...],
+	y: torch.Tensor | list[torch.Tensor] | None = None,
+	loss: Callable[..., Any] = torch.nn.MSELoss(reduction='none'),
+	tol: float = 1e-3,
+	max_iter: int = -1,
+	args: tuple | None = None,
+	n_best: int = 1,
+	alphabet: list[str] = ['A', 'C', 'G', 'T'],
+	batch_size: int = 32,
+	func: Callable[..., Any] = random_one_hot,
+	additional_func_kwargs: dict | None = None,
+	dtype: str | torch.dtype | None = None,
+	device: str | torch.device | None = None,
+	random_state: int | numpy.random.RandomState | None = None,
+	verbose: bool = False,
+) -> torch.Tensor:
 	"""Screen randomly generated sequences and choose the best one.
 
 	Potentially, the conceptually simplest method for design is to randomly
@@ -177,10 +196,23 @@ def screen(model, shape, y=None, loss=torch.nn.MSELoss(reduction='none'), tol=1e
 	return X
 
 
-def greedy_substitution(model, X, y=None, motifs=None,
-	loss=torch.nn.MSELoss(reduction='none'), reverse_complement=True,
-	input_mask=None, output_mask=None, tol=1e-3, max_iter=-1, args=None,
-	alphabet=['A', 'C', 'G', 'T'], batch_size=32, device=None, verbose=False):
+def greedy_substitution(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	y: torch.Tensor | list[torch.Tensor] | None = None,
+	motifs: list[str] | None = None,
+	loss: Callable[..., Any] = torch.nn.MSELoss(reduction='none'),
+	reverse_complement: bool = True,
+	input_mask: torch.Tensor | None = None,
+	output_mask: torch.Tensor | None = None,
+	tol: float = 1e-3,
+	max_iter: int = -1,
+	args: tuple | None = None,
+	alphabet: list[str] = ['A', 'C', 'G', 'T'],
+	batch_size: int = 32,
+	device: str | torch.device | None = None,
+	verbose: bool = False,
+) -> torch.Tensor:
 	"""Greedily add motifs to achieve a desired goal. 
 
 	This design function will greedily add motifs to achieve a desired output
@@ -380,10 +412,23 @@ def greedy_substitution(model, X, y=None, motifs=None,
 	return X
 
 
-def greedy_marginalize(model, X, y, motifs, loss=torch.nn.MSELoss(
-	reduction='none'), max_spacing=12, reverse_complement=True,
-	output_mask=None, tol=1e-3, max_iter=-1, args=None,
-	alphabet=['A', 'C', 'G', 'T'], batch_size=32, device=None, verbose=False):
+def greedy_marginalize(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	y: torch.Tensor | list[torch.Tensor],
+	motifs: list[str],
+	loss: Callable[..., Any] = torch.nn.MSELoss(reduction='none'),
+	max_spacing: int = 12,
+	reverse_complement: bool = True,
+	output_mask: torch.Tensor | None = None,
+	tol: float = 1e-3,
+	max_iter: int = -1,
+	args: tuple | None = None,
+	alphabet: list[str] = ['A', 'C', 'G', 'T'],
+	batch_size: int = 32,
+	device: str | torch.device | None = None,
+	verbose: bool = False,
+) -> torch.Tensor:
 	"""Greedily builds a construct and evaluates it using marginalizations.
 
 	This approach attempts to find a set of motifs and their orientations and
