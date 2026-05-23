@@ -101,7 +101,7 @@ def _extract_counts(chrom, start, end, bw_stream):
 	try:
 		value = bw_stream.values(chrom, start, end, bins=1, summary="sum", exact=True)[0]
 		return value if value is not None else 0
-	except:
+	except (RuntimeError, ValueError, KeyError, IndexError):
 		return float('nan')
 
 def _count_generator(coords, bw_stream, buffer = False):
@@ -135,7 +135,7 @@ def _count_generator_buffered(coords, bw_stream):
 			buffer_chrom = chrom
 			try:
 				buffer_signal = bw_stream.values(chrom, 0, None)
-			except:
+			except (RuntimeError, ValueError, KeyError):
 				buffer_signal = None
 		if buffer_signal is not None:
 			yield numpy.nansum(buffer_signal[start:end]).item()
