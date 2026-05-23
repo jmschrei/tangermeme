@@ -723,6 +723,20 @@ def test_extract_loci_seq_raises_sequences():
 		"tests/data/test.bed", "ACGTG")
 
 
+def test_extract_loci_does_not_close_user_provided_fasta():
+	# When the caller passes a pre-opened pyfaidx.Fasta, extract_loci
+	# must not close it; the caller still owns the object and needs to
+	# keep using it after the call.
+	fasta = pyfaidx.Fasta("tests/data/test.fa")
+
+	extract_loci("tests/data/test.bed", fasta, in_window=10)
+
+	# Accessing a key after the call should still work. Pre-fix this
+	# raises ValueError("I/O operation on closed file") from the
+	# underlying mmap inside pyfaidx.
+	_ = str(fasta[list(fasta.keys())[0]])
+
+
 ###
 
 

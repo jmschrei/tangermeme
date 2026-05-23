@@ -214,7 +214,8 @@ def pisa(
             X.shape[2]), ohe=True, allow_N=False, ohe_dim=-2)
         n_shuffles = references.shape[1]
 
-    n_outputs = predict(model, X[:1], device=device).shape[-1]
+    _probe_args = None if args is None else tuple(a[:1] for a in args)
+    n_outputs = predict(model, X[:1], args=_probe_args, device=device).shape[-1]
 
     # Loop over each of the examples
     for i in trange(len(X), disable=not verbose):
@@ -253,8 +254,11 @@ def pisa(
             
             with torch.autograd.set_grad_enabled(True):
                 if _args is not None:
-                    _args = (torch.cat([arg, arg]) for arg in _args)
-                    y = model(X_, *_args)
+                    # Materialize into a tuple and bind to a fresh name so
+                    # `_args` is not overwritten by an exhausted generator
+                    # for the next shuffle iteration.
+                    _args_batched = tuple(torch.cat([arg, arg]) for arg in _args)
+                    y = model(X_, *_args_batched)
                 else:
                     y = model(X_)
 

@@ -310,6 +310,23 @@ def test_pairwise_annotations_spacing_symmetric_false():
 	assert int(y.sum()) == 3
 
 
+def test_pairwise_annotations_spacing_at_max_distance():
+	# Two annotations whose gap equals max_distance exactly. The output
+	# tensor's last axis has size `max_distance`, so valid indices are
+	# 0..max_distance-1; a pair at distance == max_distance should be
+	# treated as "outside the window" rather than indexing past the end.
+	X = torch.tensor([
+		[0, 0, 0, 5],       # ends at 5
+		[0, 1, 105, 110],   # starts at 105 -> distance = 100
+	], dtype=torch.int64)
+
+	# Should not raise. Pair at exactly max_distance is excluded.
+	y = pairwise_annotations_spacing(X, max_distance=100)
+
+	assert y.shape == (2, 2, 100)
+	assert int(y.sum()) == 0
+
+
 ###
 
 

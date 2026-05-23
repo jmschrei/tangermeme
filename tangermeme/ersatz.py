@@ -408,7 +408,7 @@ def randomize(
 	if end <= start:
 		raise ValueError("End must come after start.")
 
-	if end >= X.shape[-1] or start < 0:
+	if end > X.shape[-1] or start < 0:
 		raise ValueError("Start or end are falling off the edge of X.")
 
 	X_rands = []
