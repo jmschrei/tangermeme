@@ -11,6 +11,7 @@ from tangermeme.utils import random_one_hot
 from tangermeme.space import space
 from tangermeme.ersatz import multisubstitute
 from tangermeme.deep_lift_shap import deep_lift_shap
+from tangermeme.saturation_mutagenesis import saturation_mutagenesis
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense
@@ -686,3 +687,53 @@ def test_space_multiple_motifs_multiple_spacings(X, device):
 
 	assert yb.shape == (64, 3)
 	assert ya.shape == (64, 3, 3)
+
+
+def test_space_func_saturation_mutagenesis(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	y_before, y_after = space(model, X[:3], ["ACGTC", "GAGA"], [[1], [5]],
+		func=saturation_mutagenesis, batch_size=8, device=device)
+
+	assert y_before.shape == (3, 4, 100)
+	assert y_before.dtype == torch.float32
+	assert y_after.shape == (3, 2, 4, 100)
+	assert y_after.dtype == torch.float32
+
+	y_direct = saturation_mutagenesis(model, X[:3], batch_size=8, device=device)
+	assert_array_almost_equal(y_before, y_direct, 4)
+
+	assert_array_almost_equal(y_after[:2, :, :, 45:55], [
+		[[[-0.0126,  0.0000,  0.0000, -0.0000,  0.0000,  0.0466,  0.0000,
+		    0.0093, -0.0000,  0.0236],
+		  [-0.0000,  0.0026, -0.0000, -0.0000, -0.0297, -0.0000, -0.0000,
+		   -0.0000,  0.0000,  0.0000],
+		  [-0.0000,  0.0000, -0.0451,  0.0000,  0.0000, -0.0000, -0.0067,
+		    0.0000, -0.0244, -0.0000],
+		  [ 0.0000, -0.0000,  0.0000, -0.0119,  0.0000, -0.0000,  0.0000,
+		   -0.0000,  0.0000, -0.0000]],
+		 [[-0.0000,  0.0000,  0.0000, -0.0000,  0.0000,  0.0466,  0.0000,
+		    0.0000, -0.0000,  0.0236],
+		  [-0.0000,  0.0000, -0.0040, -0.0000, -0.0000, -0.0000, -0.0555,
+		   -0.0207,  0.0000,  0.0000],
+		  [-0.0351,  0.0000, -0.0000,  0.0201,  0.0000, -0.0000, -0.0000,
+		    0.0000, -0.0244, -0.0000],
+		  [ 0.0000, -0.0073,  0.0000, -0.0000,  0.0229, -0.0000,  0.0000,
+		   -0.0000,  0.0000, -0.0000]]],
+		[[[-0.0126,  0.0000,  0.0000, -0.0000,  0.0000,  0.0466,  0.0000,
+		    0.0093, -0.0000,  0.0236],
+		  [-0.0000,  0.0026, -0.0000, -0.0000, -0.0297, -0.0000, -0.0000,
+		   -0.0000,  0.0000,  0.0000],
+		  [-0.0000,  0.0000, -0.0451,  0.0000,  0.0000, -0.0000, -0.0067,
+		    0.0000, -0.0244, -0.0000],
+		  [ 0.0000, -0.0000,  0.0000, -0.0119,  0.0000, -0.0000,  0.0000,
+		   -0.0000,  0.0000, -0.0000]],
+		 [[-0.0000,  0.0000,  0.0000, -0.0000,  0.0000,  0.0466,  0.0000,
+		    0.0000, -0.0000,  0.0236],
+		  [-0.0000,  0.0000, -0.0040, -0.0054, -0.0000, -0.0000, -0.0000,
+		   -0.0000,  0.0000,  0.0000],
+		  [-0.0351,  0.0000, -0.0000,  0.0000,  0.0000, -0.0000, -0.0067,
+		    0.0308, -0.0244, -0.0000],
+		  [ 0.0000, -0.0073,  0.0000, -0.0000,  0.0229, -0.0000,  0.0000,
+		   -0.0000,  0.0000, -0.0000]]]], 4)

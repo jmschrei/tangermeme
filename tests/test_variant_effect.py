@@ -21,6 +21,8 @@ from tangermeme.variant_effect import substitution_effect
 from tangermeme.variant_effect import deletion_effect
 from tangermeme.variant_effect import insertion_effect
 
+from tangermeme.deep_lift_shap import deep_lift_shap
+
 
 @pytest.fixture
 def X():
@@ -205,3 +207,52 @@ def test_substitution_effect_does_not_mutate_X(X, substitutions, device):
 
 	# substitution_effect clones X internally, so the input is unchanged.
 	assert_array_almost_equal(X, X_before)
+
+
+def test_substitution_effect_func_deep_lift_shap(X, substitutions, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	y, y_var = substitution_effect(model, X, substitutions,
+		func=deep_lift_shap, n_shuffles=2, device=device, random_state=0)
+
+	# deep_lift_shap returns (B, alphabet, length) attributions
+	assert y.shape == (3, 4, 100)
+	assert y_var.shape == (3, 4, 100)
+	assert y.dtype == torch.float32
+	assert y_var.dtype == torch.float32
+
+	# y_before should match a direct deep_lift_shap on the unmodified X
+	y_direct = deep_lift_shap(model, X, n_shuffles=2, device=device,
+		random_state=0)
+	assert_array_almost_equal(y, y_direct, 4)
+
+	# The substituted version should differ at least at example 0 or 1
+	# (where the variants land).
+	assert_raises(AssertionError, assert_array_almost_equal, y, y_var, 4)
+
+	assert_array_almost_equal(y_var[:, :, :10], [
+		[[ 0.0000, -0.0000, -0.0000, -0.0242,  0.0000,  0.0000,  0.0000,
+		   0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000,  0.0101,  0.0000, -0.0235,  0.0000, -0.0000,
+		  -0.0000, -0.0096,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000, -0.0000,  0.0469, -0.0000,
+		   0.0000,  0.0000,  0.0000],
+		 [-0.0000, -0.0247,  0.0000,  0.0000,  0.0000, -0.0000,  0.0230,
+		   0.0000,  0.0000, -0.0126]],
+		[[-0.0000, -0.0000, -0.0000, -0.0000, -0.0145,  0.0000,  0.0268,
+		  -0.0000, -0.0234,  0.0069],
+		 [ 0.0000,  0.0000,  0.0097,  0.0109, -0.0000,  0.0000, -0.0000,
+		  -0.0000, -0.0000,  0.0000],
+		 [-0.0000, -0.0015, -0.0000, -0.0000, -0.0000,  0.0469,  0.0000,
+		   0.0000, -0.0000,  0.0000],
+		 [-0.0000, -0.0000,  0.0000,  0.0000,  0.0000, -0.0000,  0.0000,
+		  -0.0209,  0.0000, -0.0000]],
+		[[-0.0000,  0.0000, -0.0000, -0.0000,  0.0000,  0.0000, -0.0000,
+		   0.0782, -0.0121,  0.0126],
+		 [ 0.0000,  0.0000,  0.0000, -0.0000, -0.0000,  0.0000, -0.0413,
+		   0.0000, -0.0000,  0.0000],
+		 [-0.0000,  0.0116, -0.0000, -0.0458,  0.0044,  0.0000, -0.0000,
+		   0.0000,  0.0000,  0.0000],
+		 [-0.0000, -0.0000,  0.0055,  0.0000,  0.0000, -0.0361,  0.0000,
+		   0.0000,  0.0000, -0.0000]]], 4)

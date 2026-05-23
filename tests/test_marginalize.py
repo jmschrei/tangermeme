@@ -12,6 +12,7 @@ from tangermeme.ersatz import substitute
 from tangermeme.deep_lift_shap import deep_lift_shap
 from tangermeme.marginalize import marginalize
 from tangermeme.marginalize import marginalize_annotations
+from tangermeme.saturation_mutagenesis import saturation_mutagenesis
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense
@@ -726,3 +727,41 @@ def test_marginalize_annotations_numpy_array(X, device):
 
 	assert y_befores.shape == (2, 3, 3)
 	assert y_afters.shape == (2, 3, 3)
+
+
+def test_marginalize_func_saturation_mutagenesis(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	y_before, y_after = marginalize(model, X[:4], "ACGTC",
+		func=saturation_mutagenesis, batch_size=8, device=device)
+
+	assert y_before.shape == (4, 4, 100)
+	assert y_before.dtype == torch.float32
+	assert y_after.shape == (4, 4, 100)
+	assert y_after.dtype == torch.float32
+
+	# y_before should match a direct saturation_mutagenesis on the unmodified X
+	y_direct = saturation_mutagenesis(model, X[:4], batch_size=8, device=device)
+	assert_array_almost_equal(y_before, y_direct, 4)
+
+	# The motif insertion should change the attribution somewhere
+	assert_raises(AssertionError, assert_array_almost_equal, y_before, y_after, 4)
+
+	assert_array_almost_equal(y_after[:2, :, 45:55], [
+		[[-0.0000,  0.0000,  0.0000, -0.0028,  0.0000,  0.0000,  0.0000,
+		   0.0000, -0.0000,  0.0000],
+		 [-0.0105,  0.0000, -0.0000, -0.0000, -0.0297, -0.0000, -0.0000,
+		  -0.0207,  0.0177,  0.0000],
+		 [-0.0000,  0.0000, -0.0000,  0.0000,  0.0000, -0.0117, -0.0000,
+		   0.0000, -0.0000, -0.0000],
+		 [ 0.0000, -0.0073,  0.0235, -0.0000,  0.0000, -0.0000,  0.0258,
+		  -0.0000,  0.0000, -0.0011]],
+		[[-0.0126,  0.0000,  0.0000, -0.0028,  0.0000,  0.0000,  0.0000,
+		   0.0000, -0.0000,  0.0000],
+		 [-0.0000,  0.0000, -0.0040, -0.0000, -0.0297, -0.0000, -0.0000,
+		  -0.0207,  0.0000,  0.0000],
+		 [-0.0000,  0.0000, -0.0000,  0.0000,  0.0000, -0.0117, -0.0000,
+		   0.0000, -0.0000, -0.0396],
+		 [ 0.0000, -0.0073,  0.0000, -0.0000,  0.0000, -0.0000,  0.0258,
+		  -0.0000,  0.0097, -0.0000]]], 4)

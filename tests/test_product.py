@@ -13,6 +13,9 @@ from tangermeme.predict import predict
 from tangermeme.product import apply_product
 from tangermeme.product import apply_pairwise
 from tangermeme.marginalize import marginalize
+from tangermeme.ablate import ablate
+from tangermeme.deep_lift_shap import deep_lift_shap
+from tangermeme.saturation_mutagenesis import saturation_mutagenesis
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense
@@ -780,3 +783,87 @@ def test_apply_product_batch_size_non_divisible(X, alpha, beta, device):
 
 	assert y0.shape == (4, 3, 5, 3)
 	assert_array_almost_equal(y0, y1)
+
+
+def test_apply_pairwise_deep_lift_shap(X, alpha, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	y = apply_pairwise(deep_lift_shap, model, X[:3], args=(alpha[:3],),
+		n_shuffles=2, device=device, random_state=0)
+
+	# pairwise over 3 X and 3 alpha = 9 calls; each returns (1, 4, 100)
+	assert y.shape == (3, 3, 4, 100)
+	assert y.dtype == torch.float32
+
+	assert_array_almost_equal(y[:2, :2, :, :4], [
+		[[[ 0.0000, -0.0000, -0.0000, -0.0012],
+		  [ 0.0000,  0.0000,  0.0021,  0.0000],
+		  [ 0.0000, -0.0000, -0.0000,  0.0000],
+		  [-0.0000, -0.0247, -0.0000,  0.0000]],
+		 [[ 0.0000, -0.0000, -0.0000, -0.0012],
+		  [ 0.0000,  0.0000,  0.0021,  0.0000],
+		  [ 0.0000, -0.0000, -0.0000,  0.0000],
+		  [-0.0000, -0.0247, -0.0000,  0.0000]]],
+		[[[-0.0000, -0.0000, -0.0076, -0.0000],
+		  [ 0.0000,  0.0000,  0.0000,  0.0000],
+		  [-0.0000,  0.0000, -0.0000, -0.0000],
+		  [-0.0000, -0.0000,  0.0000,  0.0350]],
+		 [[-0.0000, -0.0000, -0.0076, -0.0000],
+		  [ 0.0000,  0.0000,  0.0000,  0.0000],
+		  [-0.0000,  0.0000, -0.0000, -0.0000],
+		  [-0.0000, -0.0000,  0.0000,  0.0350]]]], 4)
+
+
+def test_apply_product_ablate(X, alpha, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	# ablate returns a tuple (y_before, y_after); apply_product's multi-output
+	# branch handles this and returns a list of two stacked tensors.
+	result = apply_product(ablate, model, X[:3], args=(alpha[:3],),
+		start=10, end=20, n=2, batch_size=8, device=device, random_state=0)
+
+	assert isinstance(result, list)
+	assert len(result) == 2
+
+	y_before, y_after = result
+	# 3 X * 3 alpha = 9 calls; per call: y_before=(1, 3), y_after=(1, 2, 3)
+	assert y_before.shape == (3, 3, 3)
+	assert y_after.shape == (3, 3, 2, 3)
+
+	assert_array_almost_equal(y_after[:2, :2], [
+		[[[1.9837, 2.1161, 1.6115], [1.8558, 2.1473, 1.6128]],
+		 [[0.6198, 0.7523, 0.2476], [0.4919, 0.7834, 0.2489]]],
+		[[[1.8361, 1.6473, 1.4556], [1.7213, 1.7589, 1.4973]],
+		 [[0.4722, 0.2834, 0.0917], [0.3574, 0.3950, 0.1335]]]], 4)
+
+
+def test_apply_product_saturation_mutagenesis(X, alpha, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	y = apply_product(saturation_mutagenesis, model, X[:3], args=(alpha[:3],),
+		batch_size=8, device=device)
+
+	# 3 X * 3 alpha = 9 calls; each returns an SM attribution of shape (1, 4, 100)
+	assert y.shape == (3, 3, 4, 100)
+	assert y.dtype == torch.float32
+
+	assert_array_almost_equal(y[:2, :2, :, :4], [
+		[[[-0.0065,  0.0000, -0.0000, -0.0188],
+		  [ 0.0000,  0.0000,  0.0099,  0.0000],
+		  [-0.0000,  0.0000, -0.0000, -0.0000],
+		  [-0.0000, -0.0164,  0.0000,  0.0000]],
+		 [[-0.0065,  0.0000, -0.0000, -0.0188],
+		  [ 0.0000,  0.0000,  0.0099,  0.0000],
+		  [-0.0000,  0.0000, -0.0000, -0.0000],
+		  [-0.0000, -0.0164,  0.0000,  0.0000]]],
+		[[[-0.0000,  0.0000, -0.0095, -0.0000],
+		  [ 0.0409,  0.0000,  0.0000,  0.0000],
+		  [-0.0000,  0.0068, -0.0000, -0.0000],
+		  [-0.0000, -0.0000,  0.0000,  0.0296]],
+		 [[-0.0000,  0.0000, -0.0095, -0.0000],
+		  [ 0.0409,  0.0000,  0.0000,  0.0000],
+		  [-0.0000,  0.0068, -0.0000, -0.0000],
+		  [-0.0000, -0.0000,  0.0000,  0.0296]]]], 4)
