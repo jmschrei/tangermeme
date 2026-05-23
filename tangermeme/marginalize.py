@@ -1,6 +1,11 @@
 # marginalize.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
 import numpy
 import torch
 
@@ -11,8 +16,16 @@ from .ersatz import substitute
 from .predict import predict
 
 
-def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
-	func=predict, additional_func_kwargs=None, **kwargs):
+def marginalize(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	motif: torch.Tensor | str,
+	start: int | None = None,
+	alphabet: list[str] = ['A', 'C', 'G', 'T'],
+	func: Callable[..., Any] = predict,
+	additional_func_kwargs: dict | None = None,
+	**kwargs: Any,
+) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
 	"""Apply a function before and after substituting a motif into sequences.
 
 	A marginalization experiment is one where a function is applied before
@@ -109,7 +122,13 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 	return y_before, y_after
 
 
-def marginalize_annotations(model, X, X0, annotations, **kwargs):
+def marginalize_annotations(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	X0: torch.Tensor,
+	annotations: torch.Tensor,
+	**kwargs: Any,
+) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
 	"""Perform marginalizations on each annotation individually.
 
 	This function takes in a model, a set of sequences, a set of background
