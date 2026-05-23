@@ -206,10 +206,14 @@ def ablate_annotations(
 		those.
 	"""
 
+	if len(annotations) == 0:
+		raise ValueError("ablate_annotations requires at least one annotation; "
+			"got an empty annotations tensor.")
+
 	y_befores, y_afters = [], []
 
 	for idx, start, end in annotations:
-		y_before, y_after = ablate(model, X[idx:idx+1], start=start, end=end, 
+		y_before, y_after = ablate(model, X[idx:idx+1], start=start, end=end,
 			**kwargs)
 
 		y_befores.append(y_before)

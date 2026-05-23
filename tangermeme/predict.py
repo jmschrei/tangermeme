@@ -90,6 +90,10 @@ def predict(
 		concatenated across all batches.
 	"""
 
+	if X.shape[0] == 0:
+		raise ValueError("predict requires at least one example; got X "
+			"with shape[0] == 0.")
+
 	device = _resolve_device(device)
 
 	if dtype is None:

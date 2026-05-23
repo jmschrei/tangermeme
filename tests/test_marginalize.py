@@ -765,3 +765,13 @@ def test_marginalize_func_saturation_mutagenesis(X, device):
 		   0.0000, -0.0000, -0.0396],
 		 [ 0.0000, -0.0073,  0.0000, -0.0000,  0.0000, -0.0000,  0.0258,
 		  -0.0000,  0.0097, -0.0000]]], 4)
+
+
+def test_marginalize_annotations_empty(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X0 = X.clone()
+	annotations = torch.zeros(0, 3, dtype=torch.int64)
+
+	assert_raises(ValueError, marginalize_annotations, model, X, X0,
+		annotations, device=device)

@@ -167,6 +167,10 @@ def pisa(
 
     _validate_input(X, "X", shape=(-1, -1, -1), ohe=True)
 
+    if X.shape[0] == 0:
+        raise ValueError("pisa requires at least one example; got X with "
+            "shape[0] == 0.")
+
     _NON_LINEAR_OPS = {
         torch.nn.ReLU: _nonlinear,
         torch.nn.ReLU6: _nonlinear,

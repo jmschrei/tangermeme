@@ -1030,3 +1030,12 @@ def test_pisa_model_unchanged_after_call(X, device):
 		assert not hasattr(module, "_NON_LINEAR_OPS")
 		if hasattr(module, "handles"):
 			assert len(module.handles) == 0
+
+
+def test_pisa_empty_X(device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	X_empty = torch.zeros(0, 4, 100)
+
+	assert_raises(ValueError, pisa, model, X_empty, n_shuffles=2,
+		device=device, random_state=0)

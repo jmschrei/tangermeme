@@ -1099,3 +1099,12 @@ def test_ablate_func_saturation_mutagenesis(X, device):
 		    0.0000, -0.0244, -0.0000],
 		  [ 0.0000, -0.0000,  0.0000, -0.0000,  0.0000, -0.0029,  0.0000,
 		   -0.0000,  0.0000, -0.0011]]]], 4)
+
+
+def test_ablate_annotations_empty(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	annotations = torch.zeros(0, 3, dtype=torch.int64)
+
+	assert_raises(ValueError, ablate_annotations, model, X, annotations,
+		device=device)

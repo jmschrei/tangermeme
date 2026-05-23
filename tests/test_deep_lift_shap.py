@@ -1823,3 +1823,12 @@ def test_deep_lift_shap_invalid_target(X, device):
 
 	assert_raises(IndexError, deep_lift_shap, model, X[:2], target=999,
 		n_shuffles=2, device=device, random_state=0)
+
+
+def test_deep_lift_shap_empty_X(device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	X_empty = torch.zeros(0, 4, 100)
+
+	assert_raises(ValueError, deep_lift_shap, model, X_empty,
+		n_shuffles=2, device=device, random_state=0)
