@@ -382,7 +382,7 @@ def pairwise_annotations_spacing(
 			for j, (idx1, start1, end1) in enumerate(annotations[i+1:]):
 				if start0 < start1:
 					d = start1 - end0
-					if d > max_distance:
+					if d >= max_distance:
 						continue
 
 					y[idx0, idx1, d] += 1
@@ -391,7 +391,7 @@ def pairwise_annotations_spacing(
 
 				else:
 					d = start0 - end1
-					if d > max_distance:
+					if d >= max_distance:
 						continue
 
 					y[idx1, idx0, d] += 1
