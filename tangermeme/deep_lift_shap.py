@@ -421,137 +421,152 @@ def deep_lift_shap(
 
 	use_autocast = _autocast_supported(device, dtype)
 
-	model = model.to(device).eval()
-	for module in model.modules():
-		module._NON_LINEAR_OPS = _NON_LINEAR_OPS
+	try:
+		_orig_device = next(model.parameters()).device
+	except StopIteration:
+		_orig_device = None
+	_was_training = model.training
+
+	model.to(device).eval()
 
 	try:
-		model.apply(_register_hooks)
-	except Exception as e:
-		model.apply(_clear_hooks)
-		raise(e)
+		for module in model.modules():
+			module._NON_LINEAR_OPS = _NON_LINEAR_OPS
+
+		try:
+			model.apply(_register_hooks)
+		except Exception as e:
+			model.apply(_clear_hooks)
+			raise(e)
 	
-	# Begin DeepLIFT procedure
+		# Begin DeepLIFT procedure
 	
-	attributions, references_, Xi, rj, attr_ = [], [], [], [], []
-	if isinstance(references, torch.Tensor):
-		_validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
-			X.shape[2]), ohe=True, allow_N=False, ohe_dim=-2, only_warn=only_warn)
-		n_shuffles = references.shape[1]
+		attributions, references_, Xi, rj, attr_ = [], [], [], [], []
+		if isinstance(references, torch.Tensor):
+			_validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
+				X.shape[2]), ohe=True, allow_N=False, ohe_dim=-2, only_warn=only_warn)
+			n_shuffles = references.shape[1]
 
-	n, z = X.shape[0] * n_shuffles, 0
+		n, z = X.shape[0] * n_shuffles, 0
 
-	for i in trange(n, disable=not verbose):
-		Xi.append(i // n_shuffles)
-		rj.append(i % n_shuffles)
+		for i in trange(n, disable=not verbose):
+			Xi.append(i // n_shuffles)
+			rj.append(i % n_shuffles)
 
-		if len(Xi) == batch_size or i == (n-1):
-			_X = X[Xi].cpu().type(dtype)
-			_args = None if args is None else tuple([a[Xi].to(device).type(dtype)
-				for a in args])
+			if len(Xi) == batch_size or i == (n-1):
+				_X = X[Xi].cpu().type(dtype)
+				_args = None if args is None else tuple([a[Xi].to(device).type(dtype)
+					for a in args])
 
-			# Handle reference sequences while ensuring that the same seed is
-			# used for each shuffle even if not all shuffles are done in the
-			# same batch.
-			if isinstance(references, torch.Tensor):
-				_references = references[Xi, rj]
-			else:
-				if random_state is None:
-					_references = references(_X, n=1)[:, 0]
+				# Handle reference sequences while ensuring that the same seed is
+				# used for each shuffle even if not all shuffles are done in the
+				# same batch.
+				if isinstance(references, torch.Tensor):
+					_references = references[Xi, rj]
 				else:
-					_references = torch.cat([references(_X[j:j+1], n=1, 
-						random_state=random_state+rj[j])[:, 0] 
-							for j in range(len(_X))])
+					if random_state is None:
+						_references = references(_X, n=1)[:, 0]
+					else:
+						_references = torch.cat([references(_X[j:j+1], n=1, 
+							random_state=random_state+rj[j])[:, 0] 
+								for j in range(len(_X))])
 
-			_X = _X.to(device).type(dtype).requires_grad_()
-			_references = _references.to(device).type(dtype).requires_grad_()
+				_X = _X.to(device).type(dtype).requires_grad_()
+				_references = _references.to(device).type(dtype).requires_grad_()
 
-			# This next block is actually running DeepLIFT by concatenating the
-			# batch of examples and the batch of references and running the
-			# forward and backward passes that have been modified by the above
-			# hooks. In a try-except block to make sure we remove hooks if an
-			# error is raised. 
-			try:
-				X_ = torch.cat([_X, _references])
+				# This next block is actually running DeepLIFT by concatenating the
+				# batch of examples and the batch of references and running the
+				# forward and backward passes that have been modified by the above
+				# hooks. In a try-except block to make sure we remove hooks if an
+				# error is raised. 
+				try:
+					X_ = torch.cat([_X, _references])
 
-				if use_autocast:
-					autocast_ctx = torch.autocast(device_type=device.type, dtype=dtype)
-				else:
-					autocast_ctx = contextlib.nullcontext()
+					if use_autocast:
+						autocast_ctx = torch.autocast(device_type=device.type, dtype=dtype)
+					else:
+						autocast_ctx = contextlib.nullcontext()
 
-				# Calculate the gradients using the rescale rule
-				with torch.autograd.set_grad_enabled(True):
-					with autocast_ctx:
-						if _args is not None:
-							_args = (torch.cat([arg, arg]) for arg in _args)
-							y = model(X_, *_args)[:, target]
-						else:
-							y = model(X_)[:, target]
+					# Calculate the gradients using the rescale rule
+					with torch.autograd.set_grad_enabled(True):
+						with autocast_ctx:
+							if _args is not None:
+								_args = (torch.cat([arg, arg]) for arg in _args)
+								y = model(X_, *_args)[:, target]
+							else:
+								y = model(X_)[:, target]
 
-						multipliers = torch.autograd.grad(y.sum(), _X)[0]
+							multipliers = torch.autograd.grad(y.sum(), _X)[0]
 
-				# Check that the prediction-difference-from-reference is equal to
-				# the sum of the attributions
-				output_diff = torch.sub(*torch.chunk(y, 2))
-				input_diff = torch.sum((_X - _references) * multipliers, 
-					dim=(1, 2))
-				convergence_deltas = abs(output_diff - input_diff)
+					# Check that the prediction-difference-from-reference is equal to
+					# the sum of the attributions
+					output_diff = torch.sub(*torch.chunk(y, 2))
+					input_diff = torch.sum((_X - _references) * multipliers, 
+						dim=(1, 2))
+					convergence_deltas = abs(output_diff - input_diff)
 
-				if torch.any(convergence_deltas > warning_threshold):
-					warnings.warn("Convergence deltas too high: " +   
-						str(convergence_deltas), RuntimeWarning)
+					if torch.any(convergence_deltas > warning_threshold):
+						warnings.warn("Convergence deltas too high: " +   
+							str(convergence_deltas), RuntimeWarning)
 
-				if print_convergence_deltas:
-					print(convergence_deltas)
+					if print_convergence_deltas:
+						print(convergence_deltas)
 
-			except Exception as e:
-				model.apply(_clear_hooks)
-				raise(e)
+				except Exception as e:
+					model.apply(_clear_hooks)
+					raise(e)
 
-			# If not returning the raw multipliers then apply the correction for
-			# character encodings
-			if raw_outputs == False:
-				multipliers = hypothetical_attributions((multipliers,), (_X,), 
-					(_references,))[0]
-
-			# attr_ is a list where each element is a tensor for the multipliers
-			# of one example-reference pair, so that once all references for an
-			# example have been processed we can chunk them together.
-			attr_.extend(list(multipliers.cpu().detach()))
-
-			# When all references for a sequence have been calculated, remove
-			# that block from the list of example-reference attributions and
-			# add it to the final attribution list, averaging across references
-			# if providing the processed results.
-			while len(attr_) >= n_shuffles:
-				attr_chunk = torch.stack(attr_[:n_shuffles])
-
+				# If not returning the raw multipliers then apply the correction for
+				# character encodings
 				if raw_outputs == False:
-					attr_chunk = attr_chunk.mean(dim=0)
-					if not hypothetical:
-						attr_chunk *= X[z].cpu()
+					multipliers = hypothetical_attributions((multipliers,), (_X,), 
+						(_references,))[0]
 
-				attributions.append(attr_chunk)
-				attr_ = attr_[n_shuffles:]
-				z += 1
+				# attr_ is a list where each element is a tensor for the multipliers
+				# of one example-reference pair, so that once all references for an
+				# example have been processed we can chunk them together.
+				attr_.extend(list(multipliers.cpu().detach()))
 
-			if return_references:
-				references_.extend(list(_references.cpu().detach()))
+				# When all references for a sequence have been calculated, remove
+				# that block from the list of example-reference attributions and
+				# add it to the final attribution list, averaging across references
+				# if providing the processed results.
+				while len(attr_) >= n_shuffles:
+					attr_chunk = torch.stack(attr_[:n_shuffles])
 
-			Xi, rj = [], []
+					if raw_outputs == False:
+						attr_chunk = attr_chunk.mean(dim=0)
+						if not hypothetical:
+							attr_chunk *= X[z].cpu()
+
+					attributions.append(attr_chunk)
+					attr_ = attr_[n_shuffles:]
+					z += 1
+
+				if return_references:
+					references_.extend(list(_references.cpu().detach()))
+
+				Xi, rj = [], []
 
 
-	model.apply(_clear_hooks)
-	for module in model.modules():
-		del(module._NON_LINEAR_OPS)
 
-	attributions = torch.stack(attributions)
+		attributions = torch.stack(attributions)
 
-	if return_references:
-		references_ = torch.cat(references_).reshape(X.shape[0], n_shuffles, 
-			*X.shape[1:])
-		return attributions, references_
-	return attributions
+		if return_references:
+			references_ = torch.cat(references_).reshape(X.shape[0], n_shuffles, 
+				*X.shape[1:])
+			return attributions, references_
+		return attributions
+	finally:
+		model.apply(_clear_hooks)
+		for module in model.modules():
+			if hasattr(module, "_NON_LINEAR_OPS"):
+				del module._NON_LINEAR_OPS
+
+		if _was_training:
+			model.train()
+		if _orig_device is not None and _orig_device != device:
+			model.to(_orig_device)
 
 
 def _captum_deep_lift_shap(
