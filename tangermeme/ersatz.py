@@ -1,6 +1,8 @@
 # ersatz.py
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
 import warnings
 
 import numba
@@ -15,7 +17,12 @@ from .utils import random_one_hot
 from .utils import TangermemeWarning
 
 
-def insert(X, motif, start=None, alphabet=list("ACGT")):
+def insert(
+	X: torch.Tensor | str,
+	motif: torch.Tensor | str,
+	start: int | None = None,
+	alphabet: list[str] = list("ACGT"),
+) -> torch.Tensor:
 	"""Insert a motif into a set of sequences at a defined position.
 
 	This function will take in a tensor of one-hot encoded sequences or a string
@@ -87,7 +94,13 @@ def insert(X, motif, start=None, alphabet=list("ACGT")):
 	return torch.cat([X[:, :, :start], motif, X[:, :, start:]], dim=-1)
 
 
-def substitute(X, motif, start=None, alphabet=list("ACGT"), ignore=["N"]):
+def substitute(
+	X: torch.Tensor | str,
+	motif: torch.Tensor | str,
+	start: int | None = None,
+	alphabet: list[str] = list("ACGT"),
+	ignore: list[str] = ["N"],
+) -> torch.Tensor:
 	"""Substitute a motif into a set of sequences at a defined position.
 
 	This function will take in a tensor of one-hot encoded sequences or a string
@@ -182,8 +195,14 @@ def substitute(X, motif, start=None, alphabet=list("ACGT"), ignore=["N"]):
 	return X
 
 
-def multisubstitute(X, motifs, spacing, start=None, alphabet=list("ACGT"),
-	ignore=["N"]):
+def multisubstitute(
+	X: torch.Tensor,
+	motifs: list[torch.Tensor | str],
+	spacing: list[int],
+	start: int | None = None,
+	alphabet: list[str] = list("ACGT"),
+	ignore: list[str] = ["N"],
+) -> torch.Tensor:
 	"""Substitute a set of motifs into sequences with provided spacings.
 
 	This function will take in a list of tensors of one-hot encoded sequences
@@ -278,7 +297,7 @@ def multisubstitute(X, motifs, spacing, start=None, alphabet=list("ACGT"),
 	return X
 
 
-def delete(X, start, end):
+def delete(X: torch.Tensor, start: int, end: int) -> torch.Tensor:
 	"""Delete a portion of a sequence.
 
 	This function will take in a tensor of one-hot encoded sequences and a pair
@@ -321,8 +340,14 @@ def delete(X, start, end):
 	return torch.cat([X[:, :, :start], X[:, :, end:]], dim=-1)
 
 
-def randomize(X, start, end, probs=[[0.25, 0.25, 0.25, 0.25]], n=1,
-	random_state=None):
+def randomize(
+	X: torch.Tensor,
+	start: int,
+	end: int,
+	probs: list | tuple | numpy.ndarray | torch.Tensor = [[0.25, 0.25, 0.25, 0.25]],
+	n: int = 1,
+	random_state: int | numpy.random.RandomState | None = None,
+) -> torch.Tensor:
 	"""Replace a region of the provided loci with randomly drawn sequence.
 
 	This function will take in a batch of sequences and replace region specified
@@ -397,7 +422,13 @@ def randomize(X, start, end, probs=[[0.25, 0.25, 0.25, 0.25]], n=1,
 	return torch.stack(X_rands).permute(1, 0, 2, 3)
 
 
-def shuffle(X, start=0, end=-1, n=1, random_state=None):
+def shuffle(
+	X: torch.Tensor,
+	start: int = 0,
+	end: int = -1,
+	n: int = 1,
+	random_state: int | numpy.random.RandomState | None = None,
+) -> torch.Tensor:
 	"""Replace a region of the provided loci with a shuffled version.
 
 	This function will take in a batch of sequences and shuffle the specified
@@ -574,8 +605,14 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 	return shuffled_sequences
 
 
-def dinucleotide_shuffle(X, start=0, end=-1, n=20, random_state=None, 
-	verbose=False):
+def dinucleotide_shuffle(
+	X: torch.Tensor,
+	start: int = 0,
+	end: int = -1,
+	n: int = 20,
+	random_state: int | numpy.random.RandomState | None = None,
+	verbose: bool = False,
+) -> torch.Tensor:
 	"""Given a one-hot encoded sequence, dinucleotide shuffle it.
 
 	This function takes in a one-hot encoded sequence (not a string) and
