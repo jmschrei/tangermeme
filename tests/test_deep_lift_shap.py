@@ -1701,3 +1701,84 @@ def test_deep_lift_shap_residual_conv_activation(X, references, device,
 	assert X_attr.shape == X.shape
 	assert X_attr.dtype == torch.float32
 	assert_array_almost_equal(X_attr[0, :, :4], expected, 4)
+
+
+###
+
+
+def test_deep_lift_shap_single_sequence(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	X_attr = deep_lift_shap(model, X[:1], n_shuffles=10, batch_size=3,
+		device=device, random_state=0)
+
+	assert X_attr.shape == (1, 4, 100)
+	assert X_attr.dtype == torch.float32
+
+	X_attr_big = deep_lift_shap(model, X[:1], n_shuffles=10, batch_size=64,
+		device=device, random_state=0)
+	assert_array_almost_equal(X_attr, X_attr_big, 4)
+
+
+def test_deep_lift_shap_print_convergence_deltas(X, device, capsys):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	deep_lift_shap(model, X[:4], n_shuffles=2, batch_size=8, device=device,
+		random_state=0, print_convergence_deltas=True)
+
+	captured = capsys.readouterr()
+	assert captured.out.strip() != ""
+
+
+def test_deep_lift_shap_only_warn(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	refs = shuffle(X, n=2, random_state=0)
+	X_bad = X * 2.0
+
+	assert_raises(ValueError, deep_lift_shap, model, X_bad, references=refs,
+		device=device, random_state=0)
+
+	X_attr = deep_lift_shap(model, X_bad, references=refs, device=device,
+		random_state=0, only_warn=True)
+
+	assert X_attr.shape == X_bad.shape
+
+
+def test_deep_lift_shap_dtype_param(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	X_attr0 = deep_lift_shap(model, X[:4], n_shuffles=2, dtype=torch.float32,
+		device=device, random_state=0)
+	X_attr1 = deep_lift_shap(model, X[:4], n_shuffles=2, dtype="float32",
+		device=device, random_state=0)
+	X_attr2 = deep_lift_shap(model, X[:4], n_shuffles=2, dtype=None,
+		device=device, random_state=0)
+
+	assert X_attr0.dtype == torch.float32
+	assert_array_almost_equal(X_attr0, X_attr1, 4)
+	assert_array_almost_equal(X_attr0, X_attr2, 4)
+
+
+def test_deep_lift_shap_random_state_none_consistency(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	X_attr0 = deep_lift_shap(model, X[:4], n_shuffles=2, device=device,
+		random_state=None)
+	X_attr1 = deep_lift_shap(model, X[:4], n_shuffles=2, device=device,
+		random_state=None)
+
+	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr1)
+
+
+def test_deep_lift_shap_invalid_target(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	assert_raises(IndexError, deep_lift_shap, model, X[:2], target=999,
+		n_shuffles=2, device=device, random_state=0)
