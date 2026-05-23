@@ -36,3 +36,17 @@ class PerturbationAnnotationsResult(NamedTuple):
 
 	y_befores: torch.Tensor | list[torch.Tensor]
 	y_afters: torch.Tensor | list[torch.Tensor]
+
+
+class AttributionReferencesResult(NamedTuple):
+	"""Result of an attribution call that also returns the reference
+	sequences it used.
+
+	Returned by `deep_lift_shap` and `pisa` when ``return_references=True``.
+	Positional unpacking (``attributions, references = ...``) continues
+	to work alongside attribute access (``result.attributions``,
+	``result.references``).
+	"""
+
+	attributions: torch.Tensor
+	references: torch.Tensor

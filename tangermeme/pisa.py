@@ -16,6 +16,7 @@ from tqdm import trange
 
 from ._compat import _resolve_device
 from .ersatz import dinucleotide_shuffle
+from .results import AttributionReferencesResult
 
 from tangermeme.predict import predict
 from tangermeme.utils import _validate_input
@@ -41,7 +42,7 @@ def pisa(
     device: str | torch.device | None = None,
     random_state: int | numpy.random.RandomState | None = None,
     verbose: bool = False,
-) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+) -> torch.Tensor | AttributionReferencesResult:
     """An implementation of Pairwise Influence by Sequence Attribution (PISA).
     
     PISA is a method for deciphering how each input in an example influences
@@ -327,7 +328,8 @@ def pisa(
         attributions = torch.stack(attributions).detach()
 
         if return_references:
-            return attributions, torch.stack(references_).detach()
+            return AttributionReferencesResult(attributions=attributions,
+                references=torch.stack(references_).detach())
         return attributions
     finally:
         model.apply(_clear_hooks)
