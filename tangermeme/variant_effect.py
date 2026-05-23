@@ -1,4 +1,4 @@
-# variant.py
+# variant_effect.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import torch
@@ -30,10 +30,10 @@ def substitution_effect(model, X, substitutions, args=None, func=predict,
 	after substitutions are made. At least one substitution should be provided 
 	per sequence for the results to be different.
 
-	The substitutions provided must be individual variants, i.e., that each row 
+	The substitutions provided must be individual variants, i.e., each row
 	in the tensor corresponds to a single substitution in a single example, but
 	one can encode longer variants (e.g., entire motifs or just multiple
-	characters) by passing in multiple rows with adjacent positions. 
+	characters) by passing in multiple rows with adjacent positions.
 
 	Note that substitutions are not insertions. A substitution involves changing
 	one character to another character. An insertion involves adding a new
@@ -64,9 +64,8 @@ def substitution_effect(model, X, substitutions, args=None, func=predict,
 		An optional set of additional arguments to pass into the model. If
 		provided, each element in the tuple or list is one input to the model
 		and the element must be formatted to be the same batch size as `X`. If
-		None, no additional arguments are passed into the forward function. This
-		argument is provided here because the args must be copied for each
-		shuffle that occurs. Default is None.
+		None, no additional arguments are passed into the forward function.
+		Default is None.
 
 	func: function, optional
 		A function to apply before and after incorporating the substitution. 
@@ -110,22 +109,22 @@ def deletion_effect(model, X, deletions, left=False, args=None, func=predict,
 	additional_func_kwargs=None, **kwargs):
 	"""Apply a function before and after deleting characters from a sequence.
 
-	This function will calculate the effect that insertions have on the
+	This function will calculate the effect that deletions have on the
 	output from a model. Any number of deletions can be specified for each
 	sequence and the provided `func` is applied before and after the deletions
 	are taken into account. By default, this `func` is the prediction function
 	and so the results are the difference in predictions before and after the
-	deletions are made, but if `func` is something else, such as 
+	deletions are made, but if `func` is something else, such as
 	`deep_lift_shap`, the results will be the attributions before and after the
 	deletions are made. At least one deletion should be provided per sequence
 	for the results to be different.
 
-	The deletions provided must be individual characters, i.e., that each row
+	The deletions provided must be individual characters, i.e., each row
 	in the tensor corresponds to a single deletion in a single example, but one
-	can encode longer deletions (e.g., entire motifs or just multiple 
+	can encode longer deletions (e.g., entire motifs or just multiple
 	characters) by passing in multiple rows with adjacent positions.
 
-	Importantly, because models assume a fixed input window but deletons are by
+	Importantly, because models assume a fixed input window but deletions are by
 	definition changing the length of the sequence, the provided sequences must
 	be of length `model_length + max_deletions_per_sequence`. Basically, if the
 	maximum number of deletions in a sequence is equal to 12 and the model
@@ -173,17 +172,16 @@ def deletion_effect(model, X, deletions, left=False, args=None, func=predict,
 		An optional set of additional arguments to pass into the model. If
 		provided, each element in the tuple or list is one input to the model
 		and the element must be formatted to be the same batch size as `X`. If
-		None, no additional arguments are passed into the forward function. This
-		argument is provided here because the args must be copied for each
-		shuffle that occurs. Default is None.
+		None, no additional arguments are passed into the forward function.
+		Default is None.
 
 	func: function, optional
-		A function to apply before and after incorporating the substitution. 
+		A function to apply before and after incorporating the deletions.
 		Default is `predict`.
 
 	additional_func_kwargs: dict, optional
 		Additional named arguments to pass into the function when it is called.
-		This is provided as an alternate path to route arguments into the 
+		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
 		their way into the function. Default is {}.
@@ -244,20 +242,19 @@ def insertion_effect(model, X, insertions, left=False, args=None, func=predict,
 	insertions are made. At least one insertion should be provided per sequence
 	for the results to be different.
 
-	The insertions provided must be individual characters, i.e., that each row
+	The insertions provided must be individual characters, i.e., each row
 	in the tensor corresponds to a single insertion in a single example, but one
-	can encode longer insertions (e.g., entire motifs or just multiple 
+	can encode longer insertions (e.g., entire motifs or just multiple
 	characters) by passing in multiple rows with adjacent positions.
 
-	Simply removing all of the specified characters will lead to a set of
-	sequences of differing lengths if there are a different number of insertions
-	in each sequence. In order to make these sequences all the same length, we
-	need to trim from each sequence a number of positions from each sequence
-	equal to the number of characters that are being added in. Because there
-	are two ways we can trim positions -- either starting from the left end of 
-	the sequence or from the right end of it -- you can use the `left` parameter
-	to specify that you should trim positions on the left (`left=True`) or from
-	the right (`left=False`, the default) of the sequence. 
+	Because models assume a fixed input window but insertions are by definition
+	changing the length of the sequence, characters must be trimmed off after
+	the insertions are made so the post-insertion sequence has the same length
+	as the original. Because there are two ways we can trim positions -- either
+	starting from the left end of the sequence or from the right end of it --
+	you can use the `left` parameter to specify that you should trim positions
+	on the left (`left=True`) or from the right (`left=False`, the default) of
+	the sequence.
 
 
 	Parameters
@@ -273,13 +270,15 @@ def insertion_effect(model, X, insertions, left=False, args=None, func=predict,
 	insertions: torch.tensor, shape=(-1, 3)
 		A set of insertions indicating characters that should be added to
 		each sequence. Each row should be a single insertion with the first
-		column corresponding to the example and the second column corresponding
-		to the position within that example. Multiple insertions can occur in 
-		each example. 
+		column corresponding to the example index, the second column
+		corresponding to the position within that example at which the
+		character should be inserted, and the third column corresponding to
+		the index in the alphabet of the character to insert. Multiple
+		insertions can occur in each example.
 
 	left: bool, optional
-		If False, use the first `n` positions to run through the model before
-		making the deletion where `n` is the expected tensor length. If True,
+		If False, use the first `n` positions to run through the model after
+		making the insertion where `n` is the expected tensor length. If True,
 		use the last `n` positions. Basically, whether we trim positions from
 		the left or the right when getting sequences of the same length.
 		Default is False.
@@ -288,17 +287,16 @@ def insertion_effect(model, X, insertions, left=False, args=None, func=predict,
 		An optional set of additional arguments to pass into the model. If
 		provided, each element in the tuple or list is one input to the model
 		and the element must be formatted to be the same batch size as `X`. If
-		None, no additional arguments are passed into the forward function. This
-		argument is provided here because the args must be copied for each
-		shuffle that occurs. Default is None.
+		None, no additional arguments are passed into the forward function.
+		Default is None.
 
 	func: function, optional
-		A function to apply before and after incorporating the substitution. 
+		A function to apply before and after incorporating the insertions.
 		Default is `predict`.
 
 	additional_func_kwargs: dict, optional
 		Additional named arguments to pass into the function when it is called.
-		This is provided as an alternate path to route arguments into the 
+		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
 		their way into the function. Default is {}.

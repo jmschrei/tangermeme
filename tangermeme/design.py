@@ -387,7 +387,7 @@ def greedy_marginalize(model, X, y, motifs, loss=torch.nn.MSELoss(
 	This approach attempts to find a set of motifs and their orientations and
 	spacings (a "construct") that yield a desired objective. Rather than 
 	editing an initial sequence, this approach is just trying to greedily build
-	a construct and evaluating its perform by marginalizing all other positions.
+	a construct and evaluate its performance by marginalizing all other positions.
 	Accordingly, rather than trying every motif at every position, it only tries
 	motifs at all positions within a given spacing from the flanks of the
 	construct that has been built so far.
@@ -404,7 +404,7 @@ def greedy_marginalize(model, X, y, motifs, loss=torch.nn.MSELoss(
 	and their other properties achieve your desired goal, without considering a
 	specific sequence. For instance, if you train a model to predict
 	accessibility and then want to design accessible regions generally, this
-	approach may be more appropriate than `greedy_substiution`.
+	approach may be more appropriate than `greedy_substitution`.
 
 
 	Parameters
@@ -439,6 +439,12 @@ def greedy_marginalize(model, X, y, motifs, loss=torch.nn.MSELoss(
 	reverse_complement: bool, optional
 		Whether to augment the provided list of motifs with their reverse
 		complements. This will double the runtime. Default is True.
+
+	max_spacing: int, optional
+		The maximum spacing on either side of the existing construct at which a
+		new motif can be implanted. Each iteration considers positions in a
+		window extending `max_spacing` nucleotides past the current left and
+		right flanks of the construct. Default is 12.
 
 	output_mask: torch.Tensor or None, optional
 		A mask on the outputs from the model to consider. True means to include
@@ -475,7 +481,7 @@ def greedy_marginalize(model, X, y, motifs, loss=torch.nn.MSELoss(
 	device: str or torch.device, optional
 		The device to move the model and batches to when making predictions. If
 		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+		to 'cpu'. Default is 'cuda'.
 
 	verbose: bool, optional
 		Whether to display a progress bar during predictions. Default is False.
@@ -484,7 +490,7 @@ def greedy_marginalize(model, X, y, motifs, loss=torch.nn.MSELoss(
 	Returns
 	-------
 	X: torch.Tensor, shape=(len(alphabet), length)
-		The designed construct. 
+		The designed construct.
 	"""
 
 	tic = time.time()

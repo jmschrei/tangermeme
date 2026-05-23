@@ -20,18 +20,18 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 
 	Ablation experiments can be thought of as the conceptual opposite of
 	marginalization experiments. Both involve applying a function before and
-	after some sequence modification, but marginalizations usually involve 
+	after some sequence modification: marginalizations usually involve
 	substituting a potentially-informative motif into a set of background
-	sequences, but an ablation usually involves removing drivers of signal
+	sequences, whereas an ablation usually involves removing drivers of signal
 	from a sequence.
 
 	By default, `ablate` will apply the `predict` function to `X` before
-	and after shuffling the given sequence. However, one can pass in any 
-	function, including `deep_lift_shap` or even `saturated_mutagenesis`. These 
-	functions may have additional arguments and those can be passed into 
-	`marginalize` as-is and will be passed along to the function. If any 
-	arguments would have had the same name as those used by this function, you 
-	can use the `additional_func_kwargs` input to ensure those values get to 
+	and after shuffling the given sequence. However, one can pass in any
+	function, including `deep_lift_shap` or even `saturation_mutagenesis`. These
+	functions may have additional arguments and those can be passed into
+	`ablate` as-is and will be passed along to the function. If any
+	arguments would have had the same name as those used by this function, you
+	can use the `additional_func_kwargs` input to ensure those values get to
 	the function.
 
 	Note: if `random_state` is passed in, it will make the shuffling step
@@ -39,7 +39,7 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 	there is not already a key called `random_state` in it. Essentially,
 	`random_state` makes shuffling deterministic and will also make the function
 	deterministic if the function accepts a random state, but if you'd like to
-	set your own separate state for the function it will not be overriden.
+	set your own separate state for the function it will not be overridden.
 
 
 	Parameters
@@ -50,18 +50,16 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 		inputs must be specified in the `args` parameter.
 
 	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to have a motif inserted into.
+		A one-hot encoded set of sequences to have a region shuffled out of.
 
-	start: int, optional
+	start: int
 		The starting position of where to randomize the sequence, inclusive.
-		Default is 0, shuffling the entire sequence.
 
-	end: int, optional
+	end: int
 		The ending position of where to randomize the sequence, not inclusive.
-		Default is -1, shuffling the entire sequence.
 
 	n: int, optional
-		The number of times to shuffle that region. Default is 1.
+		The number of times to shuffle that region. Default is 20.
 
 	shuffle_fn: function
 		A function that will shuffle a portion of the sequence. This can be
@@ -103,13 +101,13 @@ def ablate(model, X, start, end, n=20, shuffle_fn=shuffle, args=None,
 	Returns
 	-------
 	y_before: torch.Tensor or list of torch.Tensors
-		The predictions from the model before inserting the motif in. If the
+		The predictions from the model before shuffling the region. If the
 		output from the model's forward function is a single tensor, it will
 		return that. If the model outputs a list of tensors, it will return
 		those.
 
 	y_after: torch.Tensor or list of torch.Tensors
-		The predictions from the model after inserting the motif in. If the
+		The predictions from the model after shuffling the region. If the
 		output from the model's forward function is a single tensor, it will
 		return that. If the model outputs a list of tensors, it will return
 		those.
@@ -159,7 +157,7 @@ def ablate_annotations(model, X, annotations, **kwargs):
 		inputs must be specified in the `args` parameter.
 
 	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to have a motif inserted into.
+		A one-hot encoded set of sequences to ablate annotations from.
 
 	annotations: torch.Tensor, shape=(n_annotations, 3)
 		A tensor of annotations where the first column is the example_idx, the
@@ -173,15 +171,15 @@ def ablate_annotations(model, X, annotations, **kwargs):
 	Returns
 	-------
 	y_befores: torch.Tensor or list of torch.Tensors
-		The application of `func` from the model BEFORE ablating the motif. If 
-		the output from the model's forward function is a single tensor, it will 
-		return that. If the model outputs a list of tensors, it will return 
+		The application of `func` from the model BEFORE ablating the annotation.
+		If the output from the model's forward function is a single tensor, it
+		will return that. If the model outputs a list of tensors, it will return
 		those.
 
 	y_afters: torch.Tensor or list of torch.Tensors
-		The application of `func` from the model AFTER ablating the motif. If 
-		the output from the model's forward function is a single tensor, it will
-		return that. If the model outputs a list of tensors, it will return
+		The application of `func` from the model AFTER ablating the annotation.
+		If the output from the model's forward function is a single tensor, it
+		will return that. If the model outputs a list of tensors, it will return
 		those.
 	"""
 

@@ -60,7 +60,8 @@ def apply_pairwise(func, model, X, args=None, batch_size=32, device='cuda',
 		`args` should be one tensor that is input to the model. The elements do
 		not need to be the same size as each other as a product will be
 		constructed over all of them, as well as with `X`. If you only want
-		to use one value for an argument across all function applications 
+		to use one value for an argument across all function applications,
+		pass it in as a length-1 tensor.
 
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.
@@ -78,7 +79,7 @@ def apply_pairwise(func, model, X, args=None, batch_size=32, device='cuda',
 		their way into the function. Default is {}.
 
 	verbose: bool, optional
-		Whether to display a progress bar as spacings are evaluated. Default
+		Whether to display a progress bar as examples are processed. Default
 		is False.
 
 	kwargs: optional
@@ -186,7 +187,8 @@ def apply_product(func, model, X, args, batch_size=32, device='cuda',
 		`args` should be one tensor that is input to the model. The elements do
 		not need to be the same size as each other as a product will be
 		constructed over all of them, as well as with `X`. If you only want
-		to use one value for an argument across all function applications 
+		to use one value for an argument across all function applications,
+		pass it in as a length-1 tensor.
 
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.
@@ -204,7 +206,7 @@ def apply_product(func, model, X, args, batch_size=32, device='cuda',
 		their way into the function. Default is {}.
 
 	verbose: bool, optional
-		Whether to display a progress bar as spacings are evaluated. Default
+		Whether to display a progress bar as examples are processed. Default
 		is False.
 
 	kwargs: optional

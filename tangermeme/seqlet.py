@@ -261,7 +261,7 @@ def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2,
 
 	weak_threshold_for_counting_sign: float, optional
 		A minimal threshold to use when setting the final threshold value
-		separating seqlets from non-seqlets.
+		separating seqlets from non-seqlets. Default is 0.8.
 
 
 	Returns
@@ -467,7 +467,7 @@ def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	seqlet lengths by discretizing the attribution sum into integers. Then,
 	CDFs are calculated for each distribution (or, more specifically, 1-CDFs).
 	Finally, p-values are calculated via lookup to these 1-CDFs for all
-	potential CDFs, yielding a (n_positions, n_lengths) matrix of p-values.
+	potential spans, yielding a (n_positions, n_lengths) matrix of p-values.
 
 	This algorithm then identifies seqlets by defining them to have a key
 	property: all internal spans of a seqlet must also have been called a
@@ -525,7 +525,8 @@ def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 
 	additional_flanks: int, optional
 		An additional value to subtract from the start, and to add to the end,
-		of all called seqlets. Does not affect the called seqlets.
+		of all called seqlets. Does not affect which seqlets are called, only
+		extends their boundaries after calling. Default is 0.
 
 	n_bins: int, optional
 		The number of bins to use when estimating the PDFs and CDFs. Default is

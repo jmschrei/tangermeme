@@ -4,20 +4,12 @@
    contain the root `toctree` directive.
 
 
-    .. image:: logo/pomegranate-logo.png
-        :width: 300px
-
-
-    .. image:: https://readthedocs.org/projects/pomegranate/badge/?version=latest
-       :target: http://pomegranate.readthedocs.io/en/latest/?badge=latest
-
-
 tangermeme
 ==========
 
 tangermeme is a Python package that implements the basic operations necessary to perform sophisticated genomic analyses using machine learning models. Essentially, tangermeme aims to implement everything except for the model that you'd like to use, including I/O, identifying matched region sets, altering sequences (e.g., inserting a motif or scrambling out a motif), running marginalization experiments, and annotating regions. These functions are meant to be used by themselves but also can easily be built on top of if you'd like to customize your analyses. 
 
-Another way of looking at tangermeme is that, if the MEME suite is meant to do sequence analyses when you have only biological sequences (or maybe priors derived from experimental data), tangermeme is meant to do sequence analyses when you have these sequences *and* a predictive machine learning model. How does motif discovery or annotation differ when you have attribution values highlighting nucleotides based on how important they are to the predictions? Accordingly, tangermeme implements several command-line tools that are similar to those in the MEME suite, such as FIMO/TOMTOM/MEME, but also extends the capabilities of these tools to handle attributions, and implements new methods that answer additional questions.
+Another way of looking at tangermeme is that, if the MEME suite is meant to do sequence analyses when you have only biological sequences (or maybe priors derived from experimental data), tangermeme is meant to do sequence analyses when you have these sequences *and* a predictive machine learning model. How does motif discovery or annotation differ when you have attribution values highlighting nucleotides based on how important they are to the predictions? tangermeme extends classic MEME-suite-style analyses to handle attributions, and implements new methods that answer additional questions. The FIMO and TOMTOM tools themselves now live in `memesuite-lite <https://github.com/jmschrei/memesuite-lite>`_, where they can be used without a PyTorch dependency.
 
 Installation
 ============
@@ -58,7 +50,7 @@ No good project is done alone, and so I'd like to thank everyone who tested tang
 Contributions
 =============
 
-Contributions are eagerly accepted! If you would like to contribute a feature then fork the master branch and be sure to run the tests before changing any code. Let us know what you want to do on the issue tracker just in case we're already working on an implementation of something similar. Also, please don't forget to add tests for any new functions. 
+Contributions are eagerly accepted! If you would like to contribute a feature then fork the main branch and be sure to run the tests before changing any code. Let us know what you want to do on the issue tracker just in case we're already working on an implementation of something similar. Also, please don't forget to add tests for any new functions. 
 
 .. toctree::
    :maxdepth: 1
@@ -123,8 +115,10 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    api/design.rst
    api/ersatz.rst
    api/io.rst
+   api/kmers.rst
    api/marginalize.rst
    api/match.rst
+   api/pisa.rst
    api/plot.rst
    api/predict.rst
    api/product.rst

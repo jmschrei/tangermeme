@@ -1,4 +1,4 @@
-# attribute.py
+# deep_lift_shap.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import torch
@@ -21,10 +21,10 @@ def hypothetical_attributions(multipliers, X, references):
 	characters are not there. So, one needs to account for each character change 
 	actually being the addition of one character AND the subtraction of another 
 	character. Basically, once you've calculated the multipliers, you need to 
-	subtract out the contribution of the nucleotide actually present and then 
-	add in the contribution of the nucleotide you are becomming.
+	subtract out the contribution of the nucleotide actually present and then
+	add in the contribution of the nucleotide you are becoming.
 
-	Each element in the tensor is considered an independent example 
+	Each element in the tensor is considered an independent example.
 
 	As an implementation note: to be compatible with Captum, each input must
 	be a tuple of length 1 and the returned value will be a tuple of length 1.
@@ -213,7 +213,7 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 	As an implementation note, the batch size refers to the number of
 	example-reference pairs that are being run simultaneously. When the batch
 	size is smaller than the number of references, multiple batches will be
-	run per example and the attributions will only be averaged only the
+	run per example and the attributions will only be averaged across the
 	references after they have all been covered. You may want to do this if the
 	model or examples are so large that only a few can fit in memory at a time.
 	The result will be identical to if all examples could fit in memory and
@@ -284,9 +284,10 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 
 	hypothetical: bool, optional
 		Whether to return attributions for all possible characters at each
-		position or only for the character that is actually at the sequence.
-		Practically, whether to return the returned attributions from captum
-		with the one-hot encoded sequence. Default is False.
+		position (`True`) or only for the character that is actually in the
+		sequence (`False`). When `False`, the per-character attributions are
+		multiplied by the one-hot encoded input so that only the observed
+		character has a non-zero attribution at each position. Default is False.
 
 	warning_threshold: float, optional
 		A threshold on the convergence delta that will always raise a warning
@@ -479,8 +480,8 @@ def deep_lift_shap(model, X, args=None, target=0,  batch_size=32,
 					(_references,))[0]
 
 			# attr_ is a list where each element is a tensor for the multipliers
-			# of one example so that we can chunk them together once all
-			# references for an example are 
+			# of one example-reference pair, so that once all references for an
+			# example have been processed we can chunk them together.
 			attr_.extend(list(multipliers.cpu().detach()))
 
 			# When all references for a sequence have been calculated, remove
@@ -585,9 +586,10 @@ def _captum_deep_lift_shap(model, X, args=None, target=0, batch_size=32,
 
 	hypothetical: bool, optional
 		Whether to return attributions for all possible characters at each
-		position or only for the character that is actually at the sequence.
-		Practically, whether to return the returned attributions from captum
-		with the one-hot encoded sequence. Default is False.
+		position (`True`) or only for the character that is actually in the
+		sequence (`False`). When `False`, the per-character attributions are
+		multiplied by the one-hot encoded input so that only the observed
+		character has a non-zero attribution at each position. Default is False.
 
 	device: str or torch.device, optional
 		The device to move the model and batches to when making predictions. If

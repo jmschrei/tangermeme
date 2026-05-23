@@ -51,7 +51,11 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 	ohe: bool, optional
 		Whether the input must be a one-hot encoding, i.e., only consist of
 		zeroes and ones. Default is False.
-	
+
+	ohe_dim: int, optional
+		When `ohe=True`, the axis along which the one-hot encoding should sum
+		to 1 (or, with `allow_N=True`, sum to at most 1). Default is 1.
+
 	allow_N: bool, optional
 		Whether to allow the return of the character 'N' in the sequence, i.e.
 		if pwm at a position is all 0's return N. Default is False.
@@ -287,7 +291,7 @@ def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False, allow_N=False):
 
 	force: bool, optional
 		Whether to force a sequence to be produced even when there are ties.
-		At each position that there is a tight, the character earlier in the
+		At each position that there is a tie, the character earlier in the
 		sequence will be used. Default is False.
   
 	allow_N: bool, optional
@@ -455,7 +459,7 @@ def reverse_complement(seq, complement_map={"A": "T", "C": "G", "G": "C",
 	Returns
 	-------
 	rev_comp: str or torch.Tensor w/ shape (alphabet_size, length)
-		The reverse complemented string or 
+		The reverse complemented string or tensor.
 	"""
 
 	if isinstance(seq, str):
@@ -486,7 +490,7 @@ def random_one_hot(shape, probs=None, dtype='int8', random_state=None):
 
 	This function will generate random one-hot encodings where the second to
 	last dimension has a single element being a one and every other element
-	being a zero. Primary used for debugging. 
+	being a zero. Primarily used for debugging.
 
 
 	Parameters
@@ -497,7 +501,7 @@ def random_one_hot(shape, probs=None, dtype='int8', random_state=None):
 	probs: tuple, list, numpy.ndarray, or None optional
 		A 2D array of probabilities where the first dimension is the batch size
 		equal to the batch size of `X` and the second dimension is the alphabet
-		size. The values should be the probability of that character occuring
+		size. The values should be the probability of that character occurring
 		in that sequence. If a batch size of 1 is used when the batch size of
 		X is greater than 1, the same probabilities are used for each sequence.
 		The sum of probabilities across the alphabet axis must be equal to 1.

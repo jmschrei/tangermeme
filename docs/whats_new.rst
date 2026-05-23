@@ -170,7 +170,7 @@ plot
 seqlet
 ------
 
-	- The `recursive_seqlet` algorithm has been slightly modified to more closely match the provided description. This change involves using the calculated p-values instead of the maximum p-value for each position across all seqlets of smaller size. As a consequence, motifs should not be be shifted to the right anymore.
+	- The `recursive_seqlet` algorithm has been slightly modified to more closely match the provided description. This change involves using the calculated p-values instead of the maximum p-value for each position across all seqlets of smaller size. As a consequence, motifs should no longer be shifted to the right.
 
 
 utils
@@ -215,7 +215,7 @@ Version 0.4.3
 ersatz
 ------
 
-	- Substitute now accepts Ns or all-zeroes positions as inputs and, at those positions, will not alter the original sequence. If only one motif is given, this will be the same across all background sequences. If one motif is given per background sequence, this is done on a per-background example.
+	- Substitute now accepts Ns or all-zero positions as inputs and, at those positions, will not alter the original sequence. If only one motif is given, this will be the same across all background sequences. If one motif is given per background sequence, this is done on a per-background example.
 	- The above change means that higher-level functions like `marginalize` can now be run with motifs that contain missing characters, without any changes needed.
 	- The default `start` and `end` of `dinucleotide_shuffle` have been set to `None` because using `0` and `-1` meant that the last provided position never got shuffled.
 
@@ -338,9 +338,9 @@ match
 
 	- Various other changes:
 
-		1. Counts from regions that cannot be extracted from a provided bigwig file (such as for a missing chromosome) are now set to nan rather than 0. This will effect the threshold value used for filtering background regions.
+		1. Counts from regions that cannot be extracted from a provided bigwig file (such as for a missing chromosome) are now set to nan rather than 0. This will affect the threshold value used for filtering background regions.
 		2. Small change to the binning strategy for gc values, which could mean that matching loci generated in a previous version will not be reproduced exactly in all cases, even when using the same random seed.
-		3. Enable the handling of 'N' in sequences or [0,0,0,0], i.e. an ambiguous genomic positions. Updated the ``characters()`` and the ``_validate_input()`` in ``utils`` module to enable this.
+		3. Enable the handling of 'N' in sequences or [0,0,0,0], i.e., ambiguous genomic positions. Updated the ``characters()`` and the ``_validate_input()`` in ``utils`` module to enable this.
 
 
 Version 0.2.3
@@ -365,7 +365,7 @@ tools
 -----
 
 	- FIMO is now base 2 instead of base e, to better match the MEME-suite tool. p-values should remain the same but scores will change.
-	- FIMO `hits` will now return p-values, and will longer return an uninformative `attr` column
+	- FIMO `hits` will now return p-values, and will no longer return an uninformative `attr` column
 
 
 product
@@ -398,7 +398,7 @@ Version 0.2.0
 Highlights
 ----------
 
-	- Alters the API of several functions to make them more general, with the option of taking in a function to apply instead of defaulting to predict, while still back compatible
+	- Alters the API of several functions to make them more general, with the option of taking in a function to apply instead of defaulting to predict, while still backwards compatible
 	- Adds in `deep_lift_shap` and `seqlet` to operate on attributions
 
 
@@ -416,7 +416,7 @@ deep_lift_shap
 ism
 ----
 
-	- Changes the default output from the raw output (which you can get with `raw_output=True`) to defaultly aggregated attribution values to make the API compatible
+	- Changes the default output from the raw output (which you can get with `raw_output=True`) to aggregated attribution values to make the API compatible with the rest of the library
 
 
 marginalize
