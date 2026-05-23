@@ -31,9 +31,9 @@ def _fast_tile_substitute(X, motif, idxs):
 
 
 def screen(model, shape, y=None, loss=torch.nn.MSELoss(reduction='none'), tol=1e-3,
-	max_iter=-1, args=None, n_best=1, alphabet=['A', 'C', 'G', 'T'], 
-	batch_size=32, func=random_one_hot, additional_func_kwargs={}, dtype=None, 
-	device='cuda', random_state=None, verbose=False):
+	max_iter=-1, args=None, n_best=1, alphabet=['A', 'C', 'G', 'T'],
+	batch_size=32, func=random_one_hot, additional_func_kwargs=None, dtype=None,
+	device=None, random_state=None, verbose=False):
 	"""Screen randomly generated sequences and choose the best one.
 
 	Potentially, the conceptually simplest method for design is to randomly
@@ -103,22 +103,23 @@ def screen(model, shape, y=None, loss=torch.nn.MSELoss(reduction='none'), tol=1e
 		must be that it takes in a tuple of the shape of the batch to generate, e.g. 
 		(32, 4, 2114), and also a random state. Default is `random_one_hot`. 
 
-	additional_func_kwargs: dict, optional
+	additional_func_kwargs: dict or None, optional
 		Additional named arguments to pass into the function when it is called.
-		This is provided as an alternate path to route arguments into the 
+		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. Default is {}.
+		their way into the function. The dict is not modified in place. Default
+		is None.
 
 	dtype: str or torch.dtype or None, optional
 		The dtype to use with mixed precision autocasting. If None, use the dtype of
 		the *model*. This allows you to use int8 to represent large data sets and
 		only convert batches to the higher precision, saving memory. Default is None.
 
-	device: str or torch.device, optional
+	device: str or torch.device or None, optional
 		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+		None, use CUDA when available and fall back to CPU otherwise. Default
+		is None.
 
 	random_state: int or None, optional
 		The random seed to use to ensure determinism of the generation function.
@@ -138,12 +139,13 @@ def screen(model, shape, y=None, loss=torch.nn.MSELoss(reduction='none'), tol=1e
 		y = [9_999_999]
 
 	y = _cast_as_tensor(y)
-	
+	additional_func_kwargs = dict(additional_func_kwargs or {})
+
 	pq = []
 	iteration = 0
 
 	while True:
-		X = func((batch_size, *shape), random_state=random_state, 
+		X = func((batch_size, *shape), random_state=random_state,
 			**additional_func_kwargs)
 
 		y_hat = predict(model, X, dtype=dtype, device=device, args=args)
@@ -175,10 +177,10 @@ def screen(model, shape, y=None, loss=torch.nn.MSELoss(reduction='none'), tol=1e
 	return X
 
 
-def greedy_substitution(model, X, y=None, motifs=None, 
-	loss=torch.nn.MSELoss(reduction='none'), reverse_complement=True, 
-	input_mask=None, output_mask=None, tol=1e-3, max_iter=-1, args=None, 
-	alphabet=['A', 'C', 'G', 'T'], batch_size=32, device='cuda', verbose=False):
+def greedy_substitution(model, X, y=None, motifs=None,
+	loss=torch.nn.MSELoss(reduction='none'), reverse_complement=True,
+	input_mask=None, output_mask=None, tol=1e-3, max_iter=-1, args=None,
+	alphabet=['A', 'C', 'G', 'T'], batch_size=32, device=None, verbose=False):
 	"""Greedily add motifs to achieve a desired goal. 
 
 	This design function will greedily add motifs to achieve a desired output
@@ -269,10 +271,10 @@ def greedy_substitution(model, X, y=None, motifs=None,
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.
 
-	device: str or torch.device, optional
+	device: str or torch.device or None, optional
 		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+		None, use CUDA when available and fall back to CPU otherwise. Default
+		is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar during predictions. Default is False.
@@ -281,7 +283,7 @@ def greedy_substitution(model, X, y=None, motifs=None,
 	Returns
 	-------
 	X: torch.Tensor, shape=(-1, len(alphabet), length)
-		The edited sequence. 
+		The edited sequence.
 	"""
 
 	tic = time.time()
@@ -379,9 +381,9 @@ def greedy_substitution(model, X, y=None, motifs=None,
 
 
 def greedy_marginalize(model, X, y, motifs, loss=torch.nn.MSELoss(
-	reduction='none'), max_spacing=12, reverse_complement=True, 
-	output_mask=None, tol=1e-3, max_iter=-1, args=None, 
-	alphabet=['A', 'C', 'G', 'T'], batch_size=32, device='cuda', verbose=False):
+	reduction='none'), max_spacing=12, reverse_complement=True,
+	output_mask=None, tol=1e-3, max_iter=-1, args=None,
+	alphabet=['A', 'C', 'G', 'T'], batch_size=32, device=None, verbose=False):
 	"""Greedily builds a construct and evaluates it using marginalizations.
 
 	This approach attempts to find a set of motifs and their orientations and
@@ -478,10 +480,10 @@ def greedy_marginalize(model, X, y, motifs, loss=torch.nn.MSELoss(
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.
 
-	device: str or torch.device, optional
+	device: str or torch.device or None, optional
 		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'.
+		None, use CUDA when available and fall back to CPU otherwise. Default
+		is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar during predictions. Default is False.
