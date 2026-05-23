@@ -197,127 +197,141 @@ def pisa(
             _NON_LINEAR_OPS[key] = value
 
     device = _resolve_device(device)
-    model = model.to(device).eval()
-    for module in model.modules():
-        module._NON_LINEAR_OPS = _NON_LINEAR_OPS
+    try:
+        _orig_device = next(model.parameters()).device
+    except StopIteration:
+        _orig_device = None
+    _was_training = model.training
+
+    model.to(device).eval()
 
     try:
-        model.apply(_register_hooks)
-    except Exception as e:
-        model.apply(_clear_hooks)
-        raise(e)
+        for module in model.modules():
+            module._NON_LINEAR_OPS = _NON_LINEAR_OPS
 
-    # Begin PISA procedure    
-    attributions, references_ = [], [] 
-    if isinstance(references, torch.Tensor):
-        _validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
-            X.shape[2]), ohe=True, allow_N=False, ohe_dim=-2)
-        n_shuffles = references.shape[1]
+        try:
+            model.apply(_register_hooks)
+        except Exception as e:
+            model.apply(_clear_hooks)
+            raise(e)
 
-    _probe_args = None if args is None else tuple(a[:1] for a in args)
-    n_outputs = predict(model, X[:1], args=_probe_args, device=device).shape[-1]
-
-    # Loop over each of the examples
-    for i in trange(len(X), disable=not verbose):
-        _X = X[i:i+1].to(device).requires_grad_()
-
-        # Either use reference sequences if provided or generate a set of them
-        # for this example being analyzed.
+        # Begin PISA procedure    
+        attributions, references_ = [], [] 
         if isinstance(references, torch.Tensor):
-            _references = references[i]
-        else:
-            _references = references(_X.cpu(), n=n_shuffles, 
-                random_state=random_state)[0]
+            _validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
+                X.shape[2]), ohe=True, allow_N=False, ohe_dim=-2)
+            n_shuffles = references.shape[1]
 
-        _references = _references.to(device).requires_grad_()
-        if return_references:
-            references_.append(_references)
+        _probe_args = None if args is None else tuple(a[:1] for a in args)
+        n_outputs = predict(model, X[:1], args=_probe_args, device=device).shape[-1]
 
-        # Pull out the additional arguments for this example, if additional
-        # arguments are being provided
-        _args = None if args is None else tuple([a[i].to(device) 
-            for a in args])
+        # Loop over each of the examples
+        for i in trange(len(X), disable=not verbose):
+            _X = X[i:i+1].to(device).requires_grad_()
 
-        multipliers = []
+            # Either use reference sequences if provided or generate a set of them
+            # for this example being analyzed.
+            if isinstance(references, torch.Tensor):
+                _references = references[i]
+            else:
+                _references = references(_X.cpu(), n=n_shuffles, 
+                    random_state=random_state)[0]
 
-        # Loop over all of the shuffles for each example
-        for j in range(n_shuffles):
-            # For each output explained, the input and the reference will be
-            # the same, so extract those single elements and expand them to
-            # be the batch size.
+            _references = _references.to(device).requires_grad_()
+            if return_references:
+                references_.append(_references)
 
-            x = _X.expand(batch_size, -1, -1)
-            r = _references[j:j+1].expand(batch_size, -1, -1)
-            xr = (x[:1] - r[:1])
+            # Pull out the additional arguments for this example, if additional
+            # arguments are being provided
+            _args = None if args is None else tuple([a[i].to(device) 
+                for a in args])
+
+            multipliers = []
+
+            # Loop over all of the shuffles for each example
+            for j in range(n_shuffles):
+                # For each output explained, the input and the reference will be
+                # the same, so extract those single elements and expand them to
+                # be the batch size.
+
+                x = _X.expand(batch_size, -1, -1)
+                r = _references[j:j+1].expand(batch_size, -1, -1)
+                xr = (x[:1] - r[:1])
             
-            X_ = torch.cat([x, r])
+                X_ = torch.cat([x, r])
             
-            with torch.autograd.set_grad_enabled(True):
-                if _args is not None:
-                    # Materialize into a tuple and bind to a fresh name so
-                    # `_args` is not overwritten by an exhausted generator
-                    # for the next shuffle iteration.
-                    _args_batched = tuple(torch.cat([arg, arg]) for arg in _args)
-                    y = model(X_, *_args_batched)
-                else:
-                    y = model(X_)
+                with torch.autograd.set_grad_enabled(True):
+                    if _args is not None:
+                        # Materialize into a tuple and bind to a fresh name so
+                        # `_args` is not overwritten by an exhausted generator
+                        # for the next shuffle iteration.
+                        _args_batched = tuple(torch.cat([arg, arg]) for arg in _args)
+                        y = model(X_, *_args_batched)
+                    else:
+                        y = model(X_)
 
-                _multipliers = []
-                edge_size = n_outputs % batch_size
+                    _multipliers = []
+                    edge_size = n_outputs % batch_size
 
-                # Loop over all of the output positions
-                for k in range(0, n_outputs, batch_size):
-                    b = min(batch_size, n_outputs - k)
+                    # Loop over all of the output positions
+                    for k in range(0, n_outputs, batch_size):
+                        b = min(batch_size, n_outputs - k)
  
-                    rows = torch.cat([torch.arange(b), torch.arange(b)+batch_size])
-                    cols = torch.arange(k, k+b).repeat(2)
-                    y_hat = y[rows, cols].sum()
+                        rows = torch.cat([torch.arange(b), torch.arange(b)+batch_size])
+                        cols = torch.arange(k, k+b).repeat(2)
+                        y_hat = y[rows, cols].sum()
                     
-                    multipliers_ = torch.autograd.grad(y_hat, x, retain_graph=True)[0]
+                        multipliers_ = torch.autograd.grad(y_hat, x, retain_graph=True)[0]
                     
-                    # Check that the prediction-difference-from-reference is equal to
-                    # the sum of the attributions                    
-                    output_diff = torch.sub(*torch.chunk(y[rows, cols], 2))
-                    input_diff = torch.sum(xr * multipliers_[:b], dim=(1, 2))
+                        # Check that the prediction-difference-from-reference is equal to
+                        # the sum of the attributions                    
+                        output_diff = torch.sub(*torch.chunk(y[rows, cols], 2))
+                        input_diff = torch.sum(xr * multipliers_[:b], dim=(1, 2))
                                        
-                    convergence_deltas = abs(output_diff - input_diff)
-                    if torch.any(convergence_deltas > warning_threshold):
-                        warnings.warn("Convergence deltas too high: " +   
-                            str(convergence_deltas), RuntimeWarning)
+                        convergence_deltas = abs(output_diff - input_diff)
+                        if torch.any(convergence_deltas > warning_threshold):
+                            warnings.warn("Convergence deltas too high: " +   
+                                str(convergence_deltas), RuntimeWarning)
 
-                    if print_convergence_deltas:
-                        print(convergence_deltas)
+                        if print_convergence_deltas:
+                            print(convergence_deltas)
                     
-                    if not raw_outputs:
-                        multipliers_ = hypothetical_attributions(
-                            (multipliers_[:b],), 
-                            (x[:b],), 
-                            (r[:b],)
-                        )[0].cpu().detach()    
+                        if not raw_outputs:
+                            multipliers_ = hypothetical_attributions(
+                                (multipliers_[:b],), 
+                                (x[:b],), 
+                                (r[:b],)
+                            )[0].cpu().detach()    
                                        
-                    _multipliers.append(multipliers_[:b])                  
+                        _multipliers.append(multipliers_[:b])                  
 
-            # Discard the accumulated graph
-            torch.autograd.grad(y[:1, :1].sum(), x, retain_graph=False)[0]
+                # Discard the accumulated graph
+                torch.autograd.grad(y[:1, :1].sum(), x, retain_graph=False)[0]
 
-            # Keep the multipliers across each output
-            multipliers.append(torch.cat(_multipliers, dim=0))
+                # Keep the multipliers across each output
+                multipliers.append(torch.cat(_multipliers, dim=0))
 
-        attr = torch.stack(multipliers, dim=0)
-        if not raw_outputs:
-            attr = attr.mean(dim=0)
-            if not hypothetical:
-                attr = attr * _X.cpu()
+            attr = torch.stack(multipliers, dim=0)
+            if not raw_outputs:
+                attr = attr.mean(dim=0)
+                if not hypothetical:
+                    attr = attr * _X.cpu()
         
-        attributions.append(attr)
+            attributions.append(attr)
 
 
-    model.apply(_clear_hooks)
-    for module in model.modules():
-        del(module._NON_LINEAR_OPS)
+        attributions = torch.stack(attributions).detach()
 
-    attributions = torch.stack(attributions).detach()
+        if return_references:
+            return attributions, torch.stack(references_).detach()
+        return attributions
+    finally:
+        model.apply(_clear_hooks)
+        for module in model.modules():
+            if hasattr(module, "_NON_LINEAR_OPS"):
+                del module._NON_LINEAR_OPS
 
-    if return_references:
-        return attributions, torch.stack(references_).detach()
-    return attributions
+        if _was_training:
+            model.train()
+        if _orig_device is not None and _orig_device != device:
+            model.to(_orig_device)

@@ -484,6 +484,46 @@ def test_pisa_args_preserved_across_shuffles(X, device):
 	assert X_attr.shape == (X.shape[0], 1, X.shape[1], X.shape[2])
 
 
+def test_pisa_preserves_model_state(X, device):
+	# After pisa returns the model should be back on its original device
+	# and in its original training mode, with no _NON_LINEAR_OPS attributes
+	# leaked onto its modules.
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	model.train()  # explicitly leave model in train mode
+	orig_device = next(model.parameters()).device
+
+	pisa(model, X, n_shuffles=2, device=device, random_state=0)
+
+	assert model.training, "training mode was not restored"
+	assert next(model.parameters()).device == orig_device, \
+		"device was not restored"
+	for module in model.modules():
+		assert not hasattr(module, "_NON_LINEAR_OPS"), \
+			"_NON_LINEAR_OPS attribute leaked onto module"
+
+
+def test_pisa_cleans_up_hooks_on_exception(X, device):
+	# If the forward pass raises mid-loop, hooks and _NON_LINEAR_OPS
+	# attributes must still be cleaned up by the finally clause.
+	class Boom(torch.nn.Module):
+		def __init__(self):
+			super().__init__()
+			self.dense = torch.nn.Linear(100 * 4, 1)
+
+		def forward(self, X):
+			raise RuntimeError("intentional boom")
+
+	model = Boom()
+
+	with pytest.raises(RuntimeError):
+		pisa(model, X, n_shuffles=1, device=device, random_state=0)
+
+	for module in model.modules():
+		assert not hasattr(module, "_NON_LINEAR_OPS"), \
+			"_NON_LINEAR_OPS leaked after exception"
+
+
 def test_pisa_raises(references, device):
 	X_ = random_one_hot((16, 4, 100), random_state=0).type(torch.float32)
 	X = substitute(X_, "ACGTACGT")
