@@ -370,6 +370,36 @@ def test_marginalize_rejects_empty_X():
 		marginalize(model, X, "ACGTC")
 
 
+def test_marginalize_accepts_fp64(X, device):
+	# X passed in as fp64 should be accepted (predict casts internally).
+	model = FlattenDense()
+	X64 = X.type(torch.float64)
+
+	y_before, y_after = marginalize(model, X64, "ACGTC", device=device)
+	assert y_before.dtype == torch.float32
+	assert y_after.dtype == torch.float32
+
+
+def test_marginalize_accepts_fp16(X, cuda_device):
+	model = FlattenDense().to(cuda_device)
+	X16 = X.type(torch.float16).to(cuda_device)
+
+	y_before, y_after = marginalize(model, X16, "ACGTC",
+		device=cuda_device, dtype=torch.float16)
+	assert y_before.dtype == torch.float16
+	assert y_after.dtype == torch.float16
+
+
+def test_marginalize_accepts_bf16(X, cuda_device):
+	model = FlattenDense().to(cuda_device)
+	Xbf = X.type(torch.bfloat16).to(cuda_device)
+
+	y_before, y_after = marginalize(model, Xbf, "ACGTC",
+		device=cuda_device, dtype=torch.bfloat16)
+	assert y_before.dtype == torch.bfloat16
+	assert y_after.dtype == torch.bfloat16
+
+
 ###
 
 
