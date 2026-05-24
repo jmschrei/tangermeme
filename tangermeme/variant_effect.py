@@ -224,7 +224,16 @@ def deletion_effect(
 
 	mask = torch.zeros_like(X[:, 0]).type(torch.int32)
 	mask[deletions[:, 0], deletions[:, 1]] = 1
-	
+
+	max_deletions = int(mask.sum(dim=-1).max())
+	if max_deletions >= X.shape[-1]:
+		raise ValueError(
+			f"deletion_effect requires X.shape[-1] > max deletions per example "
+			f"to leave at least one position for the model; got "
+			f"X.shape[-1]={X.shape[-1]} and max deletions per example "
+			f"={max_deletions}. Each sequence must be of length "
+			f"`model_length + max_deletions_per_sequence`.")
+
 	counts = mask.sum(dim=-1)
 	counts = abs(counts - counts.max())
 

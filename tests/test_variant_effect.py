@@ -126,6 +126,18 @@ def test_deletion_effect_summodel(X_del, substitutions, device):
 	assert_array_almost_equal(y, X_del[:, :, :100].sum(dim=-1))
 
 
+def test_deletion_effect_rejects_X_too_short():
+	# X.shape[-1] must exceed the max deletion count per example so the model
+	# is left with at least one position to consume. Previously this fell
+	# through to a cryptic empty-tensor / model crash.
+	model = FlattenDense()
+	X = random_one_hot((2, 4, 5)).type(torch.float32)
+	deletions = torch.tensor([[0, 0], [0, 1], [0, 2], [0, 3], [0, 4]])
+
+	with pytest.raises(ValueError, match="max deletions per example"):
+		deletion_effect(model, X, deletions)
+
+
 ###
 
 

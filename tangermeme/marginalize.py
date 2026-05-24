@@ -116,6 +116,11 @@ def marginalize(
 	_validate_input(X, "X", shape=(-1, len(alphabet), -1), ohe=True, allow_N=True)
 	additional_func_kwargs = dict(additional_func_kwargs or {})
 
+	if isinstance(motif, torch.Tensor) and motif.device != X.device:
+		raise ValueError(
+			f"`motif` and `X` must be on the same device; got motif on "
+			f"{motif.device} and X on {X.device}.")
+
 	X_perturb = substitute(X, motif, start=start, alphabet=alphabet)
 	y_before = func(model, X, **kwargs, **additional_func_kwargs)
 	y_after = func(model, X_perturb, **kwargs, **additional_func_kwargs)

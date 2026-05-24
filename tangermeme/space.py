@@ -126,6 +126,12 @@ def space(
 		"spacing", shape=(-1, len(motifs)-1))
 	X = _validate_input(X, "X", shape=(-1, len(alphabet), -1))
 
+	for i, motif in enumerate(motifs):
+		if isinstance(motif, torch.Tensor) and motif.device != X.device:
+			raise ValueError(
+				f"motifs[{i}] and X must be on the same device; got "
+				f"motifs[{i}] on {motif.device} and X on {X.device}.")
+
 	additional_func_kwargs = dict(additional_func_kwargs or {})
 
 	y_before = func(model, X, **kwargs, **additional_func_kwargs)

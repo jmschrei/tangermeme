@@ -120,6 +120,14 @@ def apply_pairwise(
 	# with callables that haven't yet been updated to accept torch.device.
 	device_arg = str(device)
 
+	if args is not None and len(args) > 1:
+		lengths = [len(a) for a in args]
+		if len(set(lengths)) != 1:
+			raise ValueError("apply_pairwise requires every element in `args` "
+				"to have the same length (they are paired index-wise). Got "
+				f"lengths {lengths}; use `apply_product` for the cartesian "
+				"product instead.")
+
 	with _preserve_model_state(model, device):
 		X_, y, args_ = [], [], [[] for _ in args]
 		for x in tqdm(itertools.product(X, zip(*args)), disable=not verbose):

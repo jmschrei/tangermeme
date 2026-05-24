@@ -217,6 +217,15 @@ def test_apply_pairwise_predict_convdense_alpha(X, alpha, device):
 		 [-0.2375, -0.0069,  0.0835]]], 4)
 
 
+def test_apply_pairwise_rejects_mismatched_args_lengths(X, alpha, beta):
+	# apply_pairwise pairs entries in args index-wise; mismatched lengths
+	# previously silently truncated to the shorter via zip(*args).
+	model = FlattenDense()
+
+	with pytest.raises(ValueError, match="same length"):
+		apply_pairwise(predict, model, X[:5], args=(alpha[:5], beta[:3]))
+
+
 ###
 
 
