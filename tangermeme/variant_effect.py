@@ -220,6 +220,10 @@ def deletion_effect(
 
 	deletions = _cast_as_tensor(deletions)
 
+	if X.shape[0] == 0:
+		raise ValueError("deletion_effect requires at least one example; "
+			"got X with shape[0] == 0.")
+
 	additional_func_kwargs = dict(additional_func_kwargs or {})
 
 	mask = torch.zeros_like(X[:, 0]).type(torch.int32)

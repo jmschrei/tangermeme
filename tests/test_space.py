@@ -739,6 +739,15 @@ def test_space_func_saturation_mutagenesis(X, device):
 		   -0.0000,  0.0000, -0.0000]]]], 4)
 
 
+def test_space_rejects_empty_X():
+	from tangermeme.space import space
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 100, dtype=torch.float32)
+	with pytest.raises(ValueError, match="at least one example"):
+		space(model, X, ["ACGT", "ACGT"], spacing=[[1]])
+
+
 def test_space_rejects_device_mismatch():
 	# A tensor motif on a different device from X used to fall through
 	# to a cryptic torch error from inside multisubstitute(). String motifs

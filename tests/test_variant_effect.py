@@ -138,6 +138,79 @@ def test_deletion_effect_rejects_X_too_short():
 		deletion_effect(model, X, deletions)
 
 
+def test_deletion_effect_rejects_empty_X():
+	# Empty X previously crashed cryptically inside the mask reduction.
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 105, dtype=torch.float32)
+	deletions = torch.zeros(0, 2, dtype=torch.int64)
+	with pytest.raises(ValueError, match="at least one example"):
+		deletion_effect(model, X, deletions)
+
+
+def test_substitution_effect_rejects_empty_X():
+	# Routes through predict's empty-input check.
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 100, dtype=torch.float32)
+	subs = torch.zeros(0, 3, dtype=torch.int64)
+	with pytest.raises(ValueError, match="at least one example"):
+		substitution_effect(model, X, subs)
+
+
+def test_insertion_effect_rejects_empty_X():
+	# Empty X crashes inside torch.cat with a slightly cryptic message;
+	# any ValueError is acceptable here.
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 100, dtype=torch.float32)
+	insertions = torch.zeros(0, 3, dtype=torch.int64)
+	with pytest.raises(ValueError):
+		insertion_effect(model, X, insertions)
+
+
+###
+
+
+def test_substitution_effect_args(X, substitutions, device):
+	# args= should be threaded through to the model. FlattenDense's forward
+	# adds `alpha` to the output, so non-zero alpha shifts the predictions.
+	torch.manual_seed(0)
+	model = FlattenDense()
+	alpha = torch.full((X.shape[0], 1), 2.0)
+
+	y0, y0_var = substitution_effect(model, X, substitutions, device=device)
+	y, y_var = substitution_effect(model, X, substitutions, args=(alpha,),
+		device=device)
+
+	assert_array_almost_equal(y - y0, torch.full_like(y, 2.0))
+	assert_array_almost_equal(y_var - y0_var, torch.full_like(y_var, 2.0))
+
+
+def test_deletion_effect_args(X_del, deletions, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	alpha = torch.full((X_del.shape[0], 1), 2.0)
+
+	y0, y0_var = deletion_effect(model, X_del, deletions, device=device)
+	y, y_var = deletion_effect(model, X_del, deletions, args=(alpha,),
+		device=device)
+
+	assert_array_almost_equal(y - y0, torch.full_like(y, 2.0))
+	assert_array_almost_equal(y_var - y0_var, torch.full_like(y_var, 2.0))
+
+
+def test_insertion_effect_args(X, substitutions, device):
+	# Reuse `substitutions` as insertions (same (idx, pos, char) layout).
+	torch.manual_seed(0)
+	model = FlattenDense()
+	alpha = torch.full((X.shape[0], 1), 2.0)
+
+	y0, y0_var = insertion_effect(model, X, substitutions, device=device)
+	y, y_var = insertion_effect(model, X, substitutions, args=(alpha,),
+		device=device)
+
+	assert_array_almost_equal(y - y0, torch.full_like(y, 2.0))
+	assert_array_almost_equal(y_var - y0_var, torch.full_like(y_var, 2.0))
+
+
 ###
 
 

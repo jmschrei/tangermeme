@@ -246,6 +246,20 @@ def test_predict_raises_args(X, alpha, beta, device):
 		args=(alpha, beta[:5]), device=device)
 
 
+def test_predict_flattendense_fp64(X, device):
+	# Predict accepts fp64 inputs and returns fp32 per docstring contract.
+	torch.manual_seed(0)
+	model = FlattenDense().to(device)
+	X64 = X.type(torch.float64)
+	y = predict(model, X64, batch_size=8, device=device)
+
+	assert y.shape == (64, 3)
+	assert y.dtype == torch.float32
+
+	y_ref = predict(model, X, batch_size=8, device=device)
+	assert_array_almost_equal(y, y_ref, 4)
+
+
 def test_predict_flattendense_16bit(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense().to(device)

@@ -120,6 +120,14 @@ def apply_pairwise(
 	# with callables that haven't yet been updated to accept torch.device.
 	device_arg = str(device)
 
+	if len(X) == 0:
+		raise ValueError("apply_pairwise requires at least one example; "
+			"got X with shape[0] == 0.")
+
+	if args is not None and any(len(a) == 0 for a in args):
+		raise ValueError("apply_pairwise requires every element in `args` to "
+			"be non-empty; got at least one zero-length entry.")
+
 	if args is not None and len(args) > 1:
 		lengths = [len(a) for a in args]
 		if len(set(lengths)) != 1:
@@ -270,6 +278,14 @@ def apply_product(
 	# Pass device as a string to downstream `func` to remain back-compatible
 	# with callables that haven't yet been updated to accept torch.device.
 	device_arg = str(device)
+
+	if len(X) == 0:
+		raise ValueError("apply_product requires at least one example; "
+			"got X with shape[0] == 0.")
+
+	if args is not None and any(len(a) == 0 for a in args):
+		raise ValueError("apply_product requires every element in `args` to "
+			"be non-empty; got at least one zero-length entry.")
 
 	with _preserve_model_state(model, device):
 		X_, y, args_ = [], [], [[] for _ in args]

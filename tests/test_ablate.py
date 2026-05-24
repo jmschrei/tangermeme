@@ -1123,6 +1123,43 @@ def test_ablate_annotations_empty(X, device):
 		device=device)
 
 
+def test_ablate_rejects_empty_X():
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 100, dtype=torch.float32)
+	with pytest.raises(ValueError, match="at least one example"):
+		ablate(model, X, start=10, end=20, n=2, random_state=0)
+
+
+def test_ablate_accepts_fp64(X, device):
+	model = FlattenDense()
+	X64 = X.type(torch.float64)
+
+	y_before, y_after = ablate(model, X64, start=10, end=20, n=2,
+		device=device, random_state=0)
+	assert y_before.dtype == torch.float32
+	assert y_after.dtype == torch.float32
+
+
+def test_ablate_accepts_fp16(X, cuda_device):
+	model = FlattenDense().to(cuda_device)
+	X16 = X.type(torch.float16).to(cuda_device)
+
+	y_before, y_after = ablate(model, X16, start=10, end=20, n=2,
+		device=cuda_device, dtype=torch.float16, random_state=0)
+	assert y_before.dtype == torch.float16
+	assert y_after.dtype == torch.float16
+
+
+def test_ablate_accepts_bf16(X, cuda_device):
+	model = FlattenDense().to(cuda_device)
+	Xbf = X.type(torch.bfloat16).to(cuda_device)
+
+	y_before, y_after = ablate(model, Xbf, start=10, end=20, n=2,
+		device=cuda_device, dtype=torch.bfloat16, random_state=0)
+	assert y_before.dtype == torch.bfloat16
+	assert y_after.dtype == torch.bfloat16
+
+
 def test_ablate_returns_named_tuple(X, device):
 	# AblateResult should support both positional unpacking and named
 	# field access.

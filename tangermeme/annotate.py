@@ -356,6 +356,10 @@ def pairwise_annotations_spacing(
 	elif isinstance(X, pandas.DataFrame):
 		X = torch.from_numpy(X.values)
 
+	if X.shape[0] == 0:
+		raise ValueError("pairwise_annotations_spacing requires at least one "
+			"annotation; got X with shape[0] == 0.")
+
 	_validate_input(X, 'X', shape=(-1, 4), min_value=0)
 
 	n_examples, n_annotations = X.max(dim=0).values[:2] + 1

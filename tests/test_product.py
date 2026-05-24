@@ -226,6 +226,32 @@ def test_apply_pairwise_rejects_mismatched_args_lengths(X, alpha, beta):
 		apply_pairwise(predict, model, X[:5], args=(alpha[:5], beta[:3]))
 
 
+def test_apply_pairwise_rejects_empty_X(alpha):
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 100, dtype=torch.float32)
+	with pytest.raises(ValueError, match="at least one example"):
+		apply_pairwise(predict, model, X, args=(alpha[:0],))
+
+
+def test_apply_pairwise_rejects_empty_args_entry(X, alpha):
+	model = FlattenDense()
+	with pytest.raises(ValueError, match="non-empty"):
+		apply_pairwise(predict, model, X[:5], args=(alpha[:0],))
+
+
+def test_apply_product_rejects_empty_X(alpha):
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 100, dtype=torch.float32)
+	with pytest.raises(ValueError, match="at least one example"):
+		apply_product(predict, model, X, args=(alpha[:5],))
+
+
+def test_apply_product_rejects_empty_args_entry(X, alpha):
+	model = FlattenDense()
+	with pytest.raises(ValueError, match="non-empty"):
+		apply_product(predict, model, X[:5], args=(alpha[:0],))
+
+
 ###
 
 
@@ -761,6 +787,18 @@ def test_apply_pairwise_verbose(X, alpha, device):
 	y_quiet = apply_pairwise(predict, model, X[:5], args=(alpha[:5],),
 		device=device, verbose=False)
 	y_loud = apply_pairwise(predict, model, X[:5], args=(alpha[:5],),
+		device=device, verbose=True)
+
+	assert_array_almost_equal(y_quiet, y_loud)
+
+
+def test_apply_product_verbose(X, alpha, beta, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	y_quiet = apply_product(predict, model, X[:5], args=(alpha[:3], beta[:2]),
+		device=device, verbose=False)
+	y_loud = apply_product(predict, model, X[:5], args=(alpha[:3], beta[:2]),
 		device=device, verbose=True)
 
 	assert_array_almost_equal(y_quiet, y_loud)
