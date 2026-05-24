@@ -138,6 +138,34 @@ def test_deletion_effect_rejects_X_too_short():
 		deletion_effect(model, X, deletions)
 
 
+def test_deletion_effect_rejects_empty_X():
+	# Empty X previously crashed cryptically inside the mask reduction.
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 105, dtype=torch.float32)
+	deletions = torch.zeros(0, 2, dtype=torch.int64)
+	with pytest.raises(ValueError, match="at least one example"):
+		deletion_effect(model, X, deletions)
+
+
+def test_substitution_effect_rejects_empty_X():
+	# Routes through predict's empty-input check.
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 100, dtype=torch.float32)
+	subs = torch.zeros(0, 3, dtype=torch.int64)
+	with pytest.raises(ValueError, match="at least one example"):
+		substitution_effect(model, X, subs)
+
+
+def test_insertion_effect_rejects_empty_X():
+	# Empty X crashes inside torch.cat with a slightly cryptic message;
+	# any ValueError is acceptable here.
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 100, dtype=torch.float32)
+	insertions = torch.zeros(0, 3, dtype=torch.int64)
+	with pytest.raises(ValueError):
+		insertion_effect(model, X, insertions)
+
+
 ###
 
 
