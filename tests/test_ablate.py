@@ -1123,6 +1123,13 @@ def test_ablate_annotations_empty(X, device):
 		device=device)
 
 
+def test_ablate_rejects_empty_X():
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 100, dtype=torch.float32)
+	with pytest.raises(ValueError, match="at least one example"):
+		ablate(model, X, start=10, end=20, n=2, random_state=0)
+
+
 def test_ablate_returns_named_tuple(X, device):
 	# AblateResult should support both positional unpacking and named
 	# field access.

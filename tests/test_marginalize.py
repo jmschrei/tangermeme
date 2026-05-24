@@ -363,6 +363,13 @@ def test_marginalize_rejects_device_mismatch():
 		marginalize(model, X, motif)
 
 
+def test_marginalize_rejects_empty_X():
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 100, dtype=torch.float32)
+	with pytest.raises(ValueError, match="at least one example"):
+		marginalize(model, X, "ACGTC")
+
+
 ###
 
 

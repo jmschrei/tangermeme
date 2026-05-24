@@ -427,6 +427,14 @@ def test_saturation_mutagenesis_sum_model(X, device):
 ###
 
 
+def test_saturation_mutagenesis_rejects_empty_X():
+	# Routes through predict's empty-input check.
+	model = FlattenDense()
+	X = torch.zeros(0, 4, 100, dtype=torch.float32)
+	with pytest.raises(ValueError, match="at least one example"):
+		saturation_mutagenesis(model, X)
+
+
 def test_saturation_mutagenesis_verbose(X0, device):
 	model = SmallDeepSEA(1)
 
