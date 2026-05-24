@@ -169,6 +169,51 @@ def test_insertion_effect_rejects_empty_X():
 ###
 
 
+def test_substitution_effect_args(X, substitutions, device):
+	# args= should be threaded through to the model. FlattenDense's forward
+	# adds `alpha` to the output, so non-zero alpha shifts the predictions.
+	torch.manual_seed(0)
+	model = FlattenDense()
+	alpha = torch.full((X.shape[0], 1), 2.0)
+
+	y0, y0_var = substitution_effect(model, X, substitutions, device=device)
+	y, y_var = substitution_effect(model, X, substitutions, args=(alpha,),
+		device=device)
+
+	assert_array_almost_equal(y - y0, torch.full_like(y, 2.0))
+	assert_array_almost_equal(y_var - y0_var, torch.full_like(y_var, 2.0))
+
+
+def test_deletion_effect_args(X_del, deletions, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	alpha = torch.full((X_del.shape[0], 1), 2.0)
+
+	y0, y0_var = deletion_effect(model, X_del, deletions, device=device)
+	y, y_var = deletion_effect(model, X_del, deletions, args=(alpha,),
+		device=device)
+
+	assert_array_almost_equal(y - y0, torch.full_like(y, 2.0))
+	assert_array_almost_equal(y_var - y0_var, torch.full_like(y_var, 2.0))
+
+
+def test_insertion_effect_args(X, substitutions, device):
+	# Reuse `substitutions` as insertions (same (idx, pos, char) layout).
+	torch.manual_seed(0)
+	model = FlattenDense()
+	alpha = torch.full((X.shape[0], 1), 2.0)
+
+	y0, y0_var = insertion_effect(model, X, substitutions, device=device)
+	y, y_var = insertion_effect(model, X, substitutions, args=(alpha,),
+		device=device)
+
+	assert_array_almost_equal(y - y0, torch.full_like(y, 2.0))
+	assert_array_almost_equal(y_var - y0_var, torch.full_like(y_var, 2.0))
+
+
+###
+
+
 def test_insertion_effect(X, substitutions, device):
 	model = SmallDeepSEA()
 	y, y_var = insertion_effect(model, X, substitutions, device=device)
