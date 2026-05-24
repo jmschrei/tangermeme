@@ -438,12 +438,13 @@ def plot_logo(
 
 
 def plot_categorical_scatter(
-	X: pandas.DataFrame,
+	X: torch.Tensor,
 	colors: dict | None = None,
+	ax: matplotlib.axes.Axes | None = None,
 	**kwargs: Any,
 ) -> matplotlib.axes.Axes:
 	"""A scatterplot of category weights across a seq, useful for attributions.
-	
+
 	Frequently, when you calculate attributions you are considering a sequence
 	that is too long to be easily visualized in the standard character format,
 	e.g. in `plot_logo`. One could scan the sequence a few times to find the
@@ -452,30 +453,45 @@ def plot_categorical_scatter(
 	which nucleotide is there) and the value is the weight encoded in the matrix.
 	Basically, this is a way to consider attributions on an entire sequence and
 	get a sense for which areas you may want to follow-up with.
-	
+
 	This function is not meant solely for attributions, though. You can put any
 	value in the matrix to be visualized.
-	
-	
+
+
 	Parameters
 	----------
 	X: torch.Tensor, shape=(alphabet_len, length)
 		A sequence to be visualized.
-	
+
 	colors: list or None, optional
 		The colors to use for each category. By default, uses the standard
 		nucleotide color scheme.
-	
+
+	ax: matplotlib.axes.Axes or None, optional
+		The axes to plot on. If None, use the current axes via `plt.gca()`.
+		Default is None.
+
 	**kwargs: any additional arguments
+
+
+	Returns
+	-------
+	ax: matplotlib.axes.Axes
+		The axes on which the scatterplot was drawn.
 	"""
-	
+
+	if ax is None:
+		ax = plt.gca()
+
 	if colors is None:
 		c = [[0, 0.5, 0], [0, 0, 1], [1, 0.65, 0], [1, 0, 0]]
 
 	pos = numpy.arange(X.shape[-1])
 	for i in range(X.shape[0]):
-		idxs = torch.abs(X).argmax(axis=0) == i    
-		plt.scatter(pos[idxs], X.sum(axis=0)[idxs], c=[c[i]], **kwargs)
+		idxs = torch.abs(X).argmax(axis=0) == i
+		ax.scatter(pos[idxs], X.sum(axis=0)[idxs], c=[c[i]], **kwargs)
+
+	return ax
 
 
 def plot_attributions(

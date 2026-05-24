@@ -161,3 +161,39 @@ def test_place_new_bar_does_not_mutate_input():
 	new_box, _ = place_new_bar(box, [], y_step=1.0)
 	assert (box.x0, box.y0, box.x1, box.y1) == original
 	assert new_box is not box
+
+
+def test_plot_categorical_scatter_respects_ax():
+	from tangermeme.plot import plot_categorical_scatter
+
+	X = torch.tensor([
+		[1.0, 0.0, 0.0, 0.0, 0.5],
+		[0.0, 1.0, 0.0, 0.0, 0.0],
+		[0.0, 0.0, 1.0, 0.0, 0.0],
+		[0.0, 0.0, 0.0, 1.0, 0.5],
+	])
+
+	# Create a user-owned figure with two axes; pass the second one in.
+	fig, (ax1, ax2) = plt.subplots(2, 1)
+	returned = plot_categorical_scatter(X, ax=ax2)
+
+	# The function should draw on ax2 (the one we passed), not ax1.
+	assert returned is ax2, "function did not return the passed ax"
+	assert len(ax2.collections) > 0, "expected scatter on ax2"
+	assert len(ax1.collections) == 0, "ax1 should be untouched"
+
+
+def test_plot_categorical_scatter_defaults_to_gca():
+	from tangermeme.plot import plot_categorical_scatter
+
+	X = torch.tensor([
+		[1.0, 0.0, 0.5],
+		[0.0, 1.0, 0.0],
+		[0.0, 0.0, 0.0],
+		[0.0, 0.0, 0.5],
+	])
+
+	fig, ax = plt.subplots()
+	plt.sca(ax)
+	returned = plot_categorical_scatter(X)
+	assert returned is ax
