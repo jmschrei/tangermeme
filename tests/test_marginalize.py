@@ -347,8 +347,20 @@ def test_marginalize_raises_args(X, alpha, beta, device):
 		args=alpha, device=device)
 	assert_raises(ValueError, marginalize, model, X, "ACGTC", batch_size=2, 
 		args=(alpha[:5],), device=device)
-	assert_raises(ValueError, marginalize, model, X, "ACGTC", batch_size=2, 
+	assert_raises(ValueError, marginalize, model, X, "ACGTC", batch_size=2,
 		args=(alpha, beta[:5]), device=device)
+
+
+def test_marginalize_rejects_device_mismatch():
+	# A motif on a different device from X previously crashed with a cryptic
+	# torch error from inside substitute(). Surface a clear ValueError up
+	# front. We use the `meta` device so the test works without CUDA.
+	model = FlattenDense()
+	X = random_one_hot((2, 4, 100), random_state=0).type(torch.float32)
+	motif = torch.zeros(1, 4, 5, device='meta')
+
+	with pytest.raises(ValueError, match="same device"):
+		marginalize(model, X, motif)
 
 
 ###
