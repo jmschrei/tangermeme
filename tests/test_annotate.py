@@ -2,6 +2,7 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 
+import pandas
 import torch
 torch.use_deterministic_algorithms(True, warn_only=True)
 torch.manual_seed(0)
@@ -332,6 +333,39 @@ def test_pairwise_annotations_spacing_rejects_empty():
 	X = torch.zeros(0, 4, dtype=torch.int64)
 	with pytest.raises(ValueError, match="at least one annotation"):
 		pairwise_annotations_spacing(X)
+
+
+def test_pairwise_annotations_spacing_multi_example():
+	# Pairs that cross example boundaries should not be counted.
+	X = torch.tensor([
+		[0, 0, 0, 5],
+		[0, 1, 10, 15],
+		[1, 0, 0, 5],
+		[1, 1, 10, 15],
+	], dtype=torch.int64)
+
+	y = pairwise_annotations_spacing(X)
+
+	# One (0,1) pair in each example, distance 5 -> 2 counts; symmetric
+	# adds 2 to (1,0). No cross-example pairs.
+	assert int(y[0, 1, 5]) == 2
+	assert int(y[1, 0, 5]) == 2
+	assert int(y.sum()) == 4
+
+
+def test_pairwise_annotations_spacing_dataframe_input():
+	# pandas.DataFrame should accept inputs equivalent to the tensor form.
+	X = torch.tensor([
+		[0, 0, 0, 5],
+		[0, 1, 10, 15],
+	], dtype=torch.int64)
+	df = pandas.DataFrame(X.numpy(),
+		columns=['example_idx', 'annotation_idx', 'start', 'end'])
+
+	y_tensor = pairwise_annotations_spacing(X)
+	y_df = pairwise_annotations_spacing(df)
+
+	assert_array_almost_equal(y_tensor, y_df)
 
 
 ###
