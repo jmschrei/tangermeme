@@ -737,3 +737,20 @@ def test_space_func_saturation_mutagenesis(X, device):
 		    0.0308, -0.0244, -0.0000],
 		  [ 0.0000, -0.0073,  0.0000, -0.0000,  0.0229, -0.0000,  0.0000,
 		   -0.0000,  0.0000, -0.0000]]]], 4)
+
+
+def test_space_returns_named_tuple(X, device):
+	from tangermeme.space import SpaceResult
+
+	torch.manual_seed(0)
+	model = FlattenDense()
+	spacing = torch.tensor([[5]], dtype=torch.int32)
+
+	result = space(model, X, motifs=["ACGT", "ACGT"], spacing=spacing,
+		device=device)
+
+	y_before, y_afters = result
+	assert torch.equal(result.y_before, y_before)
+	assert torch.equal(result.y_afters, y_afters)
+	assert isinstance(result, SpaceResult)
+	assert isinstance(result, tuple)

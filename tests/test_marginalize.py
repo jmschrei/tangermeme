@@ -775,3 +775,34 @@ def test_marginalize_annotations_empty(X, device):
 
 	assert_raises(ValueError, marginalize_annotations, model, X, X0,
 		annotations, device=device)
+
+
+def test_marginalize_returns_named_tuple(X, device):
+	from tangermeme.results import PerturbationResult
+
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	result = marginalize(model, X, "ACGT", device=device)
+
+	y_before, y_after = result
+	assert torch.equal(result.y_before, y_before)
+	assert torch.equal(result.y_after, y_after)
+	assert isinstance(result, PerturbationResult)
+	assert isinstance(result, tuple)
+
+
+def test_marginalize_annotations_returns_named_tuple(X, device):
+	from tangermeme.results import PerturbationAnnotationsResult
+
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X0 = X.clone()
+	annotations = torch.tensor([[0, 5, 10], [1, 5, 10]], dtype=torch.int64)
+
+	result = marginalize_annotations(model, X, X0, annotations, device=device)
+
+	y_befores, y_afters = result
+	assert torch.equal(result.y_befores, y_befores)
+	assert torch.equal(result.y_afters, y_afters)
+	assert isinstance(result, PerturbationAnnotationsResult)

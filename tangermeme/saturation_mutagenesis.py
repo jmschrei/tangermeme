@@ -3,12 +3,28 @@
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import numba
 import torch
 
 from tqdm import trange
 
 from .predict import predict
+
+
+class SaturationMutagenesisRawResult(NamedTuple):
+	"""Return type of `saturation_mutagenesis` when `raw_outputs=True`.
+
+	Holds the reference predictions (`y0`, model output on the original
+	sequences) alongside `y_hat`, the model output for each
+	edit-distance-one perturbation. Positional unpacking
+	(`y0, y_hat = saturation_mutagenesis(..., raw_outputs=True)`)
+	continues to work.
+	"""
+
+	y0: torch.Tensor | list[torch.Tensor]
+	y_hat: torch.Tensor | list[torch.Tensor]
 
 
 def _attribution_score(y0, y_hat, target):
@@ -90,7 +106,7 @@ def saturation_mutagenesis(
 	dtype: str | torch.dtype | None = None,
 	device: str | torch.device | None = None,
 	verbose: bool = False,
-) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+) -> torch.Tensor | SaturationMutagenesisRawResult:
 	"""Performs in-silico saturation mutagenesis on a set of sequences.
 	
 	This function will perform in-silico saturation mutagenesis on a set of 
@@ -221,4 +237,4 @@ def saturation_mutagenesis(
 		if end <= 0:
 			return X * attr if hypothetical == False else attr
 		return X[:, :, start:end] * attr if hypothetical == False else attr
-	return y0, y_hat
+	return SaturationMutagenesisRawResult(y0=y0, y_hat=y_hat)

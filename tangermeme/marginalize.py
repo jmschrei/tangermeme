@@ -14,6 +14,7 @@ from .utils import one_hot_encode
 
 from .ersatz import substitute
 from .predict import predict
+from .results import PerturbationResult, PerturbationAnnotationsResult
 
 
 def marginalize(
@@ -25,7 +26,7 @@ def marginalize(
 	func: Callable[..., Any] = predict,
 	additional_func_kwargs: dict | None = None,
 	**kwargs: Any,
-) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
+) -> PerturbationResult:
 	"""Apply a function before and after substituting a motif into sequences.
 
 	A marginalization experiment is one where a function is applied before
@@ -119,7 +120,7 @@ def marginalize(
 	y_before = func(model, X, **kwargs, **additional_func_kwargs)
 	y_after = func(model, X_perturb, **kwargs, **additional_func_kwargs)
 
-	return y_before, y_after
+	return PerturbationResult(y_before=y_before, y_after=y_after)
 
 
 def marginalize_annotations(
@@ -128,7 +129,7 @@ def marginalize_annotations(
 	X0: torch.Tensor,
 	annotations: torch.Tensor,
 	**kwargs: Any,
-) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
+) -> PerturbationAnnotationsResult:
 	"""Perform marginalizations on each annotation individually.
 
 	This function takes in a model, a set of sequences, a set of background
@@ -201,5 +202,4 @@ def marginalize_annotations(
 		y_afters = [torch.stack([x[i] for x in y_afters]) for i in range(len(
 			y_afters))]
 
-	return y_befores, y_afters
-	
+	return PerturbationAnnotationsResult(y_befores=y_befores, y_afters=y_afters)

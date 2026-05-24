@@ -473,3 +473,23 @@ def test_saturation_mutagenesis_zero_where_X_zero(X0, device):
 	# Non-hypothetical attribution masks by X, so zeros stay zero.
 	zero_mask = (X0 == 0)
 	assert torch.all(X_attr[zero_mask] == 0)
+
+
+def test_saturation_mutagenesis_raw_outputs_named_tuple(device):
+	from tangermeme.saturation_mutagenesis import SaturationMutagenesisRawResult
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	X = random_one_hot((2, 4, 100), random_state=0).type(torch.float32)
+
+	result = saturation_mutagenesis(model, X, raw_outputs=True, device=device)
+
+	y0, y_hat = result
+	assert torch.equal(result.y0, y0)
+	assert torch.equal(result.y_hat, y_hat)
+	assert isinstance(result, SaturationMutagenesisRawResult)
+	assert isinstance(result, tuple)
+
+	# When raw_outputs=False the return is still a plain Tensor.
+	attr = saturation_mutagenesis(model, X, raw_outputs=False, device=device)
+	assert isinstance(attr, torch.Tensor)

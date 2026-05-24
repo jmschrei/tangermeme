@@ -1039,3 +1039,24 @@ def test_pisa_empty_X(device):
 
 	assert_raises(ValueError, pisa, model, X_empty, n_shuffles=2,
 		device=device, random_state=0)
+
+
+def test_pisa_return_references_named_tuple(X, device):
+	from tangermeme.results import AttributionReferencesResult
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	result = pisa(model, X, n_shuffles=2, return_references=True,
+		device=device, random_state=0)
+
+	attributions, references = result
+	assert torch.equal(result.attributions, attributions)
+	assert torch.equal(result.references, references)
+	assert isinstance(result, AttributionReferencesResult)
+	assert isinstance(result, tuple)
+
+	# When return_references=False the return is still a plain Tensor.
+	attr = pisa(model, X, n_shuffles=2, return_references=False,
+		device=device, random_state=0)
+	assert isinstance(attr, torch.Tensor)

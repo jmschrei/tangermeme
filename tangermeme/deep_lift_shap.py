@@ -16,6 +16,7 @@ from tqdm import trange
 
 from ._compat import _autocast_supported, _resolve_device
 from .ersatz import dinucleotide_shuffle
+from .results import AttributionReferencesResult
 from .utils import _validate_input
 
 
@@ -228,7 +229,7 @@ def deep_lift_shap(
 	device: str | torch.device | None = None,
 	random_state: int | numpy.random.RandomState | None = None,
 	verbose: bool = False,
-) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+) -> torch.Tensor | AttributionReferencesResult:
 	"""Calculate attributions for a set of sequences using DeepLIFT/SHAP.
 
 	This function will calculate the DeepLIFT/SHAP attributions on a set of
@@ -557,9 +558,10 @@ def deep_lift_shap(
 		attributions = torch.stack(attributions)
 
 		if return_references:
-			references_ = torch.cat(references_).reshape(X.shape[0], n_shuffles, 
+			references_ = torch.cat(references_).reshape(X.shape[0], n_shuffles,
 				*X.shape[1:])
-			return attributions, references_
+			return AttributionReferencesResult(
+				attributions=attributions, references=references_)
 		return attributions
 	finally:
 		model.apply(_clear_hooks)
@@ -586,7 +588,7 @@ def _captum_deep_lift_shap(
 	device: str | torch.device | None = None,
 	random_state: int | numpy.random.RandomState | None = None,
 	verbose: bool = False,
-) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+) -> torch.Tensor | AttributionReferencesResult:
 	"""Calculate attributions using DeepLift/Shap and a given model. 
 
 	This function will calculate DeepLift/Shap attributions on a set of
@@ -716,5 +718,6 @@ def _captum_deep_lift_shap(
 	attributions = torch.cat(attributions)
 
 	if return_references:
-		return attributions, torch.cat(references_)
+		return AttributionReferencesResult(
+			attributions=attributions, references=torch.cat(references_))
 	return attributions

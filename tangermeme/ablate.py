@@ -13,6 +13,7 @@ import torch
 from .utils import _validate_input
 from .ersatz import shuffle
 from .predict import predict
+from .results import PerturbationResult, PerturbationAnnotationsResult
 
 
 def ablate(
@@ -27,7 +28,7 @@ def ablate(
 	func: Callable[..., Any] = predict,
 	additional_func_kwargs: dict | None = None,
 	**kwargs: Any,
-) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
+) -> PerturbationResult:
 	"""Make predictions before and after shuffling a region of sequences.
 
 	An ablation experiment is one where a motif (or region of interest) is
@@ -151,10 +152,10 @@ def ablate(
 	if isinstance(y_after, torch.Tensor):
 		y_after = y_after.reshape(*X_perturb.shape[:2], *y_after.shape[1:])
 	else:
-		y_after = [y.reshape(*X_perturb.shape[:2], *y.shape[1:]) 
+		y_after = [y.reshape(*X_perturb.shape[:2], *y.shape[1:])
 			for y in y_after]
 
-	return y_before, y_after
+	return PerturbationResult(y_before=y_before, y_after=y_after)
 
 
 def ablate_annotations(
@@ -162,7 +163,7 @@ def ablate_annotations(
 	X: torch.Tensor,
 	annotations: torch.Tensor,
 	**kwargs: Any,
-) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
+) -> PerturbationAnnotationsResult:
 	"""Ablate each annotation individually and return the deltas.
 
 	This function takes in a model, a set of sequences, and a set of annotations
@@ -228,4 +229,4 @@ def ablate_annotations(
 		y_afters = [torch.stack([x[i] for x in y_afters]) for i in range(len(
 			y_afters))]
 
-	return y_befores, y_afters
+	return PerturbationAnnotationsResult(y_befores=y_befores, y_afters=y_afters)

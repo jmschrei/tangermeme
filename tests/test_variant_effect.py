@@ -256,3 +256,30 @@ def test_substitution_effect_func_deep_lift_shap(X, substitutions, device):
 		   0.0000,  0.0000,  0.0000],
 		 [-0.0000, -0.0000,  0.0055,  0.0000,  0.0000, -0.0361,  0.0000,
 		   0.0000,  0.0000, -0.0000]]], 4)
+
+
+def test_variant_effect_returns_named_tuple(device):
+	from tangermeme.results import PerturbationResult
+
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X = random_one_hot((4, 4, 100), random_state=0).type(torch.float32)
+	substitutions = torch.tensor([[0, 5, 2], [1, 10, 3]], dtype=torch.int64)
+
+	result = substitution_effect(model, X, substitutions)
+	y_before, y_after = result
+	assert torch.equal(result.y_before, y_before)
+	assert torch.equal(result.y_after, y_after)
+	assert isinstance(result, PerturbationResult)
+	assert isinstance(result, tuple)
+
+	# deletion_effect requires sequences of length model_length + max
+	# deletions per example. Each example here has at most one deletion.
+	deletions = torch.tensor([[0, 5], [1, 10]], dtype=torch.int64)
+	X_with_extra = random_one_hot((4, 4, 101), random_state=0).type(torch.float32)
+	result = deletion_effect(model, X_with_extra, deletions)
+	assert isinstance(result, PerturbationResult)
+
+	insertions = torch.tensor([[0, 5, 2], [1, 10, 3]], dtype=torch.int64)
+	result = insertion_effect(model, X, insertions)
+	assert isinstance(result, PerturbationResult)

@@ -14,6 +14,7 @@ from .utils import _cast_as_tensor
 from .ersatz import insert
 
 from .predict import predict
+from .results import PerturbationResult
 
 
 def substitution_effect(
@@ -24,7 +25,7 @@ def substitution_effect(
 	func: Callable[..., Any] = predict,
 	additional_func_kwargs: dict | None = None,
 	**kwargs: Any,
-) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
+) -> PerturbationResult:
 	"""Apply a function before and after including one or more substitutions.
 
 	This function will calculate the effect that substitutions have on the
@@ -110,7 +111,7 @@ def substitution_effect(
 
 	y_before = func(model, X, args=args, **additional_func_kwargs, **kwargs)
 	y_after = func(model, X_var, args=args, **additional_func_kwargs, **kwargs)
-	return y_before, y_after
+	return PerturbationResult(y_before=y_before, y_after=y_after)
 
 
 def deletion_effect(
@@ -122,7 +123,7 @@ def deletion_effect(
 	func: Callable[..., Any] = predict,
 	additional_func_kwargs: dict | None = None,
 	**kwargs: Any,
-) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
+) -> PerturbationResult:
 	"""Apply a function before and after deleting characters from a sequence.
 
 	This function will calculate the effect that deletions have on the
@@ -242,7 +243,7 @@ def deletion_effect(
 
 	y_before = func(model, X, args=args, **additional_func_kwargs, **kwargs)
 	y_after = func(model, X_var, args=args, **additional_func_kwargs, **kwargs)
-	return y_before, y_after
+	return PerturbationResult(y_before=y_before, y_after=y_after)
 
 
 def insertion_effect(
@@ -254,7 +255,7 @@ def insertion_effect(
 	func: Callable[..., Any] = predict,
 	additional_func_kwargs: dict | None = None,
 	**kwargs: Any,
-) -> tuple[torch.Tensor | list[torch.Tensor], torch.Tensor | list[torch.Tensor]]:
+) -> PerturbationResult:
 	"""Apply a function before and after inserting characters into a sequence.
 
 	This function will calculate the effect that insertions have on the
@@ -367,4 +368,4 @@ def insertion_effect(
 	X_var = torch.cat(X_var)
 	y_before = func(model, X, args=args, **additional_func_kwargs, **kwargs)
 	y_after = func(model, X_var, args=args, **additional_func_kwargs, **kwargs)
-	return y_before, y_after
+	return PerturbationResult(y_before=y_before, y_after=y_after)
