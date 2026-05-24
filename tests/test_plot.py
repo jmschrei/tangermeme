@@ -127,3 +127,37 @@ def test_plot_pwm_smoke():
 		[0.1, 0.1, 0.1, 0.7],
 	]).T
 	plot_pwm(pwm, name="toy")
+
+
+def test_place_new_box_does_not_mutate_input():
+	from tangermeme.plot import place_new_box
+	from matplotlib.transforms import Bbox
+
+	box = Bbox.from_extents(0.0, 0.0, 10.0, 5.0)
+	original = (box.x0, box.y0, box.x1, box.y1)
+
+	# Empty box_list path: should still return a (shifted) result without
+	# mutating the input.
+	new_box, _ = place_new_box(box, [])
+	assert (box.x0, box.y0, box.x1, box.y1) == original, \
+		"place_new_box mutated the caller's box on the empty path"
+	assert new_box is not box, "expected a fresh Bbox to be returned"
+
+	# Non-empty box_list path: same guarantee under the overlap loop.
+	overlap = Bbox.from_extents(0.0, -5.0, 10.0, 0.0)
+	box2 = Bbox.from_extents(0.0, 0.0, 10.0, 5.0)
+	original2 = (box2.x0, box2.y0, box2.x1, box2.y1)
+	new_box, _ = place_new_box(box2, [overlap])
+	assert (box2.x0, box2.y0, box2.x1, box2.y1) == original2
+
+
+def test_place_new_bar_does_not_mutate_input():
+	from tangermeme.plot import place_new_bar
+	from matplotlib.transforms import Bbox
+
+	box = Bbox.from_extents(0.0, 5.0, 10.0, 5.0)
+	original = (box.x0, box.y0, box.x1, box.y1)
+
+	new_box, _ = place_new_bar(box, [], y_step=1.0)
+	assert (box.x0, box.y0, box.x1, box.y1) == original
+	assert new_box is not box

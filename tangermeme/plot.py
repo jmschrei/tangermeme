@@ -44,7 +44,11 @@ def place_new_box(
 	n_tracks: int = 4,
 	show_extra: bool = True,
 ) -> tuple[Bbox, int]:
-    """Place annotation text so that it does not overlap with existing text."""
+    """Place annotation text so that it does not overlap with existing text.
+
+    The returned Bbox is a fresh object; the input `box` is not mutated.
+    """
+    box = Bbox.from_extents(box.x0, box.y0, box.x1, box.y1)
     box_height = box.y1 - box.y0
     box.y0 -= box_height
     box.y1 -= box_height
@@ -83,9 +87,13 @@ def place_new_bar(
 ) -> tuple[Bbox, int]:
     """
     Find a position for a new annotation bar such that it does not overlap with previously plotted bars.
+
+    The returned Bbox is a fresh object; the input `box` is not mutated.
     """
     if y_step is None:
         raise ValueError("y_step must be provided.")
+
+    box = Bbox.from_extents(box.x0, box.y0, box.x1, box.y1)
 
     if len(box_list)==0:
         return box, 0
