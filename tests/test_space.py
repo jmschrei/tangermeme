@@ -739,6 +739,21 @@ def test_space_func_saturation_mutagenesis(X, device):
 		   -0.0000,  0.0000, -0.0000]]]], 4)
 
 
+def test_space_rejects_device_mismatch():
+	# A tensor motif on a different device from X used to fall through
+	# to a cryptic torch error from inside multisubstitute(). String motifs
+	# bypass the check (they're encoded on CPU inside substitute). We use
+	# `meta` so the test works without CUDA.
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X = random_one_hot((2, 4, 100), random_state=0).type(torch.float32)
+	motif_meta = torch.zeros(1, 4, 5, device='meta')
+	motif_str = "ACGTC"
+
+	with pytest.raises(ValueError, match="same device"):
+		space(model, X, [motif_str, motif_meta], spacing=[[1]])
+
+
 def test_space_returns_named_tuple(X, device):
 	from tangermeme.space import SpaceResult
 
