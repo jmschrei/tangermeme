@@ -568,7 +568,7 @@ def extract_matching_loci(
 				break
 
 			idx = i - offset
-			if idx > 0:
+			if idx >= 0:
 				count = min(bg_bin_count[idx], loci_bin_count[i])
 				bg_bin_count[idx] -= count
 				loci_bin_count[i] -= count

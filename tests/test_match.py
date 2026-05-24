@@ -339,13 +339,36 @@ def test_extract_matching_loci_end_edge():
 		'end': [270, 280, 290]
 	})
 
-	regions = extract_matching_loci(peaks, "tests/data/test.fa", 
+	regions = extract_matching_loci(peaks, "tests/data/test.fa",
 		chroms=['chr1'], in_window=10, out_window=10, random_state=0)
 	assert regions.shape == (2, 3)
 
 
-	regions = extract_matching_loci(peaks, "tests/data/test.fa", 
+	regions = extract_matching_loci(peaks, "tests/data/test.fa",
 		chroms=['chr1'], in_window=20, out_window=10, random_state=0)
+	assert regions.shape == (1, 3)
+
+
+def test_extract_matching_loci_bin_0_spillover(tmp_path):
+	# bin 0 (the lowest GC bin) previously couldn't receive spillover from
+	# a peak in a higher bin: the spillover loop guarded with `idx > 0`
+	# instead of `>= 0`. Construct a chromosome where the only available
+	# backgrounds are at GC=0 and the lone peak is at GC=1.0, so the
+	# matching algorithm has nowhere else to go.
+	fa_path = tmp_path / "tiny.fa"
+	fa_path.write_text(">chr1\n" + "A"*100 + "G"*10 + "A"*90 + "\n")
+
+	peaks = pandas.DataFrame({
+		'chrom': ['chr1'],
+		'start': [100],
+		'end':   [110],
+	})
+
+	regions = extract_matching_loci(peaks, str(fa_path), in_window=10,
+		out_window=10, max_n_perc=1.0, random_state=0)
+
+	# Without the fix this returns zero rows; with the fix the peak finds
+	# a GC=0 background to match against.
 	assert regions.shape == (1, 3)
 
 
