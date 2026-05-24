@@ -327,6 +327,13 @@ def test_pairwise_annotations_spacing_at_max_distance():
 	assert int(y.sum()) == 0
 
 
+def test_pairwise_annotations_spacing_rejects_empty():
+	# Empty annotations previously crashed inside the max() reduction.
+	X = torch.zeros(0, 4, dtype=torch.int64)
+	with pytest.raises(ValueError, match="at least one annotation"):
+		pairwise_annotations_spacing(X)
+
+
 ###
 
 
