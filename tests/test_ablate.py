@@ -1101,6 +1101,19 @@ def test_ablate_func_saturation_mutagenesis(X, device):
 		   -0.0000,  0.0000, -0.0011]]]], 4)
 
 
+def test_ablate_rejects_args_device_mismatch():
+	# args on a different device from X used to fall through to a cryptic
+	# torch error from inside the model. Surface a clear ValueError up
+	# front. We use the `meta` device so the test works without CUDA.
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X = random_one_hot((2, 4, 100), random_state=0).type(torch.float32)
+	alpha_meta = torch.zeros(2, 1, device='meta')
+
+	with pytest.raises(ValueError, match="same device"):
+		ablate(model, X, start=10, end=20, n=2, args=(alpha_meta,))
+
+
 def test_ablate_annotations_empty(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense()

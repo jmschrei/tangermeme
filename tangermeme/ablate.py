@@ -133,6 +133,14 @@ def ablate(
 	"""
 
 	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, allow_N=True)
+
+	if args is not None:
+		for i, a in enumerate(args):
+			if a.device != X.device:
+				raise ValueError(
+					f"args[{i}] and X must be on the same device; got "
+					f"args[{i}] on {a.device} and X on {X.device}.")
+
 	additional_func_kwargs = dict(additional_func_kwargs or {})
 	if 'random_state' in inspect.signature(func).parameters.keys():
 		if 'random_state' not in additional_func_kwargs:
