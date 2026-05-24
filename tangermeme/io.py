@@ -461,7 +461,7 @@ def extract_loci(
 		end = mid + max(out_width, in_width) + max_jitter
 
 		# Does it fall off the end of a chromosome?
-		if start < 0 or end >= chrom_lengths[str(chrom)]:
+		if start < 0 or end > chrom_lengths[str(chrom)]:
 			kept_mask.append(False)
 			continue
 

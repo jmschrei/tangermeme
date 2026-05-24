@@ -625,6 +625,27 @@ def test_extract_loci_seq_jitter(loci_seqs):
 	assert_array_almost_equal(X[:, :, 20:-20], loci_seqs[1:])
 
 
+def test_extract_loci_keeps_locus_ending_at_chrom_length():
+	# A locus whose extracted window ends exactly at chrom_length is valid
+	# (end is exclusive); previously dropped by `end >= chrom_lengths[chrom]`.
+	# chr2 in tests/data/test.fa is 211bp long; with in_window=10 and
+	# max_jitter=0 the extracted window is [mid-5, mid+5), so mid=206 yields
+	# a window of [201, 211), which fits exactly. A window of [202, 212)
+	# (mid=207) genuinely runs off the end and should still be dropped.
+	loci = pandas.DataFrame({
+		'chrom': ['chr2', 'chr2'],
+		'start': [201, 202],
+		'end':   [211, 212],
+	})
+	fasta = "tests/data/test.fa"
+
+	X, mask = extract_loci(loci, fasta, in_window=10, return_mask=True)
+
+	# The boundary locus is kept; the one that overruns is dropped.
+	assert mask.tolist() == [True, False]
+	assert X.shape == (1, 4, 10)
+
+
 def test_extract_loci_seq_alphabet(loci_seqs):
 	loci = "tests/data/test.bed"
 	fasta = "tests/data/test.fa"
