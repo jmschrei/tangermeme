@@ -601,16 +601,22 @@ def plot_attributions(
 
 def plot_pwm(
 	pwm: torch.Tensor | numpy.ndarray,
+	ax: matplotlib.axes.Axes | None = None,
 	name: str | None = None,
 	alphabet: list[str] = ['A', 'C', 'G', 'T'],
 	eps: float = 1e-7,
-) -> None:
-	"""Plots an information-content weighted PWM and its reverse complement.
+) -> matplotlib.axes.Axes:
+	"""Plot an information-content weighted PWM as a sequence logo.
 
 	This function takes in a PWM, where the sum across all values in the
-	alphabet is equal to 1, and plots the information-content weighted version
-	of it, as well as the reverse complement. This should be used when you want
-	to visualize a motif, perhaps from a motif database.
+	alphabet is equal to 1, and plots the information-content weighted
+	version of it. To visualize the reverse complement, call this function
+	a second time with `pwm[::-1, ::-1]`.
+
+	The function no longer creates its own figure or calls `plt.show()`;
+	it draws on the provided `ax` (or `plt.gca()` if none is given) and
+	returns the axes used. This matches the convention used by
+	`plot_logo` and `plot_categorical_scatter`.
 
 
 	Parameters
@@ -618,9 +624,12 @@ def plot_pwm(
 	pwm: torch.Tensor or numpy.ndarray, shape=(len(alphabet), length)
 		The PWM to visualize. The rows must sum to 1.
 
+	ax: matplotlib.axes.Axes or None, optional
+		The axes to draw on. If None, use the current axes via
+		`plt.gca()`. Default is None.
+
 	name: str or None, optional
-		The name to put as the title for the plots. If None, do not put
-		anything. Default is None.
+		The title for the plot. If None, no title is set. Default is None.
 
 	alphabet: list, optional
 		A list of characters that comprise the alphabet. Default is
@@ -629,34 +638,29 @@ def plot_pwm(
 	eps: float, optional
 		A small pseudocount to add to counts to make the log work correctly.
 		Default is 1e-7.
+
+
+	Returns
+	-------
+	ax: matplotlib.axes.Axes
+		The axes on which the logo was drawn.
 	"""
 
 	if isinstance(pwm, torch.Tensor):
 		pwm = pwm.numpy(force=True)
-	
+
+	if ax is None:
+		ax = plt.gca()
+
 	bg = 0.25 * numpy.log(0.25) / numpy.log(2)
 
-	
-	plt.figure(figsize=(8, 2.5))
-	ax = plt.subplot(121)
-	plt.title(name)
-	
 	ic = pwm * numpy.log(pwm + eps) / numpy.log(2) - bg
 	ic = numpy.sum(ic, axis=0, keepdims=True)
 	plot_logo(pwm * ic, ax=ax)
-	plt.xlabel("Motif Position")
-	plt.ylabel("Information Content (Bits)", fontsize=10)
-	
-	
-	ax = plt.subplot(122)
-	plt.title(name + "RC" if name is not None else "RC")
-	pwm = pwm[::-1, ::-1]
-	ic = pwm * numpy.log(pwm + eps) / numpy.log(2) - bg
-	ic = numpy.sum(ic, axis=0, keepdims=True)
-	plot_logo(pwm * ic, ax=ax)
-	plt.xlabel("Motif Position")
-	plt.ylabel("Information Content (Bits)", fontsize=10)
-	
-	plt.tight_layout()
-	plt.show()
-	
+
+	if name is not None:
+		ax.set_title(name)
+	ax.set_xlabel("Motif Position")
+	ax.set_ylabel("Information Content (Bits)", fontsize=10)
+
+	return ax

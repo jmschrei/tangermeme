@@ -197,3 +197,40 @@ def test_plot_categorical_scatter_defaults_to_gca():
 	plt.sca(ax)
 	returned = plot_categorical_scatter(X)
 	assert returned is ax
+
+
+def test_plot_pwm_respects_ax():
+	# plot_pwm should draw on the provided ax and return it, rather than
+	# creating its own figure or calling plt.show().
+	pwm = numpy.full((4, 6), 0.25)
+
+	fig, (ax1, ax2) = plt.subplots(2, 1)
+	returned = plot_pwm(pwm, ax=ax2)
+
+	assert returned is ax2, "plot_pwm did not return the passed ax"
+	# Something should have been drawn on ax2; the IC is zero for a
+	# uniform PWM but plot_logo still sets axis labels.
+	assert ax2.get_ylabel() == "Information Content (Bits)"
+	# ax1 should be untouched.
+	assert ax1.get_ylabel() == ""
+
+
+def test_plot_pwm_defaults_to_gca():
+	pwm = numpy.full((4, 6), 0.25)
+
+	fig, ax = plt.subplots()
+	plt.sca(ax)
+	returned = plot_pwm(pwm)
+	assert returned is ax
+
+
+def test_plot_pwm_does_not_call_show(monkeypatch):
+	# plot_pwm no longer calls plt.show() unconditionally.
+	called = []
+	monkeypatch.setattr(plt, "show", lambda *a, **k: called.append(True))
+
+	pwm = numpy.full((4, 6), 0.25)
+	fig, ax = plt.subplots()
+	plot_pwm(pwm, ax=ax)
+
+	assert called == [], "plot_pwm should not call plt.show()"
