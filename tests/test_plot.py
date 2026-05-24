@@ -234,3 +234,27 @@ def test_plot_pwm_does_not_call_show(monkeypatch):
 	plot_pwm(pwm, ax=ax)
 
 	assert called == [], "plot_pwm should not call plt.show()"
+
+
+def test_plot_attributions_uses_provided_func():
+	# plot_attributions previously hard-coded a call to deep_lift_shap
+	# and ignored the `func=` kwarg. Verify the kwarg is now honored.
+	from tangermeme.plot import plot_attributions
+
+	calls = []
+
+	def fake_attribute(model, X, **kwargs):
+		calls.append((model, tuple(X.shape)))
+		# Return something the size of X so plot_logo can render it.
+		return X * 0.0
+
+	from tests.toy_models import FlattenDense
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X = torch.zeros(1, 4, 20)
+	X[0, 0] = 1.0  # all-A so plot_logo doesn't error
+
+	axs, X_attrs = plot_attributions(model, X, func=fake_attribute)
+
+	assert len(calls) == 1, "fake_attribute should have been called once"
+	assert X_attrs.shape == X.shape

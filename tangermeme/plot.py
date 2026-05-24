@@ -586,7 +586,7 @@ def plot_attributions(
 	
 	X_attrs = []
 	for i, model in enumerate(models):
-		X_attr = deep_lift_shap(model, X[i:i+1], **attribute_kwargs)
+		X_attr = func(model, X[i:i+1], **attribute_kwargs)
 		X_attrs.append(X_attr)
 	X_attrs = torch.cat(X_attrs, dim=0).detach()
 	
