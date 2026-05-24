@@ -866,3 +866,23 @@ def test_substitute_returns_clone_not_view(X):
 
 	X_sub[0, 0, 5] = 99
 	assert_array_almost_equal(X, X_orig)
+
+
+def test_ersatz_ops_preserve_cuda_device(cuda_device):
+	# All public ersatz ops should accept a CUDA-resident X and return a
+	# tensor on the same device. Previously dinucleotide_shuffle crashed
+	# in the internal .numpy() conversion.
+	X = random_one_hot((2, 4, 100), random_state=0).type(
+		torch.float32).to(cuda_device)
+	motif = one_hot_encode("ACGT").unsqueeze(0).to(cuda_device)
+
+	for name, out in [
+		('substitute', substitute(X, motif)),
+		('multisubstitute', multisubstitute(X, [motif, motif], [5])),
+		('insert', insert(X, motif, start=20)),
+		('delete', delete(X, 20, 30)),
+		('shuffle', shuffle(X, start=20, end=30, n=2, random_state=0)),
+		('randomize', randomize(X, start=20, end=30, n=2, random_state=0)),
+		('dinucleotide_shuffle', dinucleotide_shuffle(X, n=2, random_state=0)),
+	]:
+		assert out.device.type == 'cuda', f"{name} produced device {out.device}"

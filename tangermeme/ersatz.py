@@ -571,7 +571,7 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 		random_state = numpy.random.randint(0, 9999999)
 
 	n_chars, seq_len = X.shape
-	idxs = X.argmax(axis=0).numpy().astype(numpy.int32)
+	idxs = X.argmax(axis=0).cpu().numpy().astype(numpy.int32)
 
 	next_idxs = numpy.zeros((n_chars, seq_len), dtype=numpy.int32)
 	next_idxs_counts = numpy.zeros(n_chars, dtype=numpy.int32)
@@ -669,11 +669,11 @@ def dinucleotide_shuffle(
 
 	X_shufs = []
 	for i in range(X.shape[0]):
-		insert_ = _dinucleotide_shuffle(X[i, :, start:end], n_shuffles=n, 
+		insert_ = _dinucleotide_shuffle(X[i, :, start:end], n_shuffles=n,
 			random_state=random_state+i, verbose=verbose)
 
 		X_shuf = torch.clone(X[i:i+1]).repeat(n, 1, 1)
-		X_shuf[:, :, start:end] = insert_
+		X_shuf[:, :, start:end] = insert_.to(X.device)
 		X_shufs.append(X_shuf)
 
 	return torch.stack(X_shufs)
