@@ -792,6 +792,18 @@ def test_apply_pairwise_verbose(X, alpha, device):
 	assert_array_almost_equal(y_quiet, y_loud)
 
 
+def test_apply_product_verbose(X, alpha, beta, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	y_quiet = apply_product(predict, model, X[:5], args=(alpha[:3], beta[:2]),
+		device=device, verbose=False)
+	y_loud = apply_product(predict, model, X[:5], args=(alpha[:3], beta[:2]),
+		device=device, verbose=True)
+
+	assert_array_almost_equal(y_quiet, y_loud)
+
+
 def test_apply_pairwise_batch_size_non_divisible(X, alpha, device):
 	torch.manual_seed(0)
 	model = FlattenDense()

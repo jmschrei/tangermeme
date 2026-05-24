@@ -1060,3 +1060,15 @@ def test_pisa_return_references_named_tuple(X, device):
 	attr = pisa(model, X, n_shuffles=2, return_references=False,
 		device=device, random_state=0)
 	assert isinstance(attr, torch.Tensor)
+
+
+def test_pisa_verbose(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	X_quiet = pisa(model, X[:2], n_shuffles=2, device=device,
+		random_state=0, verbose=False)
+	X_loud = pisa(model, X[:2], n_shuffles=2, device=device,
+		random_state=0, verbose=True)
+
+	assert_array_almost_equal(X_quiet, X_loud)
