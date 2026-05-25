@@ -211,6 +211,14 @@ def _extract_locus_signal(signals, chrom, start, end):
 	-------
 	values: list of numpy.ndarrays, shape=(len(signals), end-start)
 		The extracted signal from each of the signal files.
+
+	Notes
+	-----
+	When `signal` is a dict, each `signal[chrom]` is assumed to be a 1-D
+	array indexable by genomic position. Passing a `(n_tracks, length)`
+	array under a single chromosome key will silently slice the first axis
+	instead of positions and yield mis-shaped output; provide one signal
+	dict per track in the outer `signals` list instead.
 	"""
 
 	if not isinstance(signals, (list, tuple)):
@@ -616,19 +624,26 @@ def read_vcf(filename: str) -> pandas.DataFrame:
 
 	This function takes in the name of a file that is VCF formatted and returns
 	a pandas DataFrame with the comments filtered out. This will only return the
-	columns that are most commonly provided in VCF files.
+	first 9 columns (CHROM, POS, ID, REF, ALT, QUAL, FILTER, INFO, FORMAT); any
+	per-sample genotype columns past column 9 are silently dropped.
+
+	Compressed VCFs are read transparently when pandas detects the compression
+	from the filename extension (e.g., `.vcf.gz` works via `pandas.read_csv`).
+	BCF (binary VCF) files are NOT supported by this function.
 
 
 	Parameters
 	----------
 	filename: str
-		The path to the VCF-formatted file to read in.
+		The path to the VCF-formatted file to read in. May be plain `.vcf` or
+		gzip-compressed `.vcf.gz`.
 
 
 	Returns
 	-------
 	vcf: pandas.DataFrame
-		A pandas DataFrame containing the rows.
+		A pandas DataFrame containing the rows, with columns CHROM, POS, ID,
+		REF, ALT, QUAL, FILTER, INFO, FORMAT.
 	"""
 
 	names = ["CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", 
