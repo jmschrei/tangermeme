@@ -292,13 +292,16 @@ def deep_lift_shap(
 		is 32.
 
 	references: func or torch.Tensor, optional
-		If a function is passed in, this function is applied to each sequence
-		with the provided random state and number of shuffles. This function
-		should serve to transform a sequence into some form of signal-null
+		If a function is passed in, the function must accept `(X, n=...)` and
+		(when `random_state` is not None) `(X, n=..., random_state=...)`. It is
+		called with `n=1` per shuffle and once per `(example, shuffle_idx)` pair
+		when seeded, or once per batch when not. It should return a tensor
+		shaped `(batch, 1, *X.shape[1:])` (the second axis is squeezed off).
+		The function should transform a sequence into some form of signal-null
 		background, such as by shuffling it. If a torch.Tensor is passed in,
 		that tensor must have shape `(len(X), n_shuffles, *X.shape[1:])`, in
 		that for each sequence a number of shuffles are provided. Default is
-		the function `dinucleotide_shuffle`. 
+		the function `dinucleotide_shuffle`.
 
 	n_shuffles: int, optional
 		The number of shuffles to use if a function is given for `references`.
@@ -306,8 +309,8 @@ def deep_lift_shap(
 
 	return_references: bool, optional
 		Whether to return the references that were generated during this
-		process. Only use if `references` is not a torch.Tensor. Default is 
-		False. 
+		process. Only use if `references` is not a torch.Tensor. Default is
+		False.
 
 	hypothetical: bool, optional
 		Whether to return attributions for all possible characters at each
@@ -344,8 +347,9 @@ def deep_lift_shap(
 
 	only_warn: bool, optional
 		Whether to only warn when a violation is recorded instead of raise a
-		terminating error. This allows users to indicate that they know what they
-		are doing. Default is False.
+		terminating error. This applies to input validation on `X` and (if
+		passed) `references`; it does NOT suppress the runtime convergence-delta
+		warnings emitted from the DeepLIFT computation itself. Default is False.
 
 	dtype: str or torch.dtype or None, optional
 		The dtype to use with mixed precision autocasting. If None, use the dtype of
@@ -357,9 +361,11 @@ def deep_lift_shap(
 		None, use CUDA when available and fall back to CPU otherwise. Default
 		is None.
 
-	random_state: int or None or numpy.random.RandomState, optional
-		The random seed to use to ensure determinism. If None, the
-		process is not deterministic. Default is None.
+	random_state: int or None, optional
+		The random seed to use to ensure determinism. Must be an int (or None);
+		the value is added to per-shuffle offsets when calling `references`, so
+		`numpy.random.RandomState` instances are not supported here. If None,
+		the process is not deterministic. Default is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar. Default is False.
@@ -376,7 +382,7 @@ def deep_lift_shap(
 	references: torch.tensor, optional
 		The references used for each input sequence, with the shape
 		(n_input_sequences, n_shuffles, 4, length). Only returned if
-		`return_references = True`. 
+		`return_references = True`.
 	"""
 
 	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, only_warn=only_warn)
@@ -589,13 +595,15 @@ def _captum_deep_lift_shap(
 	random_state: int | numpy.random.RandomState | None = None,
 	verbose: bool = False,
 ) -> torch.Tensor | AttributionReferencesResult:
-	"""Calculate attributions using DeepLift/Shap and a given model. 
+	"""Calculate attributions using captum's DeepLiftShap and a given model.
 
 	This function will calculate DeepLift/Shap attributions on a set of
-	sequences. It assumes that the model returns "logits" in the first output,
-	not softmax probabilities, and count predictions in the second output.
-	It will create GC-matched negatives to use as a reference and proceed
-	using the given batch size.
+	sequences by delegating to captum's `DeepLiftShap` and using a user-
+	supplied (or default `dinucleotide_shuffle`) reference function or
+	pre-computed reference tensor, the same `references` contract used by
+	`deep_lift_shap`. It does NOT make any assumption about the structure of
+	the model output (no BPNet logits/counts split) and it does NOT generate
+	GC-matched negatives.
 
 	This is an internal/debugging function that is mostly meant to be used to
 	check for differences with the `deep_lift_shap` method.
@@ -634,13 +642,15 @@ def _captum_deep_lift_shap(
 		is 32.
 
 	references: func or torch.Tensor, optional
-		If a function is passed in, this function is applied to each sequence
-		with the provided random state and number of shuffles. This function
-		should serve to transform a sequence into some form of signal-null
-		background, such as by shuffling it. If a torch.Tensor is passed in,
-		that tensor must have shape `(len(X), n_shuffles, *X.shape[1:])`, in
-		that for each sequence a number of shuffles are provided. Default is
-		the function `dinucleotide_shuffle`. 
+		If a function is passed in, the function must accept `(X, n=...,
+		random_state=...)`. It is called once per example with `n=n_shuffles`
+		and should return a tensor shaped `(1, n_shuffles, *X.shape[1:])`
+		(the leading axis is indexed off). The function should transform a
+		sequence into some form of signal-null background, such as by
+		shuffling it. If a torch.Tensor is passed in, that tensor must have
+		shape `(len(X), n_shuffles, *X.shape[1:])`, in that for each sequence
+		a number of shuffles are provided. Default is the function
+		`dinucleotide_shuffle`.
 
 	n_shuffles: int, optional
 		The number of shuffles to use if a function is given for `references`.
@@ -648,8 +658,8 @@ def _captum_deep_lift_shap(
 
 	return_references: bool, optional
 		Whether to return the references that were generated during this
-		process. Only use if `references` is not a torch.Tensor. Default is 
-		False. 
+		process. Only use if `references` is not a torch.Tensor. Default is
+		False.
 
 	hypothetical: bool, optional
 		Whether to return attributions for all possible characters at each
@@ -663,9 +673,10 @@ def _captum_deep_lift_shap(
 		None, use CUDA when available and fall back to CPU otherwise. Default
 		is None.
 
-	random_state: int or None or numpy.random.RandomState, optional
-		The random seed to use to ensure determinism. If None, the
-		process is not deterministic. Default is None.
+	random_state: int or None, optional
+		The random seed to use to ensure determinism. Passed through to the
+		`references` callable; `numpy.random.RandomState` instances are not
+		supported. If None, the process is not deterministic. Default is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar. Default is False.
@@ -680,7 +691,7 @@ def _captum_deep_lift_shap(
 	references: torch.tensor, optional
 		The references used for each input sequence, with the shape
 		(n_input_sequences, n_shuffles, 4, length). Only returned if
-		`return_references = True`. 
+		`return_references = True`.
 	"""
 
 	from captum.attr import DeepLiftShap as CaptumDeepLiftShap
