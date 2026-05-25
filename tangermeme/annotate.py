@@ -92,7 +92,7 @@ def annotate_seqlets(
 def count_annotations(
 	X: torch.Tensor | pandas.DataFrame,
 	dtype: torch.dtype = torch.uint8,
-	shape: tuple[int, ...] | None = None,
+	shape: tuple[int, int] | None = None,
 	dim: int | None = None,
 ) -> torch.Tensor:
 	"""A method for counting the annotations for each example.
@@ -112,9 +112,12 @@ def count_annotations(
 		the second column is the annotation_idx. Both should be integers. 
 
 	dtype: torch.dtype, optional
-		The dtype of the returned matrix. Default is torch.uint8.
+		The dtype of the returned matrix. Default is torch.uint8. Note that
+		counts above 255 will silently overflow under the default dtype; pass
+		a wider dtype (e.g. `torch.int32`) if any (example, annotation) pair
+		may occur more than 255 times.
 
-	shape: tuple or None, optional
+	shape: tuple of (int, int) or None, optional
 		A user-defined shape of the returned count matrix. Use this if you are
 		not sure whether all examples or annotations are observed in `X` but you
 		want to have a constant shape. If None, derive shape from the maximum
@@ -188,7 +191,7 @@ def pairwise_annotations(
 	dtype: torch.dtype = torch.int64,
 	unique: bool = True,
 	symmetric: bool = True,
-	shape: tuple[int, ...] | None = None,
+	shape: int | None = None,
 ) -> torch.Tensor:
 	"""Returns the number of times pairs of annotations occur in an example.
 
@@ -218,8 +221,10 @@ def pairwise_annotations(
 
 	symmetric: bool, optional
 		Whether to return a symmetric matrix or one where the row is the first
-		element in `X` and the column is the subsequent element in `X`. If
-		symmetric, the diagonal is NOT double counted. Default is True.
+		element in `X` and the column is the subsequent element in `X` (i.e.
+		ordering follows the order rows appear in `X`, not the spatial layout
+		of the annotations). If symmetric, the diagonal is NOT double counted.
+		Default is True.
 
 	shape: int or None, optional
 		The number of rows and columns to use in the matrix. If None, infer the
@@ -283,7 +288,7 @@ def pairwise_annotations_spacing(
 	max_distance: int = 100,
 	dtype: torch.dtype = torch.uint8,
 	symmetric: bool = True,
-	shape: tuple[int, ...] | None = None,
+	shape: int | None = None,
 ) -> torch.Tensor:
 	"""Finds the number of times each annotation pair occurs at each distance.
 
@@ -316,12 +321,18 @@ def pairwise_annotations_spacing(
 		consider. Default is 100.
 
 	dtype: torch.dtype, optional
-		The dtype of the returned matrix. Default is torch.uint8.
+		The dtype of the returned matrix. Default is torch.uint8. Note that
+		counts above 255 will silently overflow under the default dtype; pass
+		a wider dtype (e.g. `torch.int32`) if any (motif_a, motif_b, distance)
+		bin may occur more than 255 times.
 
 	symmetric: bool, optional
-		Whether to return a symmetric matrix or one where the row is the first
-		element in `X` and the column is the subsequent element in `X`. If
-		symmetric, the diagonal is NOT double counted. Default is True.
+		Whether to return a symmetric matrix or one where the row is the
+		spatially leftmost annotation of the pair and the column is the
+		spatially rightmost (i.e. ordering is determined by `start` position
+		within each example, NOT by the order rows appear in `X`; this
+		differs from `pairwise_annotations`). If symmetric, the diagonal is
+		NOT double counted. Default is True.
 
 	shape: int or None, optional
 		The number of rows and columns to use in the matrix. If None, infer the
