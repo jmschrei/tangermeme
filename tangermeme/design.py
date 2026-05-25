@@ -95,11 +95,14 @@ def screen(
 		torch.nn.MSELoss().
 
 	tol: float, optional
-		A threshold on how small the loss should be before terminating the screening
-		procedure. Default is 1e-3.
+		A threshold on the loss below which the screening procedure terminates.
+		Termination requires the loss of the *worst* kept candidate (i.e. the
+		`n_best`-th best so far) to fall below `tol` — when `n_best > 1` the
+		current best may have been below `tol` for many iterations before this
+		condition triggers. Default is 1e-3.
 
 	max_iter: int, optional
-		The maximum number of iterations to run before terminating the procedure. 
+		The maximum number of iterations to run before terminating the procedure.
 		Set to -1 for no limit. Default is -1.
 
 	args: tuple or list or None, optional
@@ -115,7 +118,10 @@ def screen(
 		observed across all generation batches. Default is 1.
 
 	batch_size: int, optional
-		The number of examples to make predictions for at a time. Default is 32.
+		The number of sequences to generate (via `func`) and evaluate per
+		iteration. This controls the size of each generation/screening batch;
+		it is NOT forwarded to `predict`'s own batch_size (which retains its
+		default). Default is 32.
 
 	func: function, optional
 		The function to use to generate sequences. The signature of this function
@@ -142,7 +148,9 @@ def screen(
 
 	random_state: int or None, optional
 		The random seed to use to ensure determinism of the generation function.
-		If None, not deterministic. Default is None.
+		The seed is incremented by 1 at the end of each iteration so successive
+		iterations draw different sequences while remaining reproducible. If
+		None, not deterministic. Default is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar during predictions. Default is False.
@@ -283,7 +291,11 @@ def greedy_substitution(
 
 	max_iter: int, optional
 		The maximum number of iterations to run before terminating the
-		procedure. Set to -1 for no limit. Default is -1.
+		procedure. The loop condition is `iteration < max_iter`, so any
+		non-positive value (including the `-1` default) causes the loop body
+		to never execute and the original `X` to be returned unchanged. Pass
+		a positive integer (or a large sentinel such as `10**9`) for actual
+		iteration. Default is -1.
 
 	args: tuple or list or None, optional
 		An optional set of additional arguments to pass into the model. If
@@ -321,7 +333,7 @@ def greedy_substitution(
 	tic = time.time()
 	iteration = 0
 
-	X = torch.clone(X)	
+	X = torch.clone(X)
 	y_orig = predict(model, X, args=args, batch_size=batch_size, device=device, 
 		verbose=False)
 
