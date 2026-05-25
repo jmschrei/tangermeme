@@ -82,10 +82,11 @@ def ablate(
 	shuffle_fn: function
 		A function that will shuffle a portion of the sequence. This can be
 		`ersatz.shuffle`, `ersatz.dinucleotide_shuffle`, or any other function
-		with the signature func(X, start, end, random_state) where `X` is a
+		with the signature func(X, start, end, n, random_state) where `X` is a
 		tensor with shape (-1, len(alphabet), length), `start` and `end` are
-		coordinates on that sequence, and `random_state` is a seed to use to
-		ensure determinism. Default is `ersatz.shuffle`. 
+		coordinates on that sequence, `n` is the number of shuffles to produce,
+		and `random_state` is a seed to use to ensure determinism. Default is
+		`ersatz.shuffle`.
 
 	args: tuple or None, optional
 		An optional set of additional arguments to pass into the model. If
@@ -120,16 +121,17 @@ def ablate(
 	Returns
 	-------
 	y_before: torch.Tensor or list of torch.Tensors
-		The predictions from the model before shuffling the region. If the
-		output from the model's forward function is a single tensor, it will
-		return that. If the model outputs a list of tensors, it will return
-		those.
+		The predictions from the model before shuffling the region, with shape
+		(batch, ...). If the output from the model's forward function is a
+		single tensor, it will return that. If the model outputs a list of
+		tensors, it will return those.
 
 	y_after: torch.Tensor or list of torch.Tensors
-		The predictions from the model after shuffling the region. If the
-		output from the model's forward function is a single tensor, it will
-		return that. If the model outputs a list of tensors, it will return
-		those.
+		The predictions from the model after shuffling the region, with shape
+		(batch, n, ...) — an extra `n` axis is inserted for the n shuffles. If
+		the output from the model's forward function is a single tensor, it
+		will return that. If the model outputs a list of tensors, it will
+		return those.
 	"""
 
 	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, allow_N=True)
@@ -203,13 +205,18 @@ def ablate_annotations(
 	Returns
 	-------
 	y_befores: torch.Tensor or list of torch.Tensors
-		The application of `func` from the model BEFORE ablating the annotation.
+		The application of `func` from the model BEFORE ablating the
+		annotation, stacked over annotations as the leading axis (shape
+		`(n_annotations, 1, ...)` since each call is on a single example).
 		If the output from the model's forward function is a single tensor, it
 		will return that. If the model outputs a list of tensors, it will return
 		those.
 
 	y_afters: torch.Tensor or list of torch.Tensors
-		The application of `func` from the model AFTER ablating the annotation.
+		The application of `func` from the model AFTER ablating the
+		annotation, stacked over annotations as the leading axis (shape
+		`(n_annotations, 1, n, ...)` since each call is on a single example
+		with `n` shuffles).
 		If the output from the model's forward function is a single tensor, it
 		will return that. If the model outputs a list of tensors, it will return
 		those.
