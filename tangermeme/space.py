@@ -71,7 +71,9 @@ def space(
 		and each column is the spacing between an adjacent pair of motifs.
 		Specifically, the 1st column corresponds to the spacing between the
 		first and second motif, the 2nd column corresponds to the spacing
-		between the second and third motif, etc. 
+		between the second and third motif, etc. Must be 2-D; scalar/1-D
+		`spacing` is rejected here (unlike `multisubstitute`, which accepts a
+		single int and broadcasts it).
 
 	start: int or None, optional
 		The starting position of where to insert the first motif. If None, the
@@ -95,12 +97,17 @@ def space(
 		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. The dict is not modified in place. Default
-		is None.
+		their way into the function. The dict is not modified in place. Note
+		that overlap between keys of `additional_func_kwargs` and `**kwargs`
+		raises `TypeError: multiple values for keyword argument` from
+		Python's call-site dict-unpacking; only collisions with *this*
+		function's named parameters are resolved by routing through
+		`additional_func_kwargs`. Default is None.
 
 	verbose: bool, optional
-		Whether to display a progress bar as spacings are evaluated. Default
-		is False.
+		Whether to display a progress bar as spacings are evaluated. Only
+		drives the outer spacing-loop progress bar; it is NOT forwarded to
+		inner `func` calls. Default is False.
 
 	kwargs: optional
 		Additional named arguments that will get passed into the function when
@@ -110,13 +117,14 @@ def space(
 	Returns
 	-------
 	y_before: torch.Tensor or list of torch.Tensors
-		The predictions from the model before inserting the motifs in. If the
-		output from the model's forward function is a single tensor, it will
-		return that. If the model outputs a list of tensors, it will return
-		those.
+		The predictions from the model before inserting the motifs in, with
+		shape `(batch, ...)`. If the output from the model's forward function
+		is a single tensor, it will return that. If the model outputs a list
+		of tensors, it will return those.
 
 	y_afters: torch.Tensor or list of torch.Tensors
-		The predictions from the model after inserting the motifs in. If the
+		The predictions from the model after inserting the motifs in, stacked
+		over spacings as axis 1: shape `(batch, n_spacings, ...)`. If the
 		output from the model's forward function is a single tensor, it will
 		return that. If the model outputs a list of tensors, it will return
 		those.
