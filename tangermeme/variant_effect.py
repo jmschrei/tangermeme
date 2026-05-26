@@ -66,7 +66,10 @@ def substitution_effect(
 		variant, the first column is the index in `X`, the second index is the
 		position in that example, and the third index is the index into the
 		alphabet that should be present at that position (overriding whatever
-		is currently there). 
+		is currently there). Note: multiple rows targeting the same
+		`(example, position)` pair are applied in row order via tensor
+		assignment, so the *last* row wins. Order your rows accordingly if
+		you intend to chain edits at the same position.
 
 	args: tuple or None, optional
 		An optional set of additional arguments to pass into the model. If
@@ -84,8 +87,12 @@ def substitution_effect(
 		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. The dict is not modified in place. Default
-		is None.
+		their way into the function. The dict is not modified in place. Note
+		that overlap between keys of `additional_func_kwargs` and `**kwargs`
+		raises `TypeError: multiple values for keyword argument` from
+		Python's call-site dict-unpacking; only collisions with *this*
+		function's named parameters are resolved by routing through
+		`additional_func_kwargs`. Default is None.
 
 	kwargs: optional
 		Additional named arguments that will get passed into the function when
@@ -201,8 +208,12 @@ def deletion_effect(
 		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. The dict is not modified in place. Default
-		is None.
+		their way into the function. The dict is not modified in place. Note
+		that overlap between keys of `additional_func_kwargs` and `**kwargs`
+		raises `TypeError: multiple values for keyword argument` from
+		Python's call-site dict-unpacking; only collisions with *this*
+		function's named parameters are resolved by routing through
+		`additional_func_kwargs`. Default is None.
 
 	kwargs: optional
 		Additional named arguments that will get passed into the function when
@@ -212,7 +223,12 @@ def deletion_effect(
 	Returns
 	-------
 	y_before: torch.Tensor
-		The output from `func` before variants are included.
+		The output from `func` on a trimmed slice of `X` — NOT on the raw
+		input. Specifically, `X` is reduced to `model_length` columns by
+		dropping `max_deletions_per_example` characters from the left when
+		`left=True` (otherwise from the right) so the slice fed to the model
+		has the same shape as the post-deletion sequence. Use the same
+		`left` value the model was trained on.
 
 	y_after: torch.Tensor
 		The output from `func` after the variants are included.
@@ -338,8 +354,12 @@ def insertion_effect(
 		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. The dict is not modified in place. Default
-		is None.
+		their way into the function. The dict is not modified in place. Note
+		that overlap between keys of `additional_func_kwargs` and `**kwargs`
+		raises `TypeError: multiple values for keyword argument` from
+		Python's call-site dict-unpacking; only collisions with *this*
+		function's named parameters are resolved by routing through
+		`additional_func_kwargs`. Default is None.
 
 	kwargs: optional
 		Additional named arguments that will get passed into the function when
