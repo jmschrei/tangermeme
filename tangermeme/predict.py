@@ -56,7 +56,10 @@ def predict(
 		provided, each element in the tuple or list is one input to the model
 		and the element must be formatted to be the same batch size as `X`. If
 		None, no additional arguments are passed into the forward function.
-		Default is None.
+		Each per-batch slice is cast to `dtype` before being passed to the
+		model — integer index tensors and boolean masks will be silently
+		coerced to float, so pre-cast them or pass non-floating-point
+		auxiliary inputs through a model wrapper instead. Default is None.
 
 	func: function or None, optional 
 		A function to apply to a batch of predictions after they have been made.
@@ -82,12 +85,13 @@ def predict(
 
 	Returns
 	-------
-	y: torch.Tensor or list/tuple of torch.Tensors
+	y: torch.Tensor or list of torch.Tensors
 		The output from the model for each input example. The precise format
 		is determined by the model. If the model outputs a single tensor,
 		y is a single tensor concatenated across all batches. If the model
-		outputs multiple tensors, y is a list of tensors which are each
-		concatenated across all batches.
+		outputs multiple tensors (list or tuple), y is always returned as a
+		list (the original tuple container type is not preserved) of tensors
+		which are each concatenated across all batches.
 	"""
 
 	if X.shape[0] == 0:
