@@ -6,6 +6,135 @@ Release History
 ===============
 
 
+Version 1.2.0
+=============
+
+Highlights
+----------
+
+	- Perturbation-style entry points now return public NamedTuple objects so results can be accessed by attribute (``result.y_before``) while remaining tuple-compatible with the existing positional-unpacking API.
+	- Every public module ships type hints.
+	- ``predict``, ``deep_lift_shap``, ``pisa``, ``product.*``, ``saturation_mutagenesis``, and ``design.*`` default ``device=None``, which resolves to CUDA if available and falls back to CPU. The caller's model device and training mode are restored after the call.
+	- ``deep_lift_shap`` and ``pisa`` now preserve model state and clean up registered hooks even when the call raises.
+	- ``additional_func_kwargs`` is now copied defensively in ``ablate``, ``marginalize``, ``space``, ``product.*``, ``variant_effect.*``, and ``design.screen``; passing a dict no longer mutates the caller's object.
+	- Substantial bug fixes, new diagnostics, broad test backfill, and a full docstring sweep.
+
+Breaking changes
+----------------
+
+	- ``plot.plot_pwm`` no longer manages its own figure; callers must pass an ``ax=`` matplotlib axis. The function previously created (and sometimes leaked) its own figure.
+
+results (new module)
+--------------------
+
+	- Adds ``PerturbationResult`` (``ablate``, ``marginalize``, ``variant_effect.*``), ``PerturbationAnnotationsResult`` (``ablate_annotations``, ``marginalize_annotations``), ``AttributionReferencesResult`` (``deep_lift_shap``, ``pisa`` with ``return_references=True``), ``SpaceResult`` (``space``), and ``SaturationMutagenesisRawResult`` (``saturation_mutagenesis(raw_outputs=True)``).
+	- All of these subclass ``tuple``, so positional unpacking and ``isinstance(_, tuple)`` continue to work unchanged.
+
+predict
+-------
+
+	- ``device=None`` auto-resolves to CUDA / CPU; caller's model device and training mode are preserved.
+	- Empty-input rejection with a clear error.
+
+deep_lift_shap / pisa
+---------------------
+
+	- Return ``AttributionReferencesResult`` when ``return_references=True``.
+	- ``device=None`` auto-resolves; model state and hooks are restored on success and on exception.
+	- ``pisa`` now threads ``args`` through every shuffle iteration (previously dropped).
+
+ablate / marginalize / space
+----------------------------
+
+	- Return ``PerturbationResult`` / ``SpaceResult``.
+	- ``additional_func_kwargs`` is copied defensively (no longer mutated).
+	- New device-mismatch errors instead of silent failures when motifs/args sit on a different device than ``X``.
+	- ``plot_attributions`` (and related plot helpers) now honor the ``func=`` argument.
+
+variant_effect
+--------------
+
+	- ``substitution_effect`` / ``deletion_effect`` / ``insertion_effect`` return ``PerturbationResult``.
+	- ``deletion_effect`` rejects ``X`` shorter than the maximum deletion.
+	- ``additional_func_kwargs`` is copied defensively in all three sub-functions.
+
+saturation_mutagenesis
+----------------------
+
+	- ``raw_outputs=True`` returns ``SaturationMutagenesisRawResult``.
+	- ``device=None`` auto-resolves to CUDA / CPU.
+
+design
+------
+
+	- ``device=None`` auto-resolves; ``additional_func_kwargs`` is copied defensively in ``screen``.
+
+product
+-------
+
+	- ``apply_pairwise`` / ``apply_product`` auto-detect device and preserve model state.
+	- ``apply_pairwise`` rejects mismatched ``args`` lengths and empty inputs with a clear error.
+
+ersatz
+------
+
+	- ``dinucleotide_shuffle`` now works on CUDA-resident inputs.
+	- ``randomize`` accepts ``end == X.shape[-1]``.
+	- Switched ``print`` calls to ``warnings.warn`` and dropped unused imports.
+
+io
+--
+
+	- ``extract_loci`` keeps loci whose window ends exactly at the chromosome end.
+	- ``extract_loci`` accepts a pre-opened ``pyfaidx.Fasta`` and respects ownership semantics.
+	- ``_extract_locus_signal`` uses ``warnings.warn`` and narrows bare ``except`` clauses.
+
+annotate
+--------
+
+	- ``pairwise_annotations_spacing`` fixes an ``IndexError`` at ``max_distance`` and rejects empty annotations with a clear error.
+
+match
+-----
+
+	- GC-bin 0 no longer receives spillover from higher bins.
+	- Narrowed bare ``except`` clauses in the bigwig extraction helper.
+
+kmers
+-----
+
+	- ``gapped_kmers`` properly handles ``scores=None``.
+
+seqlet
+------
+
+	- Empty-input validation added to public entry points.
+
+plot
+----
+
+	- ``plot_pwm`` gains an ``ax=`` parameter and no longer manages its own figure (see Breaking changes).
+	- ``plot_attributions`` honors the ``func=`` argument.
+	- ``plot_categorical_scatter`` respects a user-supplied ``ax=``.
+	- ``place_new_box`` / ``place_new_bar`` no longer mutate the caller's ``Bbox``.
+	- Narrowed bare ``ImportError`` clauses.
+
+utils
+-----
+
+	- New diagnostics: ``set_seed``, ``gc_content``, ``entropy``, ``information_content``.
+	- ``_validate_input`` accepts all-zero one-hot columns when ``allow_N=True``.
+	- ``print`` calls replaced with ``warnings.warn``.
+
+Documentation / tests
+---------------------
+
+	- Type hints added across the entire public surface.
+	- Comprehensive new test coverage for ``func=`` plug-points, CUDA paths, ``verbose=True`` smoke, ``args=`` plumbing, dtype matrices, edge cases, and regression values.
+	- Cross-module integration tests for the ``func=`` plug-point in ``ablate``, ``marginalize``, ``space``, ``product.*``, and ``variant_effect.*``.
+	- Sweeping docstring corrections across ``ablate``, ``annotate``, ``deep_lift_shap``, ``design``, ``ersatz``, ``io``, ``kmers``, ``marginalize``, ``match``, ``pisa``, ``plot``, ``predict``, ``product``, ``saturation_mutagenesis``, ``seqlet``, ``space``, ``utils``, and ``variant_effect`` (return types, device assumptions, validation behavior, kwarg collisions, dtype coercion footguns).
+
+
 Version 1.1.0
 =============
 
