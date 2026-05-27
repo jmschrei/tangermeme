@@ -650,13 +650,22 @@ def dinucleotide_shuffle(
 		Whether to use a specific random seed when generating the shuffle,
 		to ensure reproducibility. If None, do not use a reproducible seed.
 		Unlike other methods, cannot be a numpy.random.RandomState object.
+		Note: the seed used for the i-th sequence in the batch is
+		`random_state + i`, so the per-sequence stream depends on batch
+		position. Two calls with the same `random_state` but different batch
+		sizes will agree on the leading prefix of sequences (positions where
+		both batches contain that index) but diverge otherwise; this also
+		means sequence 0 of one batch is reproduced as sequence 0 of any
+		other batch that uses the same `random_state`.
 		Default is None.
 
 
 	Returns
 	-------
-	shuffled_sequences: torch.tensor, shape=(-1, n, k, -1)
-		The shuffled sequences.
+	shuffled_sequences: torch.tensor, shape=(-1, n, len(alphabet), length)
+		The shuffled sequences. Dtype and device match the input `X` (the
+		internal float32 buffer is cast on assignment back into a clone of
+		`X`).
 	"""
 
 	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1)

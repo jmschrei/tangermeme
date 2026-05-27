@@ -65,9 +65,11 @@ def marginalize(
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences to have a motif inserted into.
 
-	motif: torch.tensor, shape=(-1, len(alphabet), motif_length)
-		A one-hot encoded version of a short motif to insert into the set of
-		sequences.
+	motif: torch.tensor or str
+		Either a one-hot encoded short motif with shape
+		`(-1, len(alphabet), motif_length)` to insert into the set of
+		sequences, or a string that will be one-hot encoded internally using
+		`alphabet` (and the `N` ignore convention from `ersatz.substitute`).
 
 	start: int or None, optional
 		The starting position of where to insert the motif. If None, insert the

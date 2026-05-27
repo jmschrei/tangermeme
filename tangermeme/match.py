@@ -428,10 +428,12 @@ def extract_matching_loci(
 		from this bigwig. If None, do not filter based on signal strength.
 		Default is None.
 
-	signal_beta: float or None, optional
+	signal_beta: float, optional
 		A multiplier of the robust minimum signal calculated from `loci` that
-		each background region must have fewer reads then. Only relevant if a
-		bigwig is passed in. Default is 0.5.
+		each background region must have fewer reads than. Only relevant if a
+		bigwig is passed in. Must be a number when `bigwig` is set (the code
+		computes `robust_min * signal_beta`); passing `None` together with a
+		`bigwig` raises a `TypeError`. Default is 0.5.
 
 	chroms: list, tuple, or None, optional
 		A set of chromosomes to use when choosing matching loci. If None, only

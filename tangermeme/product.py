@@ -92,8 +92,12 @@ def apply_pairwise(
 		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. The dict is not modified in place. Default
-		is None.
+		their way into the function. The dict is not modified in place. Note
+		that overlap between keys of `additional_func_kwargs` and `**kwargs`
+		raises `TypeError: multiple values for keyword argument` from
+		Python's call-site dict-unpacking; only collisions with *this*
+		function's named parameters are resolved by routing through
+		`additional_func_kwargs`. Default is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar as examples are processed. Default
@@ -251,8 +255,12 @@ def apply_product(
 		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. The dict is not modified in place. Default
-		is None.
+		their way into the function. The dict is not modified in place. Note
+		that overlap between keys of `additional_func_kwargs` and `**kwargs`
+		raises `TypeError: multiple values for keyword argument` from
+		Python's call-site dict-unpacking; only collisions with *this*
+		function's named parameters are resolved by routing through
+		`additional_func_kwargs`. Default is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar as examples are processed. Default

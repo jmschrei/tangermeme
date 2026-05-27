@@ -63,20 +63,26 @@ def _attribution_score(y0, y_hat, target):
 @numba.njit("void(int8[:, :, :], int32, int32)")
 def _edit_distance_one(X, start, end):
 	"""An internal function for generating all sequences of edit distance 1
-	
+
 	This internal function, which is meant to be used for ISM, will take in a
 	one-hot encoded sequence and return all sequences that have an edit distance
-	of one. 
-	
-	
+	of one.
+
+	Note: the inner loop iterates over all 4 alphabet characters at each
+	mutated position, *including* the character already at that position.
+	One of the four "variants" per position is therefore an identity
+	substitution (a no-op); it contributes a zero into the per-position
+	mean used by `_attribution_score`. Callers wanting strict
+	edit-distance-1 outputs should mask or skip those rows.
+
 	Parameters
 	----------
 	X: torch.Tensor, shape=(length*len(alphabet), len(alphabet), length)
 		A single one-hot encoded sequence.
-	
+
 	start: int
 		The first nucleotide to begin making edits on, inclusive.
-	
+
 	end: int
 		The end of the span. Edits are not made on this nucleotide at this
 		index. Can be negative indexes.
@@ -147,9 +153,12 @@ def saturation_mutagenesis(
 		Default is 0.
 	
 	end: int, optional
-		The end of where to make perturbations to the sequence. If end is
-		positive, it is non-inclusive. If end is negative, it is inclusive.
-		Default is -1, meaning the entire sequence.
+		The end of where to make perturbations to the sequence. Positive
+		values follow standard Python slice semantics (non-inclusive).
+		Negative values are remapped via `end = length + 1 + end` so that
+		`end=-1` maps to `length` and the *last* nucleotide is included.
+		Note this differs from Python's `X[start:-1]` (which would drop the
+		last element). Default is -1, meaning the entire sequence.
 	
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.

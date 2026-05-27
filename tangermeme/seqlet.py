@@ -114,8 +114,8 @@ def _iterative_extract_seqlets(X_sum, window_size, flank, suppress):
 	Returns
 	-------
 	seqlets: list
-		A list of tuples containing the example index, the start of the seqlet,
-		the end of the seqlet, and the sum of attributions within the seqlet.
+		A list of 3-tuples `(example_index, start, end)`. The sum of
+		attributions within the seqlet is NOT included in this output.
 	"""
 
 	n, d = X_sum.shape

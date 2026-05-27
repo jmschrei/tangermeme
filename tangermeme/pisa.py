@@ -164,6 +164,19 @@ def pisa(
         The references used for each input sequence, with the shape
         (n_input_sequences, n_shuffles, 4, length). Only returned if
         `return_references = True`.
+
+    Notes
+    -----
+    `n_outputs` is inferred from the *last* axis of the model's output
+    (`predict(model, X[:1]).shape[-1]`). Profile-style models that return
+    `(batch, n_tasks, length)` will therefore be attributed over `length`
+    only — to attribute over tasks instead, wrap the model in a small
+    adapter that transposes or flattens the output.
+
+    The returned `attributions` and `references` tensors are produced via
+    `torch.stack` over per-example accumulators and may live on the input
+    device rather than CPU in some return paths; explicit `.cpu()` is
+    advisable when consuming results on a non-CUDA host.
     """
 
     _validate_input(X, "X", shape=(-1, -1, -1), ohe=True)

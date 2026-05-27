@@ -608,10 +608,11 @@ def plot_pwm(
 ) -> matplotlib.axes.Axes:
 	"""Plot an information-content weighted PWM as a sequence logo.
 
-	This function takes in a PWM, where the sum across all values in the
-	alphabet is equal to 1, and plots the information-content weighted
-	version of it. To visualize the reverse complement, call this function
-	a second time with `pwm[::-1, ::-1]`.
+	This function takes in a PWM with shape `(len(alphabet), length)`,
+	where each column (position) sums to 1 across the alphabet axis, and
+	plots the information-content weighted version of it. To visualize
+	the reverse complement, call this function a second time with
+	`pwm[::-1, ::-1]`.
 
 	The function no longer creates its own figure or calls `plt.show()`;
 	it draws on the provided `ax` (or `plt.gca()` if none is given) and
@@ -622,7 +623,8 @@ def plot_pwm(
 	Parameters
 	----------
 	pwm: torch.Tensor or numpy.ndarray, shape=(len(alphabet), length)
-		The PWM to visualize. The rows must sum to 1.
+		The PWM to visualize. Each *column* (i.e. position) must sum to 1
+		across the alphabet axis.
 
 	ax: matplotlib.axes.Axes or None, optional
 		The axes to draw on. If None, use the current axes via

@@ -541,6 +541,16 @@ def reverse_complement(
 	-------
 	rev_comp: str or torch.Tensor w/ shape (alphabet_size, length)
 		The reverse complemented string or tensor, matching the type of `seq`.
+
+	Notes
+	-----
+	The tensor path is 2-D only (shape `(alphabet_size, length)`). Passing a
+	batched tensor with shape `(N, A, L)` is NOT rejected but produces silently
+	wrong output: `torch.flip(..., dims=(-1,))` flips the last axis as
+	intended, but the subsequent `[idxs]` indexing permutes the *first* axis,
+	which on a batched input is the batch dimension instead of the alphabet
+	axis. Iterate over the batch (or unsqueeze and call once per row) until a
+	proper batched path is added.
 	"""
 
 	if isinstance(seq, str):
@@ -719,11 +729,13 @@ def unchunk(
 		A set of fixed-length tensors for any number of outputs. Usually the
 		result of applying `chunk` and then some form of model.
 
-	lengths: list or numpy.ndarray or torch.tensor, shape=(-1,) or None
+	lengths: list or numpy.ndarray or torch.tensor, shape=(-1,)
 		The *original lengths* of the elements that were chunked. This is not
 		the number of chunks produced, which will be influenced by the overlap,
-		but the actual length in bp of the original sequences. If None, assume
-		that all chunks in `X` come from a single variable-length sequence.
+		but the actual length in bp of the original sequences. Note: the
+		signature also lists `None` as the type, but the current
+		implementation calls `_validate_input(_cast_as_tensor(lengths), ...)`
+		which rejects `None`; a length tensor must be provided in practice.
 		Default is None.
 
 	overlap: int, optional

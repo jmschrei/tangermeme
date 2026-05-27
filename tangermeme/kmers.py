@@ -207,7 +207,9 @@ def gapped_kmers(
 
 	max_gkmers: int, optional
 		The maximum number of gapped k-mers to return per example, ranked by
-		absolute score. Default is 10.
+		absolute score. Any gapped k-mers beyond this cap are silently
+		dropped from the output sparse matrix; raise this if your example
+		may contain more than 10 meaningful gapped k-mers. Default is 10.
 
 	max_pos: int or None, optional
 		If provided, only consider the top `max_pos` positions per example
