@@ -64,6 +64,9 @@ docs = [
     "nbconvert>=7.0",
 ]
 
+[project.scripts]
+tangermeme-install-skills = "tangermeme._skills.install:main"
+
 [project.urls]
 Homepage      = "https://github.com/jmschrei/tangermeme"
 Repository    = "https://github.com/jmschrei/tangermeme"
