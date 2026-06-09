@@ -46,6 +46,22 @@ uv run pytest -m "not cmd"
 
 This installs the package in editable mode along with the testing toolchain (`pytest`, `captum`, `ruff`, `build`, `twine`).
 
+## Claude Code Skill
+
+tangermeme ships an [Agent Skill](https://docs.claude.com/en/docs/claude-code/skills) for [Claude Code](https://claude.com/claude-code) that teaches the agent how to use the library correctly — the API contracts, the footguns (e.g., `deep_lift_shap` needs `target=` for multi-task models, `extract_loci` has a variable-length return), and the multi-step workflows. It is bundled with the package but, because Claude Code does not scan installed Python packages, you install it once into your personal skills directory:
+
+```bash
+tangermeme-install-skills
+```
+
+This copies the skill to `~/.claude/skills/tangermeme/`, where it is available to Claude Code in **every** project. Re-run with `--force` after upgrading tangermeme to refresh it. Once installed, just ask Claude Code to do tangermeme tasks ("compute DeepLIFT/SHAP attributions on these peaks", "marginalize this motif", "set up a notebook to inspect what my model learned") and the skill is consulted automatically. The skill is a router (`SKILL.md`) that points to detailed reference files loaded on demand, so it adds essentially no context cost until it is used.
+
+If you would rather not copy files into your home directory, point Claude Code at the bundled copy in place instead:
+
+```bash
+export CLAUDE_SKILLS_PATH="$(tangermeme-install-skills --print-path)"
+```
+
 ## Roadmap
 
 This first release focused on the core prediction-based functionality (e.g., marginalizations, ISM, etc..) that subsequent releases will build on. Although my focus will largely follow my research projects and the feedback I receive from the community, here is a roadmap for what I currently plan to focus on in the next few releases.

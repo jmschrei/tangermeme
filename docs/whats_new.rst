@@ -6,6 +6,18 @@ Release History
 ===============
 
 
+Version 1.3.0
+=============
+
+*Unreleased.*
+
+Claude Code skill
+-----------------
+
+	- Bundles a `Claude Code <https://claude.com/claude-code>`_ Agent Skill (a ``SKILL.md`` router plus on-demand reference files) that documents tangermeme's API contracts, footguns, and multi-step workflows for coding agents.
+	- Adds the ``tangermeme-install-skills`` console script, which copies the bundled skill into ``~/.claude/skills/`` so it is available to Claude Code in every project. Use ``--force`` to refresh after upgrading or ``--print-path`` for the ``CLAUDE_SKILLS_PATH`` route.
+
+
 Version 1.2.0
 =============
 
