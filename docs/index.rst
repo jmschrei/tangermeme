@@ -41,6 +41,18 @@ Contributors should clone the repository and use ``uv`` to create a reproducible
     uv run pytest -m "not cmd"
 
 
+Claude Code Skill
+-----------------
+
+tangermeme ships an `Agent Skill <https://docs.claude.com/en/docs/claude-code/skills>`_ for `Claude Code <https://claude.com/claude-code>`_ that teaches the agent how to use the library correctly — the API contracts, the common footguns, and the multi-step workflows. It is bundled with the package, but because Claude Code does not scan installed Python packages you install it once into your personal skills directory:
+
+.. code-block:: bash
+
+    tangermeme-install-skills
+
+This copies the skill to ``~/.claude/skills/tangermeme/``, where it is available to Claude Code in every project (re-run with ``--force`` after upgrading to refresh it). Once installed, simply ask Claude Code to perform tangermeme tasks and the skill is consulted automatically. To instead point Claude Code at the bundled copy in place, set ``CLAUDE_SKILLS_PATH`` to the output of ``tangermeme-install-skills --print-path``.
+
+
 Thank You
 =========
 
