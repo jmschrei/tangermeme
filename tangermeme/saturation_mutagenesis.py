@@ -120,12 +120,17 @@ def saturation_mutagenesis(
 	of the sequences with an edit distance of one on them.
 	
 	By default, this function will aggregate these predictions into an
-	attribution value. This aggregation involves taking the Euclidean distance
-	between the predictions before and after the substitutions and Z-score
-	normalizing them across the entire example. However, this assumes that
-	the model returns only a single tensor. This tensor can have multiple
-	outputs, e.g., be of shape (batch_size, n_targets) where n_targets > 1,
-	but the model cannot return multiple tensors.
+	attribution value. For each single-character substitution, the change in
+	prediction (perturbed minus original) is computed and then mean-subtracted
+	across the alphabet axis so the values at each position are centered on zero;
+	when `target=None` these are additionally averaged across all of the model's
+	outputs. The values are not Euclidean distances and are not Z-score
+	normalized -- preserving the raw magnitude lets you compare the importance of
+	different regions head-to-head. Unless `hypothetical=True`, the result is then
+	projected onto the observed bases by multiplying by the one-hot `X`. This
+	aggregation assumes that the model returns only a single tensor. This tensor
+	can have multiple outputs, e.g., be of shape (batch_size, n_targets) where
+	n_targets > 1, but the model cannot return multiple tensors.
 	
 	If you simply want the predictions before and after the substitutions
 	without the method turning those into attributions because, perhaps, you
@@ -166,7 +171,7 @@ def saturation_mutagenesis(
 	target: int or slice or None, optional
 		Whether to focus on a single output/slice of outputs from the model
 		when calculating attributions rather than the entire set of outputs.
-		If None, use all targets when calculating distances. Default is None.  
+		If None, use all targets when calculating attributions. Default is None.
 	
 	hypothetical: bool, optional
 		Whether to return attributions for all possible characters at each
