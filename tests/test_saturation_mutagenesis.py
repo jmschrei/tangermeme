@@ -12,7 +12,6 @@ from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
 from tangermeme.utils import TangermemeWarning
 
-from tangermeme.saturation_mutagenesis import _edit_distance_one
 from tangermeme.saturation_mutagenesis import _attribution_score
 from tangermeme.saturation_mutagenesis import saturation_mutagenesis
 
@@ -35,130 +34,6 @@ def X():
 @pytest.fixture
 def X0():
 	return random_one_hot((2, 4, 100), random_state=0).float()
-
-
-###
-
-
-def test_edit_distance_one(X):
-	X_ = X[0].repeat(X.shape[-1]*X[0].shape[0], 1, 1).numpy(force=True)
-	_edit_distance_one(X_, 0, X_.shape[-1])
-	X_one = torch.from_numpy(X_)
-	
-	assert X_one.dtype == torch.int8
-	assert X_one.shape == (40, 4, 10)
-	assert X_one.sum() == 400
-
-	assert_array_almost_equal(X_one[:4], [
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 1, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 0, 0, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 1, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]]])
-
-	assert_array_almost_equal(X_one[-4:], [
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 1, 1]],
-
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]]])
-
-
-def test_edit_distance_one_start_end(X):
-	start, end = 2, 5
-	X_ = X[0].repeat((end-start)*X[0].shape[0], 1, 1).numpy(force=True)
-	_edit_distance_one(X_, start, end)
-	X_one = torch.from_numpy(X_)
-	assert X_one.shape == (12, 4, 10)
-
-	assert_array_almost_equal(X_one, [
-		[[1, 0, 1, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 1, 1, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 0, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 1, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 1, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 0, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 0, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 1, 0, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 1, 1, 1, 1, 1, 0, 1]],
-
-		[[1, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-		 [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-		 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-		 [0, 1, 0, 0, 1, 1, 1, 1, 0, 1]]])
 
 
 ###
@@ -533,6 +408,51 @@ def test_saturation_mutagenesis_multi_hot_column(device):
 		assert_array_almost_equal(y_hat[0, base, 30], y_sub[0], 4)
 
 
+def test_saturation_mutagenesis_matches_bruteforce(device):
+	# Full validation of the vectorized edit construction: every (base,
+	# position) slot of y_hat must equal an explicit prediction of that single
+	# substitution. Identity slots reduce to the reference (== y0) and are
+	# covered too. A small sequence keeps the brute-force loop cheap.
+	torch.manual_seed(0)
+	X = random_one_hot((1, 4, 12), random_state=0).float()
+	model = FlattenDense(seq_len=12, n_outputs=1)
+
+	y0, y_hat = saturation_mutagenesis(model, X, raw_outputs=True,
+		device=device)
+
+	for base in range(4):
+		for pos in range(12):
+			X_sub = X.clone()
+			X_sub[0, :, pos] = 0
+			X_sub[0, base, pos] = 1
+			y_sub = predict(model, X_sub, device=device)
+			assert_array_almost_equal(y_hat[0, base, pos], y_sub[0], 4)
+
+
+def test_saturation_mutagenesis_bruteforce_windowed_with_N(device):
+	# Combines the trickiest pieces of the construction: a start/end window
+	# (so edit positions are offset) containing an all-zero `N` column (so the
+	# kept-edit count varies within the window). Every slot must match an
+	# explicit substitution at the absolute position.
+	torch.manual_seed(0)
+	X = random_one_hot((1, 4, 20), random_state=0).float()
+	X[0, :, 8] = 0                      # N column inside the window
+	model = FlattenDense(seq_len=20, n_outputs=1)
+	start, end = 5, 12
+
+	y0, y_hat = saturation_mutagenesis(model, X, start=start, end=end,
+		raw_outputs=True, device=device)
+	assert y_hat.shape == (1, 4, end - start, 1)
+
+	for base in range(4):
+		for pos in range(end - start):
+			X_sub = X.clone()
+			X_sub[0, :, start + pos] = 0
+			X_sub[0, base, start + pos] = 1
+			y_sub = predict(model, X_sub, device=device)
+			assert_array_almost_equal(y_hat[0, base, pos], y_sub[0], 4)
+
+
 def test_saturation_mutagenesis_zero_where_X_zero(X0, device):
 	model = SmallDeepSEA(1)
 	X_attr = saturation_mutagenesis(model, X0, device=device,
@@ -700,8 +620,8 @@ def test_saturation_mutagenesis_empty_span(X0):
 
 
 def test_saturation_mutagenesis_end_past_length(X0):
-	# end beyond the sequence length would drive the numba kernel to write
-	# out of bounds and silently corrupt the batch; it must be rejected.
+	# end beyond the sequence length would index past the sequence when
+	# building the edits; it must be rejected up front.
 	model = SmallDeepSEA(1)
 	with pytest.raises(ValueError, match="0 <= start < end <= length"):
 		saturation_mutagenesis(model, X0, start=0, end=X0.shape[-1] + 5,

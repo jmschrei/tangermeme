@@ -8,7 +8,6 @@ from collections.abc import Callable
 from typing import Any
 from typing import NamedTuple
 
-import numba
 import torch
 
 from tqdm import trange
@@ -61,45 +60,6 @@ def _attribution_score(y0, y_hat, target):
 	if len(attr.shape) > 3:
 		attr = torch.mean(attr, dim=tuple(range(3, len(attr.shape))))
 	return attr
-
-
-
-@numba.njit("void(int8[:, :, :], int32, int32)")
-def _edit_distance_one(X, start, end):
-	"""An internal function for generating all sequences of edit distance 1
-
-	This internal function, which is meant to be used for ISM, will take in a
-	one-hot encoded sequence and return all sequences that have an edit distance
-	of one.
-
-	Note: the inner loop iterates over all 4 alphabet characters at each
-	mutated position, *including* the character already at that position.
-	One of the four "variants" per position is therefore an identity
-	substitution (a no-op); it contributes a zero into the per-position
-	mean used by `_attribution_score`. Callers wanting strict
-	edit-distance-1 outputs should mask or skip those rows.
-
-	Parameters
-	----------
-	X: torch.Tensor, shape=(length*len(alphabet), len(alphabet), length)
-		A single one-hot encoded sequence.
-
-	start: int
-		The first nucleotide to begin making edits on, inclusive.
-
-	end: int
-		The end of the span. Edits are not made on this nucleotide at this
-		index. Can be negative indexes.
-	"""
-	
-	i = 0
-	for j in range(4):
-		for k in range(start, end):
-			for l in range(4):
-				X[i, l, k] = 0
-				
-			X[i, j, k] = 1
-			i += 1
 
 
 
@@ -251,27 +211,27 @@ def saturation_mutagenesis(
 
 	y_hat = []
 	for i in trange(X.shape[0], disable=not verbose):
-		X_ = X[i].repeat((end-start)*X[i].shape[0], 1, 1).numpy(force=True)
-		_edit_distance_one(X_, start, end)
-		X_ = torch.from_numpy(X_)
-
-		# One generated sequence per position is an identity substitution: the
-		# edit re-applies the base already there, so the sequence is identical
-		# to the reference and its prediction equals y0. Skip those forward
-		# passes (up to 25% of them) and reconstruct the slots from y0 below.
-		# A row is identity only when the edit reproduces the reference column
-		# exactly, i.e. the column is a clean one-hot of that character; an
-		# all-zero column (an `N`) or a multi-hot column has no identity row,
-		# so all four edits are real and must be predicted. The kernel lays
-		# rows out as [character, position], so `identity` flattens to match.
+		# Build only the true single-base edits. One substitution per position
+		# would re-apply the base already there (an identity edit whose
+		# prediction equals y0); it is skipped here and filled from y0 below,
+		# saving up to 25% of the forward passes. A column that is all-zero (an
+		# `N`) or multi-hot is not a clean one-hot of any character, so it has
+		# no identity row and all four of its edits are kept. The kept rows are
+		# laid out in [character, position] order to match the reconstruction.
 		ref = X[i, :, start:end]
 		identity = (ref == 1) & (ref.sum(dim=0, keepdim=True) == 1)
 		edits = ~identity.reshape(-1)
 
-		X_ = X_[edits]
+		edit_chars, edit_positions = torch.where(~identity)
+		edit_positions = edit_positions + start
+		n_edits = edit_chars.shape[0]
+
+		X_ = X[i].repeat(n_edits, 1, 1)
+		rows = torch.arange(n_edits)
+		X_[rows, :, edit_positions] = 0
+		X_[rows, edit_chars, edit_positions] = 1
 
 		if args is not None:
-			n_edits = int(edits.sum())
 			args_ = tuple(a[i].repeat(n_edits, *(1 for _ in a[i].shape))
 				for a in args)
 		else:
