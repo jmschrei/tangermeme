@@ -254,18 +254,44 @@ def saturation_mutagenesis(
 		X_ = X[i].repeat((end-start)*X[i].shape[0], 1, 1).numpy(force=True)
 		_edit_distance_one(X_, start, end)
 		X_ = torch.from_numpy(X_)
-	
+
+		# One generated sequence per position is an identity substitution: the
+		# edit re-applies the base already there, so the sequence is identical
+		# to the reference and its prediction equals y0. Skip those forward
+		# passes (25% of them) and reconstruct the slots from y0 below. The
+		# kernel lays rows out as [character, position], so the identity row
+		# at position p is the one whose character equals the original base.
+		orig = X[i, :, start:end].argmax(dim=0)
+		chars = torch.arange(4).repeat_interleave(end-start)
+		positions = torch.arange(end-start).repeat(4)
+		edits = chars != orig[positions]
+
+		X_ = X_[edits]
+
 		if args is not None:
-			args_ = tuple(a[i].repeat(X_.shape[0], *(1 for _ in a[i].shape)) 
+			n_edits = int(edits.sum())
+			args_ = tuple(a[i].repeat(n_edits, *(1 for _ in a[i].shape))
 				for a in args)
 		else:
 			args_ = None
-	
-		y_hat_ = predict(model, X_, args=args_, func=func, batch_size=batch_size,
-			dtype=dtype, device=device)
-	
+
+		y_edits = predict(model, X_, args=args_, func=func,
+			batch_size=batch_size, dtype=dtype, device=device)
+
+		# Scatter the edit predictions back into the full [character, position]
+		# grid, filling the identity slots with the reference prediction y0.
+		if isinstance(y_edits, torch.Tensor):
+			y_hat_ = y0[i].unsqueeze(0).repeat(edits.shape[0],
+				*(1 for _ in y0[i].shape))
+			y_hat_[edits] = y_edits
+		else:
+			y_hat_ = [y0_[i].unsqueeze(0).repeat(edits.shape[0],
+				*(1 for _ in y0_[i].shape)) for y0_ in y0]
+			for y_hat_h, y_edit in zip(y_hat_, y_edits):
+				y_hat_h[edits] = y_edit
+
 		y_hat.append(y_hat_)
-	
+
 	if isinstance(y_hat[0], torch.Tensor):
 		y_hat = torch.stack(y_hat).reshape(X.shape[0], X.shape[1], end-start, 
 			*y_hat_.shape[1:])

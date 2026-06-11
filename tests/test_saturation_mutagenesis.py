@@ -468,12 +468,13 @@ def test_saturation_mutagenesis_identity_recovers_y0(X0, device):
 		device=device)
 
 	# For each (example, position), the substitution that keeps the original
-	# base must equal y0 for that example.
+	# base is an identity edit. Its forward pass is skipped and the slot is
+	# filled directly from y0, so it must equal y0 *exactly* (not just to
+	# float tolerance) -- this guards the identity-skipping optimization.
 	for i in range(X0.shape[0]):
 		for pos in range(X0.shape[-1]):
 			orig_base = int(X0[i, :, pos].argmax())
-			assert_array_almost_equal(
-				y_hat[i, orig_base, pos], y0[i], 4)
+			assert torch.equal(y_hat[i, orig_base, pos], y0[i])
 
 
 def test_saturation_mutagenesis_zero_where_X_zero(X0, device):
@@ -816,3 +817,24 @@ def test_saturation_mutagenesis_no_warning_on_hard_one_hot(X0, device):
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", TangermemeWarning)
 		saturation_mutagenesis(model, X0, device=device)
+
+
+def test_saturation_mutagenesis_skips_identity_forward_passes(X0, device):
+	# Identity substitutions are not run through the model: only the 3 true
+	# edits per position are predicted, plus one reference pass for y0.
+	class _Counter(torch.nn.Module):
+		def __init__(self, model):
+			super(_Counter, self).__init__()
+			self.model = model
+			self.rows = 0
+
+		def forward(self, X, *args):
+			self.rows += X.shape[0]
+			return self.model(X, *args)
+
+	model = _Counter(SmallDeepSEA(1))
+	saturation_mutagenesis(model, X0, device=device)
+
+	n, length = X0.shape[0], X0.shape[-1]
+	# n reference rows + 3 true edits per position per example.
+	assert model.rows == n + 3 * length * n
