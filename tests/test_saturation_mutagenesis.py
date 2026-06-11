@@ -501,3 +501,218 @@ def test_saturation_mutagenesis_raw_outputs_named_tuple(device):
 	# When raw_outputs=False the return is still a plain Tensor.
 	attr = saturation_mutagenesis(model, X, raw_outputs=False, device=device)
 	assert isinstance(attr, torch.Tensor)
+
+
+###
+
+
+class _DenseHead(torch.nn.Module):
+	"""Single-tensor model sharing the dense head of a ConvDense instance.
+
+	Used to cross-check the multi-tensor reshape branch in
+	`saturation_mutagenesis`: the second (dense) output of `ConvDense` must
+	match this standalone model exactly when both are run through ISM.
+	"""
+
+	def __init__(self, src):
+		super(_DenseHead, self).__init__()
+		self.dense = src.dense
+
+	def forward(self, X):
+		return self.dense(X.reshape(X.shape[0], -1))
+
+
+def test_saturation_mutagenesis_multi_output(device):
+	# Exercises the list/tuple-output reshape branch end-to-end.
+	torch.manual_seed(0)
+	X = random_one_hot((2, 4, 100), random_state=0).float()
+
+	model = ConvDense(n_outputs=3)
+	y0, y_hat = saturation_mutagenesis(model, X, raw_outputs=True,
+		device=device)
+
+	assert isinstance(y0, list) and isinstance(y_hat, list)
+	assert len(y0) == 2 and len(y_hat) == 2
+	assert y0[0].shape == (2, 12, 98)
+	assert y0[1].shape == (2, 3)
+	assert y_hat[0].shape == (2, 4, 100, 12, 98)
+	assert y_hat[1].shape == (2, 4, 100, 3)
+
+	# The dense head must equal the same head run as a single-tensor model.
+	# This catches the alphabet/position axis scrambling the old reshape had.
+	y0_s, y_hat_s = saturation_mutagenesis(_DenseHead(model), X,
+		raw_outputs=True, device=device)
+	assert_array_almost_equal(y_hat[1], y_hat_s, 4)
+	assert_array_almost_equal(y0[1], y0_s, 4)
+
+	# Identity substitutions recover y0 on both heads.
+	for head_hat, head0 in zip(y_hat, y0):
+		for i in range(X.shape[0]):
+			for pos in range(X.shape[-1]):
+				ob = int(X[i, :, pos].argmax())
+				assert_array_almost_equal(head_hat[i, ob, pos], head0[i], 4)
+
+
+def test_saturation_mutagenesis_multi_output_start_end(device):
+	# Regression: the multi-tensor reshape previously hardcoded the full
+	# length and raised when start>0 / end<length.
+	torch.manual_seed(0)
+	X = random_one_hot((2, 4, 100), random_state=0).float()
+
+	model = ConvDense(n_outputs=3)
+	y0, y_hat = saturation_mutagenesis(model, X, start=50, end=60,
+		raw_outputs=True, device=device)
+
+	assert y_hat[0].shape == (2, 4, 10, 12, 98)
+	assert y_hat[1].shape == (2, 4, 10, 3)
+
+	# Cross-check the dense head against the equivalent single-tensor model.
+	y0_s, y_hat_s = saturation_mutagenesis(_DenseHead(model), X, start=50,
+		end=60, raw_outputs=True, device=device)
+	assert_array_almost_equal(y_hat[1], y_hat_s, 4)
+
+
+def test_attribution_score_target_slice():
+	torch.manual_seed(0)
+	y0 = torch.zeros(1, 3)
+	y_hat = torch.randn(1, 4, 10, 3)
+
+	attr_slice = _attribution_score(y0, y_hat, slice(0, 2))
+	attr0 = _attribution_score(y0, y_hat, 0)
+	attr1 = _attribution_score(y0, y_hat, 1)
+
+	assert attr_slice.shape == (1, 4, 10)
+	# A slice averages over the selected targets, matching the int-target mean.
+	assert_array_almost_equal(attr_slice, (attr0 + attr1) / 2, 4)
+
+
+def test_saturation_mutagenesis_start_default_end(X0, device):
+	# start>0 combined with the default negative end (-1 -> length).
+	torch.manual_seed(0)
+	model = SmallDeepSEA(5)
+
+	X_attr = saturation_mutagenesis(model, X0, start=50, device=device)
+	X_attr_full = saturation_mutagenesis(model, X0, device=device)
+
+	assert X_attr.shape == (2, 4, 50)
+	assert_array_almost_equal(X_attr, X_attr_full[:, :, 50:], 4)
+
+
+def test_saturation_mutagenesis_int8_float_equivalence(X0, device):
+	# The int8 cast is load-bearing; a hard one-hot must give identical
+	# results whether passed as float or int8.
+	torch.manual_seed(0)
+	model = SmallDeepSEA(1)
+
+	X_attr_float = saturation_mutagenesis(model, X0, device=device)
+	X_attr_int8 = saturation_mutagenesis(model, X0.type(torch.int8),
+		device=device)
+
+	assert_array_almost_equal(X_attr_float, X_attr_int8, 4)
+
+
+def test_saturation_mutagenesis_dtype_arg(X0, device):
+	# Explicitly passing dtype should match the default (model dtype) path.
+	torch.manual_seed(0)
+	model = SmallDeepSEA(1)
+
+	X_attr = saturation_mutagenesis(model, X0, dtype=torch.float32,
+		device=device)
+	X_attr_default = saturation_mutagenesis(model, X0, device=device)
+
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr, X_attr_default, 4)
+
+
+def test_saturation_mutagenesis_args_batch_mismatch(X0):
+	# args with a mismatched batch dimension must surface predict's check.
+	model = FlattenDense(seq_len=100, n_outputs=1)
+	with pytest.raises(ValueError, match="same first dimension"):
+		saturation_mutagenesis(model, X0, args=(torch.randn(5, 1),),
+			raw_outputs=True)
+
+
+def test_saturation_mutagenesis_empty_span(X0):
+	# A degenerate span (no positions to perturb) is rejected up front.
+	model = SmallDeepSEA(1)
+	with pytest.raises(ValueError, match="0 <= start < end <= length"):
+		saturation_mutagenesis(model, X0, start=0, end=0, raw_outputs=True)
+
+
+def test_saturation_mutagenesis_end_past_length(X0):
+	# end beyond the sequence length would drive the numba kernel to write
+	# out of bounds and silently corrupt the batch; it must be rejected.
+	model = SmallDeepSEA(1)
+	with pytest.raises(ValueError, match="0 <= start < end <= length"):
+		saturation_mutagenesis(model, X0, start=0, end=X0.shape[-1] + 5,
+			raw_outputs=True)
+
+
+def test_saturation_mutagenesis_negative_start(X0):
+	# Negative start is never remapped (unlike end) and would index before
+	# the sequence; it must be rejected rather than corrupt the batch.
+	model = SmallDeepSEA(1)
+	with pytest.raises(ValueError, match="0 <= start < end <= length"):
+		saturation_mutagenesis(model, X0, start=-3, end=8, raw_outputs=True)
+
+
+def test_saturation_mutagenesis_start_after_end(X0):
+	# An inverted span must be rejected.
+	model = SmallDeepSEA(1)
+	with pytest.raises(ValueError, match="0 <= start < end <= length"):
+		saturation_mutagenesis(model, X0, start=8, end=3, raw_outputs=True)
+
+
+def test_saturation_mutagenesis_input_dtypes(X0, device):
+	# X is coerced to int8 internally, so any integer-valued encoding -- float64,
+	# int32, or bool -- must give identical results to the float32 input.
+	torch.manual_seed(0)
+	model = SmallDeepSEA(1)
+
+	X_attr = saturation_mutagenesis(model, X0, device=device)
+	for X_cast in (X0.double(), X0.to(torch.int32), X0.bool()):
+		X_attr_cast = saturation_mutagenesis(model, X_cast, device=device)
+		assert_array_almost_equal(X_attr, X_attr_cast, 4)
+
+
+# Low-precision (fp16, bf16) autocast tests. CUDA only: torch.autocast does not
+# support these dtypes on CPU for most ops. The dtype is forwarded to `predict`,
+# so these guard the forwarding rather than re-deriving attribution magnitudes
+# (which are sub-1e-3 differences dominated by fp16 rounding noise). We assert
+# the prediction dtype, finiteness, and the precision-robust identity invariant.
+
+
+def test_saturation_mutagenesis_fp16(X0, cuda_device):
+	torch.manual_seed(0)
+	model = FlattenDense(seq_len=100, n_outputs=1).to(cuda_device)
+
+	y0, y_hat = saturation_mutagenesis(model, X0, dtype=torch.float16,
+		raw_outputs=True, device=cuda_device)
+
+	assert y_hat.shape == (2, 4, 100, 1)
+	assert y_hat.dtype == torch.float16
+	assert torch.isfinite(y_hat).all()
+
+	for i in range(X0.shape[0]):
+		for pos in range(X0.shape[-1]):
+			ob = int(X0[i, :, pos].argmax())
+			assert_array_almost_equal(y_hat[i, ob, pos].float(),
+				y0[i].float(), 2)
+
+
+def test_saturation_mutagenesis_bf16(X0, cuda_device):
+	torch.manual_seed(0)
+	model = FlattenDense(seq_len=100, n_outputs=1).to(cuda_device)
+
+	y0, y_hat = saturation_mutagenesis(model, X0, dtype=torch.bfloat16,
+		raw_outputs=True, device=cuda_device)
+
+	assert y_hat.shape == (2, 4, 100, 1)
+	assert y_hat.dtype == torch.bfloat16
+	assert torch.isfinite(y_hat).all()
+
+	for i in range(X0.shape[0]):
+		for pos in range(X0.shape[-1]):
+			ob = int(X0[i, :, pos].argmax())
+			assert_array_almost_equal(y_hat[i, ob, pos].float(),
+				y0[i].float(), 2)

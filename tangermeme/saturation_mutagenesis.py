@@ -216,10 +216,16 @@ def saturation_mutagenesis(
 
 	X = X.type(torch.int8).cpu()
 	y0 = predict(model, X, args=args, dtype=dtype, device=device)
-	
+
+	length = X.shape[-1]
 	if end < 0:
-		end = X.shape[-1] + 1 + end
-	
+		end = length + 1 + end
+
+	if start < 0 or end > length or start >= end:
+		raise ValueError("start and end must satisfy "
+			"0 <= start < end <= length; got start={}, end={} for length "
+			"{}.".format(start, end, length))
+
 	y_hat = []
 	for i in trange(X.shape[0], disable=not verbose):
 		X_ = X[i].repeat((end-start)*X[i].shape[0], 1, 1).numpy(force=True)
@@ -242,8 +248,8 @@ def saturation_mutagenesis(
 			*y_hat_.shape[1:])
 	else:
 		y_hat = [
-			torch.cat(y_).reshape(X.shape[0], X.shape[2], X.shape[1], 
-				*y_[0].shape[1:]).transpose(2, 1) for y_ in zip(*y_hat)
+			torch.stack(y_).reshape(X.shape[0], X.shape[1], end-start,
+				*y_[0].shape[1:]) for y_ in zip(*y_hat)
 		]
 	
 	if raw_outputs == False:
