@@ -258,13 +258,15 @@ def saturation_mutagenesis(
 		# One generated sequence per position is an identity substitution: the
 		# edit re-applies the base already there, so the sequence is identical
 		# to the reference and its prediction equals y0. Skip those forward
-		# passes (25% of them) and reconstruct the slots from y0 below. The
-		# kernel lays rows out as [character, position], so the identity row
-		# at position p is the one whose character equals the original base.
-		orig = X[i, :, start:end].argmax(dim=0)
-		chars = torch.arange(4).repeat_interleave(end-start)
-		positions = torch.arange(end-start).repeat(4)
-		edits = chars != orig[positions]
+		# passes (up to 25% of them) and reconstruct the slots from y0 below.
+		# A row is identity only when the edit reproduces the reference column
+		# exactly, i.e. the column is a clean one-hot of that character; an
+		# all-zero column (an `N`) or a multi-hot column has no identity row,
+		# so all four edits are real and must be predicted. The kernel lays
+		# rows out as [character, position], so `identity` flattens to match.
+		ref = X[i, :, start:end]
+		identity = (ref == 1) & (ref.sum(dim=0, keepdim=True) == 1)
+		edits = ~identity.reshape(-1)
 
 		X_ = X_[edits]
 

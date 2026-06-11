@@ -7,6 +7,7 @@ import numpy
 import torch
 import pytest
 
+from tangermeme.predict import predict
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
 from tangermeme.utils import TangermemeWarning
@@ -475,6 +476,61 @@ def test_saturation_mutagenesis_identity_recovers_y0(X0, device):
 		for pos in range(X0.shape[-1]):
 			orig_base = int(X0[i, :, pos].argmax())
 			assert torch.equal(y_hat[i, orig_base, pos], y0[i])
+
+
+def test_saturation_mutagenesis_identity_recovers_y0_windowed(X0, device):
+	# Identity-slot exactness must also hold inside a start/end window, which
+	# exercises the windowed alignment of the identity mask.
+	model = SmallDeepSEA(1)
+	start, end = 30, 70
+
+	y0, y_hat = saturation_mutagenesis(model, X0, start=start, end=end,
+		raw_outputs=True, device=device)
+
+	for i in range(X0.shape[0]):
+		for pos in range(end - start):
+			orig_base = int(X0[i, :, start + pos].argmax())
+			assert torch.equal(y_hat[i, orig_base, pos], y0[i])
+
+
+def test_saturation_mutagenesis_all_zero_column(device):
+	# An all-zero column (an `N`) has no identity substitution, so all four
+	# edits at that position must be genuinely predicted -- not skipped and
+	# filled from y0. Validate against brute-force per-substitution predictions.
+	torch.manual_seed(0)
+	X = random_one_hot((1, 4, 100), random_state=0).float()
+	X[0, :, 50] = 0
+	model = SmallDeepSEA(1)
+
+	y0, y_hat = saturation_mutagenesis(model, X, raw_outputs=True,
+		device=device)
+
+	for base in range(4):
+		X_sub = X.clone()
+		X_sub[0, :, 50] = 0
+		X_sub[0, base, 50] = 1
+		y_sub = predict(model, X_sub, device=device)
+		assert_array_almost_equal(y_hat[0, base, 50], y_sub[0], 4)
+
+
+def test_saturation_mutagenesis_multi_hot_column(device):
+	# A multi-hot column likewise has no identity row; all four edits are real.
+	torch.manual_seed(0)
+	X = random_one_hot((1, 4, 100), random_state=0).float()
+	X[0, :, 30] = 0
+	X[0, 1, 30] = 1
+	X[0, 2, 30] = 1
+	model = SmallDeepSEA(1)
+
+	y0, y_hat = saturation_mutagenesis(model, X, raw_outputs=True,
+		device=device)
+
+	for base in range(4):
+		X_sub = X.clone()
+		X_sub[0, :, 30] = 0
+		X_sub[0, base, 30] = 1
+		y_sub = predict(model, X_sub, device=device)
+		assert_array_almost_equal(y_hat[0, base, 30], y_sub[0], 4)
 
 
 def test_saturation_mutagenesis_zero_where_X_zero(X0, device):
