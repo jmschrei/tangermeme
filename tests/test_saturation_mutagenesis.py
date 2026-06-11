@@ -3,12 +3,10 @@
 
 import warnings
 
-import numpy
 import torch
 import pytest
 
 from tangermeme.predict import predict
-from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
 from tangermeme.utils import TangermemeWarning
 
@@ -17,8 +15,6 @@ from tangermeme.saturation_mutagenesis import saturation_mutagenesis
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense
-from .toy_models import Conv
-from .toy_models import Scatter
 from .toy_models import ConvDense
 from .toy_models import SmallDeepSEA
 

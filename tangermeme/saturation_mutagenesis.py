@@ -263,7 +263,7 @@ def saturation_mutagenesis(
 				*y_[0].shape[1:]) for y_ in zip(*y_hat)
 		]
 	
-	if raw_outputs == False:
+	if not raw_outputs:
 		attr = _attribution_score(y0, y_hat, target)
-		return X[:, :, start:end] * attr if hypothetical == False else attr
+		return X[:, :, start:end] * attr if not hypothetical else attr
 	return SaturationMutagenesisRawResult(y0=y0, y_hat=y_hat)
