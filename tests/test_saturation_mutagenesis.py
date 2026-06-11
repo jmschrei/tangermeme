@@ -1,12 +1,15 @@
 # test_saturation_mutagenesis.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import warnings
+
 import numpy
 import torch
 import pytest
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import TangermemeWarning
 
 from tangermeme.saturation_mutagenesis import _edit_distance_one
 from tangermeme.saturation_mutagenesis import _attribution_score
@@ -716,3 +719,100 @@ def test_saturation_mutagenesis_bf16(X0, cuda_device):
 			ob = int(X0[i, :, pos].argmax())
 			assert_array_almost_equal(y_hat[i, ob, pos].float(),
 				y0[i].float(), 2)
+
+
+def test_saturation_mutagenesis_args_applied_per_example(X0, device):
+	# FlattenDense adds a per-example alpha. Because ISM is a difference, the
+	# arg must shift every perturbation of example i by exactly alpha[i] -- a
+	# wrong index (e.g. alpha[0] for all) would break this -- and the resulting
+	# attribution must be invariant to the additive shift.
+	torch.manual_seed(0)
+	model = FlattenDense(seq_len=100, n_outputs=1)
+	alpha = torch.randn(2, 1)
+
+	y0_w, y_hat_w = saturation_mutagenesis(model, X0, args=(alpha,),
+		raw_outputs=True, device=device)
+	y0_n, y_hat_n = saturation_mutagenesis(model, X0, raw_outputs=True,
+		device=device)
+
+	for i in range(X0.shape[0]):
+		delta = y_hat_w[i] - y_hat_n[i]
+		assert_array_almost_equal(delta, torch.full_like(delta, float(alpha[i])),
+			4)
+
+	attr_w = saturation_mutagenesis(model, X0, args=(alpha,), device=device)
+	attr_n = saturation_mutagenesis(model, X0, device=device)
+	assert_array_almost_equal(attr_w, attr_n, 4)
+
+
+def test_saturation_mutagenesis_batch_size_invariance(X0, device):
+	# Results must not depend on how perturbations are batched.
+	torch.manual_seed(0)
+	model = SmallDeepSEA(1)
+
+	a1 = saturation_mutagenesis(model, X0, batch_size=1, device=device)
+	a32 = saturation_mutagenesis(model, X0, batch_size=32, device=device)
+	a_big = saturation_mutagenesis(model, X0, batch_size=10000, device=device)
+
+	assert_array_almost_equal(a1, a32, 4)
+	assert_array_almost_equal(a1, a_big, 4)
+
+
+def test_saturation_mutagenesis_length_one(device):
+	# A single-position sequence is a valid degenerate input.
+	torch.manual_seed(0)
+	X = random_one_hot((2, 4, 1), random_state=0).float()
+	model = FlattenDense(seq_len=1, n_outputs=1)
+
+	X_attr = saturation_mutagenesis(model, X, device=device)
+	assert X_attr.shape == (2, 4, 1)
+
+
+def test_saturation_mutagenesis_multi_output_requires_raw(X0, device):
+	# Attribution aggregation assumes a single output tensor; a tuple-output
+	# model must fail fast with a clear message instead of an opaque error.
+	model = ConvDense(n_outputs=3)
+	with pytest.raises(ValueError, match="raw_outputs=True is required"):
+		saturation_mutagenesis(model, X0, device=device)
+
+
+def test_saturation_mutagenesis_func_selects_head(X0, device):
+	# func is forwarded to predict and applied to both reference and perturbed
+	# predictions, so selecting a head with func matches target= on that head.
+	torch.manual_seed(0)
+	model = FlattenDense(seq_len=100, n_outputs=3)
+
+	attr_func = saturation_mutagenesis(model, X0, func=lambda y: y[:, 1:2],
+		device=device)
+	attr_target = saturation_mutagenesis(model, X0, target=1, device=device)
+	assert_array_almost_equal(attr_func, attr_target, 4)
+
+
+def test_saturation_mutagenesis_func_collapses_multi_output(X0, device):
+	# func can reduce a multi-output model to a single tensor, making the
+	# attribution path valid again.
+	torch.manual_seed(0)
+	model = ConvDense(n_outputs=3)
+
+	attr = saturation_mutagenesis(model, X0, func=lambda ys: ys[1],
+		device=device)
+	assert attr.shape == (2, 4, 100)
+
+
+def test_saturation_mutagenesis_warns_on_non_integer_input(device):
+	# Soft / scaled one-hot inputs are truncated by the int8 cast; the user
+	# must be warned rather than silently getting zeros.
+	torch.manual_seed(0)
+	X = random_one_hot((2, 4, 100), random_state=0).float()
+	model = SmallDeepSEA(1)
+
+	with pytest.warns(TangermemeWarning, match="non-integer values"):
+		saturation_mutagenesis(model, X * 0.5, device=device)
+
+
+def test_saturation_mutagenesis_no_warning_on_hard_one_hot(X0, device):
+	# A valid hard one-hot must not trigger the truncation warning.
+	model = SmallDeepSEA(1)
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", TangermemeWarning)
+		saturation_mutagenesis(model, X0, device=device)

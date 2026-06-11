@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import warnings
+from collections.abc import Callable
+from typing import Any
 from typing import NamedTuple
 
 import numba
@@ -11,6 +14,7 @@ import torch
 from tqdm import trange
 
 from .predict import predict
+from .utils import TangermemeWarning
 
 
 class SaturationMutagenesisRawResult(NamedTuple):
@@ -112,6 +116,7 @@ def saturation_mutagenesis(
 	dtype: str | torch.dtype | None = None,
 	device: str | torch.device | None = None,
 	verbose: bool = False,
+	func: Callable[..., Any] | None = None,
 ) -> torch.Tensor | SaturationMutagenesisRawResult:
 	"""Performs in-silico saturation mutagenesis on a set of sequences.
 	
@@ -195,8 +200,15 @@ def saturation_mutagenesis(
 	
 	verbose: bool, optional
 		Whether to display a progress bar during predictions. Default is False.
-	
-	
+
+	func: function or None, optional
+		A function to apply to a batch of predictions after they have been made,
+		forwarded to `predict`. It is applied identically to the reference
+		predictions and to every perturbation, so attributions are computed on
+		the post-processed values. Use it to, e.g., select a single output head
+		or apply a final non-linearity. If None, do nothing. Default is None.
+
+
 	Returns
 	-------
 	attr: torch.Tensor
@@ -214,8 +226,19 @@ def saturation_mutagenesis(
 		The outputs from the model for each of the perturbed sequences.
 	"""
 
+	if X.is_floating_point() and not torch.equal(X, X.round()):
+		warnings.warn("X contains non-integer values which will be truncated "
+			"toward zero by the int8 cast; values with magnitude < 1 become 0. "
+			"Pass a hard one-hot encoding to avoid silently zeroing positions.",
+			TangermemeWarning)
+
 	X = X.type(torch.int8).cpu()
-	y0 = predict(model, X, args=args, dtype=dtype, device=device)
+	y0 = predict(model, X, args=args, func=func, dtype=dtype, device=device)
+
+	if not raw_outputs and not isinstance(y0, torch.Tensor):
+		raise ValueError("raw_outputs=True is required for models that return "
+			"multiple output tensors; the attribution aggregation assumes a "
+			"single output tensor.")
 
 	length = X.shape[-1]
 	if end < 0:
@@ -238,7 +261,7 @@ def saturation_mutagenesis(
 		else:
 			args_ = None
 	
-		y_hat_ = predict(model, X_, args=args_, batch_size=batch_size, 
+		y_hat_ = predict(model, X_, args=args_, func=func, batch_size=batch_size,
 			dtype=dtype, device=device)
 	
 		y_hat.append(y_hat_)
@@ -254,7 +277,5 @@ def saturation_mutagenesis(
 	
 	if raw_outputs == False:
 		attr = _attribution_score(y0, y_hat, target)
-		if end <= 0:
-			return X * attr if hypothetical == False else attr
 		return X[:, :, start:end] * attr if hypothetical == False else attr
 	return SaturationMutagenesisRawResult(y0=y0, y_hat=y_hat)
