@@ -3,14 +3,17 @@
 
 from __future__ import annotations
 
+import warnings
+from collections.abc import Callable
+from typing import Any
 from typing import NamedTuple
 
-import numba
 import torch
 
 from tqdm import trange
 
 from .predict import predict
+from .utils import TangermemeWarning
 
 
 class SaturationMutagenesisRawResult(NamedTuple):
@@ -60,45 +63,6 @@ def _attribution_score(y0, y_hat, target):
 
 
 
-@numba.njit("void(int8[:, :, :], int32, int32)")
-def _edit_distance_one(X, start, end):
-	"""An internal function for generating all sequences of edit distance 1
-
-	This internal function, which is meant to be used for ISM, will take in a
-	one-hot encoded sequence and return all sequences that have an edit distance
-	of one.
-
-	Note: the inner loop iterates over all 4 alphabet characters at each
-	mutated position, *including* the character already at that position.
-	One of the four "variants" per position is therefore an identity
-	substitution (a no-op); it contributes a zero into the per-position
-	mean used by `_attribution_score`. Callers wanting strict
-	edit-distance-1 outputs should mask or skip those rows.
-
-	Parameters
-	----------
-	X: torch.Tensor, shape=(length*len(alphabet), len(alphabet), length)
-		A single one-hot encoded sequence.
-
-	start: int
-		The first nucleotide to begin making edits on, inclusive.
-
-	end: int
-		The end of the span. Edits are not made on this nucleotide at this
-		index. Can be negative indexes.
-	"""
-	
-	i = 0
-	for j in range(4):
-		for k in range(start, end):
-			for l in range(4):
-				X[i, l, k] = 0
-				
-			X[i, j, k] = 1
-			i += 1
-
-
-
 def saturation_mutagenesis(
 	model: torch.nn.Module,
 	X: torch.Tensor,
@@ -112,6 +76,7 @@ def saturation_mutagenesis(
 	dtype: str | torch.dtype | None = None,
 	device: str | torch.device | None = None,
 	verbose: bool = False,
+	func: Callable[..., Any] | None = None,
 ) -> torch.Tensor | SaturationMutagenesisRawResult:
 	"""Performs in-silico saturation mutagenesis on a set of sequences.
 	
@@ -195,8 +160,15 @@ def saturation_mutagenesis(
 	
 	verbose: bool, optional
 		Whether to display a progress bar during predictions. Default is False.
-	
-	
+
+	func: function or None, optional
+		A function to apply to a batch of predictions after they have been made,
+		forwarded to `predict`. It is applied identically to the reference
+		predictions and to every perturbation, so attributions are computed on
+		the post-processed values. Use it to, e.g., select a single output head
+		or apply a final non-linearity. If None, do nothing. Default is None.
+
+
 	Returns
 	-------
 	attr: torch.Tensor
@@ -214,41 +186,84 @@ def saturation_mutagenesis(
 		The outputs from the model for each of the perturbed sequences.
 	"""
 
+	if X.is_floating_point() and not torch.equal(X, X.round()):
+		warnings.warn("X contains non-integer values which will be truncated "
+			"toward zero by the int8 cast; values with magnitude < 1 become 0. "
+			"Pass a hard one-hot encoding to avoid silently zeroing positions.",
+			TangermemeWarning)
+
 	X = X.type(torch.int8).cpu()
-	y0 = predict(model, X, args=args, dtype=dtype, device=device)
-	
+	y0 = predict(model, X, args=args, func=func, dtype=dtype, device=device)
+
+	if not raw_outputs and not isinstance(y0, torch.Tensor):
+		raise ValueError("raw_outputs=True is required for models that return "
+			"multiple output tensors; the attribution aggregation assumes a "
+			"single output tensor.")
+
+	length = X.shape[-1]
 	if end < 0:
-		end = X.shape[-1] + 1 + end
-	
+		end = length + 1 + end
+
+	if start < 0 or end > length or start >= end:
+		raise ValueError("start and end must satisfy "
+			"0 <= start < end <= length; got start={}, end={} for length "
+			"{}.".format(start, end, length))
+
 	y_hat = []
 	for i in trange(X.shape[0], disable=not verbose):
-		X_ = X[i].repeat((end-start)*X[i].shape[0], 1, 1).numpy(force=True)
-		_edit_distance_one(X_, start, end)
-		X_ = torch.from_numpy(X_)
-	
+		# Build only the true single-base edits. One substitution per position
+		# would re-apply the base already there (an identity edit whose
+		# prediction equals y0); it is skipped here and filled from y0 below,
+		# saving up to 25% of the forward passes. A column that is all-zero (an
+		# `N`) or multi-hot is not a clean one-hot of any character, so it has
+		# no identity row and all four of its edits are kept. The kept rows are
+		# laid out in [character, position] order to match the reconstruction.
+		ref = X[i, :, start:end]
+		identity = (ref == 1) & (ref.sum(dim=0, keepdim=True) == 1)
+		edits = ~identity.reshape(-1)
+
+		edit_chars, edit_positions = torch.where(~identity)
+		edit_positions = edit_positions + start
+		n_edits = edit_chars.shape[0]
+
+		X_ = X[i].repeat(n_edits, 1, 1)
+		rows = torch.arange(n_edits)
+		X_[rows, :, edit_positions] = 0
+		X_[rows, edit_chars, edit_positions] = 1
+
 		if args is not None:
-			args_ = tuple(a[i].repeat(X_.shape[0], *(1 for _ in a[i].shape)) 
+			args_ = tuple(a[i].repeat(n_edits, *(1 for _ in a[i].shape))
 				for a in args)
 		else:
 			args_ = None
-	
-		y_hat_ = predict(model, X_, args=args_, batch_size=batch_size, 
-			dtype=dtype, device=device)
-	
+
+		y_edits = predict(model, X_, args=args_, func=func,
+			batch_size=batch_size, dtype=dtype, device=device)
+
+		# Scatter the edit predictions back into the full [character, position]
+		# grid, filling the identity slots with the reference prediction y0.
+		if isinstance(y_edits, torch.Tensor):
+			y_hat_ = y0[i].unsqueeze(0).repeat(edits.shape[0],
+				*(1 for _ in y0[i].shape))
+			y_hat_[edits] = y_edits
+		else:
+			y_hat_ = [y0_[i].unsqueeze(0).repeat(edits.shape[0],
+				*(1 for _ in y0_[i].shape)) for y0_ in y0]
+			for y_hat_h, y_edit in zip(y_hat_, y_edits):
+				y_hat_h[edits] = y_edit
+
 		y_hat.append(y_hat_)
-	
+
 	if isinstance(y_hat[0], torch.Tensor):
 		y_hat = torch.stack(y_hat).reshape(X.shape[0], X.shape[1], end-start, 
 			*y_hat_.shape[1:])
 	else:
 		y_hat = [
-			torch.cat(y_).reshape(X.shape[0], X.shape[2], X.shape[1], 
-				*y_[0].shape[1:]).transpose(2, 1) for y_ in zip(*y_hat)
+			torch.stack(y_).reshape(X.shape[0], X.shape[1], end-start,
+				*y_[0].shape[1:]) for y_ in zip(*y_hat)
 		]
 	
-	if raw_outputs == False:
+	if not raw_outputs:
 		attr = _attribution_score(y0, y_hat, target)
-		if end <= 0:
-			return X * attr if hypothetical == False else attr
-		return X[:, :, start:end] * attr if hypothetical == False else attr
+		return X[:, :, start:end] * attr if not hypothetical else attr
 	return SaturationMutagenesisRawResult(y0=y0, y_hat=y_hat)
