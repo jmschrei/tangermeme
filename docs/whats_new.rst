@@ -17,6 +17,15 @@ Claude Code skill
 	- Bundles a `Claude Code <https://claude.com/claude-code>`_ Agent Skill (a ``SKILL.md`` router plus on-demand reference files) that documents tangermeme's API contracts, footguns, and multi-step workflows for coding agents.
 	- Adds the ``tangermeme-install-skills`` console script, which copies the bundled skill into ``~/.claude/skills/`` so it is available to Claude Code in every project. Use ``--force`` to refresh after upgrading or ``--print-path`` for the ``CLAUDE_SKILLS_PATH`` route.
 
+saturation_mutagenesis
+----------------------
+
+	- Fixes ``saturation_mutagenesis`` for models that return multiple output tensors: the per-output reshape previously transposed the alphabet and length axes, returning scrambled values on the default span and raising when ``start``/``end`` subset the sequence.
+	- Skips the identity substitution at each position (the "edit" that re-applies the existing base), reconstructing those slots from the reference prediction ``y0`` instead of recomputing them. This removes ~25% of the model forward passes with no change to the output, for a wall-clock speedup that approaches 25% as the model becomes inference-bound.
+	- Adds a ``func=`` argument, forwarded to ``predict`` and applied identically to the reference and perturbed predictions (e.g. to select an output head or apply a final non-linearity).
+	- Validates that ``0 <= start < end <= length`` rather than silently producing out-of-bounds edits, and raises a clear error when a multi-output model is used without ``raw_outputs=True``.
+	- Warns (``TangermemeWarning``) when ``X`` holds non-integer values, which the internal int8 cast would otherwise truncate toward zero.
+
 
 Version 1.2.0
 =============
