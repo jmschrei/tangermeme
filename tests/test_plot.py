@@ -16,8 +16,10 @@ from tangermeme.utils import one_hot_encode
 
 from tangermeme.plot import plot_logo
 from tangermeme.plot import plot_pwm
+from tangermeme.plot import interactive_logo
 from tangermeme.plot import _base_path
 from tangermeme.plot import get_glyph_path
+from tangermeme.plot import _format_tooltip_value
 
 
 @pytest.fixture(autouse=True)
@@ -258,3 +260,297 @@ def test_plot_attributions_uses_provided_func():
 
 	assert len(calls) == 1, "fake_attribute should have been called once"
 	assert X_attrs.shape == X.shape
+
+
+###
+# interactive_logo
+###
+
+
+@pytest.fixture
+def annotations():
+	return pandas.DataFrame({
+		'name': ['GATA2', 'TAL1', 'SP1'],
+		'start': [5, 20, 35],
+		'end': [12, 28, 42],
+		'strand': ['+', '-', '+'],
+		'attribution': [0.42, 0.31, 0.9],
+		'p-value': [1e-5, 3.2e-3, 1e-12],
+		'annotation_p-value': [2e-4, 1e-2, 5e-9],
+	})
+
+
+def test_format_tooltip_value_float():
+	assert _format_tooltip_value(1e-12) == "1e-12"
+	assert _format_tooltip_value(numpy.float64(3.2e-3)) == "0.0032"
+
+
+def test_format_tooltip_value_non_float():
+	assert _format_tooltip_value("+") == "+"
+	assert _format_tooltip_value(7) == "7"
+
+
+def test_interactive_logo_returns_ax(X_attr, annotations):
+	pytest.importorskip("mpld3")
+	fig, ax = plt.subplots()
+	returned = interactive_logo(X_attr, ax=ax, annotations=annotations)
+	assert returned is ax
+
+
+def test_interactive_logo_draws_one_box_per_annotation(X_attr, annotations):
+	pytest.importorskip("mpld3")
+	from matplotlib.collections import PatchCollection
+
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations)
+
+	patch_collections = [c for c in ax.collections
+		if isinstance(c, PatchCollection)]
+	assert len(patch_collections) == 1
+	assert len(patch_collections[0].get_paths()) == len(annotations)
+
+
+def test_interactive_logo_draws_corner_labels(X_attr, annotations):
+	pytest.importorskip("mpld3")
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations)
+
+	texts = [t.get_text() for t in ax.texts]
+	assert "GATA2" in texts
+	assert "TAL1" in texts
+	assert "SP1" in texts
+
+
+def test_interactive_logo_tooltip_contents(X_attr, annotations):
+	mpld3 = pytest.importorskip("mpld3")
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations)
+
+	html = mpld3.fig_to_html(fig)
+	assert "htmltooltip" in html
+	assert "GATA2" in html
+	assert "length:" in html
+	# All extra columns are surfaced, including both p-values.
+	assert "1e-12" in html
+	assert "5e-09" in html or "5e-9" in html
+	assert "strand:" in html
+	# The seqlet caller's bare columns are relabeled in the tooltip.
+	assert "seqlet attribution:" in html
+	assert "seqlet p-value:" in html
+
+
+def test_interactive_logo_none_annotations_draws_no_boxes(X_attr):
+	pytest.importorskip("mpld3")
+	from matplotlib.collections import PatchCollection
+
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=None)
+
+	patch_collections = [c for c in ax.collections
+		if isinstance(c, PatchCollection)]
+	assert len(patch_collections) == 0
+
+
+def test_interactive_logo_filters_out_of_view_annotations(X_attr, annotations):
+	pytest.importorskip("mpld3")
+	from matplotlib.collections import PatchCollection
+
+	fig, ax = plt.subplots()
+	# Window [15, 50) drops GATA2 (start 5) and keeps TAL1 and SP1.
+	interactive_logo(X_attr, ax=ax, annotations=annotations, start=15, end=50)
+
+	patch_collections = [c for c in ax.collections
+		if isinstance(c, PatchCollection)]
+	assert len(patch_collections[0].get_paths()) == 2
+
+	texts = [t.get_text() for t in ax.texts]
+	assert "GATA2" not in texts
+	assert "TAL1" in texts
+
+
+def test_interactive_logo_box_alpha(X_attr, annotations):
+	pytest.importorskip("mpld3")
+	from matplotlib.collections import PatchCollection
+
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations, box_alpha=0.5)
+
+	pc = [c for c in ax.collections if isinstance(c, PatchCollection)][0]
+	facecolors = pc.get_facecolors()
+	assert numpy.allclose(facecolors[:, 3], 0.5)
+
+
+def test_interactive_logo_respects_ylim(X_attr, annotations):
+	pytest.importorskip("mpld3")
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations, ylim=(-2, 2))
+	assert ax.get_ylim() == (-2, 2)
+
+
+def test_interactive_logo_default_tooltip_has_background(X_attr, annotations):
+	mpld3 = pytest.importorskip("mpld3")
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations)
+
+	html = mpld3.fig_to_html(fig)
+	assert ".mpld3-tooltip" in html
+	assert "background: rgba(255, 255, 255" in html
+
+
+def test_interactive_logo_custom_tooltip_css_overrides(X_attr, annotations):
+	mpld3 = pytest.importorskip("mpld3")
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations,
+		tooltip_css=".mpld3-tooltip { background: black; }")
+
+	html = mpld3.fig_to_html(fig)
+	assert "background: black" in html
+	assert "background: rgba(255, 255, 255" not in html
+
+
+def test_interactive_logo_overrides_dark_rcparam_grid(X_attr, annotations,
+	monkeypatch):
+	mpld3 = pytest.importorskip("mpld3")
+	# Simulate a style with a heavy default grid; the function should not
+	# inherit it -- the x-axis grid is cleared and the y-axis grid is light.
+	monkeypatch.setitem(matplotlib.rcParams, "axes.grid", True)
+
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations)
+
+	xgrid = ax.xaxis.get_gridlines()
+	ygrid = ax.yaxis.get_gridlines()
+	assert all(not line.get_visible() for line in xgrid)
+	assert all(line.get_visible() for line in ygrid)
+
+	# mpld3 fails to apply the grid color to the gridline <line> elements, so
+	# the function injects a light stroke directly. Confirm the CSS is present.
+	html = mpld3.fig_to_html(fig)
+	assert ".mpld3-ygrid .tick line" in html
+	assert "stroke: #c4c4c4 !important" in html
+
+
+def test_interactive_logo_grid_false_injects_no_grid_css(X_attr, annotations):
+	mpld3 = pytest.importorskip("mpld3")
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations, grid=False)
+
+	html = mpld3.fig_to_html(fig)
+	assert ".mpld3-ygrid .tick line" not in html
+
+
+def test_interactive_logo_grid_false(X_attr, annotations, monkeypatch):
+	pytest.importorskip("mpld3")
+	monkeypatch.setitem(matplotlib.rcParams, "axes.grid", True)
+
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations, grid=False)
+
+	xgrid = ax.xaxis.get_gridlines()
+	ygrid = ax.yaxis.get_gridlines()
+	assert all(not line.get_visible() for line in xgrid)
+	assert all(not line.get_visible() for line in ygrid)
+
+
+def test_interactive_logo_despine_default(X_attr, annotations):
+	mpld3 = pytest.importorskip("mpld3")
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations)
+
+	# Left spine hidden on the matplotlib side; mpld3 axis lines hidden via CSS.
+	assert not ax.spines['left'].get_visible()
+	html = mpld3.fig_to_html(fig)
+	assert ".mpld3-xaxis path" in html
+	assert "display: none !important" in html
+
+
+def test_interactive_logo_despine_false_keeps_spines(X_attr, annotations):
+	mpld3 = pytest.importorskip("mpld3")
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations, despine=False)
+
+	assert ax.spines['left'].get_visible()
+	html = mpld3.fig_to_html(fig)
+	assert ".mpld3-xaxis path" not in html
+
+
+def test_interactive_logo_box_linewidth_default_zero(X_attr, annotations):
+	pytest.importorskip("mpld3")
+	from matplotlib.collections import PatchCollection
+
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations)
+
+	pc = [c for c in ax.collections if isinstance(c, PatchCollection)][0]
+	assert numpy.allclose(pc.get_linewidth(), 0)
+
+
+def test_interactive_logo_box_linewidth_positive(X_attr, annotations):
+	pytest.importorskip("mpld3")
+	from matplotlib.collections import PatchCollection
+
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations, box_linewidth=2)
+
+	pc = [c for c in ax.collections if isinstance(c, PatchCollection)][0]
+	assert numpy.allclose(pc.get_linewidth(), 2)
+
+
+def test_interactive_logo_coordinates_have_commas_no_scientific():
+	mpld3 = pytest.importorskip("mpld3")
+	# In a typical genomic window, float positions over 1000 would render in
+	# scientific notation (e.g. 1.03e+03) under the default formatter.
+	X_attr = torch.randn(4, 3000)
+	annot = pandas.DataFrame({
+		'motif_name': ['GATA2'],
+		'start': [1030.0],
+		'end': [1085.0],
+		'p-value': [1e-12],
+	})
+
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annot)
+
+	html = mpld3.fig_to_html(fig)
+	assert "start: 1,030" in html
+	assert "end: 1,085" in html
+	assert "1.03e+03" not in html
+	# length still comma-formatted, p-values still scientific.
+	assert "length: 55" in html
+	assert "1e-12" in html
+
+
+def test_interactive_logo_index_labels_without_name():
+	mpld3 = pytest.importorskip("mpld3")
+	# A seqlet-caller frame (no `name` column): boxes are labeled by index and
+	# the bare columns are relabeled in the tooltip.
+	X_attr = torch.randn(4, 50)
+	annot = pandas.DataFrame({
+		'start': [5, 25],
+		'end': [12, 33],
+		'attribution': [0.42, 0.91],
+		'p-value': [1e-5, 1e-9],
+	})
+
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annot)
+
+	texts = [t.get_text() for t in ax.texts]
+	assert "0" in texts
+	assert "1" in texts
+
+	html = mpld3.fig_to_html(fig)
+	assert "seqlet attribution:" in html
+	assert "seqlet p-value:" in html
+
+
+def test_interactive_logo_label_false_draws_no_corner_text(X_attr, annotations):
+	mpld3 = pytest.importorskip("mpld3")
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations, label=False)
+
+	# No corner labels drawn, but the hover tooltip is unaffected.
+	assert len(ax.texts) == 0
+	html = mpld3.fig_to_html(fig)
+	assert "htmltooltip" in html
+	assert "GATA2" in html

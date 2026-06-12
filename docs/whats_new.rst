@@ -26,6 +26,11 @@ saturation_mutagenesis
 	- Validates that ``0 <= start < end <= length`` rather than silently producing out-of-bounds edits, and raises a clear error when a multi-output model is used without ``raw_outputs=True``.
 	- Warns (``TangermemeWarning``) when ``X`` holds non-integer values, which the internal int8 cast would otherwise truncate toward zero.
 
+plot
+----
+
+	- Adds ``plot.interactive_logo``, an interactive counterpart to ``plot_logo``. Annotations are drawn as translucent, pastel boxes (colored by any ``annot_cmap``) behind the logo glyphs, with the motif name in the box corner and a hover tooltip listing the length and every column of the annotation (e.g. seqlet p-value, annotation p-value, summed attribution). Interactivity is provided by ``mpld3``, available via the optional ``interactive`` extra (``pip install tangermeme[interactive]``).
+
 
 Version 1.2.0
 =============

@@ -16,6 +16,7 @@ import matplotlib.collections as mc
 from matplotlib import pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.path import Path
+from matplotlib.patches import Rectangle
 from matplotlib.font_manager import FontProperties
 from matplotlib.textpath import TextPath
 from matplotlib.transforms import Bbox
@@ -433,6 +434,343 @@ def plot_logo(
 							label_box.set_color((0,0,0))
 					for bar_box in bars_box_objects:
 							bar_box.set_color((0,0,0))
+
+	return ax
+
+
+_DEFAULT_TOOLTIP_CSS = """
+.mpld3-tooltip {
+	background: rgba(255, 255, 255, 0.95);
+	border: 1px solid #cccccc;
+	border-radius: 4px;
+	padding: 6px 9px;
+	font-family: sans-serif;
+	font-size: 11px;
+	color: #222222;
+	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+"""
+
+
+# mpld3 draws its own axis domain lines and tick marks in a near-black
+# `axiscolor` that ignores matplotlib spine visibility, so they cannot be
+# removed from the Python side. This CSS hides the axis paths (the "spines")
+# and tick marks while leaving the tick labels and the gridlines (which live
+# under the separate `mpld3-xgrid` / `mpld3-ygrid` classes) untouched. The
+# `!important` is needed to beat mpld3's id-prefixed rules regardless of order.
+_DESPINE_CSS = """
+.mpld3-xaxis path, .mpld3-yaxis path,
+.mpld3-xaxis .tick line, .mpld3-yaxis .tick line {
+	display: none !important;
+}
+"""
+
+
+# mpld3 sets the grid color on the `<g class="tick">` wrapper, but the gridline
+# `<line>` inside does not inherit it and renders black. Style the line elements
+# directly (with `!important` to beat mpld3's own rules) to get a light grid.
+_GRID_CSS = """
+.mpld3-xgrid .tick line, .mpld3-ygrid .tick line {
+	stroke: #c4c4c4 !important;
+	stroke-width: 0.5px !important;
+}
+"""
+
+
+# Columns whose tooltip label differs from the raw DataFrame column name. The
+# seqlet caller emits bare `attribution` / `p-value` columns; spell them out as
+# seqlet-specific so they are not confused with an annotation (e.g. TOMTOM)
+# p-value carried in a separate column.
+_TOOLTIP_COLUMN_LABELS = {
+	'attribution': 'seqlet attribution',
+	'p-value': 'seqlet p-value',
+}
+
+
+def _format_tooltip_value(value: Any) -> str:
+	"""Format a single annotation value for display in an HTML tooltip.
+
+	Floating-point values -- which include p-values that are frequently very
+	small as well as attribution sums -- are rendered with `{:.3g}` so that
+	both tiny and large magnitudes stay readable. Everything else is passed
+	through `str`.
+	"""
+
+	if isinstance(value, (float, numpy.floating)):
+		return "{:.3g}".format(value)
+	return str(value)
+
+
+def interactive_logo(
+	X_attr: torch.Tensor | numpy.ndarray,
+	ax: matplotlib.axes.Axes | None = None,
+	color: str | dict | None = None,
+	annotations: pandas.DataFrame | None = None,
+	start: int | None = None,
+	end: int | None = None,
+	ylim: tuple[float, float] | None = None,
+	alphabet: list[str] = ["A", "C", "G", "T"],
+	min_height_pct: float = 0.02,
+	box_alpha: float = 0.3,
+	box_linewidth: float = 0,
+	annot_cmap: str | list | ListedColormap = "Pastel1",
+	label: bool = True,
+	label_fontsize: float = 9,
+	grid: bool = True,
+	despine: bool = True,
+	tooltip_css: str | None = None,
+) -> matplotlib.axes.Axes:
+	"""Make a logo plot with interactive, hoverable annotation boxes.
+
+	This is an interactive counterpart to `plot_logo`. The sequence logo
+	itself is drawn by reusing `plot_logo`, so the glyphs look identical.
+	The difference is in how annotations are displayed: rather than the
+	stacked underline-and-label tracks used by `plot_logo`, each annotation
+	is drawn as a single translucent, pastel box spanning the full vertical
+	extent of the plot across the positions of the hit. A label -- the `name`
+	column when present, otherwise the annotation's index -- is written in
+	small font in the upper-left corner of its box (unless `label=False`), and
+	hovering over the box reveals a tooltip with the rest of the annotation's
+	statistics.
+
+	The reason for this idiom is that motif hits frequently carry several
+	pieces of metadata worth inspecting together -- the seqlet p-value, the
+	annotation (TOMTOM) p-value, the summed attribution, the strand, and so
+	on -- which is more than a static label can show without cluttering the
+	plot. Boxing the region and deferring the details to a hover tooltip keeps
+	the logo readable while still exposing every column you pass in. Because
+	the boxes are translucent, overlapping hits remain legible and are
+	distinguished by their colors and corner labels rather than by being
+	pushed onto separate tracks.
+
+	Interactivity is provided by `mpld3`, which converts the matplotlib
+	figure to D3-backed HTML. The tooltips therefore work both inline in a
+	Jupyter notebook and in exported static HTML. `mpld3` is an optional
+	dependency; this function imports it lazily and raises a helpful error if
+	it is not installed. The figure returned has the tooltip plugin already
+	attached, so to view it call `mpld3.display(ax.get_figure())` in a
+	notebook (or `mpld3.enable_notebook()` before plotting), and to export it
+	call `mpld3.fig_to_html(ax.get_figure())`.
+
+
+	Parameters
+	----------
+	X_attr: torch.tensor, shape=(4, -1)
+		A tensor of the attributions. Can be either the hypothetical
+		attributions, where the entire matrix has values, or the projected
+		attributions, where only the actual bases have their attributions
+		stored, i.e., 3 values per column are zero.
+
+	ax: matplotlib.axes.Axes or None, optional
+		The art board to draw on. If None, choose the current artboard.
+		Default is None.
+
+	color: str or dict or None, optional
+		The color to plot all characters as, passed through to `plot_logo`.
+		If None, plot according to standard nucleotide coloring. Default is
+		None.
+
+	annotations: pandas.DataFrame, optional
+		A set of annotations to box and label. Must contain `start` and `end`
+		columns giving each hit's position relative to the window; all other
+		columns are shown in the hover tooltip. If a `name` column is present
+		it is used as the box label and tooltip title; otherwise each box is
+		labeled by its index among the annotations visible in the window. In
+		the tooltip, `attribution` and `p-value` columns (as emitted by the
+		seqlet caller) are relabeled `seqlet attribution` and `seqlet p-value`
+		so they are not confused with a separate annotation p-value. Default
+		is None.
+
+	start: int or None, optional
+		The start of the sequence to visualize. Must be non-negative and
+		cannot be longer than the length of `X_attr`. If None, visualize the
+		full sequence. Default is None.
+
+	end: int or None, optional
+		The end of the sequence to visualize. Must be non-negative and cannot
+		be longer than the length of `X_attr`. If `start` is provided, `end`
+		must be larger. If None, visualize the full sequence. Default is None.
+
+	ylim: tuple or None, optional
+		The lower and upper bounds of the plot as `(low, high)`. The
+		annotation boxes span this full vertical range. If None, use the
+		bounds chosen by `plot_logo`. Default is None.
+
+	alphabet: list, optional
+		A list of characters that comprise the alphabet. Default is
+		['A', 'C', 'G', 'T'].
+
+	min_height_pct: float, optional
+		Passed through to `plot_logo`; glyphs shorter than this fraction of
+		the tallest glyph are not drawn. Default is 0.02.
+
+	box_alpha: float, optional
+		The opacity of the annotation box fill, between 0 and 1. The corner
+		label is drawn opaque regardless. Default is 0.3.
+
+	box_linewidth: float, optional
+		The width of the annotation box outline. When 0 (the default), no
+		outline is drawn and the box is shown by its translucent fill alone;
+		set to a positive value to draw a tinted border around each box.
+		Default is 0.
+
+	annot_cmap: str, list, or matplotlib.colors.ListedColormap, optional
+		The colormap used to color the annotation boxes. Each annotation
+		receives a distinct color. If a string, must be a valid matplotlib
+		colormap name. If a list, must be a list of colors. Qualitative
+		(listed) colormaps cycle by annotation index; continuous colormaps
+		are sampled evenly across the annotations. Default is 'Pastel1'.
+
+	label: bool, optional
+		Whether to draw the name/index label in the corner of each box. The
+		hover tooltip is unaffected by this. Default is True.
+
+	label_fontsize: float, optional
+		The font size of the label drawn in the corner of each box. Only
+		applies when `label=True`. Default is 9.
+
+	grid: bool, optional
+		Whether to draw a light horizontal grid. mpld3 renders whatever grid
+		matplotlib's style specifies, which is frequently a heavy default. When
+		True, this overrides it with a subtle light-gray horizontal grid; when
+		False, no grid is drawn at all (it does not fall back to the matplotlib
+		default). Either way the appearance does not depend on the caller's
+		rcParams. Default is True.
+
+	despine: bool, optional
+		Whether to remove the bottom and left axis lines. mpld3 draws its own
+		near-black axis spines and tick marks that ignore matplotlib's spine
+		settings; when True, these are hidden (via injected CSS) for a clean,
+		despined look while the tick labels and grid remain. Default is True.
+
+	tooltip_css: str or None, optional
+		CSS string passed to the mpld3 tooltip plugin for styling the hover
+		text. If None, a default stylesheet is used that gives the tooltip a
+		semi-opaque white background, a border, and padding so the text is
+		legible over the plot. Pass a string to override it entirely. Default
+		is None.
+
+
+	Returns
+	-------
+	ax: matplotlib.axes.Axes
+		The axes on which the logo was drawn. The parent figure has the
+		mpld3 tooltip plugin attached; render it with `mpld3.display` or
+		`mpld3.fig_to_html`.
+	"""
+
+	try:
+		from mpld3 import plugins
+	except ImportError:
+		raise ImportError("interactive_logo requires mpld3. Install it with "
+			"`pip install mpld3` or `pip install tangermeme[interactive]`.")
+
+	if ax is None:
+		ax = plt.gca()
+
+	# Draw the logo glyphs by reusing plot_logo without its annotation tracks.
+	plot_logo(X_attr, ax=ax, color=color, start=start, end=end,
+		alphabet=alphabet, min_height_pct=min_height_pct)
+
+	if ylim is not None:
+		ax.set_ylim(ylim)
+
+	# mpld3 renders whatever grid the caller's matplotlib style specifies,
+	# which is often a heavy default; set it explicitly for a consistent look.
+	ax.grid(False)
+	if grid:
+		ax.set_axisbelow(True)
+		ax.grid(True, axis='y', color="#c4c4c4", linewidth=0.5)
+
+	# plot_logo already hides the top/right/bottom spines; hide the left one
+	# too for the despined look. The mpld3-side axis lines are handled by CSS
+	# injected alongside the tooltip below.
+	if despine:
+		ax.spines['left'].set_visible(False)
+
+	if annotations is None:
+		return ax
+
+	view_start, view_end = start or 0, end or (
+		X_attr.shape[-1] if isinstance(X_attr, numpy.ndarray) else X_attr.shape[-1])
+
+	annotations_ = annotations[annotations['start'] > view_start]
+	annotations_ = annotations_[annotations_['end'] < view_end]
+	annotations_ = annotations_.sort_values(["start"], ascending=True)
+
+	if len(annotations_) == 0:
+		return ax
+
+	if isinstance(annot_cmap, str):
+		cmap = plt.get_cmap(annot_cmap)
+	elif isinstance(annot_cmap, list):
+		cmap = ListedColormap(annot_cmap)
+	else:
+		cmap = annot_cmap
+
+	has_name = 'name' in annotations_.columns
+	n = len(annotations_)
+
+	y0, y1 = ax.get_ylim()
+	height = y1 - y0
+
+	rects, facecolors, edgecolors, labels = [], [], [], []
+	for i, (_, row) in enumerate(annotations_.iterrows()):
+		motif_start = int(row['start']) - view_start
+		motif_end = int(row['end']) - view_start
+
+		# Label by the `name` column when present, otherwise by the index among
+		# the annotations visible in the window.
+		label_text = str(row['name']) if has_name else str(i)
+
+		if isinstance(cmap, ListedColormap):
+			rgb = cmap(i % cmap.N)[:3]
+		else:
+			rgb = cmap(i / max(1, n - 1))[:3]
+
+		x0 = motif_start - 0.1
+		width = (motif_end - motif_start) + 0.05
+		rects.append(Rectangle((x0, y0), width, height))
+		facecolors.append((*rgb, box_alpha))
+		# Darken the edge and label relative to the pastel fill so the box
+		# outline and label stand out against the translucent interior.
+		edgecolors.append((*tuple(0.7 * c for c in rgb), 1.0))
+
+		if label:
+			# Darker than the edge (0.7) so the on-top label reads clearly
+			# against the pastel fill.
+			text_color = tuple(0.4 * c for c in rgb)
+			ax.text(x0 + 0.25, y1 - 0.05 * height, label_text,
+				fontsize=label_fontsize, ha='left', va='top', color=text_color)
+
+		parts = ["<b>{}</b>".format(label_text),
+			"length: {:,}".format(motif_end - motif_start)]
+		for col in annotations_.columns:
+			if has_name and col == 'name':
+				continue
+			# Coordinates are raw counts -- show them with thousands separators
+			# and never in scientific notation, unlike scores / p-values.
+			if col in ('start', 'end'):
+				value = "{:,}".format(int(row[col]))
+			else:
+				value = _format_tooltip_value(row[col])
+			parts.append("{}: {}".format(
+				_TOOLTIP_COLUMN_LABELS.get(col, col), value))
+		labels.append("<br>".join(parts))
+
+	# zorder 0.6 places the boxes behind the logo glyphs (default zorder 1) so
+	# the letters render at full saturation, but above the grid (zorder 0.5).
+	col = mc.PatchCollection(rects, facecolors=facecolors,
+		edgecolors=edgecolors, linewidths=box_linewidth, zorder=0.6)
+	ax.add_collection(col)
+
+	css = tooltip_css if tooltip_css is not None else _DEFAULT_TOOLTIP_CSS
+	if grid:
+		css = css + _GRID_CSS
+	if despine:
+		css = css + _DESPINE_CSS
+	tooltip = plugins.PointHTMLTooltip(col, labels=labels, css=css)
+	plugins.connect(ax.get_figure(), tooltip)
 
 	return ax
 

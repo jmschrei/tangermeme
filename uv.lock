@@ -1873,6 +1873,19 @@ wheels = [
 ]
 
 [[package]]
+name = "mpld3"
+version = "0.5.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jinja2" },
+    { name = "matplotlib" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f8/b2/9943f3e0bdf4ff9968b7ac4499152162d8ee8fc8eaa55487339872f86300/mpld3-0.5.12.tar.gz", hash = "sha256:1333e2bca012ea9af3c27801ba36f65bc26540b6fad4c56a903afb19477f2c37", size = 1028433, upload-time = "2025-11-05T18:12:24.183Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5b/69/93b34728cc386efdde0c342f8c680b9187dea7beb7adaf6b58a0713be101/mpld3-0.5.12-py3-none-any.whl", hash = "sha256:bea31799a4041029a906f53f2662bbf1c49903e0c0bc712b412354158ec7cf54", size = 203051, upload-time = "2025-11-05T18:12:22.527Z" },
+]
+
+[[package]]
 name = "mpmath"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3756,6 +3769,7 @@ dependencies = [
 dev = [
     { name = "build" },
     { name = "captum" },
+    { name = "mpld3" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "twine" },
@@ -3770,6 +3784,9 @@ docs = [
     { name = "sphinx", version = "9.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "sphinx-rtd-theme" },
 ]
+interactive = [
+    { name = "mpld3" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -3780,6 +3797,8 @@ requires-dist = [
     { name = "jupyter", marker = "extra == 'docs'", specifier = ">=1.0" },
     { name = "matplotlib", specifier = ">=3.7" },
     { name = "memelite", specifier = ">=0.2" },
+    { name = "mpld3", marker = "extra == 'dev'", specifier = ">=0.5" },
+    { name = "mpld3", marker = "extra == 'interactive'", specifier = ">=0.5" },
     { name = "nbconvert", marker = "extra == 'docs'", specifier = ">=7.0" },
     { name = "nbsphinx", marker = "extra == 'docs'", specifier = ">=0.9" },
     { name = "numba", specifier = ">=0.58" },
@@ -3797,7 +3816,7 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.65" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=4.0" },
 ]
-provides-extras = ["dev", "docs"]
+provides-extras = ["dev", "docs", "interactive"]
 
 [[package]]
 name = "terminado"
