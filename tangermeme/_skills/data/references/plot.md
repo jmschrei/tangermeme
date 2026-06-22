@@ -52,8 +52,14 @@ external `memelite` package — `fimo(motifs, X, dim=1)[i]`), and seqlets from
 
 Overlapping annotations are greedily packed into rows; past `n_tracks` (default 4)
 they collapse into a compact gray name-only strip. `show_extra=False` hides the
-overflow; raise `n_tracks` to show more. `color=` sets a single uniform character
-color (handy for cross-model overlays); `ylim=` fixes the y-axis for comparison.
+overflow; raise `n_tracks` to show more. `ylim=` fixes the y-axis for comparison.
+
+`color=` controls glyph coloring and accepts several forms: a single color string
+(uniform, handy for cross-model overlays), a `{char: color}` dict (per character),
+or an **array-like the length of the sequence** (per position). A per-position
+array can hold color specs (names/hex/RGB(A)) used verbatim, or numeric values
+mapped through `color_cmap` with optional `color_vmin`/`color_vmax`. It is sliced
+alongside `X_attr`; a length mismatch warns and falls back to per-character color.
 
 ## Related references
 

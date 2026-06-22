@@ -30,6 +30,7 @@ plot
 ----
 
 	- Adds ``plot.interactive_logo``, an interactive counterpart to ``plot_logo``. Annotations are drawn as translucent, pastel boxes (colored by any ``annot_cmap``) behind the logo glyphs, with the motif name in the box corner and a hover tooltip listing the length and every column of the annotation (e.g. seqlet p-value, annotation p-value, summed attribution). Interactivity is provided by ``mpld3``, available via the optional ``interactive`` extra (``pip install tangermeme[interactive]``).
+	- Extends the ``color`` argument of ``plot.plot_logo`` to accept a per-position array-like in addition to the existing ``None``/``str``/``dict`` (per-character) forms. Pass a length-matched sequence of either color specifications (names, hex strings, or RGB(A) values), used verbatim, or numeric values, mapped through ``color_cmap`` with optional ``color_vmin``/``color_vmax`` bounds. The array-like is sliced alongside ``X_attr``; an array-like whose length does not match the sequence raises a ``TangermemeWarning`` and falls back to per-character coloring. ``plot.interactive_logo`` accepts the same ``color`` forms and forwards ``color_cmap``/``color_vmin``/``color_vmax``.
 
 
 Version 1.2.0
