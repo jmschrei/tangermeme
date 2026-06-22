@@ -5,6 +5,8 @@
 import matplotlib
 matplotlib.use("Agg")
 
+import warnings
+
 import numpy
 import torch
 import pytest
@@ -13,6 +15,7 @@ import pandas
 import matplotlib.pyplot as plt
 
 from tangermeme.utils import one_hot_encode
+from tangermeme.utils import TangermemeWarning
 
 from tangermeme.plot import plot_logo
 from tangermeme.plot import plot_pwm
@@ -98,6 +101,155 @@ def test_plot_logo_alphabet_custom():
 
 	ax = plot_logo(X, alphabet=alphabet)
 	assert ax is not None
+
+
+def test_plot_logo_color_per_position_name_list():
+	X = one_hot_encode("ACGT" * 5).type(torch.float32)
+	colors = ["red"] * 10 + ["blue"] * 10
+
+	ax = plot_logo(X, color=colors)
+	facecolors = ax.collections[0].get_facecolors()
+
+	assert len(facecolors) == 20
+	numpy.testing.assert_array_almost_equal(facecolors[:10],
+		numpy.tile([1.0, 0.0, 0.0, 1.0], (10, 1)))
+	numpy.testing.assert_array_almost_equal(facecolors[10:],
+		numpy.tile([0.0, 0.0, 1.0, 1.0], (10, 1)))
+
+
+def test_plot_logo_color_per_position_rgba_array():
+	X = one_hot_encode("ACGT" * 5).type(torch.float32)
+	rgba = numpy.tile([0.2, 0.4, 0.6, 1.0], (20, 1))
+
+	ax = plot_logo(X, color=rgba)
+	facecolors = ax.collections[0].get_facecolors()
+
+	numpy.testing.assert_array_almost_equal(facecolors, rgba)
+
+
+def test_plot_logo_color_per_position_scalar_cmap():
+	X = one_hot_encode("ACGT" * 5).type(torch.float32)
+	values = numpy.linspace(0.0, 1.0, 20)
+
+	ax = plot_logo(X, color=values, color_cmap="viridis")
+	facecolors = ax.collections[0].get_facecolors()
+
+	cmap = plt.get_cmap("viridis")
+	norm = matplotlib.colors.Normalize(vmin=0.0, vmax=1.0)
+	expected = cmap(norm(values))
+
+	numpy.testing.assert_array_almost_equal(facecolors, expected)
+
+
+def test_plot_logo_color_per_position_scalar_vmin_vmax():
+	X = one_hot_encode("ACGT" * 5).type(torch.float32)
+	values = numpy.linspace(0.0, 1.0, 20)
+
+	ax = plot_logo(X, color=values, color_cmap="viridis",
+		color_vmin=-1.0, color_vmax=2.0)
+	facecolors = ax.collections[0].get_facecolors()
+
+	cmap = plt.get_cmap("viridis")
+	norm = matplotlib.colors.Normalize(vmin=-1.0, vmax=2.0)
+	expected = cmap(norm(values))
+
+	numpy.testing.assert_array_almost_equal(facecolors, expected)
+
+
+def test_plot_logo_color_per_position_sliced():
+	X = one_hot_encode("ACGT" * 5).type(torch.float32)
+	colors = ["red"] * 5 + ["blue"] * 10 + ["green"] * 5
+
+	ax = plot_logo(X, color=colors, start=5, end=15)
+	facecolors = ax.collections[0].get_facecolors()
+
+	assert len(facecolors) == 10
+	numpy.testing.assert_array_almost_equal(facecolors,
+		numpy.tile([0.0, 0.0, 1.0, 1.0], (10, 1)))
+
+
+def test_plot_logo_color_dict_still_per_character():
+	X = one_hot_encode("ACGT").type(torch.float32)
+	color = {'A': 'red', 'C': 'blue', 'G': 'green', 'T': 'black'}
+
+	ax = plot_logo(X, color=color)
+	facecolors = ax.collections[0].get_facecolors()
+
+	expected = numpy.array([
+		matplotlib.colors.to_rgba('red'),
+		matplotlib.colors.to_rgba('blue'),
+		matplotlib.colors.to_rgba('green'),
+		matplotlib.colors.to_rgba('black'),
+	])
+	numpy.testing.assert_array_almost_equal(facecolors, expected)
+
+
+def test_plot_logo_color_length_mismatch_warns_and_falls_back():
+	X = one_hot_encode("ACGT" * 5).type(torch.float32)
+
+	with pytest.warns(TangermemeWarning):
+		ax = plot_logo(X, color=["red"] * 5)
+
+	facecolors = ax.collections[0].get_facecolors()
+	assert len(facecolors) == 20
+
+	# Falls back to the standard per-character coloring, not a single red.
+	assert not numpy.allclose(facecolors,
+		numpy.tile([1.0, 0.0, 0.0, 1.0], (20, 1)))
+
+
+def test_plot_logo_color_array_matching_alphabet_length_is_per_position():
+	# A length-4 array on a length-4 sequence is treated as per-position
+	# coloring (not a single RGBA color) and must not warn.
+	X = one_hot_encode("ACGT").type(torch.float32)
+	colors = ["red", "green", "blue", "black"]
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error")
+		ax = plot_logo(X, color=colors)
+
+	facecolors = ax.collections[0].get_facecolors()
+	expected = numpy.array([matplotlib.colors.to_rgba(c) for c in colors])
+	numpy.testing.assert_array_almost_equal(facecolors, expected)
+
+
+def test_plot_logo_color_per_position_rgb_without_alpha():
+	X = one_hot_encode("ACGT" * 5).type(torch.float32)
+	rgb = numpy.tile([0.2, 0.4, 0.6], (20, 1))
+
+	ax = plot_logo(X, color=rgb)
+	facecolors = ax.collections[0].get_facecolors()
+
+	expected = numpy.tile([0.2, 0.4, 0.6, 1.0], (20, 1))
+	numpy.testing.assert_array_almost_equal(facecolors, expected)
+
+
+def test_interactive_logo_passes_per_position_color_through():
+	pytest.importorskip("mpld3")
+	X = one_hot_encode("ACGT" * 5).type(torch.float32)
+	colors = ["red"] * 20
+
+	ax = interactive_logo(X, color=colors)
+	facecolors = ax.collections[0].get_facecolors()
+
+	numpy.testing.assert_array_almost_equal(facecolors,
+		numpy.tile([1.0, 0.0, 0.0, 1.0], (20, 1)))
+
+
+def test_interactive_logo_forwards_color_cmap_and_bounds():
+	pytest.importorskip("mpld3")
+	X = one_hot_encode("ACGT" * 5).type(torch.float32)
+	values = numpy.linspace(0.0, 1.0, 20)
+
+	ax = interactive_logo(X, color=values, color_cmap="plasma",
+		color_vmin=-1.0, color_vmax=2.0)
+	facecolors = ax.collections[0].get_facecolors()
+
+	cmap = plt.get_cmap("plasma")
+	norm = matplotlib.colors.Normalize(vmin=-1.0, vmax=2.0)
+	expected = cmap(norm(values))
+
+	numpy.testing.assert_array_almost_equal(facecolors, expected)
 
 
 ###

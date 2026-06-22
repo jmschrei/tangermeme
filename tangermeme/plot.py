@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 from collections.abc import Callable
 from typing import Any
 
@@ -23,6 +25,7 @@ from matplotlib.transforms import Bbox
 from functools import lru_cache
 
 from .deep_lift_shap import deep_lift_shap
+from .utils import TangermemeWarning
 
 import numpy as np
 
@@ -139,7 +142,10 @@ def get_glyph_path(
 def plot_logo(
 	X_attr: torch.Tensor | numpy.ndarray,
 	ax: matplotlib.axes.Axes | None = None,
-	color: str | dict | None = None,
+	color: str | dict | numpy.ndarray | list | None = None,
+	color_cmap: str = "viridis",
+	color_vmin: float | None = None,
+	color_vmax: float | None = None,
 	annotations: pandas.DataFrame | None = None,
 	start: int | None = None,
 	end: int | None = None,
@@ -177,9 +183,41 @@ def plot_logo(
 	ax: matplotlib.pyplot.subplot or None, optional
 			The art board to draw on. If None, choose the current artboard.
 
-	color: str or None, optional
-			The color to plot all characters as. If None, plot according to
-			standard coloring. Default is None.
+	color: str, dict, numpy.ndarray, list, or None, optional
+			The coloring for the glyphs, which can be specified per character or
+			per position depending on the form passed in:
+
+					- None: color each character according to the standard coloring.
+					- str: color every character with this single color.
+					- dict: color each character according to a mapping from the
+					  character to a color (e.g. ``{'A': 'red', 'C': 'blue', ...}``).
+					- array-like: color each position independently. Must have the
+					  same length as the last dimension of `X_attr` (before any
+					  `start`/`end` slicing) and is sliced alongside `X_attr` under
+					  the same conditions. May either be a 1D numeric vector, in
+					  which case each value is mapped to a color through `color_cmap`
+					  and the `color_vmin`/`color_vmax` bounds, or a sequence of
+					  color specifications (names, hex strings, or an (length, 3)/
+					  (length, 4) array of RGB(A) values), used verbatim. All glyphs
+					  in a column share the color assigned to that position.
+
+			When an array-like is passed but its length does not match the last
+			dimension of `X_attr`, a `TangermemeWarning` is raised and the standard
+			per-character coloring is used instead. Default is None.
+
+	color_cmap: str, optional
+			The colormap used to map a numeric `color` vector to colors. Ignored
+			unless `color` is a 1D numeric array-like. Default is "viridis".
+
+	color_vmin: float or None, optional
+			The lower bound used to normalize a numeric `color` vector before
+			mapping through `color_cmap`. If None, the minimum of the vector is
+			used. Default is None.
+
+	color_vmax: float or None, optional
+			The upper bound used to normalize a numeric `color` vector before
+			mapping through `color_cmap`. If None, the maximum of the vector is
+			used. Default is None.
 
 	annotations: pandas.DataFrame, optional
 			A set of annotations with the following columns in any order except for
@@ -251,29 +289,60 @@ def plot_logo(
 	# Main glyph plotting code
 	###
 
-	if isinstance(X_attr, torch.Tensor): 
+	if isinstance(X_attr, torch.Tensor):
 		X_attr = X_attr.numpy(force=True)
-		
-	if start is not None and end is not None:
-		X_attr = X_attr[:, start:end]
-	
-	if ax is None:
-		ax = plt.gca()
-	
+
+	default_color = {
+		'G': [1, .65, 0],
+		'T': [1, 0, 0],
+		'C': [0, 0, 1],
+		'A': [0, .5, 0]
+	}
+
+	# `color` can be a per-character mapping (None/str/dict) or a per-position
+	# array-like. Resolve which case we are in here; the per-position colors are
+	# sliced alongside `X_attr` below and turned into RGBA after slicing.
+	position_colors = None
 	if color is None:
-		color = {
-			'G': [1, .65, 0],
-			'T': [1, 0, 0],
-			'C': [0, 0, 1],
-			'A': [0, .5, 0]
-		}
+		color = default_color
 	elif isinstance(color, str):
 		color = {char: color for char in alphabet}
 	elif isinstance(color, dict):
 		pass # Use the dictionary
 	else:
-		raise ValueError("`color` must be string, dictionary, or None.")
-	
+		if len(color) != X_attr.shape[-1]:
+			warnings.warn("`color` is an array-like of length {} but `X_attr` "
+				"has length {} along its last dimension; falling back to the "
+				"default per-character coloring. Pass a dict to color by "
+				"character or an array-like matching the sequence length to "
+				"color by position.".format(len(color), X_attr.shape[-1]),
+				TangermemeWarning)
+			color = default_color
+		else:
+			position_colors = color
+			color = default_color
+
+	if start is not None and end is not None:
+		X_attr = X_attr[:, start:end]
+		if position_colors is not None:
+			position_colors = position_colors[start:end]
+
+	if ax is None:
+		ax = plt.gca()
+
+	if position_colors is not None:
+		position_colors_ = numpy.asarray(position_colors)
+		if position_colors_.ndim == 1 and position_colors_.dtype.kind in "fiu":
+			vmin = color_vmin if color_vmin is not None \
+				else position_colors_.min()
+			vmax = color_vmax if color_vmax is not None \
+				else position_colors_.max()
+			norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
+			cmap = plt.get_cmap(color_cmap)
+			position_colors = cmap(norm(position_colors_))
+		else:
+			position_colors = matplotlib.colors.to_rgba_array(position_colors)
+
 	paths, facecolors = [], []
 	
 	threshold = 0.0
@@ -290,13 +359,18 @@ def plot_logo(
 			if abs(h) < threshold:
 				continue
 	
+			if position_colors is not None:
+				facecolor = position_colors[pos]
+			else:
+				facecolor = color[alphabet[idx]]
+
 			if h > 0:
 				paths.append(get_glyph_path(alphabet[idx], pos, y_pos, 0.95, h))
-				facecolors.append(color[alphabet[idx]])
+				facecolors.append(facecolor)
 				y_pos += h
 			else:
 				y_neg += h
-				facecolors.append(color[alphabet[idx]])
+				facecolors.append(facecolor)
 				paths.append(get_glyph_path(alphabet[idx], pos, y_neg, 0.95, -h, flip=True))
 	
 	pos_total = np.sum(np.where(X_attr > 0, X_attr, 0), axis=0).max()
@@ -504,7 +578,10 @@ def _format_tooltip_value(value: Any) -> str:
 def interactive_logo(
 	X_attr: torch.Tensor | numpy.ndarray,
 	ax: matplotlib.axes.Axes | None = None,
-	color: str | dict | None = None,
+	color: str | dict | numpy.ndarray | list | None = None,
+	color_cmap: str = "viridis",
+	color_vmin: float | None = None,
+	color_vmax: float | None = None,
 	annotations: pandas.DataFrame | None = None,
 	start: int | None = None,
 	end: int | None = None,
@@ -565,10 +642,25 @@ def interactive_logo(
 		The art board to draw on. If None, choose the current artboard.
 		Default is None.
 
-	color: str or dict or None, optional
-		The color to plot all characters as, passed through to `plot_logo`.
-		If None, plot according to standard nucleotide coloring. Default is
-		None.
+	color: str, dict, numpy.ndarray, list, or None, optional
+		The glyph coloring, passed through to `plot_logo`. Accepts the same
+		forms: None for standard nucleotide coloring, a str or dict for
+		per-character coloring, or an array-like for per-position coloring
+		(see `plot_logo` for the full contract). Default is None.
+
+	color_cmap: str, optional
+		The colormap used to map a numeric per-position `color` vector to
+		colors, passed through to `plot_logo`. Default is "viridis".
+
+	color_vmin: float or None, optional
+		The lower normalization bound for a numeric per-position `color`
+		vector, passed through to `plot_logo`. If None, the minimum of the
+		vector is used. Default is None.
+
+	color_vmax: float or None, optional
+		The upper normalization bound for a numeric per-position `color`
+		vector, passed through to `plot_logo`. If None, the maximum of the
+		vector is used. Default is None.
 
 	annotations: pandas.DataFrame, optional
 		A set of annotations to box and label. Must contain `start` and `end`
@@ -669,7 +761,8 @@ def interactive_logo(
 		ax = plt.gca()
 
 	# Draw the logo glyphs by reusing plot_logo without its annotation tracks.
-	plot_logo(X_attr, ax=ax, color=color, start=start, end=end,
+	plot_logo(X_attr, ax=ax, color=color, color_cmap=color_cmap,
+		color_vmin=color_vmin, color_vmax=color_vmax, start=start, end=end,
 		alphabet=alphabet, min_height_pct=min_height_pct)
 
 	if ylim is not None:
