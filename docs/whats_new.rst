@@ -9,8 +9,6 @@ Release History
 Version 1.3.0
 =============
 
-*Unreleased.*
-
 Claude Code skill
 -----------------
 
