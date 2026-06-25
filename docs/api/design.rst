@@ -1,5 +1,14 @@
 design
 ======
 
-.. automodule:: tangermeme.design
-	:members: screen, greedy_substitution, beam_substitution, greedy_marginalize
+.. automodule:: tangermeme.design.screen
+	:members:
+
+.. automodule:: tangermeme.design.greedy_substitution
+	:members:
+
+.. automodule:: tangermeme.design.beam_substitution
+	:members:
+
+.. automodule:: tangermeme.design.greedy_marginalize
+	:members:
