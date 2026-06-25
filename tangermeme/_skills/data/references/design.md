@@ -51,6 +51,35 @@ X_bar = greedy_substitution(model, X, y=y_bar, motifs=motif_list,
 - **Elimination is automatic** — set a low target and the same function removes
   harmful motifs without being told which are bad; add/remove can interleave.
 
+## beam_substitution — greedy_substitution with a beam
+
+```python
+from tangermeme.design import beam_substitution
+
+X_bar = beam_substitution(model, X, y=y_bar, motifs=motif_list,
+                          beam_size=4, n_best=1, max_iter=10)
+```
+
+- A strict generalization of `greedy_substitution`: instead of committing to the
+  single best edit each round, it keeps the `beam_size` lowest-loss **complete**
+  sequences and expands all of them. **`beam_size=1` reproduces
+  `greedy_substitution` exactly.**
+- Every beam member is always a full, fixed-length sequence (each step
+  *substitutes* into an existing sequence, never grows one), so there is no
+  partial-sequence scoring problem — the search is over trajectories through
+  edit-space. Larger beams recover good multi-edit combinations that greedy
+  prunes after a locally-suboptimal first edit.
+- Each round expands all members, pools every candidate, and keeps the **global**
+  top `beam_size` by **absolute loss** (not per-step improvement); current members
+  are carried forward so the beam never regresses, and identical sequences are
+  de-duplicated so it does not collapse onto one sequence.
+- `n_best` returns that many sequences (≤ `beam_size`), ranked low→high loss,
+  shape `(n_best, len(alphabet), length)`.
+- **`max_iter` differs from the greedy functions:** here `-1` means *no limit*
+  (like `screen`), with `tol` as the stop — not the greedy no-op. Cost scales
+  ~linearly with `beam_size`. `input_mask`/`output_mask`/`reverse_complement`/
+  `args`/`loss` behave exactly as in `greedy_substitution`.
+
 ## greedy_marginalize — build a construct against backgrounds
 
 ```python

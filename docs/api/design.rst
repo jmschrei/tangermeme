@@ -2,4 +2,4 @@ design
 ======
 
 .. automodule:: tangermeme.design
-	:members: greedy_substitution
+	:members: greedy_substitution, beam_substitution
