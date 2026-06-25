@@ -50,7 +50,7 @@ reproducibility traps).
 | composing predict / deep_lift_shap / saturation_mutagenesis through a perturbation fn | [references/func-pattern.md](references/func-pattern.md) |
 | adapting a multi-input/output PyTorch model to the tangermeme contract | [references/model-wrapping.md](references/model-wrapping.md) |
 | loading sequences/signals at loci, reading FASTA/bigWig/BED/MEME/VCF | [references/io-loci.md](references/io-loci.md) |
-| designing sequences to hit a target output (screen / greedy substitution) | [references/design.md](references/design.md) |
+| designing sequences to hit a target output (screen / greedy / beam substitution) | [references/design.md](references/design.md) |
 
 ## Quick orientation (the rest of the library)
 

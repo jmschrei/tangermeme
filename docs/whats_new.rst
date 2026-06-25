@@ -6,6 +6,15 @@ Release History
 ===============
 
 
+Version 1.4.0
+=============
+
+design
+------
+
+	- Adds ``design.beam_substitution``, a beam-search generalization of ``greedy_substitution``. Instead of committing to the single best edit each round, it keeps the ``beam_size`` lowest-loss complete sequences and expands all of them, so it can recover good multi-edit combinations that the greedy search prunes after a locally-suboptimal first edit. ``beam_size=1`` reproduces ``greedy_substitution`` exactly. Current beam members are carried forward (the beam never regresses), candidates are ranked by absolute loss, and identical sequences are de-duplicated to avoid the beam collapsing onto a single sequence. ``n_best`` returns the lowest-loss sequences ranked low-to-high. Unlike the greedy functions, ``max_iter=-1`` means no iteration limit (with ``tol`` as the stop), matching ``screen``.
+
+
 Version 1.3.0
 =============
 
