@@ -274,7 +274,7 @@ Currently, the only design algorithm implemented in tangermeme is a greedy subst
 ```python
 from tangermeme.design import greedy_substitution
 
-X_hat = greedy_substitution(model, X, motifs, y, mask=idxs, max_iter=3, verbose=True)
+X_hat = greedy_substitution(model, X, y, motifs, output_mask=idxs, max_iter=3, verbose=True)
 ```
 
 When the model is the Beluga model and the goal is to design a sequence that yields strong AP-1 binding but ignore the effect on all other tasks, this function inserts three AP-1 binding sites close together. The predictions from the model are much higher for the AP-1 tasks on the designed sequence than the original sequence.
