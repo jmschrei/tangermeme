@@ -13,6 +13,13 @@ design
 ------
 
 	- Adds ``design.beam_substitution``, a beam-search generalization of ``greedy_substitution``. Instead of committing to the single best edit each round, it keeps the ``beam_size`` lowest-loss complete sequences and expands all of them, so it can recover good multi-edit combinations that the greedy search prunes after a locally-suboptimal first edit. ``beam_size=1`` reproduces ``greedy_substitution`` exactly. Current beam members are carried forward (the beam never regresses), candidates are ranked by absolute loss, and identical sequences are de-duplicated to avoid the beam collapsing onto a single sequence. ``n_best`` returns the lowest-loss sequences ranked low-to-high. Unlike the greedy functions, ``max_iter=-1`` means no iteration limit (with ``tol`` as the stop), matching ``screen``.
+	- Reorganizes ``tangermeme.design`` from a single module into a subpackage with one module per algorithm (``screen``, ``greedy_substitution``, ``beam_substitution``, ``greedy_marginalize``, plus a private ``_substitute`` numba kernel). This is purely structural: every function is re-exported from ``tangermeme.design``, so imports such as ``from tangermeme.design import greedy_substitution`` are unchanged.
+
+Documentation
+-------------
+
+	- Corrects the stale ``greedy_substitution`` and ``greedy_marginalize`` call signatures in the README and the design tutorial; the current order is ``(model, X, y, motifs, ...)`` with the ``output_mask=`` keyword. The design tutorial (Tutorial B6) was re-executed against the Beluga model and gains a beam-search section comparing ``beam_substitution`` to ``greedy_substitution``.
+	- Renders ``screen`` and ``greedy_marginalize`` on the design API page; they were previously omitted from the autodoc members list.
 
 
 Version 1.3.0
