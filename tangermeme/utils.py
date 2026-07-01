@@ -1014,3 +1014,6 @@ def information_content(
 	IC = max_h - entropy(X_float, eps=eps)
 	IC[zero_col] = 0.0
 	return IC
+
+def _device():
+	return "cuda" if torch.cuda.is_available() else "cpu"
