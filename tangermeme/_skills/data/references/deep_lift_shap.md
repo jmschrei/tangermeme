@@ -98,7 +98,7 @@ Cross-check a suspicious logo against the actual prediction.
 ### Registering a custom non-linearity
 
 ```python
-from tangermeme.deep_lift_shap import _nonlinear
+from tangermeme._deep_lift_utils import _nonlinear
 X_attr = deep_lift_shap(model, X, additional_nonlinear_ops={MyActivation: _nonlinear})
 ```
 

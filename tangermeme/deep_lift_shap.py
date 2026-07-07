@@ -18,6 +18,7 @@ from ._compat import _autocast_supported, _resolve_device
 from .ersatz import dinucleotide_shuffle
 from .results import AttributionReferencesResult
 from .utils import _validate_input
+from ._deep_lift_utils import _nonlinear, _maxpool, _softmax, _layernorm
 
 
 def hypothetical_attributions(
@@ -95,7 +96,6 @@ def hypothetical_attributions(
 def _register_hooks(module): 
 	if len(module._backward_hooks) > 0:
 		return
-	# for the other modules the normal torch gradient will appl
 	if not isinstance(module, tuple(module._NON_LINEAR_OPS.keys())):
 		return
 
@@ -114,15 +114,10 @@ def _clear_hooks(module):
 
 
 def _fp_hook(module, inputs): 
-	# save a copy of the input to the module. this is needed for example in _nonlinear
-    # so that we can do delta_y / delta_x. The delta_y comes from doing a diff of module
-    # output for a seq and module output for its reference seq. Same for delta_x. inputs
-    # is a tuple (of size 1) so just grab the input
 	module.input = inputs[0].clone().detach()
 
 
 def _f_hook(module, inputs, outputs):
-	# save a copy of the output of the module. outputs is a tensor
 	module.output = outputs.clone().detach()
 
 
@@ -336,14 +331,14 @@ def deep_lift_shap(
 		torch.nn.PReLU: _nonlinear,
 		torch.nn.MaxPool1d: _maxpool,
 		torch.nn.MaxPool2d: _maxpool,
-		torch.nn.Softmax: softmax_log_ratio_product_rule,
-		torch.nn.LayerNorm: layernorm_symmetric_rule,
+		torch.nn.Softmax: _softmax,
+		torch.nn.LayerNorm: _layernorm,
 	}
 
 	device = _resolve_device(device)
 
 	if random_state is not None:
-		print(f"DLS: setting random state to {random_state}")
+		print(f"Setting random state to {random_state}")
 
 	if dtype is None:
 		try:
@@ -392,10 +387,6 @@ def deep_lift_shap(
 		n, z = X.shape[0] * n_shuffles, 0
 
 		for i in trange(n, disable=not verbose):
-			# Xi will be like [0,0,0, 1,1,1, 2,2,2, ...] if n_shuffles=3, so when len(Xi) == batch_size,
-			# there are 3 0's, 3 1's, etc. in Xi, so X[Xi] will contain 3 times the first seq in X, 3 times
-			# the second seq, etc. Note that batch_size does not have to be a multiple of n_shuffles so for
-			# instance Xi might be like [0,0,0, 1,1,1, 2,2,2, 3,3,3, 4,4] (in this case batch_size=14)
 			Xi.append(i // n_shuffles)
 			rj.append(i % n_shuffles)
 
@@ -412,9 +403,6 @@ def deep_lift_shap(
 				if isinstance(references, torch.Tensor):
 					_references = references[Xi, rj]
 				else:
-					# shuffle each seq once (_X already contains n_shuffle entries) -- the [:, 0]
-					# is b/c references(_X, n=1).shape = torch.Size([n_examples, 1, 4, seq_length]),
-					# and 1 is b/c n=1
 					if random_state is None:
 						_references = references(_X, n=1)[:, 0]
 					else:
@@ -423,9 +411,7 @@ def deep_lift_shap(
 								for j in range(len(_X))])
 
 				_X = _X.to(device).type(dtype).requires_grad_()
-				# now _X.shape = torch.Size([n_examples, 4, seq_length])
 				_references = _references.to(device).type(dtype).requires_grad_()
-				# now _references.shape = torch.Size([n_examples, 4, seq_length])
 
 				# This next block is actually running DeepLIFT by concatenating the
 				# batch of examples and the batch of references and running the
@@ -434,7 +420,6 @@ def deep_lift_shap(
 				# error is raised. 
 				try:
 					X_ = torch.cat([_X, _references])
-					# now X_.shape = torch.Size([n_examples*2, 4, seq_length])
 
 					if use_autocast:
 						autocast_ctx = torch.autocast(device_type=device.type, dtype=dtype)
@@ -448,19 +433,8 @@ def deep_lift_shap(
 								_args = (None if arg is None else torch.cat([arg, arg]) for arg in _args)
 								y = model(X_, *_args)[:, target]
 							else:
-								# The model here is actually a wrapper model (like CountWrapper)
-								# that returns only the output type we're interested in.
-								# model(X_).shape = torch.Size([n_examples*2, 1]).
-								# In the case of counts w/ a target=0, the "[:, target]" is basically
-								# a no-op.
 								y = model(X_)[:, target]
 
-							# when we do the forward pass, _X is a specific tensor object in
-							# memory with requires_grad=True, when we later call torch.autograd.grad(y.sum(), _X)
-							# we are passing the exact same tensor object that was used (via concatenation) to
-							# build X_. Here torch.autograd.grad returns gradients only for _X (and not for the
-							# _references).
-							# multipliers.shape = _X.shape = torch.Size([n_examples, 4, seq_length])
 							multipliers = torch.autograd.grad(y.sum(), _X)[0]
 
 					# Check that the prediction-difference-from-reference is equal to
@@ -492,19 +466,13 @@ def deep_lift_shap(
 				# of one example-reference pair, so that once all references for an
 				# example have been processed we can chunk them together.
 				attr_.extend(list(multipliers.cpu().detach()))
-				# now len(attr_) = multipliers.shape[0] = batch_size
 
 				# When all references for a sequence have been calculated, remove
 				# that block from the list of example-reference attributions and
 				# add it to the final attribution list, averaging across references
 				# if providing the processed results.
 				while len(attr_) >= n_shuffles:
-					# Take the first n_shuffles elements from attr_
-					# this includes the attributions for all references for one seq
-					# attr_chunk.shape = torch.Size([n_shuffles, 4, seq_length])
 					attr_chunk = torch.stack(attr_[:n_shuffles])
-					# now attr_chunk.shape = torch.Size([4, seq_length]), ie avg attr
-					# (across shuffles) for one seq
 
 					if raw_outputs == False:
 						attr_chunk = attr_chunk.mean(dim=0)

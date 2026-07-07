@@ -19,7 +19,7 @@ from tangermeme.ersatz import dinucleotide_shuffle
 from tangermeme.deep_lift_shap import hypothetical_attributions
 from tangermeme.deep_lift_shap import deep_lift_shap
 from tangermeme.deep_lift_shap import _captum_deep_lift_shap
-from tangermeme.deep_lift_shap import _nonlinear
+from tangermeme._deep_lift_utils import _nonlinear
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense

@@ -62,7 +62,7 @@ def _maxpool(module, grad_input, grad_output):
 	new_grad_inp = torch.where(idxs, grad_input[0], unpool_delta / delta_in)
 	return (new_grad_inp,)
 
-def layernorm_symmetric_rule(module, grad_input, grad_output):
+def _layernorm(module, grad_input, grad_output):
     """An internal function implementing the DeepLIFT correction for LayerNorm.
 
     Given y_i = gamma_i * A_i * v + beta_i
@@ -136,10 +136,10 @@ def layernorm_symmetric_rule(module, grad_input, grad_output):
 
     return (torch.cat([grad_in, grad_in0]),)
 
-def gauss_legendre_rule(n_points):
+def _gauss_legendre(n_points):
     """Return Gauss-Legendre nodes and weights mapped from [-1, 1] to [0, 1]."""
     from numpy.polynomial.legendre import leggauss
-    print(f"gauss_legendre_rule n_points: {n_points}")
+    print(f"_gauss_legendre n_points: {n_points}")
     nodes, weights = leggauss(n_points)
 	# Map from [-1, 1] to [0, 1] for integration along the path z(t) = z0 + t*(z - z0)
     alphas = (nodes + 1.0) / 2.0
@@ -188,7 +188,7 @@ def make_local_ig_autograd(forward_func, K=8, name=None):
     Returns:
         A hook function compatible with ``additional_nonlinear_ops``.
     """
-    _nodes_list, _weights_list = gauss_legendre_rule(K)
+    _nodes_list, _weights_list = _gauss_legendre(K)
 
     def _hook(module, grad_input, grad_output):
         dtype, device = grad_output[0].dtype, grad_output[0].device
@@ -227,7 +227,7 @@ def make_local_ig_autograd(forward_func, K=8, name=None):
     _hook.__name__ = f"_local_ig_autograd_{suffix}_K{K}"
     return _hook
 
-def softmax_log_ratio_product_rule(module, grad_input, grad_output):
+def _softmax(module, grad_input, grad_output):
     """DeepLIFT rule for softmax that respects full input-output dependencies and uses
     a log-ratio product rule.
     Softmax decomposition:
