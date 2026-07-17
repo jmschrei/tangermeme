@@ -18,7 +18,7 @@ from ._compat import _autocast_supported, _resolve_device
 from .ersatz import dinucleotide_shuffle
 from .results import AttributionReferencesResult
 from .utils import _validate_input
-from ._deep_lift_utils import _nonlinear, _maxpool, _softmax, _layernorm
+from ._deep_lift_utils import _nonlinear, _maxpool, _softmax, _layernorm, _hooks_disabled
 
 
 def hypothetical_attributions(
@@ -114,14 +114,23 @@ def _clear_hooks(module):
 
 
 def _fp_hook(module, inputs): 
+	if _hooks_disabled():
+		return
+	
 	module.input = inputs[0].clone().detach()
 
 
 def _f_hook(module, inputs, outputs):
+	if _hooks_disabled():
+		return
+	
 	module.output = outputs.clone().detach()
 
 
 def _b_hook(module, grad_input, grad_output):
+	if _hooks_disabled():
+		return
+
 	return module._NON_LINEAR_OPS[type(module)](module, grad_input, 
 		grad_output)
 
@@ -138,7 +147,6 @@ def deep_lift_shap(
 	warning_threshold: float = 0.001,
 	additional_nonlinear_ops: dict | None = None,
 	print_convergence_deltas: bool = False,
-	print_convergence_delta_stats: bool = False,
 	raw_outputs: bool = False,
 	only_warn: bool = False,
 	dtype: str | torch.dtype | None = None,
@@ -255,10 +263,6 @@ def deep_lift_shap(
 	print_convergence_deltas: bool, optional
 		Whether to print the convergence deltas for each example when using
 		DeepLiftShap. Default is False.
-
-	print_convergence_delta_stats: bool, optional
-		Whether to print convergence delta statistics (eg mean, max, min) across
-		all example-reference pairs. Default is False.
 
 	raw_outputs: bool, optional
 		Whether to return the raw outputs from the method -- in this case,
@@ -377,7 +381,6 @@ def deep_lift_shap(
 		# Begin DeepLIFT procedure
 	
 		attributions, references_, Xi, rj, attr_ = [], [], [], [], []
-		all_convergence_deltas = [] # per example-reference pair, always collected
 
 		if isinstance(references, torch.Tensor):
 			_validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
@@ -392,10 +395,8 @@ def deep_lift_shap(
 
 			if len(Xi) == batch_size or i == (n-1):
 				_X = X[Xi].cpu().type(dtype)
-				_args = None
-				if args is not None:
-					_args_lst = [None if a is None else a[Xi].to(device) for a in args]
-					_args = tuple(_args_lst)
+				_args = None if args is None else tuple([a[Xi].to(device).type(dtype)
+					for a in args])
 
 				# Handle reference sequences while ensuring that the same seed is
 				# used for each shuffle even if not all shuffles are done in the
@@ -430,7 +431,7 @@ def deep_lift_shap(
 					with torch.autograd.set_grad_enabled(True):
 						with autocast_ctx:
 							if _args is not None:
-								_args = (None if arg is None else torch.cat([arg, arg]) for arg in _args)
+								_args = (torch.cat([arg, arg]) for arg in _args)
 								y = model(X_, *_args)[:, target]
 							else:
 								y = model(X_)[:, target]
@@ -448,7 +449,6 @@ def deep_lift_shap(
 						warnings.warn("Convergence deltas too high: " +   
 							str(convergence_deltas), RuntimeWarning)
 						
-					all_convergence_deltas.append(convergence_deltas.detach().cpu())
 					if print_convergence_deltas:
 						print(convergence_deltas)
 
@@ -488,12 +488,6 @@ def deep_lift_shap(
 
 				Xi, rj = [], []
 
-		all_deltas = torch.cat(all_convergence_deltas)  # shape: (n_examples * n_shuffles,)
-		if print_convergence_delta_stats:
-			print(f"Convergence delta stats — mean: {all_deltas.mean().item():.6e}, "
-				f"max: {all_deltas.max().item():.6e}, "
-				f"min: {all_deltas.min().item():.6e}")
-		
 		attributions = torch.stack(attributions)
 
 		if return_references:

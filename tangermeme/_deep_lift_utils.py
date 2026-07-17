@@ -1,7 +1,25 @@
-
 import torch
 import torch.nn.functional as F
+from contextlib import contextmanager
 
+class HookState:
+    """Global switch controlling whether the DeepLIFT hooks do work."""
+    enabled = True
+
+@contextmanager
+def _disable_hooks():
+    """Temporarily make every DeepLIFT hook a no-op."""
+
+    previous = HookState.enabled
+    HookState.enabled = False
+    try:
+        yield
+    finally:
+        HookState.enabled = previous
+
+def _hooks_disabled():
+    """Return True if DeepLIFT hooks are currently disabled."""
+    return not HookState.enabled
 
 def _nonlinear(module, grad_input, grad_output):
 	"""An internal function implementing a general-purpose nonlinear correction.
@@ -146,41 +164,18 @@ def _gauss_legendre(n_points):
     weights = weights / 2.0
     return alphas, weights
 
-def make_local_ig_autograd(forward_func, K=8, name=None):
+def make_local_ig_autograd(K=8, name=None):
     """Return a generic local-IG hook using autograd VJPs.
 
     This function implements integrated-gradients for any generic module. It integrates
     ``J_f(z(t))^T q`` along the local linear path from reference activation ``z0`` to
     actual activation ``z`` using Gauss-Legendre quadrature for integral approximation.
-	The caller supplies the local differentiable function for the module, e.g.::
-
-        ln_hook = make_local_ig_autograd(
-            lambda module, z: F.layer_norm(
-                z, module.normalized_shape, module.weight, module.bias, module.eps
-            )
-        )
-
-        softmax_hook = make_local_ig_autograd(
-            lambda module, z: F.softmax(z, dim=module.dim)
-        )
 
     The implementation computes VJPs, not full Jacobians. For efficiency, all
     quadrature nodes and both upstream-gradient halves are packed into one
     autograd call.
 
-    Use a functional or otherwise stateless implementation inside
-    ``forward_func``. Avoid calling ``module(z)`` directly from this function:
-    this hook is already running for ``module``, so re-entering the module can
-    trigger its hooks again or overwrite saved hook state such as
-    ``module.input``. Prefer functional calls such as ``F.layer_norm`` or
-    ``F.softmax`` that read parameters from ``module`` without invoking the
-    module's hook machinery.
-
     Args:
-        forward_func: Callable with signature ``forward_func(module, z)``.
-            It must return a tensor with the same shape as ``grad_output[0]``
-            for the corresponding packed input. This callable should not call
-            ``module(z)``; use a functional/stateless equivalent instead.
         K (int): Number of Gauss-Legendre quadrature points. Higher K incurs more
 		autograd calls but yields more accurate IG approximations.
         name (str or None): Optional name suffix for the returned hook.
@@ -207,8 +202,8 @@ def make_local_ig_autograd(forward_func, K=8, name=None):
         q0_path = torch.cat([w_k * q0.detach() for w_k in GL_WEIGHTS], dim=0)
         q_eval = torch.cat([q_path, q0_path], dim=0)
 
-        with torch.enable_grad():
-            y_eval = forward_func(module, z_eval)
+        with torch.enable_grad(), _disable_hooks():
+            y_eval = module(z_eval)
             grad_eval = torch.autograd.grad(
                 y_eval,
                 z_eval,
@@ -223,7 +218,7 @@ def make_local_ig_autograd(forward_func, K=8, name=None):
         grad0 = grad0.reshape(K, batch_size, *z0.shape[1:])
         return (torch.cat([grad.sum(dim=0), grad0.sum(dim=0)]),)
 
-    suffix = name if name is not None else getattr(forward_func, "__name__", "fn")
+    suffix = name if name is not None else "fn"
     _hook.__name__ = f"_local_ig_autograd_{suffix}_K{K}"
     return _hook
 
