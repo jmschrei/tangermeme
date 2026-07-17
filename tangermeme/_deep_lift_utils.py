@@ -156,6 +156,7 @@ def _layernorm(module, grad_input, grad_output):
 
 def _gauss_legendre(n_points):
     """Return Gauss-Legendre nodes and weights mapped from [-1, 1] to [0, 1]."""
+
     from numpy.polynomial.legendre import leggauss
     print(f"_gauss_legendre n_points: {n_points}")
     nodes, weights = leggauss(n_points)
@@ -183,6 +184,7 @@ def make_local_ig_autograd(K=8, name=None):
     Returns:
         A hook function compatible with ``additional_nonlinear_ops``.
     """
+
     _nodes_list, _weights_list = _gauss_legendre(K)
 
     def _hook(module, grad_input, grad_output):
@@ -231,6 +233,7 @@ def _softmax(module, grad_input, grad_output):
         r = 1 / d
         y_k = a_k * r
     """
+
     dim = module.dim
     if dim < 0:
         dim = module.input.ndim + dim
@@ -306,3 +309,40 @@ def _softmax(module, grad_input, grad_output):
     )
 
     return (torch.cat([gin, gin_ref], dim=0),)
+
+def _bilinear(module, grad_input, grad_output):
+    """DeepLIFT symmetric product rule for bilinear operations."""
+
+    left, left_ref = module.left.chunk(2)
+    right, right_ref = module.right.chunk(2)
+    gout, gout_ref = grad_output[0].chunk(2)
+
+    left_mid = (0.5 * (left + left_ref)).detach().requires_grad_(True)
+    right_mid = (0.5 * (right + right_ref)).detach().requires_grad_(True)
+
+    with torch.enable_grad():
+        if module.equation is None:
+            out = torch.matmul(left_mid, right_mid)
+        else:
+            out = torch.einsum(module.equation, left_mid, right_mid)
+
+        gin_left, gin_right = torch.autograd.grad(
+            out,
+            (left_mid, right_mid),
+            grad_outputs=gout,
+            retain_graph=True,
+            create_graph=False,
+        )
+
+        gin_left_ref, gin_right_ref = torch.autograd.grad(
+            out,
+            (left_mid, right_mid),
+            grad_outputs=gout_ref,
+            retain_graph=False,
+            create_graph=False,
+        )
+
+    return (
+        torch.cat([gin_left, gin_left_ref], dim=0),
+        torch.cat([gin_right, gin_right_ref], dim=0),
+    )
