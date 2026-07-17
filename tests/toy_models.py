@@ -14,6 +14,15 @@ class SumModel(torch.nn.Module):
 		return X.sum(axis=-1)
 
 
+class SoftmaxModel(torch.nn.Module):
+	def __init__(self):
+		super(SoftmaxModel, self).__init__()
+		self.softmax = torch.nn.Softmax(dim=-1)
+
+	def forward(self, x):
+		return self.softmax(x)
+
+
 class FlattenDense(torch.nn.Module):
 	def __init__(self, seq_len=100, n_outputs=3):
 		super(FlattenDense, self).__init__()
