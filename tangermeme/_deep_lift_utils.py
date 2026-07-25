@@ -84,7 +84,7 @@ def _layernorm(module, grad_input, grad_output):
     """An internal function implementing the DeepLIFT correction for LayerNorm.
 
     Given y_i = gamma_i * A_i * v + beta_i
-	where A_i = x_i - mu and v = (sigma^2 + eps)^{-1/2}, the DeepLIFT multiplier
+    where A_i = x_i - mu and v = (sigma^2 + eps)^{-1/2}, the DeepLIFT multiplier
     from input j to output i is:
 
         m_ji = gamma_i * [ (v + v0)/2 * (delta_ij - 1/D)
@@ -132,16 +132,11 @@ def _layernorm(module, grad_input, grad_output):
     v_avg = (v + v0) / 2
     A_sum = A + A0
 
-    # Safe ratio: delta_v / delta_sigma2; mask degenerate case
-    degenerate = torch.abs(delta_sigma2) < 1e-6
-    ratio_secant = delta_v / torch.where(
-        degenerate,
-        torch.ones_like(delta_sigma2),
-        delta_sigma2,
-    )
-    var_avg = (var + var0) / 2
-    ratio_limit = -0.5 * (var_avg + module.eps).pow(-1.5)
-    ratio = torch.where(degenerate, ratio_limit, ratio_secant)
+    # ratio = delta_v / delta_sigma2
+    #       = (v - v0) / (v^{-2} - v0^{-2})
+    #       = -v^2 * v0^2 / (v + v0)
+    #       = -v^2 * v0^2 / (2 * v_avg)
+    ratio = (-(v ** 2) * (v0 ** 2)) / (2 * v_avg)
 
     def _compute_grad(g_tilde_):
         term1 = v_avg * (g_tilde_ - g_tilde_.mean(dim=norm_dims, keepdim=True))
