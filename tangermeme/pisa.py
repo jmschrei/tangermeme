@@ -21,7 +21,7 @@ from .results import AttributionReferencesResult
 from tangermeme.predict import predict
 from tangermeme.utils import _validate_input
 
-from tangermeme._deep_lift_utils import _nonlinear, _maxpool, _softmax
+from tangermeme.deep_lift_utils import _nonlinear, _maxpool, _softmax, BilinearOp, _layernorm, _bilinear
 from tangermeme.deep_lift_shap import _clear_hooks, _register_hooks
 from tangermeme.deep_lift_shap import hypothetical_attributions
 
@@ -205,7 +205,9 @@ def pisa(
         torch.nn.PReLU: _nonlinear,
         torch.nn.MaxPool1d: _maxpool,
         torch.nn.MaxPool2d: _maxpool,
-        torch.nn.Softmax: _softmax
+        torch.nn.Softmax: _softmax,
+        torch.nn.LayerNorm: _layernorm,
+		BilinearOp: _bilinear,
     }
 
     # Misc. set up for overriding operations

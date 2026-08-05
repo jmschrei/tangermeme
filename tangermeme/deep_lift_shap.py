@@ -18,7 +18,7 @@ from ._compat import _autocast_supported, _resolve_device
 from .ersatz import dinucleotide_shuffle
 from .results import AttributionReferencesResult
 from .utils import _validate_input
-from ._deep_lift_utils import _nonlinear, _maxpool, _softmax, _layernorm, _hooks_disabled
+from .deep_lift_utils import _nonlinear, _maxpool, _softmax, _layernorm, _hooks_disabled, _bilinear, BilinearOp
 
 
 def hypothetical_attributions(
@@ -337,6 +337,7 @@ def deep_lift_shap(
 		torch.nn.MaxPool2d: _maxpool,
 		torch.nn.Softmax: _softmax,
 		torch.nn.LayerNorm: _layernorm,
+		BilinearOp: _bilinear,
 	}
 
 	device = _resolve_device(device)

@@ -19,13 +19,13 @@ from tangermeme.ersatz import dinucleotide_shuffle
 from tangermeme.deep_lift_shap import hypothetical_attributions
 from tangermeme.deep_lift_shap import deep_lift_shap
 from tangermeme.deep_lift_shap import _captum_deep_lift_shap
-from tangermeme._deep_lift_utils import _nonlinear
-from tangermeme._deep_lift_utils import _layernorm
-from tangermeme._deep_lift_utils import _softmax
-from tangermeme._deep_lift_utils import make_local_ig_autograd
-from tangermeme._deep_lift_utils import HookState
-from tangermeme._deep_lift_utils import _disable_hooks
-from tangermeme._deep_lift_utils import _hooks_disabled
+from tangermeme.deep_lift_utils import _nonlinear
+from tangermeme.deep_lift_utils import _layernorm
+from tangermeme.deep_lift_utils import _softmax
+from tangermeme.deep_lift_utils import make_local_ig_autograd
+from tangermeme.deep_lift_utils import HookState
+from tangermeme.deep_lift_utils import _disable_hooks
+from tangermeme.deep_lift_utils import _hooks_disabled
 
 from .toy_models import SoftmaxModel, SumModel
 from .toy_models import FlattenDense

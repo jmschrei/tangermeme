@@ -305,6 +305,35 @@ def _softmax(module, grad_input, grad_output):
 
     return (torch.cat([gin, gin_ref], dim=0),)
 
+class BilinearOp(torch.nn.Module):
+    """Hookable binary bilinear contraction.
+
+    If ``equation`` is None, this module computes ``torch.matmul(left, right)``.
+    If ``equation`` is "...,...->...", it computes ``left * right``.
+    Otherwise it computes ``torch.einsum(equation, left, right)``.
+    The operands are used exactly as passed; any transpose, reshape, cast, or scaling should
+    happen outside this module so attribution rules stay simple.
+    """
+
+    def __init__(self, equation: str | None = None):
+        super().__init__()
+        self.equation = equation
+
+    def forward(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+        # Tangermeme temporarily adds _NON_LINEAR_OPS to every module while its
+        # DeepLIFT hooks are active; only cache these large tensors in that mode.
+        # In addition, if hooks are disabled, we dont want to overwrite the cached
+        # tensors.
+        if hasattr(self, "_NON_LINEAR_OPS") and not _hooks_disabled():
+            self.left = left.detach()
+            self.right = right.detach()
+
+        if self.equation is None:
+            return torch.matmul(left, right)
+        elif self.equation == "...,...->...":
+            return left * right
+        return torch.einsum(self.equation, left, right)
+    
 def _bilinear(module, grad_input, grad_output):
     """DeepLIFT symmetric product rule for bilinear operations."""
 
@@ -318,6 +347,8 @@ def _bilinear(module, grad_input, grad_output):
     with torch.enable_grad():
         if module.equation is None:
             out = torch.matmul(left_mid, right_mid)
+        elif module.equation == "...,...->...":
+            out = left_mid * right_mid
         else:
             out = torch.einsum(module.equation, left_mid, right_mid)
 
