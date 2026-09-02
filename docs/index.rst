@@ -82,6 +82,7 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    tutorials/Tutorial_A3_Deep_LIFT_SHAP.ipynb
    tutorials/Tutorial_A4_Seqlets.ipynb
    tutorials/Tutorial_A5_Annotations.ipynb
+   tutorials/Tutorial_A6_Saliency.ipynb
    tutorials/Tutorial_B1_Marginalization.ipynb
    tutorials/Tutorial_B2_Ablation.ipynb
    tutorials/Tutorial_B3_Spacing.ipynb
@@ -89,6 +90,7 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    tutorials/Tutorial_B5_Variant_Effect.ipynb
    tutorials/Tutorial_B6_Design.ipynb
    tutorials/Tutorial_B7_Cartesian_Product.ipynb
+   tutorials/Tutorial_B8_Dependency_Maps.ipynb
    tutorials/Tutorial_C1_IO_and_Data_Loading.ipynb
    tutorials/Tutorial_C2_Plotting.ipynb
 
@@ -124,6 +126,7 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    api/ablate.rst
    api/annotate.rst
    api/deep_lift_shap.rst
+   api/dependency_map.rst
    api/design.rst
    api/ersatz.rst
    api/io.rst
@@ -134,6 +137,7 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    api/plot.rst
    api/predict.rst
    api/product.rst
+   api/saliency.rst
    api/saturation_mutagenesis.rst
    api/seqlet.rst
    api/space.rst

@@ -168,6 +168,32 @@ Note that for multi-task models a target must be set to calculate attributions f
 ![image](https://github.com/jmschrei/tangermeme/assets/3916816/db628856-182a-427a-be95-2dc33def11b0)
 
 
+#### Saliency
+
+DeepLIFT/SHAP and saturation mutagenesis both cost far more than a single forward pass. When you have more sequences than either can afford, or your model uses an op that has no DeepLIFT rule registered, `saliency` gives you input times gradient attributions for one backward pass per batch. It returns the same shape and sign convention as the other two, so it plots and composes identically.
+
+```python
+from tangermeme.saliency import saliency
+
+X_attr = saliency(model, X, target=267)
+```
+
+The trade-off is the linearity assumption: gradients saturate, so a nucleotide the model is already confident about can carry a near-zero value despite being essential. Prefer DeepLIFT/SHAP when you can afford it, and use saliency to triage which regions deserve the more careful method.
+
+
+#### Dependency Maps
+
+Attributions say which bases matter; a dependency map says which bases decide whether the other bases matter. It substitutes every base at every position and records how far the attributions *elsewhere* in the sequence move, so a model with no interactions gives a purely diagonal map and any off-diagonal structure is evidence of epistasis the model learned -- cooperating motifs appear as blocks, and the flanks a motif depends on appear as stripes.
+
+```python
+from tangermeme.dependency_map import dependency_map
+
+dmap = dependency_map(model, X, start=975, end=1030, target=267)
+```
+
+`func` chooses the attribution method and defaults to `saliency`; `deep_lift_shap` and `saturation_mutagenesis` can be passed in when their accuracy is worth the cost. Because this runs one attribution per substitution, use `start` and `end` to restrict the substituted region. Note that the diagonal is non-zero even for a linear model and dominates any color scale, so mask it before plotting.
+
+
 #### Marginalization
 
 Given a predictive model and a set of known motifs, a common question is to ask what motifs affect the model's predictions. Rather than trying to scan these motifs against the genome and averaging predictions at all sites -- which is challenging and computationally costly -- you can simply substitute in the motif of interest into a background set of sequences and see what the difference in predictions is. Because `tangermeme` aims to be assumption-free, these functions take in a batch of examples that you specify, and return the predictions before and after adding the motif in for each example. If the model is multi-task, `y_before` and `y_after` will be a tuple of outputs. If the model is multi-input, additional inputs can be specified as a tuple passed into `args`. 

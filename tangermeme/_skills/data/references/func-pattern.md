@@ -11,11 +11,12 @@ Any function passed as `func=` must satisfy:
 func(model, X, args=None, **kwargs) -> torch.Tensor | list[torch.Tensor]
 ```
 
-Three library functions already satisfy it and can be passed directly:
+Four library functions already satisfy it and can be passed directly:
 
 - `tangermeme.predict.predict` — the default; returns model predictions.
 - `tangermeme.deep_lift_shap.deep_lift_shap` — returns attributions.
 - `tangermeme.saturation_mutagenesis.saturation_mutagenesis` — returns ISM scores.
+- `tangermeme.saliency.saliency` — returns input × gradient attributions.
 
 ## Where `func=` is accepted
 
@@ -25,12 +26,16 @@ marginalize(model, X, motif, func=...)
 space(model, X, motifs, spacing, func=...)
 variant_effect.substitution_effect(model, X, subs, func=...)
 variant_effect.deletion_effect(...)   ;  variant_effect.insertion_effect(...)
+dependency_map(model, X, func=...)            # defaults to saliency, not predict
 product.apply_pairwise(func, model, X, ...)   # func is FIRST positional here
 product.apply_product(func, model, X, ...)
 ```
 
 `func` defaults to `predict` on `ablate`, `marginalize`, `space` and the three
-`variant_effect` functions. On `product.apply_pairwise` / `apply_product` it is a
+`variant_effect` functions, and to `saliency` on `dependency_map` — which also
+requires that `func` return `(-1, len(alphabet), length)`, so `predict` is not a
+valid choice there; see [dependency_map.md](dependency_map.md).
+On `product.apply_pairwise` / `apply_product` it is a
 **required first positional argument** with no default — and because of that
 position they do **not** themselves satisfy the contract; see
 [product.md](product.md).
@@ -41,7 +46,8 @@ take the `func(model, X)` predictor contract above:
 - `design.screen(func=random_one_hot)` — a *sequence generator*
   `func(shape_tuple, random_state=, **kwargs)` that produces candidates. Don't pass
   `predict`/`deep_lift_shap` here.
-- `predict(func=None)` and `saturation_mutagenesis(func=None)` — a *post-processing*
+- `predict(func=None)`, `saliency(func=None)` and
+  `saturation_mutagenesis(func=None)` — a *post-processing*
   hook applied to each batch of predictions, e.g. to pick a head or apply a final
   non-linearity. In `saturation_mutagenesis` it is applied identically to the
   reference and to every perturbation, so attributions are computed on the

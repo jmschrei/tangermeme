@@ -20,8 +20,9 @@ reproducibility traps).
 ## Two cross-cutting concepts (read these first if unsure)
 
 - **[The `func=` plug-point](references/func-pattern.md)** — `ablate`,
-  `marginalize`, `space`, `variant_effect.*`, and `product.*` (where it is the
-  first positional argument) all accept `func(model, X, args=, **kwargs)`.
+  `marginalize`, `space`, `variant_effect.*`, `dependency_map`, and `product.*`
+  (where it is the first positional argument) all accept
+  `func(model, X, args=, **kwargs)`.
   Swapping `predict` for
   `deep_lift_shap` turns a "predictions before/after" experiment into an
   "attributions before/after" one. Covers the `additional_func_kwargs` collision
@@ -41,6 +42,8 @@ reproducibility traps).
 | **starting from scratch** — set up a notebook to load a model and run predictions → attributions → seqlets → motif tests, end to end | [references/notebook-walkthrough.md](references/notebook-walkthrough.md) |
 | attribution via **DeepLIFT/SHAP** — "which bases drive this prediction", attribution logos, hypothetical contributions for CWMs | [references/deep_lift_shap.md](references/deep_lift_shap.md) |
 | attribution via **ISM / saturation mutagenesis** — the forward-pass alternative; use it when DeepLIFT/SHAP convergence deltas are too high, an op can't be registered, or the model is massively multi-task | [references/saturation_mutagenesis.md](references/saturation_mutagenesis.md) |
+| attribution via **saliency** (input × gradient) — the one-backward-pass option; use it when there are far more sequences than DeepLIFT/SHAP or ISM can afford, or an op has no DeepLIFT rule | [references/dependency_map.md](references/dependency_map.md) |
+| **dependency maps** — which bases decide whether the other bases matter; epistasis, motif–flank and motif–motif interactions | [references/dependency_map.md](references/dependency_map.md) |
 | comparing predictions/attributions **across N models** (replicates, architectures, ensembles) | [references/comparing-models.md](references/comparing-models.md) |
 | effect of a motif / region: marginalize, ablate, spacing between motifs | [references/motif-effects.md](references/motif-effects.md) |
 | scoring **variant effects** (substitution / deletion / insertion, from a VCF) | [references/variant-effect.md](references/variant-effect.md) |
@@ -83,7 +86,8 @@ no dedicated reference file, but here is where to look:
 - Variable naming: `X`/`y` observed, `X_bar`/`y_bar` designed/target,
   `y_hat` predictions, `X_attr` attributions.
 - Device defaults: `predict`, `deep_lift_shap`, `pisa`, `design.*`,
-  `saturation_mutagenesis`, `product.*` take `device=None` → CUDA if available
-  else CPU; the model's original device + training mode are restored afterward.
+  `saturation_mutagenesis`, `saliency`, `product.*` take `device=None` → CUDA if
+  available else CPU; the model's original device + training mode are restored
+  afterward. `dependency_map` has no `device` of its own — it forwards to `func`.
 - Perturbation functions return NamedTuples (`PerturbationResult`, etc.) — unpack
   positionally or by attribute; `isinstance(result, tuple)` is True.

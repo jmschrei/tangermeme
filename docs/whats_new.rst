@@ -6,6 +6,55 @@ Release History
 ===============
 
 
+Unreleased
+==========
+
+saliency
+--------
+
+	- Adds ``tangermeme.saliency.saliency``, input-times-gradient
+	  attribution. It answers the same question as ``deep_lift_shap`` and
+	  ``saturation_mutagenesis`` -- which nucleotides drive this prediction
+	  -- for the cost of one backward pass, at the price of the linearity
+	  assumption: the gradient is the tangent to the model at the observed
+	  sequence, so it saturates and says nothing about finite substitutions.
+	  Use it when there are far more sequences than the other two methods can
+	  afford, or when an op in the model has no DeepLIFT rule registered.
+	  Returns ``(-1, len(alphabet), length)`` signed attributions and takes
+	  ``hypothetical``, so it is interchangeable with ``deep_lift_shap`` and
+	  ``saturation_mutagenesis`` and plots directly with ``plot_logo``. It
+	  satisfies the ``func=`` contract and can be passed to ``ablate``,
+	  ``marginalize``, ``space``, and the ``variant_effect`` functions.
+
+dependency_map
+--------------
+
+	- Adds ``tangermeme.dependency_map.dependency_map``, which substitutes
+	  every base at every position and records how far each substitution
+	  moves the attributions across the whole sequence. A model that treats
+	  positions independently yields a purely diagonal map, so off-diagonal
+	  structure is direct evidence of epistasis the model has learned:
+	  cooperative motif pairs appear as blocks, and the flanks a motif
+	  depends on appear as stripes. ``func=`` selects the attribution method
+	  and defaults to ``saliency``; ``deep_lift_shap`` and
+	  ``saturation_mutagenesis`` both satisfy the same contract and can be
+	  passed in when their accuracy is worth the cost. ``start`` and ``end``
+	  restrict which positions are substituted, following the same
+	  convention as ``saturation_mutagenesis``, since substituting every
+	  position of a full-length locus is rarely what you want.
+	- Substitutions that re-apply the base already present are skipped
+	  rather than computed, because their attributions are unchanged and
+	  their difference is exactly zero, and each position is averaged over
+	  only the substitutions that actually changed it. This removes a
+	  quarter of the passes for DNA and puts a position holding an ``N``,
+	  which has four real substitutions rather than three, on the same scale
+	  as every other position.
+	- Note that the diagonal is not comparable to the rest of the map: it is
+	  the direct effect of a substitution on its own attribution, is
+	  non-zero even for a linear model, and is typically several times
+	  larger than the off-diagonal entries. Mask it before plotting.
+
+
 Version 1.4.1
 =============
 
