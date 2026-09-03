@@ -22,7 +22,7 @@ extract_loci(
     min_counts=None, max_counts=None, target_idx=0,
     n_loci=None, summits=False,
     alphabet=['A','C','G','T'], ignore=['N'],
-    exclusion_lists=None,
+    exclusion_lists=None,  # BED path, DataFrame, or list of them
     return_mask=False,
     verbose=False,
 )
@@ -72,6 +72,13 @@ shortest is exhausted, then appends the remainder — it does not concatenate th
 order. `n_loci` then truncates that interleaved list. Useful for mixing a
 locus-of-interest with genomic background; surprising if you expected file-order
 concatenation.
+
+### Chromosome names are always strings
+
+Chromosome names from BED files and DataFrames are coerced to strings, so genomes
+that name their chromosomes `1`, `2`, ... (Ensembl-style) match the FASTA/bigWig
+names instead of being read in as integers by pandas. `chroms=[1, 2]` and
+`chroms=['1', '2']` are equivalent.
 
 ### Window semantics
 

@@ -467,11 +467,21 @@ def extract_matching_loci(
 	if not isinstance(random_state, numpy.random.RandomState):
 		random_state = numpy.random.RandomState(random_state)
 
+	names = ['chrom', 'start', 'end']
 	if isinstance(loci, str):
 		loci = pandas.read_csv(loci, sep='\t', usecols=[0, 1, 2], header=None,
-			index_col=False, names=['chrom', 'start', 'end'])
+			index_col=False, names=names)
+	else:
+		loci = loci.iloc[:, [0, 1, 2]].copy()
+		loci.columns = names
+
+	# Chromosome names must be strings so that they match the names used by
+	# pyfaidx/pybigtools. Otherwise, genomes whose chromosomes are named "1",
+	# "2", etc. get read in as integers by pandas and fail to match.
+	loci['chrom'] = loci['chrom'].astype(str)
 
 	if chroms is not None:
+		chroms = [str(chrom) for chrom in chroms]
 		loci = loci[numpy.isin(loci['chrom'], chroms)]
 	else:
 		chroms = numpy.unique(loci['chrom'])

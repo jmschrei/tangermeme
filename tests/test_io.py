@@ -694,6 +694,85 @@ def test_extract_loci_int(loci_seqs):
 	assert_array_almost_equal(X, expanded_loci_seqs)
 	
 
+def test_interleave_loci_int_chroms():
+	# Genomes whose chromosomes are named "1", "2", etc. would otherwise get
+	# read in as integers by pandas and fail to match the string names used
+	# by pyfaidx/pybigtools.
+	df = _interleave_loci("tests/data/test_int.bed")
+
+	assert list(df['chrom']) == ['1', '1', '1', '2', '2']
+	assert list(df['start']) == [10, 80, 140, 25, 35]
+	assert list(df['end']) == [30, 100, 160, 55, 65]
+
+
+def test_interleave_loci_int_chroms_df():
+	loci = pandas.read_csv("tests/data/test_int.bed", delimiter='\t',
+		index_col=False, header=None)
+	df = _interleave_loci(loci)
+
+	assert list(df['chrom']) == ['1', '1', '1', '2', '2']
+	assert list(df['start']) == [10, 80, 140, 25, 35]
+
+
+def test_interleave_loci_int_chroms_filter():
+	df = _interleave_loci("tests/data/test_int.bed", chroms=['1'])
+	assert list(df['chrom']) == ['1', '1', '1']
+
+	# Integer chromosome names are coerced to strings as well
+	df = _interleave_loci("tests/data/test_int.bed", chroms=[1])
+	assert list(df['chrom']) == ['1', '1', '1']
+
+	df = _interleave_loci("tests/data/test_int.bed", chroms=['2'])
+	assert list(df['chrom']) == ['2', '2']
+
+
+def test_extract_loci_int_chroms_filter():
+	X = extract_loci("tests/data/test_int.bed", "tests/data/test_int_chroms.fa",
+		chroms=['1'], in_window=10)
+	X0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		chroms=['chr1'], in_window=10)
+
+	assert X.shape == (3, 4, 10)
+	assert_array_almost_equal(X, X0)
+
+
+def test_extract_loci_int_chroms_exclusion_lists():
+	exclusion = pandas.DataFrame({0: [1], 1: [10], 2: [30]})
+	X, mask = extract_loci("tests/data/test_int.bed",
+		"tests/data/test_int_chroms.fa", in_window=10, return_mask=True,
+		exclusion_lists=[exclusion])
+
+	exclusion0 = pandas.DataFrame({0: ['chr1'], 1: [10], 2: [30]})
+	X0, mask0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		in_window=10, return_mask=True, exclusion_lists=[exclusion0])
+
+	assert X.shape == (3, 4, 10)
+	assert mask.tolist() == [False, False, True, True, True]
+	assert_array_almost_equal(X, X0)
+	assert mask.tolist() == mask0.tolist()
+
+
+def test_extract_loci_exclusion_lists_df(tmp_path):
+	exclusion = pandas.DataFrame({0: ['chr1'], 1: [10], 2: [30]})
+
+	filename = str(tmp_path / "exclusion.bed")
+	exclusion.to_csv(filename, sep='\t', header=False, index=False)
+
+	X0, mask0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		in_window=10, return_mask=True, exclusion_lists=[filename])
+
+	assert X0.shape == (3, 4, 10)
+	assert mask0.tolist() == [False, False, True, True, True]
+
+	# A bare DataFrame and a list of DataFrames are equivalent to a filename
+	for elist in (exclusion, [exclusion], filename):
+		X, mask = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+			in_window=10, return_mask=True, exclusion_lists=elist)
+
+		assert_array_almost_equal(X, X0)
+		assert mask.tolist() == mask0.tolist()
+
+
 def test_extract_loci_seq_N(loci2_seqs):
 	loci = "tests/data/test2.bed"
 	fasta = "tests/data/test.fa"
