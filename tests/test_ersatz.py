@@ -17,6 +17,7 @@ from tangermeme.ersatz import delete
 from tangermeme.ersatz import randomize
 from tangermeme.ersatz import shuffle
 from tangermeme.ersatz import dinucleotide_shuffle
+from tangermeme.ersatz import local_dinucleotide_shuffle
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -776,6 +777,218 @@ def test_dinucleotide_shuffle_raises_N():
 def test_dinucleotide_shuffle_homopolymer():
 	seq_ohe = one_hot_encode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA').unsqueeze(0)
 	assert_raises(ValueError, dinucleotide_shuffle, seq_ohe)
+
+
+###
+
+
+def _local_bins(first_cut, seq_len, bin_size, min_bin_size):
+	"""Re-derive the bin boundaries used by `local_dinucleotide_shuffle`.
+
+	Mirrors the boundary construction in the implementation so that tests can
+	check per-bin properties without depending on the RNG draw order.
+	"""
+
+	boundaries = [0, first_cut]
+	boundaries.extend(range(first_cut + bin_size, seq_len, bin_size))
+	boundaries.append(seq_len)
+
+	bins = list(zip(boundaries[:-1], boundaries[1:]))
+	if bins[-1][1] - bins[-1][0] < min_bin_size:
+		bins[-2] = (bins[-2][0], bins[-1][1])
+		bins.pop()
+
+	return bins
+
+
+def _dinuc_counts(seq):
+	"""Count the dinucleotides in a string."""
+
+	dinucs = collections.defaultdict(int)
+	for i in range(len(seq)-1):
+		dinucs[seq[i:i+2]] += 1
+
+	return dinucs
+
+
+def test_local_dinucleotide_shuffle():
+	X = random_one_hot((2, 4, 200), random_state=0)
+	X_shuf = local_dinucleotide_shuffle(X, n=5, bin_size=64, min_bin_size=32,
+		random_state=0)
+
+	assert X_shuf.shape == (2, 5, 4, 200)
+	assert X_shuf.dtype == X.dtype
+
+	# The output is still one-hot encoded and the per-sequence nucleotide
+	# composition is preserved because shuffling only permutes positions.
+	assert (X_shuf.sum(dim=2) == 1).all()
+	assert (X_shuf.sum(dim=-1) == X.sum(dim=-1).unsqueeze(1)).all()
+
+
+def test_local_dinucleotide_shuffle_default_n():
+	X = random_one_hot((1, 4, 3000), random_state=0)
+	X_shuf = local_dinucleotide_shuffle(X, random_state=0)
+
+	assert X_shuf.shape == (1, 20, 4, 3000)
+
+
+def test_local_dinucleotide_shuffle_changes_sequence():
+	X = random_one_hot((2, 4, 200), random_state=0)
+	X_shuf = local_dinucleotide_shuffle(X, n=5, bin_size=64, min_bin_size=32,
+		random_state=0)
+
+	# Every shuffle should differ from the original somewhere, and the
+	# shuffles should not all be identical to each other.
+	for i in range(X.shape[0]):
+		for j in range(5):
+			assert (X_shuf[i, j] != X[i]).any()
+
+		assert (X_shuf[i, 0] != X_shuf[i, 1]).any()
+
+
+def test_local_dinucleotide_shuffle_composition():
+	# Each bin is shuffled independently, so the dinucleotide composition is
+	# only conserved within a bin, not across bin boundaries. Rather than
+	# guessing the cut points, check that *some* valid set of bins explains
+	# each shuffle: the first cut is the only random boundary choice.
+	seq_len, bin_size, min_bin_size = 200, 64, 32
+
+	X = random_one_hot((2, 4, seq_len), random_state=0)
+	X_shuf = local_dinucleotide_shuffle(X, n=3, bin_size=bin_size,
+		min_bin_size=min_bin_size, random_state=0)
+
+	cuts = range(min_bin_size, bin_size + 1)
+
+	for i in range(X.shape[0]):
+		seq = characters(X[i])
+
+		for j in range(X_shuf.shape[1]):
+			shuf_seq = characters(X_shuf[i, j])
+
+			matches = []
+			for first_cut in cuts:
+				bins = _local_bins(first_cut, seq_len, bin_size, min_bin_size)
+
+				if all(_dinuc_counts(seq[s:e]) == _dinuc_counts(shuf_seq[s:e])
+					for s, e in bins):
+					matches.append(first_cut)
+
+			assert len(matches) > 0, ("No bin layout preserves the per-bin "
+				"dinucleotide composition of shuffle {}".format(j))
+
+
+def test_local_dinucleotide_shuffle_bin_endpoints():
+	# A dinucleotide shuffle keeps the first and last character of the region
+	# it is applied to, so the bin endpoints must be conserved. As above, at
+	# least one valid first cut must be consistent with the shuffle.
+	seq_len, bin_size, min_bin_size = 200, 64, 32
+
+	X = random_one_hot((2, 4, seq_len), random_state=0)
+	X_shuf = local_dinucleotide_shuffle(X, n=3, bin_size=bin_size,
+		min_bin_size=min_bin_size, random_state=0)
+
+	for i in range(X.shape[0]):
+		for j in range(X_shuf.shape[1]):
+			matches = []
+			for first_cut in range(min_bin_size, bin_size + 1):
+				bins = _local_bins(first_cut, seq_len, bin_size, min_bin_size)
+				idxs = [s for s, _ in bins] + [e-1 for _, e in bins]
+
+				if (X_shuf[i, j, :, idxs] == X[i, :, idxs]).all():
+					matches.append(first_cut)
+
+			assert len(matches) > 0
+
+
+def test_local_dinucleotide_shuffle_bin_layout_valid():
+	# Every bin the implementation can produce must be at least min_bin_size
+	# long and no longer than 2 * bin_size (the merge of the final two bins is
+	# the only way a bin exceeds bin_size).
+	seq_len, bin_size, min_bin_size = 200, 64, 32
+
+	for first_cut in range(min_bin_size, bin_size + 1):
+		bins = _local_bins(first_cut, seq_len, bin_size, min_bin_size)
+
+		assert bins[0][0] == 0
+		assert bins[-1][1] == seq_len
+
+		for k in range(len(bins)-1):
+			assert bins[k][1] == bins[k+1][0]  # bins tile the sequence
+
+		for s, e in bins:
+			assert e - s >= min_bin_size
+			assert e - s <= 2 * bin_size
+
+
+def test_local_dinucleotide_shuffle_random_state():
+	X = random_one_hot((2, 4, 200), random_state=0)
+
+	X_shuf0 = local_dinucleotide_shuffle(X, n=3, bin_size=64, min_bin_size=32,
+		random_state=0)
+	X_shuf1 = local_dinucleotide_shuffle(X, n=3, bin_size=64, min_bin_size=32,
+		random_state=0)
+	X_shuf2 = local_dinucleotide_shuffle(X, n=3, bin_size=64, min_bin_size=32,
+		random_state=1)
+
+	assert_array_almost_equal(X_shuf0, X_shuf1)
+	assert (X_shuf0 != X_shuf2).any()
+
+
+def test_local_dinucleotide_shuffle_does_not_modify_input():
+	X = random_one_hot((2, 4, 200), random_state=0)
+	X_orig = X.clone()
+
+	local_dinucleotide_shuffle(X, n=3, bin_size=64, min_bin_size=32,
+		random_state=0)
+
+	assert_array_almost_equal(X, X_orig)
+
+
+def test_local_dinucleotide_shuffle_single_bin_edge():
+	# bin_size = seq_len - 1 is the largest legal bin size, giving a two-bin
+	# layout that is immediately merged back into one bin.
+	X = random_one_hot((1, 4, 100), random_state=0)
+	X_shuf = local_dinucleotide_shuffle(X, n=2, bin_size=99, min_bin_size=50,
+		random_state=0)
+
+	assert X_shuf.shape == (1, 2, 4, 100)
+
+	seq = characters(X[0])
+	for j in range(2):
+		assert _dinuc_counts(characters(X_shuf[0, j])) == _dinuc_counts(seq)
+
+
+def test_local_dinucleotide_shuffle_raises_shape():
+	X = random_one_hot((2, 4, 200), random_state=0)
+
+	assert_raises(ValueError, local_dinucleotide_shuffle, X[0])
+	assert_raises(ValueError, local_dinucleotide_shuffle, X.unsqueeze(0))
+	assert_raises(ValueError, local_dinucleotide_shuffle,
+		random_one_hot((2, 5, 200), random_state=0))
+
+
+def test_local_dinucleotide_shuffle_raises_bin_size():
+	X = random_one_hot((2, 4, 200), random_state=0)
+
+	# bin_size must be strictly smaller than the sequence length.
+	assert_raises(ValueError, local_dinucleotide_shuffle, X, 20, 200)
+	assert_raises(ValueError, local_dinucleotide_shuffle, X, 20, 300)
+
+
+def test_local_dinucleotide_shuffle_raises_min_bin_size():
+	X = random_one_hot((2, 4, 200), random_state=0)
+
+	assert_raises(ValueError, local_dinucleotide_shuffle, X, 20, 64, 65)
+
+
+def test_local_dinucleotide_shuffle_preserves_cuda_device(cuda_device):
+	X = random_one_hot((2, 4, 200), random_state=0).type(
+		torch.float32).to(cuda_device)
+	X_shuf = local_dinucleotide_shuffle(X, n=2, bin_size=64, min_bin_size=32,
+		random_state=0)
+
+	assert X_shuf.device.type == 'cuda'
+	assert X_shuf.shape == (2, 2, 4, 200)
 
 
 ###

@@ -83,21 +83,21 @@ def _maxpool(module, grad_input, grad_output):
 def _layernorm(module, grad_input, grad_output):
     """An internal function implementing the DeepLIFT correction for LayerNorm.
 
-    Given y_i = gamma_i * A_i * v + beta_i
-    where A_i = x_i - mu and v = (sigma^2 + eps)^{-1/2}, the DeepLIFT multiplier
+    Given y_i = γ_i * a_i * v + β_i,
+    where a_i = x_i - μ and v = (σ^2 + ε)^{-1/2}, the DeepLIFT multiplier
     from input j to output i is:
 
-        m_ji = gamma_i * [ (v + v0)/2 * (delta_ij - 1/D)
-                         + (A_i + A0_i)/2 * (delta_v / delta_sigma2) * (A_j + A0_j) / D ]
+        m_ji = γ_i * [ (v + v_ref)/2 * (δ_ij - 1/D)
+                         + (a_i + a_ref_i)/2 * (Δv / Δσ^2) * (a_j + a_ref_j) / D ]
 
-    Multiplying by upstream gradient g_i and summing over i gives the vectorized rule:
+    Multiplying by upstream gradient g_i (short for grad_out_i) and summing over i
+    gives the vectorized rule:
 
-        grad_in_j = (v + v0)/2 * (g_tilde_j - mean(g_tilde))       [Term 1]
-                  + (delta_v / delta_sigma2) * (A_j + A0_j) / (2*D)
-                    * sum_i( g_tilde_i * (A_i + A0_i) )             [Term 2]
+        grad_in_j = (v + v_ref)/2 * (g_tilde_j - mean(g_tilde))       [Term 1]
+                  + ( Δv / Δ(σ^2) ) * (a_j + a_ref_j) / (2D)
+                    * sum_i( g_tilde_i * (a_i + a_ref_i) )             [Term 2]
 
-    where g_tilde_i = g_i * gamma_i. When delta_sigma2 is near zero (i.e., x and
-    x0 have the same variance), we fall back to the standard autograd gradient.
+    where g_tilde_i = g_i * γ_i.
     """
 
     x, x0 = module.input.chunk(2)
@@ -109,33 +109,33 @@ def _layernorm(module, grad_input, grad_output):
         D *= s
     norm_dims = list(range(-n_norm_dims, 0))
 
-    # Mean-centered inputs: A_i = x_i - mu
+    # Mean-centered inputs: a_i = x_i - mu
     mu = x.mean(dim=norm_dims, keepdim=True)
-    mu0 = x0.mean(dim=norm_dims, keepdim=True)
-    A = x - mu
-    A0 = x0 - mu0
+    mu_ref = x_ref.mean(dim=norm_dims, keepdim=True)
+    a = x - mu
+    a_ref = x_ref - mu_ref
 
-    # Inverse std: v = (sigma^2 + eps)^{-1/2}
-    var = (A ** 2).mean(dim=norm_dims, keepdim=True)
-    var0 = (A0 ** 2).mean(dim=norm_dims, keepdim=True)
+    # Inverse std: v = (σ^2 + eps)^{-1/2}
+    var = (a ** 2).mean(dim=norm_dims, keepdim=True)
+    var0 = (a_ref ** 2).mean(dim=norm_dims, keepdim=True)
     v = (var + module.eps) ** (-0.5)
-    v0 = (var0 + module.eps) ** (-0.5)
+    v_ref = (var_ref + module.eps) ** (-0.5)
 
-    delta_v = v - v0
-    delta_sigma2 = var - var0
+    delta_v = v - v_ref
+    delta_sigma2 = var - var_ref
 
     # gamma-scaled upstream gradients for both halves of the batch
     gamma = module.weight if module.weight is not None else 1.0
-    g_tilde, g0_tilde = (grad_output[0] * gamma).chunk(2)
+    g_tilde, g_tilde_ref = (grad_output[0] * gamma).chunk(2)
 
-    # Shared terms
+    # some additional terms
     v_avg = (v + v0) / 2
-    A_sum = A + A0
+    a_sum = a + a_ref
 
-    # ratio = delta_v / delta_sigma2
-    #       = (v - v0) / (v^{-2} - v0^{-2})
-    #       = -v^2 * v0^2 / (v + v0)
-    #       = -v^2 * v0^2 / (2 * v_avg)
+    # ratio = Δv / Δ(σ^2) 
+    #       = (v - v_ref) / (v^{-2} - v_ref^{-2})
+    #       = -v^2 * v_ref^2 / (v + v_ref)
+    #       = -v^2 * v_ref^2 / (2 * v_avg)
     ratio = (-(v ** 2) * (v0 ** 2)) / (2 * v_avg)
 
     def _compute_grad(g_tilde_):
@@ -145,9 +145,9 @@ def _layernorm(module, grad_input, grad_output):
         return term1 + term2
 
     grad_in = _compute_grad(g_tilde)
-    grad_in0 = _compute_grad(g0_tilde)
+    grad_in_ref = _compute_grad(g_tilde_ref)
 
-    return (torch.cat([grad_in, grad_in0]),)
+    return (torch.cat([grad_in, grad_in_ref]),)
 
 def _gauss_legendre(n_points):
     """Return Gauss-Legendre nodes and weights mapped from [-1, 1] to [0, 1]."""
