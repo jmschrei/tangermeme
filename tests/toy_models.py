@@ -305,6 +305,21 @@ class ConvLayerNorm(torch.nn.Module):
 		return self.dense(h.reshape(h.shape[0], -1))
 
 
+class ConvRMSNorm(torch.nn.Module):
+	"""conv -> RMSNorm over (C, L) -> relu -> dense."""
+
+	def __init__(self, seq_len=100, n_outputs=1):
+		super(ConvRMSNorm, self).__init__()
+		self.conv = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.norm = torch.nn.RMSNorm([8, seq_len])
+		self.relu = torch.nn.ReLU()
+		self.dense = torch.nn.Linear(8 * seq_len, n_outputs)
+
+	def forward(self, X):
+		h = self.relu(self.norm(self.conv(X)))
+		return self.dense(h.reshape(h.shape[0], -1))
+
+
 class MultiActivation(torch.nn.Module):
 	"""conv -> GELU -> conv -> SiLU -> conv -> Tanh -> dense."""
 

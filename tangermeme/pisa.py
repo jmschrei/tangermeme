@@ -21,7 +21,7 @@ from .results import AttributionReferencesResult
 from tangermeme.predict import predict
 from tangermeme.utils import _validate_input
 
-from tangermeme.deep_lift_utils import _nonlinear, _maxpool, _softmax, BilinearOp, _layernorm, _bilinear
+from tangermeme.deep_lift_utils import _nonlinear, _maxpool, _softmax, BilinearOp, _layernorm, _rmsnorm, _bilinear
 from tangermeme.deep_lift_shap import _clear_hooks, _register_hooks
 from tangermeme.deep_lift_shap import hypothetical_attributions
 
@@ -207,6 +207,7 @@ def pisa(
         torch.nn.MaxPool2d: _maxpool,
         torch.nn.Softmax: _softmax,
         torch.nn.LayerNorm: _layernorm,
+        torch.nn.RMSNorm: _rmsnorm,
 		BilinearOp: _bilinear,
     }
 
