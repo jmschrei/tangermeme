@@ -20,13 +20,7 @@ from tangermeme.deep_lift_shap import hypothetical_attributions
 from tangermeme.deep_lift_shap import deep_lift_shap
 from tangermeme.deep_lift_shap import _captum_deep_lift_shap
 from tangermeme.deep_lift_utils import _nonlinear
-from tangermeme.deep_lift_utils import _layernorm
-from tangermeme.deep_lift_utils import _rmsnorm
-from tangermeme.deep_lift_utils import _softmax
 from tangermeme.deep_lift_utils import make_local_ig_autograd
-from tangermeme.deep_lift_utils import HookState
-from tangermeme.deep_lift_utils import _disable_hooks
-from tangermeme.deep_lift_utils import _hooks_disabled
 
 from .toy_models import SoftmaxModel, SumModel
 from .toy_models import FlattenDense
@@ -46,7 +40,7 @@ from .toy_models import DropoutConv
 from .toy_models import MultiInputMultiOutput
 from .toy_models import ConvLayerNorm
 from .toy_models import ConvRMSNorm
-from .toy_models import Transformer
+from .toy_models import AttributeNameConv
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -2068,3 +2062,46 @@ def test_deep_lift_shap_verbose(X, device):
 		random_state=0, verbose=True)
 
 	assert_array_almost_equal(X_quiet, X_loud)
+
+
+def test_deep_lift_shap_clears_hook_caches(X, device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+
+	deep_lift_shap(model, X[:2], n_shuffles=2, device=device, random_state=0)
+
+	# The forward hooks cache a detached copy of each non-linearity's input
+	# and output. Those copies are as large as the activations themselves, so
+	# leaving them attached pins that much memory for the life of the model.
+	for module in model.modules():
+		assert "input" not in module.__dict__
+		assert "output" not in module.__dict__
+
+
+def test_deep_lift_shap_clears_hook_caches_on_error(X, device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+
+	# `target` is out of range for a one-output model, so the attribution loop
+	# raises and unwinds through the `finally` block that clears the hooks.
+	assert_raises(IndexError, deep_lift_shap, model, X[:2], target=5,
+		n_shuffles=2, device=device, random_state=0)
+
+	for module in model.modules():
+		assert "input" not in module.__dict__
+		assert "output" not in module.__dict__
+
+
+def test_deep_lift_shap_preserves_user_attributes(X, device):
+	torch.manual_seed(0)
+	model = AttributeNameConv()
+
+	deep_lift_shap(model, X[:2], n_shuffles=2, device=device, random_state=0)
+
+	# Hooks are only registered on non-linearities, but the caches are cleared
+	# across every module, so attributes that merely share a name with them
+	# must survive the call.
+	assert model.input == "sequence"
+	assert model.output == 1
+	assert model.conv.input == "kernel"
+	assert model.conv.output == "logits"

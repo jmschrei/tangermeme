@@ -154,3 +154,15 @@ def test_beam_substitution_input_mask(X, device):
 
 	assert_array_almost_equal(X[:, :, :54], X_hat[:, :, :54])
 	assert_array_almost_equal(X[:, :, 58:], X_hat[:, :, 58:])
+
+
+def test_beam_substitution_rejects_batch(motifs, device):
+	# A batch larger than one previously ran off the end of the numba
+	# substitution kernel rather than raising.
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	X = random_one_hot((2, 4, 100), random_state=0)
+	y = [[10]]
+
+	with pytest.raises(ValueError, match="X.shape\\[0\\] == 1"):
+		beam_substitution(model, X, y, motifs, device=device, max_iter=1)

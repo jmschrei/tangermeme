@@ -368,3 +368,31 @@ def test_variant_effect_returns_named_tuple(device):
 	insertions = torch.tensor([[0, 5, 2], [1, 10, 3]], dtype=torch.int64)
 	result = insertion_effect(model, X, insertions)
 	assert isinstance(result, PerturbationResult)
+
+
+###
+
+
+def test_substitution_effect_rejects_duplicate_positions():
+	# Two rows targeting the same (example, position) would each set a 1 in
+	# the same column, handing the model a multi-hot column rather than a
+	# one-hot one.
+	model = SumModel()
+	X = random_one_hot((1, 4, 20), random_state=0)
+	substitutions = torch.tensor([[0, 5, 2], [0, 5, 0]])
+
+	with pytest.raises(ValueError, match="duplicate"):
+		substitution_effect(model, X, substitutions)
+
+
+def test_substitution_effect_allows_repeated_position_across_examples():
+	# The same position in two different examples is not a collision.
+	model = SumModel()
+	X = random_one_hot((2, 4, 20), random_state=0)
+	substitutions = torch.tensor([[0, 5, 2], [1, 5, 0]])
+
+	y_before, y_after = substitution_effect(model, X, substitutions)
+
+	assert int(y_before.sum(dim=-1)[0]) == 20
+	assert int(y_after.sum(dim=-1)[0]) == 20
+	assert int(y_after.sum(dim=-1)[1]) == 20

@@ -27,8 +27,10 @@ background can produce a "mirage" effect driven entirely by the GC change, not t
 motif. In order of preference:
 
 1. Real inactive regions matched on GC/dinucleotide content (best).
-2. `random_one_hot(..., probs=...)` with genomic base frequencies (e.g. hg38 chr1
-   ≈ `[0.291, 0.209, 0.209, 0.292]`), or `dinucleotide_shuffle` of real sequences.
+2. `random_one_hot(..., probs=...)` with genomic base frequencies (e.g. hg38
+   ≈ `[0.291, 0.209, 0.209, 0.291]`), or `dinucleotide_shuffle` of real sequences.
+   `probs` must sum to exactly 1 — numpy raises otherwise, so don't round the
+   frequencies independently.
 3. Uniform random — prototyping only.
 
 Returns diminish past ~100 backgrounds.
@@ -52,8 +54,9 @@ y_before, y_after = ablate(model, X, start=990, end=1010, n=20, random_state=0)
 ```python
 from tangermeme.space import space
 
-y_before, y_afters = space(model, X, motifs=["GATA", "TAL1"],
-                           spacing=[5, 10, 20, 40])   # SpaceResult
+# motifs are SEQUENCES, not TF names; spacing is nested even for one gap
+y_before, y_afters = space(model, X, motifs=["AGATAA", "CAGCTG"],
+                           spacing=[[5], [10], [20], [40]])   # SpaceResult
 ```
 
 Returns `SpaceResult(y_before, y_afters)` where `y_afters` covers each spacing —
@@ -62,7 +65,8 @@ use it to find cooperative/competitive distance preferences (output axis is
 
 - **`spacing` shape is `(n_spacings, n_motifs-1)`** — entry `[i, j]` is the gap in
   experiment `i` between motif `j` and `j+1`. Even a single two-motif experiment
-  needs the nested form `[[10]]`. Sweep one gap with `torch.arange(50)[:, None]`.
+  needs the nested form `[[10]]`; a flat list raises `ValueError: spacing has shape
+  ... but must have shape (-1, 1)`. Sweep one gap with `torch.arange(50)[:, None]`.
 - Characters **inside the gaps are left as background** (not overwritten).
 
 ## Multi-task and multi-input models
@@ -84,10 +88,19 @@ positionally (`y_before, y_after = ...`) or by attribute (`r.y_before`), and
 `marginalize_annotations(model, X, X0, annotations)` (X0 = backgrounds) and
 `ablate_annotations(model, X, annotations)` apply the effect to each annotated
 region individually and return `PerturbationAnnotationsResult(y_befores, y_afters)`.
-`annotations` is a `(n_annotations, 3)` tensor `(example_idx, start, end)`. The
-output carries **extra leading axes** — e.g. `ablate_annotations` gives
-`(n_annotations, n_examples, n_shuffles, ...)` — so index carefully before taking
-deltas. See [annotate.md](annotate.md) for building the annotation tensor.
+`annotations` is a `(n_annotations, 3)` tensor `(example_idx, start, end)`. Both
+loop one annotation at a time and stack, so the output carries an **extra leading
+axis** and the second axis differs between them:
+
+- `ablate_annotations` → `(n_annotations, 1, ...)` and
+  `(n_annotations, 1, n_shuffles, ...)`. The `1` is real, not `n_examples`: each
+  annotation is ablated on its own single example `X[idx:idx+1]`, so you almost
+  always want to squeeze it.
+- `marginalize_annotations` → `(n_annotations, len(X0), ...)` for both, since each
+  annotation's span is substituted into every background in `X0`.
+
+Index carefully before taking deltas. See [annotate.md](annotate.md) for building
+the annotation tensor.
 
 ## Attributions instead of predictions
 

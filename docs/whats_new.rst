@@ -6,6 +6,31 @@ Release History
 ===============
 
 
+Version 1.4.1
+=============
+
+Claude Code skill
+-----------------
+
+	- Corrects the bundled Agent Skill against the library. Claims that did not match the implementation are fixed: ``predict`` returns the model's parameter dtype rather than always float32; the int8 sequences from ``extract_loci`` should be left as int8 because every entry point except ``pisa`` upcasts each batch; ``recursive_seqlets``' ``additional_flanks`` re-sums the reported attribution rather than only padding the coordinates; ``product.apply_pairwise``/``apply_product`` take ``func`` as a required first positional argument and so do not satisfy the ``func=`` contract themselves; ``apply_pairwise`` zips the elements of ``args`` with each other and crosses that list with every example; ``ablate_annotations``' second output axis is always one; ``plot_logo`` reads the annotation label from the first column positionally and filters the plotted window strictly; the DeepLIFT/SHAP hooks cover twenty stock non-linearities rather than five; ``pairwise_annotations`` sorts away input row order under the default ``unique=True``; and the deletion-width guard and the ``max_iter``/``tol`` stop conditions differ per function. Also documents ``saturation_mutagenesis``' own ``func=`` post-processing hook and its int8 truncation warning, and fixes three examples that could not run.
+	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
+
+annotate
+--------
+
+	- ``pairwise_annotations_spacing`` now raises a ``ValueError`` when two annotations within the same example overlap. The distance between a pair is the gap between the end of the left annotation and the start of the right one, which is negative for overlapping spans; the only guard was on the upper bound, so a negative distance would index from the far end of the distance axis and be recorded as ``max_distance + d``, indistinguishable from a genuine long-range pair. Abutting annotations (a distance of exactly zero) are unaffected.
+
+design
+------
+
+	- ``greedy_substitution`` and ``beam_substitution`` now raise a ``ValueError`` when ``X`` has a batch size other than one. Both design a single sequence at a time, but the batch dimension was never checked and a larger batch produced more rows than the numba substitution kernel had indices for, reading out of bounds and crashing the interpreter rather than raising.
+
+variant_effect
+--------------
+
+	- ``substitution_effect`` now raises a ``ValueError`` when two rows of ``substitutions`` target the same ``(example_idx, position)``. The substitutions are applied with two vectorized assignments over an example-shaped tensor, so colliding rows each set their own alphabet index to one and the model was handed a multi-hot column with no error. The same position in different examples is still valid.
+
+
 Version 1.4.0
 =============
 

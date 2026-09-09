@@ -82,6 +82,12 @@ models = {name: torch.load(p, weights_only=False) for name, p in paths.items()}
 # all on CPU; each call below moves one over and back
 ```
 
+This is the *across-models* half of memory management. The *within-call* half —
+lowering `batch_size` (which counts example×reference pairs) or `n_shuffles` when a
+single `deep_lift_shap` call OOMs — is in
+[deep_lift_shap.md](deep_lift_shap.md), under "`batch_size` counts example-reference
+pairs".
+
 ## Concordance / ensembling (generic — brief)
 
 Once predictions are harmonized, the comparison itself is ordinary analysis:

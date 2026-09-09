@@ -6,11 +6,10 @@ mutagenesis (ISM) mutates every position to every base and measures the change i
 the model's output. It is **purely forward-pass**, so it sidesteps the gradient /
 custom-backward machinery entirely.
 
-Every forward pass is run through `predict`, so inference happens under
-`model.eval()` and `torch.no_grad()` — no autograd graph is built and
-dropout/batchnorm run in eval mode, for maximum throughput. Your model's original
-training mode and device are restored afterward, so you never need to set (or
-reset) `.eval()` yourself.
+Every forward pass goes through `predict`, so inference runs under `model.eval()`
+and `torch.no_grad()` — no autograd graph, and dropout/batchnorm in eval mode. Your
+model's original training mode and device are restored afterward, so you never need
+to set (or reset) `.eval()` yourself.
 
 ## Signature (defaults that matter)
 
@@ -25,8 +24,15 @@ saturation_mutagenesis(
     raw_outputs=False,
     dtype=None, device=None,        # device None -> CUDA if available else CPU
     verbose=False,
+    func=None,                      # POST-PROCESSING hook, not the func= plug-point
 )
 ```
+
+`func=` here has the same meaning as `predict(..., func=None)`: a function applied
+to each batch of predictions after the forward pass (pick a head, apply a final
+non-linearity). It is applied identically to the reference prediction and to every
+perturbation, so attributions are computed on the post-processed values. This is
+**not** the `func(model, X)` plug-point — see [func-pattern.md](func-pattern.md).
 
 ## When to use ISM instead of DeepLIFT/SHAP
 
@@ -51,6 +57,14 @@ are independent), so there is no accuracy cost — only speed (~15× faster for 
 the sequence). Triage pattern: loop windowed ISM over a list of motif-hit
 coordinates and sum `(X_ism * X)` over each window to rank which hits actually drive
 the prediction.
+
+## Footgun: `X` is cast to int8, so soft one-hots are truncated
+
+The edit-distance-one kernel works on int8, so a non-integer `X` — a scaled,
+softened or probability-valued one-hot — is truncated toward zero. Anything with
+magnitude below 1 becomes 0, which can zero out the whole input and hand back an
+all-zero attribution. It does emit a `TangermemeWarning`, but that is easy to miss
+in a notebook. Pass a hard one-hot (int8, or float-valued 0/1).
 
 ## Single-tensor requirement
 

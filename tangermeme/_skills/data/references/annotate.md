@@ -69,8 +69,14 @@ co = pairwise_annotations(df_example_motif, shape=n_motifs)   # (n_motifs, n_mot
 
 - Default `symmetric=True`: entry counts pairs in both orders (sum = 2×pairs −
   diagonal; take a triangle for the pair count). `symmetric=False` gives an
-  **ordered** matrix (row = motif earlier in the sequence, col = later) — input row
-  order is then meaningful.
+  **ordered** matrix (row = the motif that came first) — input row order is then
+  meaningful.
+- **`unique=True` (the default) breaks that ordering.** It collapses repeated motifs
+  within an example — 3 KLF4 hits give one KLF4–KLF4 pair, not many — by sorting
+  them, which also discards the input row order. So with the default, `symmetric=False`
+  orders by *annotation index*, not by position. Pass `unique=False` for a genuinely
+  sequence-ordered matrix, at the cost of counting repeats.
+- Default `dtype` is `torch.int64` here, unlike `count_annotations`.
 
 ## pairwise_annotations_spacing — co-occurrence by distance
 
@@ -80,11 +86,19 @@ from tangermeme.annotate import pairwise_annotations_spacing
 sp = pairwise_annotations_spacing(df4, max_distance=100)   # (n_motifs, n_motifs, max_distance)
 ```
 
-- Input is the `(n, 4)` form `(example_idx, annotation_idx, start, end)`. **Sort by
-  `example_idx` then `start`**, and pass it as a **single DataFrame** so the motif
-  index stays aligned with its coordinates after sorting.
-- Distance is **absolute** (end-of-left to start-of-right), capped at `max_distance`
-  (default 100 — raise for long-range). Memory grows as `n_motifs² × max_distance`.
+- Input is the `(n, 4)` form `(example_idx, annotation_idx, start, end)`. Row order
+  doesn't matter — the function groups by `example_idx` and reads pair direction off
+  `start` — but pass it as a **single DataFrame** so each motif index stays glued to
+  its own coordinates; sorting the columns separately scrambles the pairing.
+- Distance is `start_of_right − end_of_left`, capped at `max_distance` (default
+  100 — raise for long-range). Memory grows as `n_motifs² × max_distance`.
+- **Annotations that overlap within an example raise a `ValueError`** — the gap
+  would be negative and there is no meaningful bin for it. Abutting spans
+  (`end0 == start1`, distance 0) are fine. Drop or merge overlaps first: FIMO hits
+  from a redundant motif DB routinely overlap, and so do `recursive_seqlets` spans
+  once you set `additional_flanks` (the un-flanked cores are disjoint).
+- **Default `dtype` is `uint8`** — the same 255 saturation as `count_annotations`.
+  Pass `dtype=torch.int32` for anything but small runs.
 
 ## The discovery pipeline
 

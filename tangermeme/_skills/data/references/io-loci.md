@@ -33,12 +33,17 @@ extract_loci(
 The result is a list assembled in this fixed order, and a **bare object** (not a
 list) is returned when only one element is present:
 
-1. `X` — one-hot sequences `(n, len(alphabet), in_window)`, dtype **int8** (memory;
-   call `.float()` before most models) — **always present**
+1. `X` — one-hot sequences `(n, len(alphabet), in_window)`, dtype **int8** —
+   **always present**
 2. `y` — output signals `(n, n_signals, out_window)` (single signal still gets a
    signal axis; order = file order) — only if `signals` is given
 3. `X_in` — input signals — only if `in_signals` is given
 4. `mask` — kept-locus boolean tensor — only if `return_mask=True`
+
+**Leave `X` as int8.** `predict`, `deep_lift_shap` and `saturation_mutagenesis`
+upcast each batch to the model's dtype, so the int8 blob is the whole memory win.
+Only `.float()` it for `pisa`, which doesn't upcast, or when you call `model(X)`
+yourself.
 
 So unpack to match exactly what you requested:
 

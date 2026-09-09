@@ -29,12 +29,25 @@ product.apply_pairwise(func, model, X, ...)   # func is FIRST positional here
 product.apply_product(func, model, X, ...)
 ```
 
-The default `func` is `predict` everywhere above.
+`func` defaults to `predict` on `ablate`, `marginalize`, `space` and the three
+`variant_effect` functions. On `product.apply_pairwise` / `apply_product` it is a
+**required first positional argument** with no default — and because of that
+position they do **not** themselves satisfy the contract; see
+[product.md](product.md).
 
-**Exception — `design.screen` also has a `func=`, but a different contract.** There
-it is a *sequence generator* `func(shape_tuple, random_state=, **kwargs)` (default
-`random_one_hot`) that produces candidates, **not** the `func(model, X)` predictor
-contract above. Don't pass `predict`/`deep_lift_shap` to `screen`'s `func`.
+**Elsewhere in the library `func=` is a different contract entirely.** None of these
+take the `func(model, X)` predictor contract above:
+
+- `design.screen(func=random_one_hot)` — a *sequence generator*
+  `func(shape_tuple, random_state=, **kwargs)` that produces candidates. Don't pass
+  `predict`/`deep_lift_shap` here.
+- `predict(func=None)` and `saturation_mutagenesis(func=None)` — a *post-processing*
+  hook applied to each batch of predictions, e.g. to pick a head or apply a final
+  non-linearity. In `saturation_mutagenesis` it is applied identically to the
+  reference and to every perturbation, so attributions are computed on the
+  post-processed values.
+- `plot.plot_attributions(models, X, func=deep_lift_shap)` — the *attribution*
+  function to run before plotting.
 
 ## The key idea: the return type follows `func`
 
@@ -82,6 +95,10 @@ Rule of thumb: if a name could plausibly belong to either layer, put it in
 `args=(tensor, ...)` carries extra model inputs through the whole stack; the i-th
 example is paired with the i-th row of each arg. It flows from the outer function
 into `func` into `model(X, *args)`.
+
+`product.apply_pairwise` / `apply_product` are the exception: there `args` defines
+the axes to sweep over rather than per-example inputs, so its rows are *not* aligned
+to `X` (see [product.md](product.md)).
 
 ## Related references
 

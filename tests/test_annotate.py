@@ -380,3 +380,43 @@ def test_annotate_seqlets_dict_motifs(X, X_contrib):
 
 	assert_array_almost_equal(idxs_d, idxs_s)
 	assert_array_almost_equal(pvals_d, pvals_s)
+
+
+def test_pairwise_annotations_spacing_rejects_overlapping():
+	# Overlapping annotations give start1 - end0 < 0, which would index from
+	# the far end of the distance axis and be indistinguishable from a pair
+	# that is genuinely max_distance + d apart.
+	X = torch.tensor([
+		[0, 0, 10, 30],
+		[0, 1, 20, 40],
+	], dtype=torch.int64)
+
+	with pytest.raises(ValueError, match="overlapping"):
+		pairwise_annotations_spacing(X, max_distance=100)
+
+
+def test_pairwise_annotations_spacing_allows_abutting():
+	# Annotations that touch but do not overlap give a distance of exactly 0.
+	X = torch.tensor([
+		[0, 0, 10, 20],
+		[0, 1, 20, 30],
+	], dtype=torch.int64)
+
+	y = pairwise_annotations_spacing(X, max_distance=100)
+
+	assert int(y[0, 1, 0]) == 1
+	assert int(y[1, 0, 0]) == 1
+	assert int(y.sum()) == 2
+
+
+def test_pairwise_annotations_spacing_overlap_across_examples_ok():
+	# Spans that overlap in coordinate space but sit in different examples
+	# are never paired, so they must not raise.
+	X = torch.tensor([
+		[0, 0, 10, 30],
+		[1, 1, 20, 40],
+	], dtype=torch.int64)
+
+	y = pairwise_annotations_spacing(X, max_distance=100)
+
+	assert int(y.sum()) == 0

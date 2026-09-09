@@ -102,7 +102,12 @@ from tangermeme.deep_lift_utils import _nonlinear
 X_attr = deep_lift_shap(model, X, additional_nonlinear_ops={MyActivation: _nonlinear})
 ```
 
-The built-in hooks cover ReLU/sigmoid/tanh/softmax/maxpool. The catch:
+The built-in hooks already cover essentially every stock `torch.nn` elementwise
+activation — the ReLU family (`ReLU`, `ReLU6`, `LeakyReLU`, `RReLU`, `PReLU`),
+`GELU`/`SiLU`/`Mish`/`ELU`/`CELU`/`SELU`, `Sigmoid`/`LogSigmoid`/`Tanh`,
+`Softplus`/`Softshrink`, `GLU` — plus `Softmax` and `MaxPool1d`/`MaxPool2d`
+(`pisa` registers the same set). Check that list before assuming you need
+`additional_nonlinear_ops`; it is for **custom** modules. The catch:
 `_nonlinear` divides `delta_out / delta_in`, so it **must be registered on a layer
 with equal input and output shape**. If your op also reduces (e.g. a profile head
 that does `logits * softmax(logits)` then `.sum()`), split it: put the elementwise,
@@ -128,11 +133,8 @@ hook), switch to ISM — see [saturation_mutagenesis.md](saturation_mutagenesis.
   Use these to build motif patterns / contribution-weight matrices (CWMs)
   downstream — **not** as the seqlet-caller input.
 
-Seqlet calling (`tangermeme.seqlet.recursive_seqlets` / `tfmodisco_seqlets`)
-consumes **projected** attributions summed to one value per position — i.e. the
-default (`hypothetical=False`) output collapsed over the channel axis,
-`X_attr.sum(dim=1)`, shape `(n, length)`. Feeding hypothetical attributions to the
-seqlet callers is a common mistake.
+The seqlet callers take the projected output collapsed over the channel axis
+(`X_attr.sum(dim=1)`) — see [seqlets.md](seqlets.md).
 
 ## Return type
 

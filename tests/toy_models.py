@@ -374,3 +374,29 @@ class MultiInputMultiOutput(torch.nn.Module):
 			self.conv(X) + a,
 			self.dense(X.reshape(X.shape[0], -1)) * beta,
 		)
+
+
+class AttributeNameConv(torch.nn.Module):
+	"""conv -> relu -> dense, carrying plain attributes named `input`/`output`.
+
+	The forward hooks cache activations on non-linear modules under those two
+	names, and `_clear_hooks` is applied to every module in the model rather
+	than only the hooked ones. This model puts ordinary, non-tensor attributes
+	of the same name on modules that never get hooked, so that clearing the
+	caches can be checked not to take them along with it.
+	"""
+
+	def __init__(self, seq_len=100, n_outputs=1):
+		super(AttributeNameConv, self).__init__()
+		self.conv = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.relu = torch.nn.ReLU()
+		self.dense = torch.nn.Linear(8 * seq_len, n_outputs)
+
+		self.input = "sequence"
+		self.output = n_outputs
+		self.conv.input = "kernel"
+		self.conv.output = "logits"
+
+	def forward(self, X):
+		h = self.relu(self.conv(X))
+		return self.dense(h.reshape(h.shape[0], -1))

@@ -20,7 +20,8 @@ MANIFEST
 *.fai
 tests/data/r
 
-# Working notes (per-module reviews, package overviews, etc.)
+# Agent instructions and working notes -- local only, never distributed
+CLAUDE.md
 claude_comments/
 
 # OS-generated files

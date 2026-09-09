@@ -66,10 +66,12 @@ def substitution_effect(
 		variant, the first column is the index in `X`, the second index is the
 		position in that example, and the third index is the index into the
 		alphabet that should be present at that position (overriding whatever
-		is currently there). Note: multiple rows targeting the same
-		`(example, position)` pair are applied in row order via tensor
-		assignment, so the *last* row wins. Order your rows accordingly if
-		you intend to chain edits at the same position.
+		is currently there). Note: all rows for an example are applied to that
+		one sequence at once, so at most one row may target any given
+		`(example, position)` pair; duplicate coordinates would leave a
+		multi-hot column and raise a `ValueError` instead. To score several
+		alternate alleles at one position, replicate the example so each
+		allele gets its own row of `X`.
 
 	args: tuple or None, optional
 		An optional set of additional arguments to pass into the model. If
@@ -109,6 +111,17 @@ def substitution_effect(
 	"""
 
 	substitutions = _cast_as_tensor(substitutions)
+
+	# The substitutions are applied with two vectorized assignments over an
+	# example-shaped X_var, so rows that collide on the same (example,
+	# position) would each set their own 1 and leave a multi-hot column.
+	coords = substitutions[:, :2]
+	if len(torch.unique(coords, dim=0)) != len(coords):
+		raise ValueError("substitution_effect requires at most one "
+			"substitution per (example_idx, position); the provided "
+			"substitutions contain duplicate coordinates, which would "
+			"produce a multi-hot column. De-duplicate them, or replicate "
+			"the example so each substitution gets its own row of X.")
 
 	additional_func_kwargs = dict(additional_func_kwargs or {})
 

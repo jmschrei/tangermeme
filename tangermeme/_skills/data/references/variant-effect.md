@@ -23,7 +23,7 @@ y_before, y_after = substitution_effect(model, X, subs)
 variant at genome position `g` in a window starting at `w` goes at `position = g - w`
 (account for any `max_jitter` expansion). Off-by-window errors silently mis-score.
 
-### Footgun #1 — edits are per-example, not per-variant (the collision trap)
+### Footgun #1 — edits are per-example, not per-variant
 
 Rows are grouped by `example_idx` and **all applied to that one sequence at once**;
 they do not each yield an independent result. Two rows on example 0 give you the
@@ -36,8 +36,17 @@ subs = torch.stack([torch.tensor([i, pos[i], alt[i]]) for i in range(N)])  # one
 y_before, y_after = substitution_effect(model, Xr, subs)
 ```
 
-Multiple rows targeting the **same `(example, position)`** are applied in row order
-by tensor assignment — the **last row wins**. Order rows accordingly if chaining.
+### Footgun #2 — one substitution per `(example, position)`
+
+**Duplicate `(example_idx, position)` coordinates raise a `ValueError`**, because the
+edit is a vectorized assignment that would set every listed alt base to 1 and leave a
+multi-hot column. There is no last-write-wins. To score several alternate alleles at
+one position, replicate the example so each allele gets its own row of `X` (as
+above). The same position in *different* examples is fine.
+
+`deletion_effect` and `insertion_effect` are unconstrained here: duplicate deletion
+rows collapse to a single deletion, and insertions are applied one at a time in a
+loop.
 
 ## deletion_effect — remove characters (needs over-length input)
 
@@ -50,8 +59,13 @@ y_before, y_after = deletion_effect(model, X_long, dels, left=False)
 ```
 
 - Deleting shortens the sequence, but the model needs a fixed window, so **`X` must
-  be `model_length + max_deletions_per_example`** wide (raises otherwise). Every
-  sequence is padded to the same over-length even if it has fewer deletions.
+  be `model_length + max_deletions_per_example`** wide. Every sequence is trimmed to
+  the same post-deletion length even if it has fewer deletions.
+- **tangermeme cannot check this for you** — it has no idea what length your model
+  expects, and only raises when the deletions would consume the entire sequence
+  (`max_deletions >= X.shape[-1]`). Pass a model-length `X` and nothing is caught: a
+  fixed-length model fails with its own shape error, and a length-flexible model
+  silently scores a shortened window.
 - `left=` chooses which side to trim back to `model_length` (`False`/right is
   default). Use whichever side matches how the model was trained.
 - **`y_before` is computed on the *trimmed* slice of `X`, not the raw input** — so

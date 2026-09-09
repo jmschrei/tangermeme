@@ -22,8 +22,8 @@ X_bar = screen(model, shape=(4, 2114), y=y_bar, batch_size=1000, n_best=1, rando
   the batch dimension**. `batch_size` is how many candidates are drawn and screened
   per iteration (it is *not* forwarded to `predict`'s own batch_size).
 - Generates candidates (default `func=random_one_hot`), scores each against `y` with
-  `loss`, keeps the top `n_best`. Loops until `loss < tol` (set a positive
-  `max_iter` as a safety cap). Simplest baseline; seed/sanity-check before greedy.
+  `loss`, keeps the top `n_best`, and loops until the stop condition below fires.
+  Simplest baseline; seed/sanity-check before greedy.
 
 ## greedy_substitution — build toward a goal with a motif library
 
@@ -35,12 +35,12 @@ X_bar = greedy_substitution(model, X, y=y_bar, motifs=motif_list,
 ```
 
 - Each round, tries substituting every motif at candidate positions and keeps the
-  single edit that most reduces `loss`; repeats until `loss < tol` or `max_iter`
-  motifs have been placed.
-- **`max_iter` defaults to `-1`, which is a silent no-op** — the loop is
-  `iteration < max_iter`, so a non-positive value runs zero iterations and returns
-  `X` unchanged. The greedy functions require a **positive `max_iter`**.
-- **`X` must have batch size 1** — it designs one sequence at a time.
+  single edit that most reduces `loss`; repeats until a stop condition fires.
+- **Always pass a positive `max_iter`** — the `-1` default is a silent no-op *here
+  specifically*. See the stop-conditions section below.
+- **`X` must have batch size 1** — it designs one sequence at a time and raises a
+  `ValueError` otherwise. Loop over examples, passing `X[i:i+1]` to each call. Same
+  for `beam_substitution`.
 - `reverse_complement=True` also considers each motif's reverse complement.
 - `input_mask` restricts which positions may be edited (e.g. the middle 200 bp →
   ~10× speedup); `output_mask` restricts which outputs the loss is computed over.
@@ -75,17 +75,17 @@ X_bar = beam_substitution(model, X, y=y_bar, motifs=motif_list,
   de-duplicated so it does not collapse onto one sequence.
 - `n_best` returns that many sequences (≤ `beam_size`), ranked low→high loss,
   shape `(n_best, len(alphabet), length)`.
-- **`max_iter` differs from the greedy functions:** here `-1` means *no limit*
-  (like `screen`), with `tol` as the stop — not the greedy no-op. Cost scales
-  ~linearly with `beam_size`. `input_mask`/`output_mask`/`reverse_complement`/
-  `args`/`loss` behave exactly as in `greedy_substitution`.
+- **`max_iter=-1` means *no limit* here**, not the `greedy_substitution` no-op — see
+  the stop-conditions section below. Cost scales ~linearly with `beam_size`.
+  `input_mask`/`output_mask`/`reverse_complement`/`args`/`loss` and the batch-size-1
+  requirement behave exactly as in `greedy_substitution`.
 
 ## greedy_marginalize — build a construct against backgrounds
 
 ```python
 from tangermeme.design import greedy_marginalize
 construct = greedy_marginalize(model, X_backgrounds, y=y_delta, motifs=motif_list,
-                               max_iter=5)   # positive max_iter required (see above)
+                               max_iter=5)   # -1 here means unlimited, not a no-op
 ```
 
 Semantics differ from `greedy_substitution` in three ways that are easy to miss:
@@ -95,6 +95,38 @@ Semantics differ from `greedy_substitution` in three ways that are easy to miss:
 - it returns a **variable-width one-hot construct** (e.g. `(4, 51)`), not a full
   sequence — decode with `characters(construct, allow_N=True)`; it contains `N`
   where overlapping motifs cancel. `max_spacing` (default 12) bounds the search.
+
+## Stop conditions: `max_iter` and `tol` differ per function (footgun)
+
+Both behave differently depending on which function you called:
+
+| function | `max_iter=-1` (the default) | `tol` compares |
+|---|---|---|
+| `screen` | no limit | **absolute loss** of the `n_best`-th best candidate |
+| `greedy_substitution` | **runs zero iterations, returns `X` unchanged** | per-round improvement |
+| `beam_substitution` | no limit | per-round improvement |
+| `greedy_marginalize` | no limit | per-round improvement |
+
+Two things to take from that table:
+
+- **`greedy_substitution` is the odd one out on `max_iter`.** Its loop is
+  `while iteration < max_iter`, so the `-1` default never enters the body and you get
+  your input back with no error and no warning. The other three test
+  `iteration == max_iter`, which `-1` never matches, so they run until `tol` stops
+  them. Always pass a positive `max_iter` to `greedy_substitution`.
+- **`tol` is an improvement floor everywhere except `screen`.** The three
+  motif-placing functions stop on `improvement <= tol`, where improvement is
+  `loss_previous_round - loss_this_round` — *not* a threshold on the loss itself.
+  Setting `tol` to a loss value you want to reach therefore ends the run almost
+  immediately, because the first round's improvement is already below it, and the
+  returned sequence can sit orders of magnitude above `tol`. Treat it as "stop when a
+  round stops buying me much", and control the endpoint with `max_iter` plus the
+  per-round loss from `verbose=True`.
+
+`screen` is the mirror image: its `tol` really is a loss target, but it triggers on
+the `n_best`-th best candidate, so with `n_best > 1` the current best may have been
+under `tol` for many iterations before the loop exits. With `max_iter=-1` and a `tol`
+it never reaches, `screen` loops forever — give it one or the other.
 
 ## The loss / target contract (footgun)
 

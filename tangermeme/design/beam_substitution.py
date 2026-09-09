@@ -82,6 +82,8 @@ def beam_substitution(
 	X: torch.tensor, shape=(1, len(alphabet), length)
 		A one-hot encoded sequence to use as the base for design. This must be
 		a single sequence and has the first dimension for broadcasting reasons.
+		A first dimension other than 1 raises a `ValueError`; loop over the
+		examples, passing `X[i:i+1]` to each call, to design more than one.
 
 	y: torch.Tensor or list of torch.Tensors or None
 		A tensor or list of Tensors providing the desired output from the model.
@@ -176,6 +178,12 @@ def beam_substitution(
 
 	tic = time.time()
 	iteration = 0
+
+	if X.shape[0] != 1:
+		raise ValueError("beam_substitution designs a single sequence at a "
+			"time and requires X.shape[0] == 1; got X with shape[0] == "
+			f"{X.shape[0]}. Loop over the examples, passing X[i:i+1] to each "
+			"call.")
 
 	X = torch.clone(X)
 	y_orig = predict(model, X, args=args, batch_size=batch_size, device=device,

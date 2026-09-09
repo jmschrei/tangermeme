@@ -283,6 +283,23 @@ def pairwise_annotations(
 	return torch.from_numpy(y)
 
 
+def _check_spacing(d, start0, end0, start1, end1):
+	"""Raise if a pair of annotations overlaps, giving a negative distance.
+
+	The distance between two annotations is the gap between the end of the
+	left one and the start of the right one. When they overlap this quantity
+	is negative, which would index from the far end of the distance axis and
+	be silently indistinguishable from a pair `max_distance + d` apart.
+	"""
+
+	if d < 0:
+		raise ValueError("pairwise_annotations_spacing requires that "
+			"annotations within an example do not overlap, because "
+			"overlapping spans produce a negative distance; got the pair "
+			f"[{start0}, {end0}) and [{start1}, {end1}), which overlap by "
+			f"{-d}. Drop or merge overlapping annotations before calling.")
+
+
 def pairwise_annotations_spacing(
 	X: torch.Tensor | pandas.DataFrame,
 	max_distance: int = 100,
@@ -314,7 +331,10 @@ def pairwise_annotations_spacing(
 		annotation_idx, start of the annotation, and end of the annotation.
 		The end of the annotation should not be inclusive, so two adjacent
 		annotations with zero spacing between them should have the same integer
-		index for the end of one motif and the start of the next.
+		index for the end of one motif and the start of the next. Annotations
+		within an example must not overlap, because the distance between an
+		overlapping pair is negative and has no bin in the returned tensor;
+		an overlapping pair raises a `ValueError`.
 
 	max_distance: int, optional
 		The maximum distance between two annotations in the same example to
@@ -400,6 +420,8 @@ def pairwise_annotations_spacing(
 					if d >= max_distance:
 						continue
 
+					_check_spacing(d, start0, end0, start1, end1)
+
 					y[idx0, idx1, d] += 1
 					if symmetric and idx0 != idx1:
 						y[idx1, idx0, d] += 1
@@ -409,8 +431,10 @@ def pairwise_annotations_spacing(
 					if d >= max_distance:
 						continue
 
+					_check_spacing(d, start1, end1, start0, end0)
+
 					y[idx1, idx0, d] += 1
 					if symmetric and idx0 != idx1:
-						y[idx0, idx1, d] += 1 
+						y[idx0, idx1, d] += 1
 
 	return torch.from_numpy(y)

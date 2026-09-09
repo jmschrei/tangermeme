@@ -53,13 +53,16 @@ X, y = extract_loci(
     in_window=2114,              # match your model's input length
     out_window=1000,             # match your model's output length
 )
-X = X.float()
+# X comes back as int8. Leave it — predict / deep_lift_shap /
+# saturation_mutagenesis upcast each batch to the model's dtype, so keeping the
+# full tensor as int8 is the memory win. (pisa is the exception: pass X.float().)
 print(X.shape, y.shape)
 ```
 
 ```python
 # === Cell 4: predictions on the peaks, vs observed ===
-# predict batches to `device` and back, runs under eval()+no_grad, returns float32.
+# predict batches to `device` and back, runs under eval()+no_grad, and returns the
+# model's parameter dtype (float32 for a float32 model; override with dtype=).
 # Multi-output models return a list. See the predict bullet in SKILL.md.
 from tangermeme.predict import predict
 

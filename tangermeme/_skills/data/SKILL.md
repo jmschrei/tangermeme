@@ -20,8 +20,9 @@ reproducibility traps).
 ## Two cross-cutting concepts (read these first if unsure)
 
 - **[The `func=` plug-point](references/func-pattern.md)** — `ablate`,
-  `marginalize`, `space`, `variant_effect.*`, and `product.*` all accept
-  `func(model, X, args=, **kwargs)`. Swapping `predict` for
+  `marginalize`, `space`, `variant_effect.*`, and `product.*` (where it is the
+  first positional argument) all accept `func(model, X, args=, **kwargs)`.
+  Swapping `predict` for
   `deep_lift_shap` turns a "predictions before/after" experiment into an
   "attributions before/after" one. Covers the `additional_func_kwargs` collision
   trap. **This is what makes the library compose.**
@@ -57,8 +58,10 @@ reproducibility traps).
 These are well-covered by the official tutorials and are mostly single-call ops —
 no dedicated reference file, but here is where to look:
 
-- `tangermeme.predict.predict` — batched, memory-efficient inference; always
-  returns float32; multi-output models return a list. Satisfies the `func=` contract.
+- `tangermeme.predict.predict` — batched, memory-efficient inference. Returns the
+  model's parameter dtype (override with `dtype=`) and upcasts each batch from `X`,
+  so int8 sequences go straight in; multi-output models return a list. Satisfies the
+  `func=` contract.
 - `tangermeme.ersatz` — atomic sequence ops: `insert`, `substitute`,
   `multisubstitute`, `delete`, `shuffle`, `dinucleotide_shuffle` (most motif-add
   ops *substitute*, preserving length; `start`/`end` confine shuffles to a region).
@@ -66,7 +69,8 @@ no dedicated reference file, but here is where to look:
   `random_one_hot`, `reverse_complement` (single sequence), `pwm_consensus`,
   `set_seed`, `gc_content`, etc.
 - `tangermeme.pisa.pisa` — per-position (PISA) attribution reusing the DLS hooks.
-  Footgun: some paths return tensors on the **input device**, not CPU.
+  Footguns: some paths return tensors on the **input device**, not CPU; and it does
+  **not** upcast `X`, so pass float — it is the one entry point int8 fails on.
 - `tangermeme.kmers` — k-mer counts, batched k-mers, gapped k-mers.
 
 (Motif *scanning* — FIMO/TOMTOM — is not in tangermeme; it lives in the external

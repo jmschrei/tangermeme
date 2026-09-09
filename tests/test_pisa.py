@@ -1072,3 +1072,22 @@ def test_pisa_verbose(X, device):
 		random_state=0, verbose=True)
 
 	assert_array_almost_equal(X_quiet, X_loud)
+
+
+def test_pisa_clears_hook_caches(X, device):
+	torch.manual_seed(0)
+	model = torch.nn.Sequential(
+		torch.nn.Conv1d(4, 8, (5,)),
+		torch.nn.ReLU(),
+		torch.nn.MaxPool1d(4),
+		torch.nn.ReLU(),
+		TorchSum()
+	)
+
+	pisa(model, X[:1], n_shuffles=2, device=device, random_state=0)
+
+	# `pisa` shares `_clear_hooks` with `deep_lift_shap`, so the cached
+	# activations must not outlive the call here either.
+	for module in model.modules():
+		assert "input" not in module.__dict__
+		assert "output" not in module.__dict__
