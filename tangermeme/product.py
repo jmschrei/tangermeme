@@ -48,7 +48,7 @@ def apply_pairwise(
 	of the arguments in `args` describe that second axis. This will return one
 	or more tensors whose first axes are (len(X), len(args[0])). This is in
 	contrast to `apply_product`, which returns tensors whose first axes would
-	be `(len(X), len(args[0]), len(args[1])...). 
+	be `(len(X), len(args[0]), len(args[1])...)`. 
 
 	As a more specific example, DragoNNFruit can make predictions for sequences 
 	in  each cell in a single-cell experiment. Each cell is represented by a
