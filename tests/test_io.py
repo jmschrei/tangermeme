@@ -189,13 +189,15 @@ def test_interleave_loci_single_str(short_loci1, short_loci2):
 def test_interleave_loci_single_df(short_loci1, short_loci2):
 	names = ['chrom', 'start', 'end']
 
-	df = pandas.read_csv("tests/data/test.bed", delimiter='\t',
+	loci = pandas.read_csv("tests/data/test.bed", delimiter='\t',
 		index_col=False, names=names, header=None)
+	df = _interleave_loci(loci)
 	assert (df == short_loci1).all(None)
 	assert_raises(ValueError, df.__eq__, short_loci2)
 
-	df = pandas.read_csv("tests/data/test2.bed", delimiter='\t',
+	loci = pandas.read_csv("tests/data/test2.bed", delimiter='\t',
 		index_col=False, names=names, header=None)
+	df = _interleave_loci(loci)
 	assert (df == short_loci2).all(None)
 	assert_raises(ValueError, df.__eq__, short_loci1)
 
