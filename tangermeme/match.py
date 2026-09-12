@@ -402,7 +402,10 @@ def extract_matching_loci(
 	Parameters
 	----------
 	loci: str or pandas dataframe
-		A filepath to a bed file, or a pandas dataframe in bed format.
+		A filepath to a bed file, or a pandas dataframe in bed format. The
+		first three columns are taken as the chrom, start, and end regardless
+		of what they are named, and the chromosome column is coerced to a
+		string so that it matches the record names used by the FASTA.
 
 	fasta: str
 		The filepath to the FASTA file to extract sequences from.
@@ -436,9 +439,10 @@ def extract_matching_loci(
 		`bigwig` raises a `TypeError`. Default is 0.5.
 
 	chroms: list, tuple, or None, optional
-		A set of chromosomes to use when choosing matching loci. If None, only
-		use chromosomes that the loci themselves are drawn from. Default is
-		None.
+		A set of chromosomes to use when choosing matching loci. Entries are
+		coerced to strings, so `[1, 2]` and `['1', '2']` are equivalent.
+		If None, only use chromosomes that the loci themselves are drawn from.
+		Default is None.
 
 	random_state: numpy.random.RandomState, int or None, optional
 		A random state to use for sampling loci. If a RandomState object or

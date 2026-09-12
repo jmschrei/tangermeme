@@ -313,9 +313,12 @@ def extract_loci(
 	loci: str or pandas.DataFrame or list/tuple of such
 		Either the path to a bed file or a pandas DataFrame object containing
 		three columns: the chromosome, the start, and the end, of each locus
-		to train on. Alternatively, a list or tuple of strings/DataFrames where
-		the intention is to train on the interleaved concatenation, i.e., when
-		you want to train on peaks and negatives.
+		to train on. The three columns are taken positionally regardless of
+		what they are named, and the chromosome column is coerced to a string
+		so that it matches the record names used by the sequences.
+		Alternatively, a list or tuple of strings/DataFrames where the
+		intention is to train on the interleaved concatenation, i.e., when you
+		want to train on peaks and negatives.
 
 	sequences: str or dictionary
 		Either the path to a fasta file to read from or a dictionary where the
@@ -336,8 +339,9 @@ def extract_loci(
 
 	chroms: list or None, optional
 		A set of chromosomes to extract loci from. Loci in other chromosomes
-		in the locus file are ignored. If None, all loci are used. Default is
-		None.
+		in the locus file are ignored. Entries are coerced to strings, so
+		`[1, 2]` and `['1', '2']` are equivalent. If None, all loci are
+		used. Default is None.
 
 	in_window: int, optional
 		The input window size. Default is 2114.
