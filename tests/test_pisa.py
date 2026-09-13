@@ -22,6 +22,9 @@ from tangermeme.deep_lift_shap import hypothetical_attributions
 from tangermeme.pisa import pisa
 
 from .toy_models import SumModel
+from .toy_models import ConvBilinear
+from .toy_models import ConvRuleSeq
+from .toy_models import TransformerBlock
 from .toy_models import FlattenDense
 from .toy_models import Conv1
 from .toy_models import Scatter
@@ -1074,6 +1077,152 @@ def test_pisa_verbose(X, device):
 	assert_array_almost_equal(X_quiet, X_loud)
 
 
+###
+# Basic coverage for the rules `pisa` registers alongside `deep_lift_shap`.
+# The rule table is duplicated in this module, so a rule can be correct there
+# and missing here.
+###
+
+
+PISA_RULES = ["layernorm", "rmsnorm", "softmax", "bilinear"]
+
+# First example, first two output positions, first four input positions.
+PISA_REGRESSION = {
+	"layernorm": [
+		[[ 0.0000,  0.0000, -0.0000, -0.1357],
+		 [ 0.0000, -0.0000,  0.0350,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000, -0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0211],
+		 [ 0.0000, -0.0000, -0.0829,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0000]]],
+	"rmsnorm": [
+		[[ 0.0000,  0.0000, -0.0000, -0.1420],
+		 [ 0.0000, -0.0000,  0.0290,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000, -0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0143],
+		 [ 0.0000, -0.0000, -0.0881,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0000]]],
+	"softmax": [
+		[[ 0.0000,  0.0000, -0.0000, -0.0039],
+		 [-0.0000, -0.0000,  0.0008,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000, -0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0008],
+		 [ 0.0000, -0.0000, -0.0027,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000,  0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0000]]],
+	"bilinear": [
+		[[ 0.0000,  0.0000,  0.0000,  0.0139],
+		 [ 0.0000,  0.0000, -0.0080, -0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0000]],
+
+		[[ 0.0000,  0.0000, -0.0000,  0.0133],
+		 [ 0.0000, -0.0000,  0.0243, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0000, -0.0000, -0.0000]]]
+}
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_rules_convergence(X, device, rule):
+	torch.manual_seed(0)
+	model = ConvRuleSeq(rule=rule)
+	X = X[:, :, :15]
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		X_attr = pisa(model, X, device=device, n_shuffles=3, random_state=0,
+			batch_size=4,
+			warning_threshold=1e-4 if device == "cpu" else 1e-2)
+
+	assert X_attr.shape == (2, 13, 4, 15)
+	assert X_attr.dtype == torch.float32
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_rules_regression(X, device, rule):
+	torch.manual_seed(0)
+	model = ConvRuleSeq(rule=rule)
+	X = X[:, :, :15]
+
+	X_attr = pisa(model, X, device=device, n_shuffles=3, random_state=0,
+		batch_size=4)
+
+	assert_array_almost_equal(X_attr[0, :2, :, :4], PISA_REGRESSION[rule], 4)
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_rules_batch_size(X, device, rule):
+	torch.manual_seed(0)
+	model = ConvRuleSeq(rule=rule, seq_len=12)
+
+	# batch_size=1 runs one output position per pass, so the window is kept
+	# short and the shuffle count at one to stay inside the runtime budget. A
+	# shorter window than this makes dinucleotide_shuffle raise for lack of
+	# distinct shuffles.
+	X = X[:, :, :12]
+
+	# `pisa` batches over output positions rather than examples, so the rules
+	# have to give the same answer however those positions are grouped.
+	X_attr0 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=4)
+	X_attr1 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=1)
+	X_attr2 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=100000)
+
+	assert_array_almost_equal(X_attr0, X_attr1, 4)
+	assert_array_almost_equal(X_attr0, X_attr2, 4)
+
+
+@pytest.mark.parametrize("pre_norm", [False, True])
+def test_pisa_transformer_block(X, device, pre_norm):
+	"""The rules must also compose through `pisa`, not only one at a time.
+
+	`ConvRuleSeq` puts one rule in a model; a transformer block chains all
+	four through each other, and `pisa` batches over output positions rather
+	than over examples, so the composition is a separate path from the one
+	`deep_lift_shap` exercises.
+	"""
+
+	torch.manual_seed(0)
+	model = TransformerBlock(seq_len=15, n_outputs=13, n_blocks=2,
+		pre_norm=pre_norm)
+	X = X[:, :, :15]
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		X_attr = pisa(model, X, device=device, n_shuffles=3, random_state=0,
+			batch_size=4,
+			warning_threshold=1e-4 if device == "cpu" else 1e-2)
+
+	assert X_attr.shape == (2, 13, 4, 15)
+	assert X_attr.dtype == torch.float32
+
+	if pre_norm:
+		# First example, first two output positions, first four positions.
+		assert_array_almost_equal(X_attr[0, :2, :, :4], [
+		[[ 0.0000, -0.0000, -0.0000, -0.0733],
+		 [ 0.0000, -0.0000, -0.0210,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000,  0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0195],
+		 [ 0.0000,  0.0000, -0.0165, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0000]]], 4)
+
+
 def test_pisa_clears_hook_caches(X, device):
 	torch.manual_seed(0)
 	model = torch.nn.Sequential(
@@ -1091,3 +1240,16 @@ def test_pisa_clears_hook_caches(X, device):
 	for module in model.modules():
 		assert "input" not in module.__dict__
 		assert "output" not in module.__dict__
+
+
+def test_pisa_clears_bilinear_caches(X, device):
+	torch.manual_seed(0)
+	model = ConvBilinear(seq_len=X.shape[-1])
+
+	pisa(model, X[:1], n_shuffles=2, device=device, random_state=0)
+
+	# `pisa` registers BilinearOp in its own rule table, so the two cached
+	# operands must not outlive the call here either.
+	for module in model.modules():
+		assert "left" not in module.__dict__
+		assert "right" not in module.__dict__
