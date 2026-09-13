@@ -19,7 +19,7 @@ reproducibility traps).
 
 ## Two cross-cutting concepts (read these first if unsure)
 
-- **[The `func=` plug-point](references/func-pattern.md)** — `ablate`,
+- **The `func=` plug-point** (`references/func-pattern.md`) — `ablate`,
   `marginalize`, `space`, `variant_effect.*`, and `product.*` (where it is the
   first positional argument) all accept `func(model, X, args=, **kwargs)`.
   Swapping `predict` for
@@ -27,7 +27,7 @@ reproducibility traps).
   "attributions before/after" one. Covers the `additional_func_kwargs` collision
   trap. **This is what makes the library compose.**
 
-- **[Wrapping models](references/model-wrapping.md)** — tangermeme assumes
+- **Wrapping models** (`references/model-wrapping.md`) — tangermeme assumes
   `y = model(X)` returns a single tensor with layout `(batch, channels, length)`.
   Real multi-input / multi-output models must be wrapped first. Read this before
   attribution or design on any non-trivial model. Data preprocessing or output
@@ -38,20 +38,20 @@ reproducibility traps).
 
 | If the task is… | Read |
 |---|---|
-| **starting from scratch** — set up a notebook to load a model and run predictions → attributions → seqlets → motif tests, end to end | [references/notebook-walkthrough.md](references/notebook-walkthrough.md) |
-| attribution via **DeepLIFT/SHAP** — "which bases drive this prediction", attribution logos, hypothetical contributions for CWMs | [references/deep_lift_shap.md](references/deep_lift_shap.md) |
-| attribution via **ISM / saturation mutagenesis** — the forward-pass alternative; use it when DeepLIFT/SHAP convergence deltas are too high, an op can't be registered, or the model is massively multi-task | [references/saturation_mutagenesis.md](references/saturation_mutagenesis.md) |
-| comparing predictions/attributions **across N models** (replicates, architectures, ensembles) | [references/comparing-models.md](references/comparing-models.md) |
-| effect of a motif / region: marginalize, ablate, spacing between motifs | [references/motif-effects.md](references/motif-effects.md) |
-| scoring **variant effects** (substitution / deletion / insertion, from a VCF) | [references/variant-effect.md](references/variant-effect.md) |
-| **calling seqlets** from attributions (recursive / TF-MoDISco) | [references/seqlets.md](references/seqlets.md) |
-| **annotating / counting motifs** — TOMTOM/FIMO labels, co-occurrence, spacing | [references/annotate.md](references/annotate.md) |
-| running a function over a **product of inputs** (sequence × cell-state × …) | [references/product.md](references/product.md) |
-| **plotting logos** and drawing seqlet/motif annotations on them | [references/plot.md](references/plot.md) |
-| composing predict / deep_lift_shap / saturation_mutagenesis through a perturbation fn | [references/func-pattern.md](references/func-pattern.md) |
-| adapting a multi-input/output PyTorch model to the tangermeme contract | [references/model-wrapping.md](references/model-wrapping.md) |
-| loading sequences/signals at loci, reading FASTA/bigWig/BED/MEME/VCF | [references/io-loci.md](references/io-loci.md) |
-| designing sequences to hit a target output (screen / greedy / beam substitution) | [references/design.md](references/design.md) |
+| **starting from scratch** — set up a notebook to load a model and run predictions → attributions → seqlets → motif tests, end to end | `references/notebook-walkthrough.md` |
+| attribution via **DeepLIFT/SHAP** — "which bases drive this prediction", attribution logos, hypothetical contributions for CWMs | `references/deep_lift_shap.md` |
+| attribution via **ISM / saturation mutagenesis** — the forward-pass alternative; use it when DeepLIFT/SHAP convergence deltas are too high, an op can't be registered, or the model is massively multi-task | `references/saturation_mutagenesis.md` |
+| comparing predictions/attributions **across N models** (replicates, architectures, ensembles) | `references/comparing-models.md` |
+| effect of a motif / region: marginalize, ablate, spacing between motifs | `references/motif-effects.md` |
+| scoring **variant effects** (substitution / deletion / insertion, from a VCF) | `references/variant-effect.md` |
+| **calling seqlets** from attributions (recursive / TF-MoDISco) | `references/seqlets.md` |
+| **annotating / counting motifs** — TOMTOM/FIMO labels, co-occurrence, spacing | `references/annotate.md` |
+| running a function over a **product of inputs** (sequence × cell-state × …) | `references/product.md` |
+| **plotting logos** and drawing seqlet/motif annotations on them | `references/plot.md` |
+| composing predict / deep_lift_shap / saturation_mutagenesis through a perturbation fn | `references/func-pattern.md` |
+| adapting a multi-input/output PyTorch model to the tangermeme contract | `references/model-wrapping.md` |
+| loading sequences/signals at loci, reading FASTA/bigWig/BED/MEME/VCF | `references/io-loci.md` |
+| designing sequences to hit a target output (screen / greedy / beam substitution) | `references/design.md` |
 
 ## Quick orientation (the rest of the library)
 

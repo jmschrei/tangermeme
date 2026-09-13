@@ -10,7 +10,6 @@ from typing import Any
 
 import numpy
 import torch
-import torch.nn.functional as F
 
 from tqdm import trange
 
@@ -18,7 +17,15 @@ from ._compat import _autocast_supported, _resolve_device
 from .ersatz import dinucleotide_shuffle
 from .results import AttributionReferencesResult
 from .utils import _validate_input
-from .deep_lift_utils import _nonlinear, _maxpool, _softmax, _layernorm, _rmsnorm, _hooks_disabled, _bilinear, BilinearOp
+from ._deep_lift_utils import _nonlinear
+from ._deep_lift_utils import _maxpool
+from ._deep_lift_utils import _softmax
+from ._deep_lift_utils import _layernorm
+from ._deep_lift_utils import _rmsnorm
+from ._deep_lift_utils import _bilinear
+from ._deep_lift_utils import _hooks_disabled
+from ._deep_lift_utils import _disable_hooks
+from ._deep_lift_utils import _gauss_legendre
 
 
 def hypothetical_attributions(
@@ -112,11 +119,12 @@ def _clear_hooks(module):
 
 		del module.handles
 
-	# Drop the activations cached by `_fp_hook` and `_f_hook`, which are as
+	# Drop the activations cached by `_fp_hook` and `_f_hook`, along with the
+	# two operands a bilinear op caches for its backward rule. All four are as
 	# large as the activations themselves and would otherwise stay attached to
 	# the module for as long as the model is alive. Only tensors are removed,
-	# so a model carrying its own attribute named `input` or `output` keeps it.
-	for name in ("input", "output"):
+	# so a model carrying its own attribute of one of these names keeps it.
+	for name in ("input", "output", "left", "right"):
 		if isinstance(module.__dict__.get(name), torch.Tensor):
 			delattr(module, name)
 
@@ -141,6 +149,175 @@ def _b_hook(module, grad_input, grad_output):
 
 	return module._NON_LINEAR_OPS[type(module)](module, grad_input, 
 		grad_output)
+
+class BilinearOp(torch.nn.Module):
+	"""A bilinear contraction of two tensors, written as a hookable module.
+
+	DeepLIFT attaches its rules to modules, so an operation written as a bare
+	function call has nothing for a rule to attach to and is silently treated
+	as linear. That is why `torch.nn.MultiheadAttention` cannot be attributed
+	directly: its two matmuls and its softmax are function calls. Routing
+	those products through this module instead puts them behind something the
+	`_bilinear` rule can hook, which is what makes an attention block
+	attributable.
+
+	The contraction performed depends on `equation`. The operands are used
+	exactly as passed, so any transpose, reshape, cast, or scaling belongs
+	outside this module, which keeps the backward rule to a single
+	contraction with no bookkeeping.
+
+	The two operands are cached on the module during an attribution call,
+	because the backward rule needs both of them and torch hands a backward
+	hook only the gradients. They are cleared by `_clear_hooks` when the call
+	finishes, and are not cached at all outside one.
+
+
+	Parameters
+	----------
+	equation: str or None, optional
+		The contraction to perform. If None, `torch.matmul(left, right)`. If
+		the string "...,...->...", the elementwise product `left * right`,
+		special-cased because einsum is needlessly slow for it. Any other
+		string is passed to `torch.einsum` with the two operands. Default is
+		None.
+	"""
+
+	def __init__(self, equation: str | None = None):
+		super().__init__()
+		self.equation = equation
+
+	def forward(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+		"""Contract the two operands according to `equation`.
+
+
+		Parameters
+		----------
+		left: torch.tensor
+			The left operand, used exactly as passed.
+
+		right: torch.tensor
+			The right operand, used exactly as passed.
+
+
+		Returns
+		-------
+		out: torch.tensor
+			The contraction of the two operands.
+		"""
+
+		# `_NON_LINEAR_OPS` is attached to every module only while the
+		# DeepLIFT hooks are active, so these large tensors are cached during
+		# an attribution call and never outside one. The second check keeps a
+		# re-entrant pass, such as the one the local-IG rule makes, from
+		# overwriting the operands an enclosing rule is still reading.
+		if hasattr(self, "_NON_LINEAR_OPS") and not _hooks_disabled():
+			self.left = left.detach()
+			self.right = right.detach()
+
+		if self.equation is None:
+			return torch.matmul(left, right)
+		elif self.equation == "...,...->...":
+			return left * right
+		return torch.einsum(self.equation, left, right)
+
+
+def integrated_gradients_op(
+	K: int = 8,
+	name: str | None = None,
+) -> Callable[..., tuple[torch.Tensor]]:
+	"""Build an operation that attributes any module by integrated gradients.
+
+	The returned function goes in the `additional_nonlinear_ops` dictionary
+	of `deep_lift_shap` or `pisa`, keyed by the module type it should handle,
+	the same way the built-in rules are registered.
+
+	A closed-form DeepLIFT rule has to be derived by hand for each operation,
+	which is only worth doing for the handful of layers that appear in every
+	model. This function covers everything else: given any module, it
+	approximates the DeepLIFT multiplier numerically, so a layer with no
+	analytic rule can still be attributed instead of being silently treated as
+	linear.
+
+	The multiplier is the Jacobian of the module integrated along the straight
+	path from the reference activation ``z0`` to the actual activation ``z``,
+	which is the integrated-gradients construction applied to one layer rather
+	than to the whole model. The integral is approximated by Gauss-Legendre
+	quadrature over ``K`` nodes.
+
+	Note that this does not approximate the closed-form rules. A path integral
+	and the rescale rule coincide for an elementwise function but not for one
+	whose outputs couple across positions, so registering this for a layer
+	that already has a rule gives different attributions that are equally
+	complete, not a more accurate version of the same ones.
+
+	Only vector-Jacobian products are computed, never a full Jacobian. All
+	quadrature nodes and both halves of the upstream gradient are packed into
+	a single autograd call, so the cost is one backward pass over a batch
+	``2 * K`` times the size of the input rather than ``2 * K`` separate
+	passes. The hooks are disabled while that pass runs, so re-entering the
+	module does not overwrite the cached activations the rule is reading.
+
+
+	Parameters
+	----------
+	K: int, optional
+		The number of Gauss-Legendre quadrature points used to approximate the
+		path integral. Higher values give a more accurate multiplier at a
+		proportionally larger batch in the single autograd call. Default is 8.
+
+	name: str or None, optional
+		A suffix for the returned hook's ``__name__``, which is otherwise
+		``_integrated_gradients_op_fn_K{K}``. Only affects debugging output.
+		Default is None.
+
+
+	Returns
+	-------
+	hook: callable
+		A function with the signature ``hook(module, grad_input, grad_output)``,
+		suitable for passing to ``deep_lift_shap`` or ``pisa`` through
+		``additional_nonlinear_ops``.
+	"""
+
+	_nodes_list, _weights_list = _gauss_legendre(K)
+
+	def _hook(module, grad_input, grad_output):
+		dtype, device = grad_output[0].dtype, grad_output[0].device
+		GL_NODES = torch.tensor(_nodes_list, dtype=dtype, device=device)
+		GL_WEIGHTS = torch.tensor(_weights_list, dtype=dtype, device=device)
+
+		z, z0 = module.input.chunk(2)
+		q, q0 = grad_output[0].chunk(2)
+		delta_z = z - z0
+		batch_size = z.shape[0]
+
+		z_path = torch.cat([z0 + t_k * delta_z for t_k in GL_NODES], dim=0)
+		z_eval = torch.cat([z_path, z_path], dim=0).detach().requires_grad_()
+
+		q_path = torch.cat([w_k * q.detach() for w_k in GL_WEIGHTS], dim=0)
+		q0_path = torch.cat([w_k * q0.detach() for w_k in GL_WEIGHTS], dim=0)
+		q_eval = torch.cat([q_path, q0_path], dim=0)
+
+		with torch.enable_grad(), _disable_hooks():
+			y_eval = module(z_eval)
+			grad_eval = torch.autograd.grad(
+				y_eval,
+				z_eval,
+				grad_outputs=q_eval,
+				retain_graph=False,
+				create_graph=False,
+				allow_unused=False,
+			)[0]
+
+		grad, grad0 = grad_eval.chunk(2)
+		grad = grad.reshape(K, batch_size, *z.shape[1:])
+		grad0 = grad0.reshape(K, batch_size, *z0.shape[1:])
+		return (torch.cat([grad.sum(dim=0), grad0.sum(dim=0)]),)
+
+	suffix = name if name is not None else "fn"
+	_hook.__name__ = f"_integrated_gradients_op_{suffix}_K{K}"
+	return _hook
+
 
 def deep_lift_shap(
 	model: torch.nn.Module,

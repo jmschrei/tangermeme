@@ -68,7 +68,7 @@ class CountWrapper(torch.nn.Module):
   outputs (`y['human']`) or bin-summing (`y.sum(dim=-2)`).
 - **Harmonize length across models** — pad or trim wrappers let you compare models
   with different input windows on the same loci (also see
-  [comparing-models.md](comparing-models.md)). Padding with N pushes sequences
+  `references/comparing-models.md`). Padding with N pushes sequences
   out-of-distribution if the model wasn't trained on N; trimming discards flanks.
 - **Squish N models into one** — a wrapper that runs several models and concatenates
   their outputs feeds straight into `marginalize` / `saturation_mutagenesis` as a
@@ -94,7 +94,7 @@ mode afterward. Your wrapper only needs a correct `forward`.
 
 ## Related references
 
-[func-pattern.md](func-pattern.md) (how wrapped models flow through
-perturbations), [deep_lift_shap.md](deep_lift_shap.md) and
-[saturation_mutagenesis.md](saturation_mutagenesis.md) (why a single-tensor
+`references/func-pattern.md` (how wrapped models flow through
+perturbations), `references/deep_lift_shap.md` and
+`references/saturation_mutagenesis.md` (why a single-tensor
 forward is required there).

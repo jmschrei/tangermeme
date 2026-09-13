@@ -52,8 +52,9 @@ annotation with the example index; insert the motif name (or any label) as the
 first column:
 
 ```python
-# names / motif_idxs from annotate_seqlets — see annotate.md. recursive_seqlets
-# returns a 0..n-1 index aligned with the motif_idxs rows, so s.index maps across.
+# names / motif_idxs from annotate_seqlets — see references/annotate.md.
+# recursive_seqlets returns a 0..n-1 index aligned with the motif_idxs rows, so
+# s.index maps across.
 s = seqlets[seqlets['example_idx'] == i].copy()
 s.insert(0, 'motif_name', [names[j] for j in motif_idxs[s.index, 0]])
 plot_logo(X_attr[i], ax=ax, annotations=s, score_key='attribution',
@@ -85,7 +86,7 @@ alongside `X_attr`; a length mismatch warns and falls back to per-character colo
 - `plot_attributions(models, X, func=deep_lift_shap, attribute_kwargs=,
   plot_kwargs=, layout=)` — attribute *and* plot in one call, over one or more
   models × sequences. Its `func` is the attribution function, not the `func(model,
-  X)` plug-point (see [func-pattern.md](func-pattern.md)).
+  X)` plug-point (see `references/func-pattern.md`).
 - `interactive_logo` — the `plot_logo` counterpart with hover tooltips listing every
   column of the annotation. Needs the optional `interactive` extra (`mpld3`). Worth
   it only when each annotation carries several useful fields.
@@ -93,5 +94,5 @@ alongside `X_attr`; a length mismatch warns and falls back to per-character colo
 
 ## Related references
 
-[seqlets.md](seqlets.md) and [annotate.md](annotate.md) (producing annotations),
-[deep_lift_shap.md](deep_lift_shap.md) (producing `X_attr`).
+`references/seqlets.md` and `references/annotate.md` (producing annotations),
+`references/deep_lift_shap.md` (producing `X_attr`).

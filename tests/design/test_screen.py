@@ -6,8 +6,8 @@ import torch
 from tangermeme.utils import random_one_hot
 from tangermeme.predict import predict
 from tangermeme.design import screen
-from .toy_models import SumModel
-from .toy_models import SmallDeepSEA
+from ..toy_models import SumModel
+from ..toy_models import SmallDeepSEA
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
 

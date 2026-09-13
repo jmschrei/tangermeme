@@ -4,6 +4,7 @@
 import numpy
 import torch
 import pytest
+import warnings
 import collections
 
 from tangermeme.utils import characters
@@ -18,6 +19,8 @@ from tangermeme.ersatz import randomize
 from tangermeme.ersatz import shuffle
 from tangermeme.ersatz import dinucleotide_shuffle
 from tangermeme.ersatz import local_dinucleotide_shuffle
+
+from tangermeme.utils import TangermemeWarning
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -920,6 +923,40 @@ def test_local_dinucleotide_shuffle_bin_layout_valid():
 			assert e - s <= 2 * bin_size
 
 
+def test_local_dinucleotide_shuffle_conserves_gc_profile():
+	# The reason this function exists: a whole-sequence dinucleotide shuffle
+	# conserves composition globally but flattens how it varies along the
+	# sequence, and a genomic window is rarely uniform. On a sequence whose two
+	# halves sit at ~0.80 and ~0.18 GC, 128 bp bins hold the GC profile of every
+	# 256 bp window to within 0.10, where a whole-sequence shuffle moves it by
+	# 0.42.
+	numpy.random.seed(0)
+	gc_rich = "".join(numpy.random.choice(list("ACGT"), 1024,
+		p=[.1, .4, .4, .1]))
+	at_rich = "".join(numpy.random.choice(list("ACGT"), 1024,
+		p=[.4, .1, .1, .4]))
+	X = one_hot_encode(gc_rich + at_rich).unsqueeze(0).type(torch.float32)
+
+	def gc_profile(x, w=256):
+		gc = x[1] + x[2]
+		return torch.stack([gc[i:i+w].mean()
+			for i in range(0, x.shape[-1], w)])
+
+	X_local = local_dinucleotide_shuffle(X, n=5, bin_size=128, min_bin_size=64,
+		random_state=0)
+	X_global = dinucleotide_shuffle(X, n=5, random_state=0)
+
+	profile = gc_profile(X[0])
+	local = max(float((gc_profile(X_local[0, j]) - profile).abs().max())
+		for j in range(5))
+	global_ = max(float((gc_profile(X_global[0, j]) - profile).abs().max())
+		for j in range(5))
+
+	assert local < 0.15
+	assert global_ > 0.35
+	assert local < global_
+
+
 def test_local_dinucleotide_shuffle_random_state():
 	X = random_one_hot((2, 4, 200), random_state=0)
 
@@ -958,13 +995,68 @@ def test_local_dinucleotide_shuffle_single_bin_edge():
 		assert _dinuc_counts(characters(X_shuf[0, j])) == _dinuc_counts(seq)
 
 
+def test_local_dinucleotide_shuffle_warns_unshuffled():
+	# A tandem repeat admits a single Eulerian path, so its dinucleotide
+	# shuffle is itself. `dinucleotide_shuffle` raises on that, but only when
+	# asked for more than one shuffle, and this function asks for one per bin.
+	X = one_hot_encode("CAG" * 341 + "C").unsqueeze(0)
+
+	with pytest.warns(TangermemeWarning):
+		X_shuf = local_dinucleotide_shuffle(X, n=2, bin_size=256,
+			min_bin_size=128, random_state=0)
+
+	# The unshuffled sequence is still returned, not replaced or dropped.
+	assert X_shuf.shape == (1, 2, 4, 1024)
+	assert (X_shuf[0, 0] == X[0]).all()
+
+
+def test_local_dinucleotide_shuffle_warns_partially_unshuffled():
+	# One repeat inside an otherwise ordinary sequence warns about that bin
+	# alone rather than the whole call.
+	numpy.random.seed(0)
+	flank = "".join(numpy.random.choice(list("ACGT"), 800))
+	X = one_hot_encode(flank + "CAG" * 133 + "C" + flank).unsqueeze(0)
+
+	with pytest.warns(TangermemeWarning, match="2 of 16 bins"):
+		local_dinucleotide_shuffle(X, n=2, bin_size=256, min_bin_size=128,
+			random_state=0)
+
+
+def test_local_dinucleotide_shuffle_no_warning():
+	X = random_one_hot((2, 4, 2000), random_state=0)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=TangermemeWarning)
+
+		local_dinucleotide_shuffle(X, n=3, bin_size=256, min_bin_size=128,
+			random_state=0)
+
+
 def test_local_dinucleotide_shuffle_raises_shape():
 	X = random_one_hot((2, 4, 200), random_state=0)
 
-	assert_raises(ValueError, local_dinucleotide_shuffle, X[0])
-	assert_raises(ValueError, local_dinucleotide_shuffle, X.unsqueeze(0))
-	assert_raises(ValueError, local_dinucleotide_shuffle,
-		random_one_hot((2, 5, 200), random_state=0))
+	assert_raises(ValueError, local_dinucleotide_shuffle, X[0], 20, 64, 32)
+	assert_raises(ValueError, local_dinucleotide_shuffle, X.unsqueeze(0), 20,
+		64, 32)
+
+	# Validation is on the encoding, not the alphabet size, so what is rejected
+	# here is a tensor that is not one-hot rather than one that is not DNA.
+	assert_raises(ValueError, local_dinucleotide_shuffle, torch.randn(2, 4, 200),
+		20, 64, 32)
+
+
+def test_local_dinucleotide_shuffle_alphabet():
+	# Any one-hot alphabet is accepted, matching dinucleotide_shuffle, which
+	# this function otherwise mirrors.
+	X = random_one_hot((2, 20, 200), random_state=0)
+	X_shuf = local_dinucleotide_shuffle(X, n=3, bin_size=64, min_bin_size=32,
+		random_state=0)
+
+	assert X_shuf.shape == (2, 3, 20, 200)
+	assert X_shuf.dtype == X.dtype
+
+	assert (X_shuf.sum(dim=2) == 1).all()
+	assert (X_shuf.sum(dim=-1) == X.sum(dim=-1).unsqueeze(1)).all()
 
 
 def test_local_dinucleotide_shuffle_raises_bin_size():

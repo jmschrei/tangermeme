@@ -87,13 +87,13 @@ y_before, y_after = insertion_effect(model, X, ins, left=False)
 
 ## From a VCF
 
-Read variants with `io.read_vcf` (see [io-loci.md](io-loci.md)) and build the COO
+Read variants with `io.read_vcf` (see `references/io-loci.md`) and build the COO
 `substitutions` tensor (`example_idx`, `position` relative to your extracted window,
 `alt` allele index). Remember one row per variant **and one example copy per variant**
 if you want per-variant scores.
 
 ## Related references
 
-[func-pattern.md](func-pattern.md) (swapping `func`/`additional_func_kwargs`),
-[io-loci.md](io-loci.md) (`read_vcf`, extracting the windows),
-[model-wrapping.md](model-wrapping.md) (multi-output / multi-input models).
+`references/func-pattern.md` (swapping `func`/`additional_func_kwargs`),
+`references/io-loci.md` (`read_vcf`, extracting the windows),
+`references/model-wrapping.md` (multi-output / multi-input models).

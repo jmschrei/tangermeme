@@ -33,7 +33,7 @@ product.apply_product(func, model, X, ...)
 `variant_effect` functions. On `product.apply_pairwise` / `apply_product` it is a
 **required first positional argument** with no default — and because of that
 position they do **not** themselves satisfy the contract; see
-[product.md](product.md).
+`references/product.md`.
 
 **Elsewhere in the library `func=` is a different contract entirely.** None of these
 take the `func(model, X)` predictor contract above:
@@ -98,11 +98,11 @@ into `func` into `model(X, *args)`.
 
 `product.apply_pairwise` / `apply_product` are the exception: there `args` defines
 the axes to sweep over rather than per-example inputs, so its rows are *not* aligned
-to `X` (see [product.md](product.md)).
+to `X` (see `references/product.md`).
 
 ## Related references
 
-[motif-effects.md](motif-effects.md) for marginalize/ablate/space specifics,
-[deep_lift_shap.md](deep_lift_shap.md) and
-[saturation_mutagenesis.md](saturation_mutagenesis.md) for the attribution
-methods, [model-wrapping.md](model-wrapping.md) for adapting multi-output models.
+`references/motif-effects.md` for marginalize/ablate/space specifics,
+`references/deep_lift_shap.md` and
+`references/saturation_mutagenesis.md` for the attribution
+methods, `references/model-wrapping.md` for adapting multi-output models.

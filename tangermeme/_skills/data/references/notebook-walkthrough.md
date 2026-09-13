@@ -10,7 +10,7 @@ exact signatures and footguns. Read those before relying on a step.
 
 Assumed layout: a one-hot input of shape `(batch, 4, length)`, a model where
 `y = model(X)` returns a single tensor (wrap yours first if not — see
-[model-wrapping.md](model-wrapping.md)).
+`references/model-wrapping.md`).
 
 ```python
 # === Cell 1: setup ===
@@ -32,7 +32,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model = torch.load("model.pt", weights_only=False)
 
 # If the model is multi-output (returns a list) or multi-input, wrap it so that
-# forward returns a single tensor before attribution/design. See model-wrapping.md.
+# forward returns a single tensor before attribution/design. See
+# references/model-wrapping.md.
 # class Wrapper(torch.nn.Module):
 #     def __init__(self, model): super().__init__(); self.model = model
 #     def forward(self, X, *args): return self.model(X, *args)[0]
@@ -42,8 +43,8 @@ model = torch.load("model.pt", weights_only=False)
 ```python
 # === Cell 3: load peaks + sequence (and observed signal) ===
 # extract_loci returns a VARIABLE number of objects depending on which kwargs are
-# set — here (sequences + signals) it returns two. See io-loci.md for the full
-# return-order rules and the counts/exclusion filters.
+# set — here (sequences + signals) it returns two. See references/io-loci.md
+# for the full return-order rules and the counts/exclusion filters.
 from tangermeme.io import extract_loci
 
 X, y = extract_loci(
@@ -79,7 +80,7 @@ plt.show()
 # === Cell 5: attributions at loci of interest ===
 # Pick a few loci to inspect (here the highest-signal peaks). For a multi-task
 # model you MUST pass target= or you silently attribute output 0. random_state=
-# makes the shuffled references reproducible. See deep_lift_shap.md.
+# makes the shuffled references reproducible. See references/deep_lift_shap.md.
 from tangermeme.deep_lift_shap import deep_lift_shap
 from tangermeme.plot import plot_logo
 
@@ -97,7 +98,7 @@ plt.show()
 # === Cell 6 (optional): ISM as a cross-check / fallback ===
 # Use ISM if DeepLIFT/SHAP convergence deltas are high, an op can't be registered,
 # or the model is massively multi-task. Restrict to a window — cost scales with
-# length. See saturation_mutagenesis.md.
+# length. See references/saturation_mutagenesis.md.
 from tangermeme.saturation_mutagenesis import saturation_mutagenesis
 
 X_ism = saturation_mutagenesis(model, X[idx], start=900, end=1200, target=0,
@@ -110,8 +111,9 @@ plt.show()
 # === Cell 7: call seqlets from the attributions ===
 # recursive_seqlets takes per-position PROJECTED attribution sums, shape
 # (n, length) — collapse the channel axis. Returns a DataFrame sorted by p-value
-# with columns example_idx / start / end / attribution / p-value. See seqlets.md;
-# label/count the seqlets with annotate.md, draw them with plot.md.
+# with columns example_idx / start / end / attribution / p-value. See
+# references/seqlets.md; label/count the seqlets with references/annotate.md,
+# draw them with references/plot.md.
 from tangermeme.seqlet import recursive_seqlets
 
 # Attribute the whole batch first (here just the few loci; scale up as needed).
@@ -125,7 +127,7 @@ print(seqlets.head())
 ```python
 # === Cell 8: test a motif hypothesis with marginalization ===
 # Did a motif you found in the seqlets actually drive the model? Insert it into
-# shuffled backgrounds and measure the delta. See motif-effects.md.
+# shuffled backgrounds and measure the delta. See references/motif-effects.md.
 from tangermeme.ersatz import dinucleotide_shuffle
 from tangermeme.marginalize import marginalize
 
@@ -141,12 +143,13 @@ print("mean marginal effect:", delta.mean().item())
 - **Multiple models / comparisons** — loop the same `predict` / `deep_lift_shap`
   calls over a list of models; the device/state handling is per-call and safe. To
   keep the results *comparable* (shared references, output harmonization, scale
-  normalization, memory), see [comparing-models.md](comparing-models.md).
+  normalization, memory), see `references/comparing-models.md`.
 - **Variant effects** — `tangermeme.variant_effect.*` with variants from
-  `io.read_vcf` (see [variant-effect.md](variant-effect.md)).
-- **Spacing / cooperativity** — `tangermeme.space.space` (see motif-effects.md).
-- **Sequence design** — [design.md](design.md).
+  `io.read_vcf` (see `references/variant-effect.md`).
+- **Spacing / cooperativity** — `tangermeme.space.space` (see
+  `references/motif-effects.md`).
+- **Sequence design** — `references/design.md`.
 - **Any perturbation as attributions** — pass `func=deep_lift_shap` into
-  marginalize/ablate/etc. ([func-pattern.md](func-pattern.md)).
+  marginalize/ablate/etc. (`references/func-pattern.md`).
 
-Each step above links to its deep-dive file inline; see those for the footguns.
+Each step above names its deep-dive file inline; see those for the footguns.

@@ -66,5 +66,5 @@ Batches are built iteratively, so the full product is never materialized in memo
 
 ## Related references
 
-[func-pattern.md](func-pattern.md) (the `func`/`additional_func_kwargs` contract),
-[model-wrapping.md](model-wrapping.md) (passing per-example extra inputs).
+`references/func-pattern.md` (the `func`/`additional_func_kwargs` contract),
+`references/model-wrapping.md` (passing per-example extra inputs).

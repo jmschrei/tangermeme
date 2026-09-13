@@ -140,7 +140,7 @@ it never reaches, `screen` loops forever — give it one or the other.
   holds the others near baseline rather than ignoring them.
 - `y` (the target `y_bar`) and `loss` must be shaped consistently with the model
   output. For multi-output models, either pass a list `y` matching the outputs or
-  wrap the model to a single objective head (see [model-wrapping.md](model-wrapping.md)),
+  wrap the model to a single objective head (see `references/model-wrapping.md`),
   and use `output_mask` to focus the loss.
 - The choice of loss + target *is* the design objective — get these right before
   worrying about iterations. Euclidean/MSE is the usual default; supply a custom
@@ -156,6 +156,6 @@ substitution.
 
 ## Related references
 
-[model-wrapping.md](model-wrapping.md) (collapsing multi-output models to a design
-objective), [func-pattern.md](func-pattern.md) (the `func=` candidate generator in
+`references/model-wrapping.md` (collapsing multi-output models to a design
+objective), `references/func-pattern.md` (the `func=` candidate generator in
 `screen`).

@@ -14,7 +14,7 @@ attr_sums = X_attr.sum(dim=1)        # (n, 4, length) -> (n, length)
 ```
 
 Do **not** pass the `(n, 4, length)` attributions or hypothetical attributions.
-(See [deep_lift_shap.md](deep_lift_shap.md): hypothetical is for building CWMs, not
+(See `references/deep_lift_shap.md`: hypothetical is for building CWMs, not
 for seqlet calling.)
 
 ## recursive_seqlets — sharp, p-value based
@@ -38,7 +38,7 @@ seqlets = recursive_seqlets(attr_sums, threshold=0.01, additional_flanks=0)
   `p-value` is unchanged — it is computed on the un-padded core. Flanks may overlap
   neighbors even though the cores cannot, so flanked spans are not disjoint, their
   attributions can double-count the same positions, and
-  `pairwise_annotations_spacing` rejects them (see [annotate.md](annotate.md)).
+  `pairwise_annotations_spacing` rejects them (see `references/annotate.md`).
 - **Over-calls on a single example** (it can't fit a null from one sequence) — pass
   many examples, or threshold by magnitude.
 
@@ -66,11 +66,11 @@ spans. Both flow straight into annotation and plotting.
 
 ## Related references
 
-- **Label / count seqlets** → [annotate.md](annotate.md) (`annotate_seqlets`,
+- **Label / count seqlets** → `references/annotate.md` (`annotate_seqlets`,
   `count_annotations`, `pairwise_annotations`).
-- **Plot seqlets** → [plot.md](plot.md). Three things to get right: filter to one
-  example, pass `score_key='attribution'`, and move a name column to the front —
-  `plot_logo` reads the label from column 0, which in a seqlet frame is
+- **Plot seqlets** → `references/plot.md`. Three things to get right: filter to
+  one example, pass `score_key='attribution'`, and move a name column to the
+  front — `plot_logo` reads the label from column 0, which in a seqlet frame is
   `example_idx`.
-- **Where the attributions come from** → [deep_lift_shap.md](deep_lift_shap.md)
+- **Where the attributions come from** → `references/deep_lift_shap.md`
   (projected vs hypothetical).

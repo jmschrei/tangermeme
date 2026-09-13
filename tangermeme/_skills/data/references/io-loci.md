@@ -103,7 +103,7 @@ Feed variants into `tangermeme.variant_effect.*` to score substitution / deletio
 
 ## Related references
 
-[notebook-walkthrough.md](notebook-walkthrough.md) (loading is step 3 of the
-end-to-end flow), [model-wrapping.md](model-wrapping.md) (the
+`references/notebook-walkthrough.md` (loading is step 3 of the
+end-to-end flow), `references/model-wrapping.md` (the
 `(batch, channels, length)` layout the loaded `X` follows),
-[motif-effects.md](motif-effects.md) (consuming the loaded sequences).
+`references/motif-effects.md` (consuming the loaded sequences).

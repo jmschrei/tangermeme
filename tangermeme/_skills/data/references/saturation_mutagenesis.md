@@ -1,7 +1,7 @@
 # Saturation mutagenesis (ISM) in tangermeme
 
 `tangermeme.saturation_mutagenesis.saturation_mutagenesis` is an attribution
-method, alongside [deep_lift_shap.md](deep_lift_shap.md). In-silico saturation
+method, alongside `references/deep_lift_shap.md`. In-silico saturation
 mutagenesis (ISM) mutates every position to every base and measures the change in
 the model's output. It is **purely forward-pass**, so it sidesteps the gradient /
 custom-backward machinery entirely.
@@ -32,7 +32,7 @@ saturation_mutagenesis(
 to each batch of predictions after the forward pass (pick a head, apply a final
 non-linearity). It is applied identically to the reference prediction and to every
 perturbation, so attributions are computed on the post-processed values. This is
-**not** the `func(model, X)` plug-point — see [func-pattern.md](func-pattern.md).
+**not** the `func(model, X)` plug-point — see `references/func-pattern.md`.
 
 ## When to use ISM instead of DeepLIFT/SHAP
 
@@ -74,7 +74,7 @@ model must not return a *list* of tensors. `target=None` (the default) averages 
 attribution across **all** tasks; for a model with thousands of heterogeneous heads
 (binding + expression + histone) that average is noisy and uninterpretable, so pass
 an int or slice to subset to the output(s) you care about first, or wrap the model —
-see [model-wrapping.md](model-wrapping.md). `target=N` is exactly equivalent to a
+see `references/model-wrapping.md`. `target=N` is exactly equivalent to a
 single-task slice wrapper.
 
 ## Return type
@@ -99,7 +99,7 @@ single-task slice wrapper.
 `saturation_mutagenesis` satisfies the `func=` contract, so it drops into
 `marginalize`, `ablate`, `variant_effect.*`, etc. to get ISM scores before/after
 an edit — route ISM kwargs via `additional_func_kwargs` (see
-[func-pattern.md](func-pattern.md)).
+`references/func-pattern.md`).
 
 ## Plotting
 
@@ -110,5 +110,5 @@ plot_logo(X_ism[0], ax=ax)
 
 ## Related references
 
-[deep_lift_shap.md](deep_lift_shap.md) (the gradient-based attribution method),
-[model-wrapping.md](model-wrapping.md), [func-pattern.md](func-pattern.md).
+`references/deep_lift_shap.md` (the gradient-based attribution method),
+`references/model-wrapping.md`, `references/func-pattern.md`.

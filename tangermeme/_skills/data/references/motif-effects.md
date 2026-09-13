@@ -99,14 +99,14 @@ axis** and the second axis differs between them:
 - `marginalize_annotations` → `(n_annotations, len(X0), ...)` for both, since each
   annotation's span is substituted into every background in `X0`.
 
-Index carefully before taking deltas. See [annotate.md](annotate.md) for building
+Index carefully before taking deltas. See `references/annotate.md` for building
 the annotation tensor.
 
 ## Attributions instead of predictions
 
 All three take `func=`. Swap in `deep_lift_shap` to see the effect on
 attributions rather than predictions; route attribution kwargs through
-`additional_func_kwargs=` (see [func-pattern.md](func-pattern.md)):
+`additional_func_kwargs=` (see `references/func-pattern.md`):
 
 ```python
 from tangermeme.deep_lift_shap import deep_lift_shap
@@ -125,6 +125,6 @@ attr_before, attr_after = marginalize(model, X, "CTCAGTGATG", func=deep_lift_sha
 
 ## Related references
 
-[func-pattern.md](func-pattern.md), [deep_lift_shap.md](deep_lift_shap.md),
-[saturation_mutagenesis.md](saturation_mutagenesis.md),
-[model-wrapping.md](model-wrapping.md).
+`references/func-pattern.md`, `references/deep_lift_shap.md`,
+`references/saturation_mutagenesis.md`,
+`references/model-wrapping.md`.
