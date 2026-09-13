@@ -402,7 +402,10 @@ def extract_matching_loci(
 	Parameters
 	----------
 	loci: str or pandas dataframe
-		A filepath to a bed file, or a pandas dataframe in bed format.
+		A filepath to a bed file, or a pandas dataframe in bed format. The
+		first three columns are taken as the chrom, start, and end regardless
+		of what they are named, and the chromosome column is coerced to a
+		string so that it matches the record names used by the FASTA.
 
 	fasta: str
 		The filepath to the FASTA file to extract sequences from.
@@ -436,9 +439,10 @@ def extract_matching_loci(
 		`bigwig` raises a `TypeError`. Default is 0.5.
 
 	chroms: list, tuple, or None, optional
-		A set of chromosomes to use when choosing matching loci. If None, only
-		use chromosomes that the loci themselves are drawn from. Default is
-		None.
+		A set of chromosomes to use when choosing matching loci. Entries are
+		coerced to strings, so `[1, 2]` and `['1', '2']` are equivalent.
+		If None, only use chromosomes that the loci themselves are drawn from.
+		Default is None.
 
 	random_state: numpy.random.RandomState, int or None, optional
 		A random state to use for sampling loci. If a RandomState object or
@@ -467,11 +471,21 @@ def extract_matching_loci(
 	if not isinstance(random_state, numpy.random.RandomState):
 		random_state = numpy.random.RandomState(random_state)
 
+	names = ['chrom', 'start', 'end']
 	if isinstance(loci, str):
 		loci = pandas.read_csv(loci, sep='\t', usecols=[0, 1, 2], header=None,
-			index_col=False, names=['chrom', 'start', 'end'])
+			index_col=False, names=names)
+	else:
+		loci = loci.iloc[:, [0, 1, 2]].copy()
+		loci.columns = names
+
+	# Chromosome names must be strings so that they match the names used by
+	# pyfaidx/pybigtools. Otherwise, genomes whose chromosomes are named "1",
+	# "2", etc. get read in as integers by pandas and fail to match.
+	loci['chrom'] = loci['chrom'].astype(str)
 
 	if chroms is not None:
+		chroms = [str(chrom) for chrom in chroms]
 		loci = loci[numpy.isin(loci['chrom'], chroms)]
 	else:
 		chroms = numpy.unique(loci['chrom'])

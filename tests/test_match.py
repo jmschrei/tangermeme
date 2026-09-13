@@ -315,6 +315,59 @@ def test_extract_matching_loci():
 	assert X1[:, [1, 2]].sum() == 13
 
 
+def test_extract_matching_loci_int_chroms():
+	# Genomes whose chromosomes are named "1", "2", etc. would otherwise get
+	# read in as integers by pandas and fail to match the string names used
+	# by pyfaidx.
+	regions = extract_matching_loci("tests/data/test_int.bed",
+		"tests/data/test_int_chroms.fa", chroms=['1'], in_window=10,
+		out_window=10, random_state=0)
+
+	regions0 = extract_matching_loci("tests/data/test.bed",
+		"tests/data/test.fa", chroms=['chr1'], in_window=10, out_window=10,
+		random_state=0)
+
+	assert regions.shape == (3, 3)
+	assert tuple(regions.columns) == ('chrom', 'start', 'end')
+	assert tuple(numpy.unique(regions['chrom'])) == ('1',)
+	assert tuple(regions['start']) == tuple(regions0['start'])
+	assert tuple(regions['end']) == tuple(regions0['end'])
+
+	# Integer chromosome names are coerced to strings as well
+	regions = extract_matching_loci("tests/data/test_int.bed",
+		"tests/data/test_int_chroms.fa", chroms=[1], in_window=10,
+		out_window=10, random_state=0)
+
+	assert tuple(numpy.unique(regions['chrom'])) == ('1',)
+	assert tuple(regions['start']) == tuple(regions0['start'])
+
+
+def test_extract_matching_loci_int_chroms_df():
+	loci = pandas.read_csv("tests/data/test_int.bed", sep='\t', header=None)
+
+	regions = extract_matching_loci(loci, "tests/data/test_int_chroms.fa",
+		chroms=['1'], in_window=10, out_window=10, random_state=0)
+
+	assert regions.shape == (3, 3)
+	assert tuple(numpy.unique(regions['chrom'])) == ('1',)
+
+
+def test_extract_matching_loci_int_chroms_default():
+	# When chroms is None the set is derived from the loci themselves, so the
+	# coercion has to happen before numpy.unique rather than only on a
+	# user-provided chroms list.
+	regions = extract_matching_loci("tests/data/test_int.bed",
+		"tests/data/test_int_chroms.fa", in_window=10, out_window=10,
+		random_state=0)
+
+	regions0 = extract_matching_loci("tests/data/test.bed",
+		"tests/data/test.fa", in_window=10, out_window=10, random_state=0)
+
+	assert tuple(numpy.unique(regions['chrom'])) == ('1', '2')
+	assert tuple(regions['start']) == tuple(regions0['start'])
+	assert tuple(regions['end']) == tuple(regions0['end'])
+
+
 def test_extract_matching_loci_start_edge():
 	peaks = pandas.DataFrame({
 		'chrom': ['chr1', 'chr1', 'chr1'],
