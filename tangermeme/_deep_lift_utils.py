@@ -485,7 +485,7 @@ def _softmax(module, grad_input, grad_output):
 	dense part of the dependence entirely. This rule decomposes the operation
 	into steps that each have an exact multiplier and then chains them
 
-		a_i = exp(x_i - c),   d = sum_i a_i,   r = 1 / d,   y_k = a_k * r
+		a_i = exp(x_i - c),   s = sum_i a_i,   v = 1 / s,   y_i = a_i * v
 
 	where c is subtracted from both the observed and the reference logits for
 	numerical stability and cancels out of the result. The exponential and
@@ -538,7 +538,7 @@ def _softmax(module, grad_input, grad_output):
 			"so normalizing over it would mix the two.")
 
 	x, x_ref = module.input.chunk(2, dim=0)
-	gout, gout_ref = grad_output[0].chunk(2, dim=0)
+	grad_out, grad_out_ref = grad_output[0].chunk(2, dim=0)
 
 	c = torch.maximum(
 		x.max(dim=dim, keepdim=True).values,
@@ -546,32 +546,35 @@ def _softmax(module, grad_input, grad_output):
 	)
 	a = torch.exp(x - c)
 	a_ref = torch.exp(x_ref - c)
-	d = a.sum(dim=dim, keepdim=True)
-	d_ref = a_ref.sum(dim=dim, keepdim=True)
-	r = d.reciprocal()
-	r_ref = d_ref.reciprocal()
-	y = a * r
-	y_ref = a_ref * r_ref
+	s = a.sum(dim=dim, keepdim=True)
+	s_ref = a_ref.sum(dim=dim, keepdim=True)
+	v = s.reciprocal()
+	v_ref = s_ref.reciprocal()
+	y = a * v
+	y_ref = a_ref * v_ref
 
-	# Multiplier for x_i -> exp(x_i - c), with derivative fallback.
+	# Multiplier for x_j -> a_j, with derivative fallback.
+	# m_{x_j -> a_j} = Δa_j / Δx_j
 	delta_x = x - x_ref
 	delta_a = a - a_ref
 	mult_x_to_a = torch.where(delta_x.abs() > 1e-6, delta_a / delta_x, a_ref)
 
-	# Log-ratio multipliers for the direct numerator path and denominator path.
-	#     m_{a_i -> y_k} =
-	#       1{i = k} * (Δy_k / Δlog(y_k)) * (Δlog(a_k) / Δa_k)
-	#       - (1 / (d * d_ref)) * (Δy_k / Δlog(y_k)) * (Δlog(r) / Δr)
-	delta_log_a = x - x_ref
-	delta_log_r = torch.log(r) - torch.log(r_ref)
-	delta_log_y = delta_log_a + delta_log_r
+	# Define a few intermediate quantities for the log-ratio multipliers.
 	delta_y = y - y_ref
-	delta_r = r - r_ref
+	delta_v = v - v_ref
+	delta_log_a = x - x_ref
+	delta_log_v = torch.log(v) - torch.log(v_ref)
+	delta_log_y = delta_log_a + delta_log_v
 
 	delta_y_over_delta_log_y = torch.where(
 		delta_log_y.abs() > 1e-6,
 		delta_y / delta_log_y,
 		y_ref,
+	)
+	delta_log_v_over_delta_v = torch.where(
+		delta_v.abs() > 1e-6,
+		delta_log_v / delta_v,
+		v_ref.reciprocal(),
 	)
 	# An attention mask drives its masked logits to a large negative value in
 	# both the example and the reference, so `a` and `a_ref` underflow to
@@ -585,34 +588,34 @@ def _softmax(module, grad_input, grad_output):
 		delta_log_a / delta_a,
 		a_ref_safe.reciprocal(),
 	)
-	delta_log_r_over_delta_r = torch.where(
-		delta_r.abs() > 1e-6,
-		delta_log_r / delta_r,
-		r_ref.reciprocal(),
-	)
 
+	# Log-ratio multipliers for the numerator path (m_{a_i -> y_i}) and the denominator path (m_{v -> y_i}).
+	#  m_{a_i -> y_i} = (Δy_i / Δlog(y_i)) * (Δlog(a_i) / Δa_i)
+	#  m_{v -> y_i}   = (Δy_i / Δlog(y_i)) * (Δlog(v) / Δv)
 	mult_a_to_y = delta_y_over_delta_log_y * delta_log_a_over_delta_a
-	mult_r_to_y = delta_y_over_delta_log_y * delta_log_r_over_delta_r
-	reciprocal_mult = -1.0 / (d * d_ref)
+	mult_v_to_y = delta_y_over_delta_log_y * delta_log_v_over_delta_v
 
-	# Combine the direct a_i -> y_i contribution with the dense r -> y_k path.
-	#     gin_i = m_{x_i -> a_i} * [
-	#         gout_i * (Δy_i / Δlog(y_i)) * (Δlog(a_i) / Δa_i)
-	#         - sum_k gout_k
-	#             * (1 / (d * d_ref))
-	#             * (Δy_k / Δlog(y_k))
-	#             * (Δlog(r) / Δr)
+	# Combine the a_i -> y_i path with the v -> y_i path. Also multiply by the upstream gradient (grad_out) to
+	# derive the downstream gradient (grad_in).
+	#
+	#     grad_in_j = m_{x_j -> a_j} * [
+	#         grad_out_j * (Δy_j / Δlog(y_j)) * (Δlog(a_j) / Δa_j)
+	#         - sum_i grad_out_i
+	#             * (1 / (s * s_ref))
+	#             * (Δy_i / Δlog(y_i))
+	#             * (Δlog(v) / Δv)
 	#     ]
-	gin = mult_x_to_a * (
-		gout * mult_a_to_y
-		+ (gout * mult_r_to_y * reciprocal_mult).sum(dim=dim, keepdim=True)
+	reciprocal_mult = -1.0 / (s * s_ref)
+	grad_in = mult_x_to_a * (
+		grad_out * mult_a_to_y
+		+ (grad_out * mult_v_to_y * reciprocal_mult).sum(dim=dim, keepdim=True)
 	)
-	gin_ref = mult_x_to_a * (
-		gout_ref * mult_a_to_y
-		+ (gout_ref * mult_r_to_y * reciprocal_mult).sum(dim=dim, keepdim=True)
+	grad_in_ref = mult_x_to_a * (
+		grad_out_ref * mult_a_to_y
+		+ (grad_out_ref * mult_v_to_y * reciprocal_mult).sum(dim=dim, keepdim=True)
 	)
 
-	return (torch.cat([gin, gin_ref], dim=0),)
+	return (torch.cat([grad_in, grad_in_ref], dim=0),)
 
 
 def _gauss_legendre(n_points):
