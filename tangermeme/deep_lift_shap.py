@@ -240,15 +240,15 @@ def integrated_gradients_op(
 
 	The multiplier is the Jacobian of the module integrated along the straight
 	path from the reference activation ``z0`` to the actual activation ``z``,
-	which is the integrated-gradients construction applied to one layer rather
-	than to the whole model. The integral is approximated by Gauss-Legendre
-	quadrature over ``K`` nodes.
+	which is the integrated-gradients construction (Sundararajan et al, PMLR 2017)
+	applied to one layer rather than to the whole model. The integral is approximated
+	by Gauss-Legendre quadrature over ``K`` nodes.
 
 	Note that this does not approximate the closed-form rules. A path integral
-	and the rescale rule coincide for an elementwise function but not for one
-	whose outputs couple across positions, so registering this for a layer
-	that already has a rule gives different attributions that are equally
-	complete, not a more accurate version of the same ones.
+	and the closed-form rule coincide for certain function types (eg elementwise
+	functions, bilinear tensor products). In general, however, that is not the case,
+	and so registering this for a layer that already has a rule gives different attributions
+	that are equally complete, not a more accurate version of the same ones.
 
 	Only vector-Jacobian products are computed, never a full Jacobian. All
 	quadrature nodes and both halves of the upstream gradient are packed into

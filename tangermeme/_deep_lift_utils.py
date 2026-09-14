@@ -1,5 +1,6 @@
 # _deep_lift_utils.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
+# adapted from code written by Valeh Amiri and Ruchir Rastogi
 
 from __future__ import annotations
 
@@ -208,27 +209,29 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 	between them. Neither layer is elementwise: every output position depends
 	on every input position in the normalized window, through the mean and
 	the variance. A rescale rule applied position by position would therefore
-	miss most of the dependence, which is why these need a closed form rather
-	than the generic correction.
+	miss most of the dependence.
 
-	Writing y_i = g_i * a_i * v + b_i, where a_i = x_i - mu and
-	v = (var + eps) ** -0.5, the multiplier from input j to output i is
+	Writing y_i = γ_i * a_i * v + β_i, where a_i = x_i - μ and
+	v = (σ^2 + ε) ** -0.5, the multiplier from input j to output i is
 
-		m_ji = g_i * [ (v + v_ref)/2 * (d_ij - 1/D)
-			+ (a_i + a_ref_i)/2 * (dv / dvar) * (a_j + a_ref_j) / D ]
+		m_ji = γ_i * [ (v + v_ref)/2 * (δ_ij - 1/D)
+			+ (a_i + a_ref_i)/2 * (Δv / Δσ^2) * (a_j + a_ref_j) / D ]
 
-	Multiplying by the upstream gradient and summing over the outputs gives
-	the vectorized form actually computed below, in two terms
+	where δ_ij is the Kronecker delta, equal to 1 if i = j and 0 otherwise.
 
-		grad_in_j = (v + v_ref)/2 * (gt_j - mean(gt))
-			+ (dv / dvar) * (a_j + a_ref_j)/(2D) * sum_i[gt_i * (a_i + a_ref_i)]
+	Multiplying by the upstream gradient g_i (short for grad_out_i) and summing over
+	the outputs gives the vectorized form actually computed below, in two terms
 
-	where gt_i is the upstream gradient scaled by the affine weight. RMSNorm
-	is the same expression with a_i = x_i, no mean subtraction, and so no
-	mean term in the first half.
+		grad_in_j = (v + v_ref)/2 * (g_tilde_j - mean(g_tilde_j))   [Term 1]
+			+ (Δv / Δ(σ^2)) * (a_j + a_ref_j)/(2D) * sum_i[g_tilde_i * (a_i + a_ref_i)]   [Term 2]
 
-	The ratio dv/dvar is evaluated in closed form as
-	-v**2 * v_ref**2 / (v + v_ref) rather than as a difference quotient, which
+	where g_tilde_i = g_i * γ_i, is the upstream gradient scaled by the affine weight.
+
+	RMSNorm is the same expression with a_i = x_i, no mean subtraction, and so no mean
+	term in the first half.
+
+	The ratio Δv / Δ(σ^2) is evaluated in closed form as
+	-v^2 * v_ref^2 / (v + v_ref) rather than as a difference quotient, which
 	avoids the cancellation that would otherwise dominate when the two
 	variances are close.
 	
@@ -401,11 +404,11 @@ def _bilinear(module, grad_input, grad_output):
 
 	A product of two quantities that both vary has no single rescale ratio,
 	because the change in the output cannot be assigned to one operand or the
-	other. The symmetric rule splits it evenly: each operand is credited with
-	the gradient of the contraction evaluated at the midpoint between the
-	observed and reference values of the other. Summed over both operands
-	this reproduces the change in the output exactly, which is what keeps
-	summation-to-delta intact across the layer.
+	other. The midpoint product rule splits it evenly: each operand is credited
+	with the gradient of the contraction evaluated at the midpoint between the
+	observed and reference values of the other. Summed over both operands this
+	reproduces the change in the output exactly, which is what keeps summation-to-delta
+	intact across the layer.
 
 	The contraction is re-run on the midpoints under `torch.enable_grad` and
 	differentiated, rather than the rule being written out per equation, so

@@ -333,11 +333,10 @@ collides, which is how you replace one you disagree with.
 
 ### Route 2 — `integrated_gradients_op` for a module with no closed form
 
-When the op genuinely cannot be expressed with the registered types — a learned
-module with its own internal non-linearity, a custom kernel — register a numeric
-rule for it instead. `integrated_gradients_op(K=8)` returns a hook that integrates
-the module's Jacobian along the path from the reference activation to the observed
-one, so the layer is attributed rather than silently linearized:
+If deriving a closed-form rule (and/or its corresponding Jacobian-vector-product) is too
+involved, you may register a numeric rule for it instead. `integrated_gradients_op(K=8)`
+returns a hook that integrates the module's Jacobian along the path from the reference
+activation to the observed one:
 
 ```python
 from tangermeme.deep_lift_shap import integrated_gradients_op
