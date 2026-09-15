@@ -101,7 +101,7 @@ with an unregistered op can still highlight motif-shaped patterns that look real
 *vanish* once the op is registered. Motif-shaped ≠ correct; only low deltas are.
 Cross-check a suspicious logo against the actual prediction.
 
-###c
+### Registering a custom non-linearity
 
 A rule is registered per module *type*. These are the types `deep_lift_shap` and
 `pisa` both cover:
@@ -114,8 +114,8 @@ A rule is registered per module *type*. These are the types `deep_lift_shap` and
   `tangermeme.deep_lift_shap.BilinearOp`.
 
 Anything not in that list and not linear is a hole. `Conv*`, `Linear`,
-`BatchNorm*`, `Dropout`, `Embedding`, `AvgPool*`, adds, concatenations and
-reshapes need no rule — the ordinary chain rule is already exact for them.
+`BatchNorm*`, `Embedding`, `AvgPool*`, adds, concatenations and
+reshapes need no custom rule.
 
 ### Precision: CPU vs CUDA, and the fp64 escape hatch
 
@@ -127,7 +127,8 @@ references=refs.double(), ...)` drops them to ~1e-16 (slower; fp64).
 
 When the delta is real rather than precision noise, the next two sections find
 the op responsible and fix it. When nothing can be hooked — a fused kernel with
-no functional form — switch to ISM, see `references/saturation_mutagenesis.md`.
+no functional form — consider using local integrated gradients. If for some reason
+that cannot work either, switch to ISM, see `references/saturation_mutagenesis.md`.
 
 ## Auditing a model for unhooked operations
 
