@@ -126,17 +126,16 @@ genuinely precision-driven deltas, `deep_lift_shap(model.double(), X.double(),
 references=refs.double(), ...)` drops them to ~1e-16 (slower; fp64).
 
 When the delta is real rather than precision noise, the next two sections find
-the op responsible and fix it. When nothing can be hooked — a fused kernel with
-no functional form — consider using local integrated gradients. If for some reason
-that cannot work either, switch to ISM, see `references/saturation_mutagenesis.md`.
+the op responsible and fix it. When nothing can be hooked, or when custom closed-form
+rules are difficult or impractical to derive, consider using local integrated gradients.
+If for some reason that cannot work either, switch to ISM, see `references/saturation_mutagenesis.md`.
 
 ## Auditing a model for unhooked operations
 
-Two things go wrong, and they need different checks. A **custom module** with no
+Two things can go wrong, and they need different checks. A **custom module** with no
 rule is visible in `model.modules()`. A **functional** call — `torch.matmul`,
-`F.softmax`, `torch.nn.MultiheadAttention`'s fused internals — is not a module at
-all, so there is nothing for a rule to attach to and nothing in the module list to
-notice. Both are silently treated as linear.
+`F.softmax` — is not a module at all, so there is nothing for a rule to attach to
+and nothing in the module list to notice. Both are silently treated as linear.
 
 Drop this in and run it before trusting any attribution from an unfamiliar model.
 It walks the forward pass, attributes every torch call to the innermost module
@@ -203,7 +202,7 @@ Each finding is `(owning module type, operation)`. Measured on four models:
 
 | model | `audit` reports | meaning |
 |---|---|---|
-| conv + `MultiheadAttention` | `('MultiheadAttention', 'multi_head_attention_forward')` | fused kernel, **not hookable at all** |
+| conv + `MultiheadAttention` | `('MultiheadAttention', 'multi_head_attention_forward')` | `MultiheadAttention` module internally invokes a fused kernel |
 | `TransformerEncoderLayer` | the above, plus `('TransformerEncoderLayer', 'relu')` | functional activation, rewritable |
 | the `Gated` model below, `torch.softmax(a(X), -1) * b(X)` | `('Gated', 'mul')`, `('Gated', 'softmax')` | functional ops, rewritable |
 | attention built from `BilinearOp` + `nn.Softmax` | only the constant `'div'` and `'mul'` | false positives — see below |
@@ -336,8 +335,8 @@ collides, which is how you replace one you disagree with.
 
 If deriving a closed-form rule (and/or its corresponding Jacobian-vector-product) is too
 involved, you may register a numeric rule for it instead. `integrated_gradients_op(K=8)`
-returns a hook that integrates the module's Jacobian along the path from the reference
-activation to the observed one:
+returns a hook that integrates the module's Jacobian along the straight-line path from
+the reference activation to the observed one:
 
 ```python
 from tangermeme.deep_lift_shap import integrated_gradients_op
@@ -346,7 +345,7 @@ X_attr = deep_lift_shap(model, X, references=refs, random_state=0,
     additional_nonlinear_ops={MyOpaqueModule: integrated_gradients_op(K=8)})
 ```
 
-Two constraints:
+Caveats:
 
 - **Single-input modules only.** The rule re-runs `module(z)` with one tensor.
   Registering it for a two-operand module such as `BilinearOp` raises
@@ -356,6 +355,11 @@ Two constraints:
   cost sits outside the wrapped module and on the device. The factor varies enough
   between models and between CPU and CUDA that quoting one here would mislead;
   time your own model with and without it.
+- **Choice of K** Minimally, select a `K` that satisfies summation-to-delta. Increasing
+  `K`, if runtime/compute allow, can improve attribution quality in some cases. There is
+  currently no well-defined guidance for selecting `K`. Choice of `K` is partly dependent
+  on the nature of the function whose partial derivatives we are integrating, and partly on
+  the data regime where it is being evaluated. 
 
 Prefer route 1 when it applies. Route 2 is the fallback for what route 1 cannot
 reach.
