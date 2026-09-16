@@ -563,8 +563,18 @@ def _softmax(module, grad_input, grad_output):
 	a_ref = torch.exp(x_ref - c)
 	s = a.sum(dim=dim, keepdim=True)
 	s_ref = a_ref.sum(dim=dim, keepdim=True)
-	v = s.reciprocal()
-	v_ref = s_ref.reciprocal()
+	# Defensive guard against s (or s_ref) underflowing to exactly 0, which makes
+	# the reciprocal +inf and then poisons the backward pass with NaN via log(v).
+	# This needs a whole softmax window to sit ~88 (fp32) below the shared max c,
+	# i.e. the example and reference logits to diverge that much across the window.
+	# The current call sites can't do this: c is taken over both sides, so a mask
+	# shared by an example and its reference cancels out and leaves a saturated
+	# row uniform, not underflowed. A mask that differs between the two could
+	# reach it. The clamp keeps the reciprocal finite; a fully-underflowed row
+	# carries no attribution mass, so the clamped value itself does not matter.
+	tiny = torch.finfo(s.dtype).tiny
+	v = s.clamp_min(tiny).reciprocal()
+	v_ref = s_ref.clamp_min(tiny).reciprocal()
 	y = a * v
 	y_ref = a_ref * v_ref
 
@@ -620,7 +630,8 @@ def _softmax(module, grad_input, grad_output):
 	#             * (Δy_i / Δlog(y_i))
 	#             * (Δlog(v) / Δv)
 	#     ]
-	reciprocal_mult = -1.0 / (s * s_ref)
+	#
+	reciprocal_mult = -v * v_ref # reuse the clamped reciprocals
 	grad_in = mult_x_to_a * (
 		grad_out * mult_a_to_y
 		+ (grad_out * mult_v_to_y * reciprocal_mult).sum(dim=dim, keepdim=True)

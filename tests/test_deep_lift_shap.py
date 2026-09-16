@@ -48,8 +48,6 @@ from .toy_models import DropoutConv
 from .toy_models import MultiInputMultiOutput
 from .toy_models import ConvLayerNorm
 from .toy_models import ConvRMSNorm
-<<<<<<< HEAD
-=======
 from .toy_models import ConvSoftmax
 from .toy_models import ConvBilinear
 from .toy_models import ConvBilinearMatmul
@@ -63,7 +61,6 @@ from .toy_models import TransformerBlock
 from .toy_models import Transformer
 
 from tangermeme.deep_lift_shap import BilinearOp
->>>>>>> d8eccf2156bb0e57b36fc9caf99ec68dd0c9701e
 from .toy_models import AttributeNameConv
 
 from numpy.testing import assert_raises
