@@ -153,13 +153,12 @@ def _b_hook(module, grad_input, grad_output):
 class BilinearOp(torch.nn.Module):
 	"""A bilinear contraction of two tensors, written as a hookable module.
 
-	DeepLIFT attaches its rules to modules, so an operation written as a bare
-	function call has nothing for a rule to attach to and is silently treated
-	as linear. That is why `torch.nn.MultiheadAttention` cannot be attributed
-	directly: its two matmuls and its softmax are function calls. Routing
-	those products through this module instead puts them behind something the
-	`_bilinear` rule can hook, which is what makes an attention block
-	attributable.
+	DeepLIFT attaches its rules to `torch.nn` modules, so an operation can only
+	be attributed if it lives inside a module. Bilinear operations like `matmul`,
+	`einsum`, and elementwise tensor products have no dedicated `nn` module and
+	are usually written as bare function calls, which have nothing for a rule to
+	attach to. This module wraps such operations so that they becomes something
+	the `_bilinear` rule can hook.
 
 	The contraction performed depends on `equation`. The operands are used
 	exactly as passed, so any transpose, reshape, cast, or scaling belongs
@@ -225,37 +224,30 @@ def integrated_gradients_op(
 	K: int = 8,
 	name: str | None = None,
 ) -> Callable[..., tuple[torch.Tensor]]:
-	"""Build an operation that attributes any module by integrated gradients.
+	"""Build an operation that attributes any module using integrated gradients.
 
 	The returned function goes in the `additional_nonlinear_ops` dictionary
 	of `deep_lift_shap` or `pisa`, keyed by the module type it should handle,
 	the same way the built-in rules are registered.
 
-	A closed-form DeepLIFT rule has to be derived by hand for each operation,
-	which is only worth doing for the handful of layers that appear in every
-	model. This function covers everything else: given any module, it
-	approximates the DeepLIFT multiplier numerically, so a layer with no
-	analytic rule can still be attributed instead of being silently treated as
-	linear.
-
-	The multiplier is the Jacobian of the module integrated along the straight
-	path from the reference activation ``z0`` to the actual activation ``z``,
-	which is the integrated-gradients construction (Sundararajan et al, PMLR 2017)
-	applied to one layer rather than to the whole model. The integral is approximated
-	by Gauss-Legendre quadrature over ``K`` nodes.
-
-	Note that this does not approximate the closed-form rules. A path integral
-	and the closed-form rule coincide for certain function types (eg elementwise
-	functions, bilinear tensor products). In general, however, that is not the case,
-	and so registering this for a layer that already has a rule gives different attributions
-	that are equally complete, not a more accurate version of the same ones.
+	For certain non-linear operations a closed-form DeepLIFT rule can be challenging
+	and/or impractical to derive by hand. This function can be used in those cases.
+	The multiplier it implements is the Jacobian of the module integrated along the
+	straight-line path from the reference activation ``z0`` to the actual activation ``z``.
+	This is essentially the original integrated-gradients construction (Sundararajan et al,
+	PMLR 2017) applied to one layer rather than to the whole model. The integral is numerically
+	approximated by Gauss-Legendre quadrature over ``K`` nodes.
 
 	Only vector-Jacobian products are computed, never a full Jacobian. All
 	quadrature nodes and both halves of the upstream gradient are packed into
 	a single autograd call, so the cost is one backward pass over a batch
 	``2 * K`` times the size of the input rather than ``2 * K`` separate
-	passes. The hooks are disabled while that pass runs, so re-entering the
-	module does not overwrite the cached activations the rule is reading.
+	passes.
+	
+	The module's forward and backward hooks are disabled during that pass
+	for two reasons: it stops re-entering the module from overwriting the cached
+	activations the rule reads, and, more importantly, it prevents an infinite
+	recursion in which the backward hook keeps re-triggering itself.
 
 
 	Parameters

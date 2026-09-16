@@ -59,9 +59,6 @@ def _disable_hooks():
 def _hooks_disabled():
 	"""Return whether the DeepLIFT hooks are currently switched off.
 
-	Both the forward hooks and `BilinearOp.forward` check this before
-	caching, so a re-entrant call does not clobber the cached activations.
-
 
 	Returns
 	-------
@@ -95,20 +92,22 @@ def _nonlinear(module, grad_input, grad_output):
 		batch concatenated with the reference batch along the first axis.
 
 	grad_input: tuple of torch.tensor
-		The gradients with respect to the module's inputs, as torch passes
-		them to a full backward hook. Used as the fallback wherever the rule
-		is numerically unstable.
+		What torch would pass to a full backward hook as the gradient with
+		respect to the module's inputs: the upstream gradient propagated through
+		this module's ordinary local gradient. Used as the fallback wherever the
+		rescale ratio is numerically unstable.
 
 	grad_output: tuple of torch.tensor
-		The gradients with respect to the module's outputs, as torch passes
-		them to a full backward hook.
+		The upstream gradient handed to a full backward hook: the gradient of
+		the model output with respect to this module's output.
 
 
 	Returns
 	-------
 	grad_input: tuple of one torch.tensor
-		The corrected gradient with respect to the module's input, which is
-		the DeepLIFT multiplier for this operation.
+		The replacement gradient with respect to the module's input, i.e. the
+		upstream gradient propagated through the DeepLIFT multiplier for this
+		module instead of through its ordinary local gradient.
 	"""
 
 	delta_in_ = torch.sub(*module.input.chunk(2))
@@ -145,20 +144,22 @@ def _maxpool(module, grad_input, grad_output):
 		batch concatenated with the reference batch along the first axis.
 
 	grad_input: tuple of torch.tensor
-		The gradients with respect to the module's inputs, as torch passes
-		them to a full backward hook. Used as the fallback wherever the rule
-		is numerically unstable.
+		What torch would pass to a full backward hook as the gradient with
+		respect to the module's inputs: the upstream gradient propagated through
+		this module's ordinary local gradient. Used as the fallback wherever the
+		rescale ratio is numerically unstable.
 
 	grad_output: tuple of torch.tensor
-		The gradients with respect to the module's outputs, as torch passes
-		them to a full backward hook.
+		The upstream gradient handed to a full backward hook: the gradient of
+		the model output with respect to this module's output.
 
 
 	Returns
 	-------
 	grad_input: tuple of one torch.tensor
-		The corrected gradient with respect to the module's input, which is
-		the DeepLIFT multiplier for this operation.
+		The replacement gradient with respect to the module's input, i.e. the
+		upstream gradient propagated through the DeepLIFT multiplier for this
+		module instead of through its ordinary local gradient.
 
 
 	Raises
@@ -243,13 +244,14 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 		batch concatenated with the reference batch along the first axis.
 
 	grad_input: tuple of torch.tensor
-		The gradients with respect to the module's inputs, as torch passes
-		them to a full backward hook. Used as the fallback wherever the rule
-		is numerically unstable.
+		What torch would pass to a full backward hook as the gradient with
+		respect to the module's inputs: the upstream gradient propagated through
+		this module's ordinary local gradient. Unused; the closed form is
+		evaluated everywhere and needs no fallback.
 
 	grad_output: tuple of torch.tensor
-		The gradients with respect to the module's outputs, as torch passes
-		them to a full backward hook.
+		The upstream gradient handed to a full backward hook: the gradient of
+		the model output with respect to this module's output.
 
 	norm_type: str, optional
 		Either "layernorm", which mean-centres the input first, or "rmsnorm",
@@ -259,8 +261,9 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 	Returns
 	-------
 	grad_input: tuple of one torch.tensor
-		The corrected gradient with respect to the module's input, which is
-		the DeepLIFT multiplier for this operation.
+		The replacement gradient with respect to the module's input, i.e. the
+		upstream gradient propagated through the DeepLIFT multiplier for this
+		module instead of through its ordinary local gradient.
 	"""
 
 	assert norm_type in ["layernorm", "rmsnorm"], (
@@ -288,7 +291,9 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 	# Inverse std: v = (σ^2 + eps)^{-1/2}
 	var = (a ** 2).mean(dim=norm_dims, keepdim=True)
 	var_ref = (a_ref ** 2).mean(dim=norm_dims, keepdim=True)
-	# A None eps is the dtype's epsilon, matching `F.rms_norm`.
+    # `torch.nn.RMSNorm.eps` defaults to None, which `F.rms_norm` interprets as the
+    # dtype's epsilon; mirror that here so the hook matches the forward pass it is
+    # correcting.
 	eps = module.eps if module.eps is not None else torch.finfo(x.dtype).eps
 	v = (var + eps) ** (-0.5)
 	v_ref = (var_ref + eps) ** (-0.5)
@@ -339,20 +344,22 @@ def _layernorm(module, grad_input, grad_output):
 		batch concatenated with the reference batch along the first axis.
 
 	grad_input: tuple of torch.tensor
-		The gradients with respect to the module's inputs, as torch passes
-		them to a full backward hook. Unused; the closed form is evaluated
-		everywhere and needs no fallback.
+		What torch would pass to a full backward hook as the gradient with
+		respect to the module's inputs: the upstream gradient propagated through
+		this module's ordinary local gradient. Unused; the closed form is
+		evaluated everywhere and needs no fallback.
 
 	grad_output: tuple of torch.tensor
-		The gradients with respect to the module's outputs, as torch passes
-		them to a full backward hook.
+		The upstream gradient handed to a full backward hook: the gradient of
+		the model output with respect to this module's output.
 
 
 	Returns
 	-------
 	grad_input: tuple of one torch.tensor
-		The corrected gradient with respect to the module's input, which is
-		the DeepLIFT multiplier for this operation.
+		The replacement gradient with respect to the module's input, i.e. the
+		upstream gradient propagated through the DeepLIFT multiplier for this
+		module instead of through its ordinary local gradient.
 	"""
 
 	return _layer_normalization_helper(module, grad_input, grad_output,
@@ -379,20 +386,22 @@ def _rmsnorm(module, grad_input, grad_output):
 		batch concatenated with the reference batch along the first axis.
 
 	grad_input: tuple of torch.tensor
-		The gradients with respect to the module's inputs, as torch passes
-		them to a full backward hook. Unused; the closed form is evaluated
-		everywhere and needs no fallback.
+		What torch would pass to a full backward hook as the gradient with
+		respect to the module's inputs: the upstream gradient propagated through
+		this module's ordinary local gradient. Unused; the closed form is
+		evaluated everywhere and needs no fallback.
 
 	grad_output: tuple of torch.tensor
-		The gradients with respect to the module's outputs, as torch passes
-		them to a full backward hook.
+		The upstream gradient handed to a full backward hook: the gradient of
+		the model output with respect to this module's output.
 
 
 	Returns
 	-------
 	grad_input: tuple of one torch.tensor
-		The corrected gradient with respect to the module's input, which is
-		the DeepLIFT multiplier for this operation.
+		The replacement gradient with respect to the module's input, i.e. the
+		upstream gradient propagated through the DeepLIFT multiplier for this
+		module instead of through its ordinary local gradient.
 	"""
 
 	return _layer_normalization_helper(module, grad_input, grad_output,
@@ -400,22 +409,25 @@ def _rmsnorm(module, grad_input, grad_output):
 
 
 def _bilinear(module, grad_input, grad_output):
-	"""An internal function implementing the correction for bilinear ops.
+	"""An internal function implementing the correction for bilinear tensor products
+	using the DeepLIFT midpoint product rule.
 
-	A product of two quantities that both vary has no single rescale ratio,
-	because the change in the output cannot be assigned to one operand or the
-	other. The midpoint product rule splits it evenly: each operand is credited
-	with the gradient of the contraction evaluated at the midpoint between the
-	observed and reference values of the other. Summed over both operands this
-	reproduces the change in the output exactly, which is what keeps summation-to-delta
-	intact across the layer.
+	The midpoint product rule for scalar products (y=ab) yields multipliers:
+	m_{a -> y} = (b + b_ref) / 2
+ 	m_{b -> y} = (a + a_ref) / 2
+	
+	We can see that the DeepLIFT multipliers defined above are exactly the ordinary
+	derivative of y evaluated at the midpoint of a straight-line path between the observed
+	and reference values. The same can be shown for bilinear tensor products.
 
-	The contraction is re-run on the midpoints under `torch.enable_grad` and
-	differentiated, rather than the rule being written out per equation, so
-	one implementation covers matmul, einsum, and the elementwise product
-	alike.
+	Another way to say this is that the DeepLIFT multiplier matrix for a bilinear tensor
+	product (using the midpoint product rule) is equal to the ordinary Jacobian of the tensor
+	product evaluated at the midpoint on a straight-line path from reference to observed.
+	This simplifies implementation in PyTorch as we can leverage `torch.autograd.grad` to
+	efficiently compute the Jacobian-vector product with the upstream gradient vector, simply
+	by evaluating the Jacobian at the midpoint.
 
-	Unlike the elementwise rules this returns two gradients rather than one,
+	Note that unlike most other rules here this returns two multipliers rather than one,
 	since the module takes two inputs.
 
 
@@ -428,19 +440,22 @@ def _bilinear(module, grad_input, grad_output):
 		with the reference batch along the first axis.
 
 	grad_input: tuple of torch.tensor
-		The gradients with respect to the module's inputs, as torch passes
-		them to a full backward hook. Unused; the rule is well defined
+		What torch would pass to a full backward hook as the gradients with
+		respect to the module's inputs: the upstream gradient propagated through
+		this module's ordinary local gradient. Unused; the rule is well defined
 		everywhere and needs no fallback.
 
 	grad_output: tuple of torch.tensor
-		The gradients with respect to the module's outputs, as torch passes
-		them to a full backward hook.
+		The upstream gradient handed to a full backward hook: the gradient of
+		the model output with respect to this module's output.
 
 
 	Returns
 	-------
 	grad_input: tuple of two torch.tensor
-		The corrected gradients with respect to the left and right operands.
+		The replacement gradients with respect to the left and right operands,
+		i.e. the upstream gradient propagated through the DeepLIFT multiplier for
+		each operand instead of through this module's ordinary local gradient.
 	"""
 
 	left, left_ref = module.left.chunk(2)
@@ -483,20 +498,13 @@ def _bilinear(module, grad_input, grad_output):
 def _softmax(module, grad_input, grad_output):
 	"""An internal function implementing the correction for softmax.
 
-	Softmax couples every output to every input through its denominator, so
-	the elementwise rescale rule captures only the numerator and misses the
-	dense part of the dependence entirely. This rule decomposes the operation
-	into steps that each have an exact multiplier and then chains them
+	This rule decomposes the operation into steps that each have an exact
+	multiplier and then chains them
 
 		a_i = exp(x_i - c),   s = sum_i a_i,   v = 1 / s,   y_i = a_i * v
 
 	where c is subtracted from both the observed and the reference logits for
-	numerical stability and cancels out of the result. The exponential and
-	the reciprocal are handled in log space, where their difference quotients
-	stay well conditioned, and the two paths into each output, the direct one
-	through its own numerator and the shared one through the denominator, are
-	summed. Each quotient falls back to the analytic derivative at the
-	reference point when its denominator is below 1e-6.
+	numerical stability and cancels out of the result.
 
 	The rule is applied along whichever axis the module normalizes over. Only
 	the batch axis is rejected, because DeepLIFT stacks each example with its
@@ -510,19 +518,21 @@ def _softmax(module, grad_input, grad_output):
 		axis to normalize over as `module.dim`.
 
 	grad_input: tuple of torch.tensor
-		The gradients with respect to the module's inputs, as torch passes
-		them to a full backward hook. Unused; every quotient in the rule has
-		its own fallback.
+		What torch would pass to a full backward hook as the gradient with
+		respect to the module's inputs: the upstream gradient propagated through
+		this module's ordinary local gradient. Unused.
 
 	grad_output: tuple of torch.tensor
-		The gradients with respect to the module's outputs, as torch passes
-		them to a full backward hook.
+		The upstream gradient handed to a full backward hook: the gradient of
+		the model output with respect to this module's output.
 
 
 	Returns
 	-------
 	grad_input: tuple of one torch.tensor
-		The corrected gradient with respect to the module's input.
+		The replacement gradient with respect to the module's input, i.e. the
+		upstream gradient propagated through the DeepLIFT multiplier for this
+		module instead of through its ordinary local gradient.
 
 
 	Raises
@@ -543,6 +553,8 @@ def _softmax(module, grad_input, grad_output):
 	x, x_ref = module.input.chunk(2, dim=0)
 	grad_out, grad_out_ref = grad_output[0].chunk(2, dim=0)
 
+	# Picking c = max(x, x_ref) makes the largest exponent exactly exp(0)=1,
+	# so nothing overflows.
 	c = torch.maximum(
 		x.max(dim=dim, keepdim=True).values,
 		x_ref.max(dim=dim, keepdim=True).values,
@@ -624,8 +636,8 @@ def _softmax(module, grad_input, grad_output):
 def _gauss_legendre(n_points):
 	"""Return Gauss-Legendre nodes and weights mapped from [-1, 1] to [0, 1].
 
-	Gauss-Legendre quadrature is defined on [-1, 1], but the path integral it
-	is used for here runs from the reference activation to the observed one,
+	Gauss-Legendre quadrature is defined on [-1, 1], but we use it for a path
+	integral that runs from the reference activation to the observed one,
 	parameterized over [0, 1]. Both the nodes and the weights are rescaled
 	once, when the hook is built, rather than on every backward pass.
 
