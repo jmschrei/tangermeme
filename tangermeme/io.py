@@ -28,14 +28,9 @@ def _load_exclusion_zones(chrom_lengths, exclusion_lists):
 		exclusion_zones = {}
 		for chrom, size in chrom_lengths.items():
 			exclusion_zones[chrom] = numpy.zeros(size // 100 + 1, dtype='bool')
-		
-		# Fill in the exclusion zones using the provided coordinates
-		names = 'chrom', 'start', 'end'
 
-		exclusion_list = pandas.concat([
-			pandas.read_csv(elist, sep="\t", names=names, header=None, 
-				usecols=(0, 1, 2)) for elist in exclusion_lists 
-		])
+		# Fill in the exclusion zones using the provided coordinates
+		exclusion_list = _interleave_loci(exclusion_lists)
 
 		for _, (chrom, start, end) in exclusion_list.iterrows():
 			start = start // 100
@@ -93,6 +88,8 @@ def _interleave_loci(loci, chroms=None, summits=False):
 		if not isinstance(chroms, (list, tuple)):
 			raise ValueError("Provided chroms must be a list.")
 
+		chroms = [str(chrom) for chrom in chroms]
+
 	if isinstance(loci, (str, pandas.DataFrame)):
 		loci = [loci]
 	elif not isinstance(loci, (list, tuple)):
@@ -108,13 +105,19 @@ def _interleave_loci(loci, chroms=None, summits=False):
 	for i, df in enumerate(loci):
 		# Extract the relevant columns from the dataframes
 		if isinstance(df, str):
-			df = pandas.read_csv(df, sep='\t', usecols=cols, 
+			df = pandas.read_csv(df, sep='\t', usecols=cols,
 				header=None, index_col=False, names=names)
 		elif isinstance(df, pandas.DataFrame):
 			df = df.iloc[:, cols].copy()
+			df.columns = names
 		else:
 			raise ValueError("Provided loci must be a string or pandas " +
 				"DataFrame, or a list/tuple of those.")
+
+		# Chromosome names must be strings so that they match the names used by
+		# pyfaidx/pybigtools. Otherwise, genomes whose chromosomes are named
+		# "1", "2", etc. get read in as integers by pandas and fail to match.
+		df['chrom'] = df['chrom'].astype(str)
 
 		# If using summits, correct the coordinates to be centered on them
 		if summits:
@@ -259,7 +262,7 @@ def extract_loci(
 	summits: bool = False,
 	alphabet: list[str] = ['A', 'C', 'G', 'T'],
 	ignore: list[str] = ['N'],
-	exclusion_lists: list | None = None,
+	exclusion_lists: str | pandas.DataFrame | list | None = None,
 	return_mask: bool = False,
 	verbose: bool = False,
 ) -> tuple:
@@ -310,9 +313,12 @@ def extract_loci(
 	loci: str or pandas.DataFrame or list/tuple of such
 		Either the path to a bed file or a pandas DataFrame object containing
 		three columns: the chromosome, the start, and the end, of each locus
-		to train on. Alternatively, a list or tuple of strings/DataFrames where
-		the intention is to train on the interleaved concatenation, i.e., when
-		you want to train on peaks and negatives.
+		to train on. The three columns are taken positionally regardless of
+		what they are named, and the chromosome column is coerced to a string
+		so that it matches the record names used by the sequences.
+		Alternatively, a list or tuple of strings/DataFrames where the
+		intention is to train on the interleaved concatenation, i.e., when you
+		want to train on peaks and negatives.
 
 	sequences: str or dictionary
 		Either the path to a fasta file to read from or a dictionary where the
@@ -333,8 +339,9 @@ def extract_loci(
 
 	chroms: list or None, optional
 		A set of chromosomes to extract loci from. Loci in other chromosomes
-		in the locus file are ignored. If None, all loci are used. Default is
-		None.
+		in the locus file are ignored. Entries are coerced to strings, so
+		`[1, 2]` and `['1', '2']` are equivalent. If None, all loci are
+		used. Default is None.
 
 	in_window: int, optional
 		The input window size. Default is 2114.
@@ -386,10 +393,11 @@ def extract_loci(
 		sum across characters is equal to 1 for all positions except those
 		where the original sequence is in this list. Default is ['N'].
 
-	exclusion_lists: list or None, optional
-		A list of strings of filenames to BED-formatted files containing exclusion
-		lists, i.e., regions where overlapping loci should be filtered out. If None,
-		no filtering is performed based on exclusion zones. Default is None.
+	exclusion_lists: str, pandas.DataFrame, list, or None, optional
+		Regions where overlapping loci should be filtered out, given either as a
+		filename to a BED-formatted file, a pandas DataFrame in bed-format, or a
+		list of either. If None, no filtering is performed based on exclusion
+		zones. Default is None.
 
 	return_mask: bool, optional
 		Whether to return a tensor containing whether each element in the provided

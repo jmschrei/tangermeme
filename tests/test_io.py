@@ -189,15 +189,31 @@ def test_interleave_loci_single_str(short_loci1, short_loci2):
 def test_interleave_loci_single_df(short_loci1, short_loci2):
 	names = ['chrom', 'start', 'end']
 
-	df = pandas.read_csv("tests/data/test.bed", delimiter='\t',
+	loci = pandas.read_csv("tests/data/test.bed", delimiter='\t',
 		index_col=False, names=names, header=None)
+	df = _interleave_loci(loci)
 	assert (df == short_loci1).all(None)
 	assert_raises(ValueError, df.__eq__, short_loci2)
 
-	df = pandas.read_csv("tests/data/test2.bed", delimiter='\t',
+	loci = pandas.read_csv("tests/data/test2.bed", delimiter='\t',
 		index_col=False, names=names, header=None)
+	df = _interleave_loci(loci)
 	assert (df == short_loci2).all(None)
 	assert_raises(ValueError, df.__eq__, short_loci1)
+
+
+def test_interleave_loci_df_other_column_names(short_loci1):
+	loci = pandas.read_csv("tests/data/test.bed", delimiter='\t', header=None,
+		names=['a', 'b', 'c'])
+
+	df = _interleave_loci(loci)
+	assert (df == short_loci1).all(None)
+
+	df = _interleave_loci(loci, chroms=['chr1'])
+	assert list(df.columns) == ['chrom', 'start', 'end']
+	assert list(df['chrom']) == ['chr1', 'chr1', 'chr1']
+	assert list(df['start']) == [10, 80, 140]
+	assert list(df['end']) == [30, 100, 160]
 
 
 def test_interleave_loci_multi_str(short_loci1, short_loci2):
@@ -304,6 +320,36 @@ def test_interleave_loci_bed10_summits_str():
 
 def test_interleave_loci_bed10_no_summits_str():
 	df = _interleave_loci("tests/data/test2.bed10", summits=False)
+
+	base_df = pandas.DataFrame({
+		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4',
+			'chr5', 'chr5'],
+		'start': [40, 120, 40, 120, 5, 25, 20, 50, 80],
+		'end': [60, 140, 60, 140, 25, 45, 40, 70, 100]
+	})
+
+	assert (df == base_df).all(None)
+
+
+def test_interleave_loci_bed10_summits_df():
+	loci = pandas.read_csv("tests/data/test2.bed10", delimiter='\t',
+		header=None)
+	df = _interleave_loci(loci, summits=True)
+
+	base_df = pandas.DataFrame({
+		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4',
+			'chr5', 'chr5'],
+		'start': [30, 111, 35, 122, 10, 15, 11, 42, 87],
+		'end': [50, 131, 55, 142, 30, 35, 31, 62, 107]
+	})
+
+	assert (df == base_df).all(None)
+
+
+def test_interleave_loci_bed10_no_summits_df():
+	loci = pandas.read_csv("tests/data/test2.bed10", delimiter='\t',
+		header=None)
+	df = _interleave_loci(loci, summits=False)
 
 	base_df = pandas.DataFrame({
 		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4',
@@ -694,6 +740,116 @@ def test_extract_loci_int(loci_seqs):
 	assert_array_almost_equal(X, expanded_loci_seqs)
 	
 
+def test_interleave_loci_int_chroms():
+	# Genomes whose chromosomes are named "1", "2", etc. would otherwise get
+	# read in as integers by pandas and fail to match the string names used
+	# by pyfaidx/pybigtools.
+	df = _interleave_loci("tests/data/test_int.bed")
+
+	assert list(df['chrom']) == ['1', '1', '1', '2', '2']
+	assert list(df['start']) == [10, 80, 140, 25, 35]
+	assert list(df['end']) == [30, 100, 160, 55, 65]
+
+
+def test_interleave_loci_int_chroms_df():
+	loci = pandas.read_csv("tests/data/test_int.bed", delimiter='\t',
+		index_col=False, header=None)
+	df = _interleave_loci(loci)
+
+	assert list(df['chrom']) == ['1', '1', '1', '2', '2']
+	assert list(df['start']) == [10, 80, 140, 25, 35]
+
+
+def test_interleave_loci_int_chroms_filter():
+	df = _interleave_loci("tests/data/test_int.bed", chroms=['1'])
+	assert list(df['chrom']) == ['1', '1', '1']
+
+	# Integer chromosome names are coerced to strings as well
+	df = _interleave_loci("tests/data/test_int.bed", chroms=[1])
+	assert list(df['chrom']) == ['1', '1', '1']
+
+	df = _interleave_loci("tests/data/test_int.bed", chroms=['2'])
+	assert list(df['chrom']) == ['2', '2']
+
+
+def test_extract_loci_int_chroms_filter():
+	X = extract_loci("tests/data/test_int.bed", "tests/data/test_int_chroms.fa",
+		chroms=['1'], in_window=10)
+	X0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		chroms=['chr1'], in_window=10)
+
+	assert X.shape == (3, 4, 10)
+	assert_array_almost_equal(X, X0)
+
+
+def test_extract_loci_int_chroms_exclusion_lists():
+	exclusion = pandas.DataFrame({0: [1], 1: [10], 2: [30]})
+	X, mask = extract_loci("tests/data/test_int.bed",
+		"tests/data/test_int_chroms.fa", in_window=10, return_mask=True,
+		exclusion_lists=[exclusion])
+
+	exclusion0 = pandas.DataFrame({0: ['chr1'], 1: [10], 2: [30]})
+	X0, mask0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		in_window=10, return_mask=True, exclusion_lists=[exclusion0])
+
+	assert X.shape == (3, 4, 10)
+	assert mask.tolist() == [False, False, True, True, True]
+	assert_array_almost_equal(X, X0)
+	assert mask.tolist() == mask0.tolist()
+
+
+def test_extract_loci_exclusion_lists_df(tmp_path):
+	exclusion = pandas.DataFrame({0: ['chr1'], 1: [10], 2: [30]})
+
+	filename = str(tmp_path / "exclusion.bed")
+	exclusion.to_csv(filename, sep='\t', header=False, index=False)
+
+	X0, mask0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		in_window=10, return_mask=True, exclusion_lists=[filename])
+
+	assert X0.shape == (3, 4, 10)
+	assert mask0.tolist() == [False, False, True, True, True]
+
+	# A bare DataFrame and a list of DataFrames are equivalent to a filename
+	for elist in (exclusion, [exclusion], filename):
+		X, mask = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+			in_window=10, return_mask=True, exclusion_lists=elist)
+
+		assert_array_almost_equal(X, X0)
+		assert mask.tolist() == mask0.tolist()
+
+
+def test_extract_loci_exclusion_lists_multiple(tmp_path):
+	a = pandas.DataFrame({0: ['chr1'], 1: [10], 2: [30]})
+	b = pandas.DataFrame({0: ['chr2'], 1: [25], 2: [55]})
+
+	filename = str(tmp_path / "a.bed")
+	a.to_csv(filename, sep='\t', header=False, index=False)
+
+	X, mask = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		in_window=10, return_mask=True, exclusion_lists=[a, b])
+
+	assert X.shape == (1, 4, 10)
+	assert mask.tolist() == [False, False, True, False, False]
+
+	# A filename and a DataFrame can be mixed within the same list
+	X0, mask0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		in_window=10, return_mask=True, exclusion_lists=[filename, b])
+
+	assert_array_almost_equal(X, X0)
+	assert mask.tolist() == mask0.tolist()
+
+
+def test_extract_loci_int_chroms_filter_ints():
+	X = extract_loci("tests/data/test_int.bed",
+		"tests/data/test_int_chroms.fa", chroms=[1], in_window=10)
+	X0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		chroms=['chr1'], in_window=10)
+
+	assert X.shape == (3, 4, 10)
+	assert_array_almost_equal(X, X0)
+
+
 def test_extract_loci_seq_N(loci2_seqs):
 	loci = "tests/data/test2.bed"
 	fasta = "tests/data/test.fa"
@@ -996,6 +1152,15 @@ def test_read_vcf_drops_sample_columns():
 	assert vcf.shape[1] == 9
 	assert "NA00001" not in vcf.columns
 	assert "NA00002" not in vcf.columns
+
+
+def test_read_vcf_chrom_is_str():
+	# read_vcf forces dtype=str, so chromosome names match the record names
+	# used by pyfaidx/pybigtools without any further coercion.
+	vcf = read_vcf("tests/data/test.vcf")
+
+	assert all(isinstance(chrom, str) for chrom in vcf['CHROM'])
+	assert vcf['POS'].dtype == numpy.int64
 
 
 ###

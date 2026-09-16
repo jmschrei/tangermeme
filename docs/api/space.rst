@@ -2,4 +2,4 @@ space
 =====
 
 .. automodule:: tangermeme.space
-	:members: space
+	:members: space, SpaceResult
