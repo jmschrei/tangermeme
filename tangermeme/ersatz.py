@@ -133,6 +133,9 @@ def substitute(
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences to have a motif substituted into.
+		Unknown characters are allowed and must be encoded as all-zero
+		columns, as `one_hot_encode` does for the characters in its `ignore`
+		list. Those columns are left as-is unless the motif covers them.
 
 	motif: torch.tensor, shape=(-1, len(alphabet), motif_length)
 		A one-hot encoded version of a short motif to substitute into the set of
@@ -170,7 +173,7 @@ def substitute(
 		motif = one_hot_encode(motif, alphabet=alphabet, ignore=ignore)
 		motif = motif.unsqueeze(0)
 
-	_validate_input(X, "X", ohe=True)
+	_validate_input(X, "X", ohe=True, allow_N=True)
 	_validate_input(motif, "motif", shape=(-1, X.shape[1], -1), ohe=True,
 		allow_N=True)
 

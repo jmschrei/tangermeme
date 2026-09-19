@@ -332,6 +332,46 @@ def test_substitute_raises_ohe(X):
 	assert_raises(ValueError, substitute, X, torch.randn(1, 4, 8))
 
 
+def test_substitute_X_with_N(X):
+	# Unknown characters in X are all-zero columns, as `one_hot_encode`
+	# produces for the characters in its `ignore` list. They are valid
+	# input and are left alone when the motif does not cover them.
+	X_n = torch.clone(X)
+	X_n[0, :, 10:14] = 0
+
+	X_substitute = substitute(X_n, 'CATCAG')
+	start = X.shape[-1] // 2 - 3
+
+	assert X_substitute.shape == X_n.shape
+	assert_array_almost_equal(X_substitute[0, :, 10:14], torch.zeros(4, 4))
+	assert_array_almost_equal(X_substitute[:, :, :start], X_n[:, :, :start])
+	assert_array_almost_equal(X_substitute[0, :, start:start+6],
+		one_hot_encode('CATCAG'))
+
+
+def test_substitute_X_with_N_under_motif(X):
+	# An unknown character that the motif covers is overwritten by it.
+	X_n = torch.clone(X)
+	start = X.shape[-1] // 2 - 3
+	X_n[0, :, start:start+2] = 0
+
+	X_substitute = substitute(X_n, 'CATCAG')
+
+	assert_array_almost_equal(X_substitute[0, :, start:start+6],
+		one_hot_encode('CATCAG'))
+
+
+def test_substitute_raises_ohe_X(X):
+	# Allowing all-zero columns must not also allow multi-hot columns or
+	# values outside {0, 1}.
+	X_multi = torch.clone(X)
+	X_multi[0, :, 5] = 1
+	assert_raises(ValueError, substitute, X_multi, 'CATCAG')
+
+	assert_raises(ValueError, substitute, torch.clone(X) * 2, 'CATCAG')
+	assert_raises(ValueError, substitute, torch.randn(1, 4, 68), 'CATCAG')
+
+
 ###
 
 
