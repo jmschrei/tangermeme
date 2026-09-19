@@ -26,6 +26,11 @@ design
 
 	- ``greedy_substitution`` and ``beam_substitution`` now raise a ``ValueError`` when ``X`` has a batch size other than one. Both design a single sequence at a time, but the batch dimension was never checked and a larger batch produced more rows than the numba substitution kernel had indices for, reading out of bounds and crashing the interpreter rather than raising.
 
+ersatz
+------
+
+	- ``substitute`` now accepts unknown characters in ``X``, encoded as all-zero columns, which is what it already allowed in ``motif``. ``marginalize`` validates its sequences with ``allow_N=True`` and then hands them to ``substitute``, which validated them again without it, so the permission never took effect: a set of sequences containing an ``N`` -- which is what ``extract_loci`` returns for any locus overlapping an assembly gap -- raised ``ValueError: X must be one-hot encoded. and cannot have unknown characters.`` from inside the substitution rather than being marginalized. Positions the motif does not cover keep their all-zero encoding, and the substitution overwrites the ones it does cover. Multi-hot columns and values outside ``{0, 1}`` are still rejected.
+
 io
 --
 

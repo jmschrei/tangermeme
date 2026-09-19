@@ -18,6 +18,9 @@ effect = y_after - y_before
   preserved). `start=` is the **first position** of the substitution (not the
   center); the default centers the motif.
 - `X` should be background sequences so the delta reflects the motif "in isolation".
+- `X` may carry unknown characters as all-zero columns, as `extract_loci` returns for
+  a locus over an assembly gap; they survive the substitution unless the motif covers
+  them. Multi-hot columns are still rejected.
 
 ### Choosing backgrounds — the GC mirage (important)
 
