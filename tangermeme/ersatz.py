@@ -49,6 +49,8 @@ def insert(
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences to have a motif inserted into.
+		Unknown characters are allowed and must be encoded as all-zero
+		columns; they are carried through into the returned sequences.
 
 	motif: torch.tensor, shape=(-1, len(alphabet), motif_length)
 		A one-hot encoded version of a short motif to insert into the set of
@@ -82,7 +84,7 @@ def insert(
 	if motif.shape[0] == 1:
 		motif = motif.repeat(X.shape[0], 1, 1)
 
-	_validate_input(X, "X", ohe=True, ohe_dim=1)
+	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
 	_validate_input(motif, "motif", shape=(-1, X.shape[1], -1), ohe=True)
 
 	if start is not None:
@@ -317,6 +319,8 @@ def delete(X: torch.Tensor, start: int, end: int) -> torch.Tensor:
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences to have a portion deleted from.
+		Unknown characters are allowed and must be encoded as all-zero
+		columns; those outside the deleted portion are kept.
 
 	start: int
 		The starting position to remove, inclusive.
@@ -339,7 +343,7 @@ def delete(X: torch.Tensor, start: int, end: int) -> torch.Tensor:
 		raise ValueError("End must come after start, must be greater " +
 			"than zero, and cannot be greater than the length of the sequence.")
 
-	_validate_input(X, "X", ohe=True, ohe_dim=1)	
+	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
 	return torch.cat([X[:, :, :start], X[:, :, end:]], dim=-1)
 
 
@@ -369,6 +373,10 @@ def randomize(
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences where a portion should be randomized.
+		Unknown characters are allowed and must be encoded as all-zero
+		columns. Those inside the randomized portion are replaced along with
+		everything else, so the returned sequences only keep the ones outside
+		it.
 
 	start: int
 		The starting position of where to randomize the sequence, inclusive. 
@@ -405,7 +413,7 @@ def randomize(
 	if not isinstance(random_state, numpy.random.RandomState):
 		random_state = numpy.random.RandomState(random_state)
 
-	_validate_input(X, "X", ohe=True)
+	_validate_input(X, "X", ohe=True, allow_N=True)
 	_validate_input(probs, "Probs", shape=(-1, -1), min_value=0, max_value=1)
 
 	if end <= start:
@@ -450,6 +458,10 @@ def shuffle(
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences where a portion will be shuffled.
+		Unknown characters are allowed and must be encoded as all-zero
+		columns. The shuffle is a permutation of the columns in the region,
+		so unknown characters inside it are moved rather than resolved and
+		the number of them is preserved.
 
 	start: int, optional
 		The starting position of where to randomize the sequence, inclusive.
@@ -475,8 +487,8 @@ def shuffle(
 		A one-hot encoded set of sequences that each have a shuffled portion.
 	"""
 
-	_validate_input(X, "X", ohe=True)
-	
+	_validate_input(X, "X", ohe=True, allow_N=True)
+
 	if end < 0:
 		end = X.shape[-1] + 1 + end
 
@@ -635,7 +647,13 @@ def dinucleotide_shuffle(
 	Parameters
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to be shuffled.
+		A one-hot encoded set of sequences to be shuffled. Unlike the other
+		functions in this module, unknown characters are *not* allowed:
+		the transition matrix is built from `X.argmax(axis=0)`, which maps
+		an all-zero column to the first character of the alphabet, so an
+		unknown character would silently be shuffled as an `A` and would
+		distort the dinucleotide composition the shuffle exists to preserve.
+		Remove or resolve them before calling this.
 
 	start: int, optional
 		The starting position of where to randomize the sequence, inclusive.
