@@ -6,6 +6,7 @@ torch.use_deterministic_algorithms(True, warn_only=True)
 torch.manual_seed(0)
 
 
+import numpy
 import pytest
 import warnings
 
@@ -2671,6 +2672,35 @@ def test_deep_lift_shap_softmax_axes_agree(X, references, device):
 		random_state=0)
 
 	assert_array_almost_equal(X_attr0, X_attr1, 4)
+
+
+def test_deep_lift_shap_softmax_peaked_logits(X, references, device):
+	"""A peaked softmax still has to satisfy summation-to-delta.
+
+	The rule guards two ratios separately, `delta_a / delta_x` and
+	`delta_log(a) / delta_a`, whose product is `delta_log(a) / delta_x` and so
+	is exactly one. Peaking the distribution drives most of the exponentials
+	small enough that the second guard trips while the first does not, and the
+	product stops being one. The failure is in the guard rather than in
+	floating point, so it does not go away in float64 and it grows with the
+	spread of the logits.
+	"""
+
+	torch.manual_seed(0)
+	model = ConvSoftmax(logit_scale=25.0).double()
+
+	X, references = X[:4].double(), references[:4].double()
+
+	X_attr = deep_lift_shap(model, X, references=references, device=device,
+		random_state=0, warning_threshold=numpy.inf)
+
+	with torch.no_grad():
+		y = model(X)[:, 0]
+		y_ref = model(references.reshape(-1, *X.shape[1:]))[:, 0]
+		y_ref = y_ref.reshape(references.shape[:2]).mean(dim=-1)
+
+	deltas = X_attr.sum(dim=(1, 2)).cpu() - (y - y_ref).cpu()
+	assert_array_almost_equal(deltas, numpy.zeros(X.shape[0]), 4)
 
 
 def test_deep_lift_shap_softmax_batch_axis_raises(X, references, device):

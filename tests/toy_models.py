@@ -545,17 +545,24 @@ class ConvSoftmax(torch.nn.Module):
 	`dim` selects which axis is normalized: -1 for the length axis, 1 for the
 	channel axis. The rule is applied along whichever one the module carries,
 	so both are worth exercising.
+
+	`logit_scale` multiplies the logits before the softmax. Raising it peaks
+	the distribution, which drives most of the exponentials to values small
+	enough that the rule's guarded ratios have to be right about them; a
+	default of 1.0 leaves every other user of this model unchanged.
 	"""
 
-	def __init__(self, seq_len=100, n_outputs=1, dim=-1, channels=8):
+	def __init__(self, seq_len=100, n_outputs=1, dim=-1, channels=8,
+			logit_scale=1.0):
 		super(ConvSoftmax, self).__init__()
 		self.dim = dim
+		self.logit_scale = logit_scale
 		self.conv = torch.nn.Conv1d(4, channels, (3,), padding='same')
 		self.softmax = torch.nn.Softmax(dim=dim)
 		self.dense = torch.nn.Linear(channels * seq_len, n_outputs)
 
 	def forward(self, X, alpha=0, beta=1):
-		h = self.conv(X)
+		h = self.conv(X) * self.logit_scale
 
 		# A softmax over n entries leaves every weight near 1/n, which would push
 		# the attributions below what four decimal places can resolve, so the
@@ -670,21 +677,6 @@ class ConvScaledTanh(torch.nn.Module):
 	def forward(self, X, alpha=0, beta=1):
 		h = self.act(self.conv(X))
 		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
-
-
-class ConvRMSNorm(torch.nn.Module):
-	"""conv -> RMSNorm over (C, L) -> relu -> dense."""
-
-	def __init__(self, seq_len=100, n_outputs=1):
-		super(ConvRMSNorm, self).__init__()
-		self.conv = torch.nn.Conv1d(4, 8, (3,), padding='same')
-		self.norm = torch.nn.RMSNorm([8, seq_len])
-		self.relu = torch.nn.ReLU()
-		self.dense = torch.nn.Linear(8 * seq_len, n_outputs)
-
-	def forward(self, X):
-		h = self.relu(self.norm(self.conv(X)))
-		return self.dense(h.reshape(h.shape[0], -1))
 
 
 class MultiActivation(torch.nn.Module):

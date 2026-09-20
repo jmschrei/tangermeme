@@ -291,9 +291,9 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 	# Inverse std: v = (σ^2 + eps)^{-1/2}
 	var = (a ** 2).mean(dim=norm_dims, keepdim=True)
 	var_ref = (a_ref ** 2).mean(dim=norm_dims, keepdim=True)
-    # `torch.nn.RMSNorm.eps` defaults to None, which `F.rms_norm` interprets as the
-    # dtype's epsilon; mirror that here so the hook matches the forward pass it is
-    # correcting.
+	# `torch.nn.RMSNorm.eps` defaults to None, which `F.rms_norm` interprets
+	# as the dtype's epsilon; mirror that here so the hook matches the forward
+	# pass it is correcting.
 	eps = module.eps if module.eps is not None else torch.finfo(x.dtype).eps
 	v = (var + eps) ** (-0.5)
 	v_ref = (var_ref + eps) ** (-0.5)
@@ -414,7 +414,7 @@ def _bilinear(module, grad_input, grad_output):
 
 	The midpoint product rule for scalar products (y=ab) yields multipliers:
 	m_{a -> y} = (b + b_ref) / 2
- 	m_{b -> y} = (a + a_ref) / 2
+	m_{b -> y} = (a + a_ref) / 2
 	
 	We can see that the DeepLIFT multipliers defined above are exactly the ordinary
 	derivative of y evaluated at the midpoint of a straight-line path between the observed
@@ -581,8 +581,8 @@ def _softmax(module, grad_input, grad_output):
 	# Multiplier for x_j -> a_j, with derivative fallback.
 	# m_{x_j -> a_j} = Δa_j / Δx_j
 	delta_x = x - x_ref
-	delta_a = a - a_ref
-	mult_x_to_a = torch.where(delta_x.abs() > 1e-6, delta_a / delta_x, a_ref)
+	mult_x_to_a = torch.where(delta_x.abs() > 1e-6, (a - a_ref) / delta_x,
+		a_ref)
 
 	# Define a few intermediate quantities for the log-ratio multipliers.
 	delta_y = y - y_ref
@@ -601,44 +601,44 @@ def _softmax(module, grad_input, grad_output):
 		delta_log_v / delta_v,
 		v_ref.reciprocal(),
 	)
-	# An attention mask drives its masked logits to a large negative value in
-	# both the example and the reference, so `a` and `a_ref` underflow to
-	# exactly zero there and this fallback would be infinite. `mult_x_to_a` is
-	# zero at those positions, so their contribution is zero and the fallback
-	# only has to be finite; leaving it infinite makes the product 0 * inf,
-	# which is NaN and propagates back through every earlier layer.
-	a_ref_safe = torch.where(a_ref > 0, a_ref, torch.ones_like(a_ref))
-	delta_log_a_over_delta_a = torch.where(
-		delta_a.abs() > 1e-6,
-		delta_log_a / delta_a,
-		a_ref_safe.reciprocal(),
-	)
 
-	# Log-ratio multipliers for the numerator path (m_{a_i -> y_i}) and the denominator path (m_{v -> y_i}).
-	#  m_{a_i -> y_i} = (Δy_i / Δlog(y_i)) * (Δlog(a_i) / Δa_i)
-	#  m_{v -> y_i}   = (Δy_i / Δlog(y_i)) * (Δlog(v) / Δv)
-	mult_a_to_y = delta_y_over_delta_log_y * delta_log_a_over_delta_a
+	# Log-ratio multiplier for the denominator path (m_{v -> y_i}).
+	#  m_{v -> y_i} = (Δy_i / Δlog(y_i)) * (Δlog(v) / Δv)
 	mult_v_to_y = delta_y_over_delta_log_y * delta_log_v_over_delta_v
 
 	# Combine the a_i -> y_i path with the v -> y_i path. Also multiply by the upstream gradient (grad_out) to
 	# derive the downstream gradient (grad_in).
 	#
-	#     grad_in_j = m_{x_j -> a_j} * [
-	#         grad_out_j * (Δy_j / Δlog(y_j)) * (Δlog(a_j) / Δa_j)
-	#         - sum_i grad_out_i
+	#     grad_in_j = grad_out_j * (Δy_j / Δlog(y_j))
+	#         - m_{x_j -> a_j} * sum_i grad_out_i
 	#             * (1 / (s * s_ref))
 	#             * (Δy_i / Δlog(y_i))
 	#             * (Δlog(v) / Δv)
-	#     ]
 	#
+	# The numerator path carries no factor of m_{x_j -> a_j}, because the two
+	# ratios it would be built from cancel exactly:
+	#
+	#     m_{x_j -> a_j} * (Δlog(a_j) / Δa_j) = Δlog(a_j) / Δx_j = 1
+	#
+	# since log(a_j) is x_j - c and the same c is subtracted from both sides.
+	# Evaluating the two separately, each with its own threshold, is what
+	# breaks on a peaked softmax: most of the exponentials are small enough
+	# that Δa trips its guard while Δx does not, the Δlog(a)/Δa fallback
+	# returns 1/a_ref, and the product is nowhere near one. Folding them out
+	# also removes the 0 * inf that a fully masked logit used to produce,
+	# since Δy is zero there and no reciprocal of a_ref is taken at all.
 	reciprocal_mult = -v * v_ref # reuse the clamped reciprocals
-	grad_in = mult_x_to_a * (
-		grad_out * mult_a_to_y
-		+ (grad_out * mult_v_to_y * reciprocal_mult).sum(dim=dim, keepdim=True)
+	grad_in = (
+		grad_out * delta_y_over_delta_log_y
+		+ mult_x_to_a
+			* (grad_out * mult_v_to_y * reciprocal_mult).sum(dim=dim,
+				keepdim=True)
 	)
-	grad_in_ref = mult_x_to_a * (
-		grad_out_ref * mult_a_to_y
-		+ (grad_out_ref * mult_v_to_y * reciprocal_mult).sum(dim=dim, keepdim=True)
+	grad_in_ref = (
+		grad_out_ref * delta_y_over_delta_log_y
+		+ mult_x_to_a
+			* (grad_out_ref * mult_v_to_y * reciprocal_mult).sum(dim=dim,
+				keepdim=True)
 	)
 
 	return (torch.cat([grad_in, grad_in_ref], dim=0),)
