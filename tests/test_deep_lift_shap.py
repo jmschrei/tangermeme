@@ -1416,6 +1416,31 @@ def test_captum_deep_lift_shap_n_shuffles(X, references, device):
 		assert_array_almost_equal(X_attr0, X_attr1)
 
 
+def test_captum_deep_lift_shap_return_references(X, references, device):
+	from tangermeme.results import AttributionReferencesResult
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	result = _captum_deep_lift_shap(model, X, references=references,
+		return_references=True, device=device, random_state=0)
+
+	assert isinstance(result, AttributionReferencesResult)
+	assert isinstance(result, tuple)
+
+	attr, refs = result
+	assert attr.shape == X.shape
+	assert refs.shape == references.shape
+	assert_array_almost_equal(refs, references)
+
+	# The attributions are the same whether or not the references come back.
+	attr_only = _captum_deep_lift_shap(model, X, references=references,
+		return_references=False, device=device, random_state=0)
+
+	assert isinstance(attr_only, torch.Tensor)
+	assert_array_almost_equal(attr, attr_only)
+
+
 def test_captum_deep_lift_shap_args(X, references, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
