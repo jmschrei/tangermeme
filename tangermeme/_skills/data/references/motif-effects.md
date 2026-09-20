@@ -31,9 +31,13 @@ motif. In order of preference:
 
 1. Real inactive regions matched on GC/dinucleotide content (best).
 2. `random_one_hot(..., probs=...)` with genomic base frequencies (e.g. hg38
-   ≈ `[0.291, 0.209, 0.209, 0.291]`), or `dinucleotide_shuffle` of real sequences.
-   `probs` must sum to exactly 1 — numpy raises otherwise, so don't round the
-   frequencies independently.
+   ≈ `[0.291, 0.209, 0.209, 0.291]`), or `dinucleotide_shuffle` /
+   `local_dinucleotide_shuffle` of real sequences. `probs` must sum to exactly
+   1 — numpy raises otherwise, so don't round the frequencies independently.
+   The two shuffles differ in scale: `dinucleotide_shuffle` conserves
+   composition across the whole window, `local_dinucleotide_shuffle` within
+   consecutive bins, which matters when GC or repeat content drifts across the
+   window.
 3. Uniform random — prototyping only.
 
 Returns diminish past ~100 backgrounds.

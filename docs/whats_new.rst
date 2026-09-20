@@ -21,6 +21,21 @@ annotate
 
 	- ``pairwise_annotations_spacing`` now raises a ``ValueError`` when two annotations within the same example overlap. The distance between a pair is the gap between the end of the left annotation and the start of the right one, which is negative for overlapping spans; the only guard was on the upper bound, so a negative distance would index from the far end of the distance axis and be recorded as ``max_distance + d``, indistinguishable from a genuine long-range pair. Abutting annotations (a distance of exactly zero) are unaffected.
 
+deep_lift_shap
+--------------
+
+	- Adds closed-form DeepLIFT rules for ``torch.nn.LayerNorm``, ``torch.nn.RMSNorm`` and bilinear contractions, and rewrites the one for softmax, so that a transformer block can be attributed end to end. None of these layers is elementwise: every output depends on every input in the normalized window, or on both operands of a product, so the rescale rule that covers elementwise-nonlinear activations does not apply and a layer without its own rule is silently treated as linear. Previously the only recourse was to leave those layers unhooked and accept attributions whose convergence guarantee did not hold.
+
+	- Adds ``BilinearOp``, a module wrapping ``torch.matmul``, ``torch.einsum``, or an elementwise product. DeepLIFT attaches its rules to modules, so an operation written as a bare function call has nothing to hook; this is why ``torch.nn.MultiheadAttention`` cannot be attributed directly, as it computes its softmax and both of its matmuls functionally. Writing attention with ``BilinearOp`` and ``torch.nn.Softmax`` instead puts every non-linearity behind a module, which is what makes the block attributable. ``tests/toy_models.py`` carries ``MultiHeadAttention`` as a worked example.
+
+	- The two operands a bilinear op caches for its backward rule are now cleared when the call finishes. They are as large as the activations and would otherwise stay attached for the life of the model, the same retention the other hooks had before ``_clear_hooks`` learned to drop their caches. The attention matrix a context op caches dominates, so the footprint grows with the square of the sequence length and with ``batch_size``. It was bounded rather than unbounded, since repeated calls overwrote rather than accumulated.
+
+	- Adds ``integrated_gradients_op``, a factory returning a rule for any single-input module that has no closed form. The multiplier it implements integrates the module's Jacobian along the straight-line path from the reference activation to the observed one, which is the integrated-gradients construction applied to one layer rather than to a whole model. The integral is approximated by Gauss-Legendre quadrature over ``K`` nodes, and only vector-Jacobian products are computed rather than the full Jacobian. It is not an approximation of the closed-form rules. A path integral and the rescale secant coincide to floating-point noise for an elementwise function, but not for one whose outputs couple across positions, where the two differ by orders of magnitude more and raising ``K`` does not close the gap. Both satisfy summation-to-delta; neither is a more accurate version of the other.
+
+	- The softmax rule is rewritten and now applies along whichever axis the module normalizes over. The previous rule never read ``module.dim`` at all, subtracting a mean over the entire tensor, and failed summation-to-delta everywhere, over both the last axis and the channel axis, by enough to cross the default ``warning_threshold`` of 1e-3, so those users were already being warned their attributions did not converge. The rewritten rule decomposes the operation into steps with exact multipliers and chains them in log space, bringing both deltas down to floating-point noise. Only the batch axis is rejected, since DeepLIFT stacks each example with its reference along it and normalizing over that axis would mix the two. The numerator path carries no separately-guarded ``Δlog(a)/Δa`` factor, because it cancels against ``Δa/Δx`` exactly; evaluating the two with independent thresholds broke on a peaked softmax, where most exponentials are small enough to trip one guard but not the other.
+
+	- The rule implementations are in a private ``_deep_lift_utils`` module, with ``BilinearOp`` and ``integrated_gradients_op`` living in ``deep_lift_shap`` alongside the hooks they cooperate with. Every rule is re-exported, so ``from tangermeme.deep_lift_shap import _nonlinear`` continues to work.
+
 design
 ------
 
@@ -31,6 +46,10 @@ ersatz
 
 	- ``insert``, ``substitute``, ``multisubstitute``, ``delete``, ``randomize`` and ``shuffle`` now accept unknown characters in ``X``, encoded as all-zero columns, which is what ``substitute`` already allowed in ``motif``. ``marginalize`` and ``ablate`` validate their sequences with ``allow_N=True`` and then hand them to ``substitute`` and ``shuffle``, which validated them again without it, so the permission never took effect: a set of sequences containing an ``N`` -- which is what ``extract_loci`` returns for any locus overlapping an assembly gap -- raised ``ValueError: X must be one-hot encoded. and cannot have unknown characters.`` from inside the perturbation rather than being marginalized or ablated. None of these functions read the characters of ``X``; they move, copy or overwrite columns, so an unknown character is carried through wherever the perturbation does not replace it. Multi-hot columns and values outside ``{0, 1}`` are still rejected everywhere.
 	- ``dinucleotide_shuffle`` deliberately keeps rejecting unknown characters, and its docstring now says why. It builds the transition matrix from ``X.argmax(axis=0)``, which maps an all-zero column onto the first character of the alphabet, so accepting one would silently shuffle it as an ``A`` and distort the dinucleotide composition the function exists to preserve. ``deep_lift_shap`` and ``pisa``, which draw their references from it, are unchanged for the same reason.
+
+	- Adds ``local_dinucleotide_shuffle``, which shuffles within consecutive bins rather than across the whole sequence. A dinucleotide shuffle conserves the composition of the sequence as a whole but flattens how that composition varies along it, and a genomic window is rarely uniform; a background that averages away the GC and repeat structure differs from the original in more ways than the motif content a marginalization is trying to isolate. On a 2048bp sequence whose halves sit at 0.80 and 0.18 GC, 128bp bins hold the GC content of every 256bp window to within 0.10, where a whole-sequence shuffle moves it by 0.42. The bin boundaries are redrawn for every shuffle, because a dinucleotide shuffle holds the first and last character of the region it covers and fixed boundaries would pin those positions across the whole set. Any one-hot alphabet is accepted, not only DNA.
+
+	- ``local_dinucleotide_shuffle`` raises a ``TangermemeWarning`` when a bin comes back identical to its input. A region whose characters admit only one Eulerian path, such as a homopolymer or a short tandem repeat, has itself as its only possible dinucleotide shuffle. ``dinucleotide_shuffle`` raises on that condition, but only when asked for more than one shuffle, and each bin here is shuffled once, so the check could never fire. A background built over a repeat-heavy window would otherwise be the original sequence, and therefore not a null, with nothing said about it.
 
 io
 --
@@ -44,6 +63,11 @@ match
 
 	- ``extract_matching_loci`` coerces the chromosome column and the ``chroms`` argument to strings for the same reason as ``io.extract_loci``; previously an integer chromosome name was passed to ``pyfaidx.Fasta.__getitem__``, raising a ``TypeError``, and filtering by ``chroms`` returned an empty set of loci. It also accepts a bed-format DataFrame whose columns carry other names, taking the first three positionally. Note that the columns were previously selected by name, so a DataFrame whose chrom/start/end columns are not in bed order is now read positionally rather than by label.
 
+pisa
+----
+
+	- Registers the three rules added to ``deep_lift_shap`` in its own rule table, so LayerNorm, RMSNorm and bilinear contractions are attributed there too, and picks up the rewritten softmax rule it already had registered. ``pisa`` keeps a separate copy of that table, so a rule can be correct in one module and missing from the other.
+
 variant_effect
 --------------
 
@@ -51,6 +75,12 @@ variant_effect
 
 Testing
 -------
+
+	- Covers the new DeepLIFT rules across the settings the stock models are tested against: convergence, batch size, shuffle count, example independence, seed, an explicit reference tensor, input dtype, hypothetical attributions, raw outputs, returned references, and extra forward arguments. Eight models share one forward signature so a single parametrized matrix covers them and a failure localizes to one model by its parametrize id. Two user-defined operations are shown to break summation-to-delta while unregistered and to satisfy it once passed through ``additional_nonlinear_ops``.
+
+	- Covers the transformer arrangements a user actually builds, rather than the attention operation on its own: pre-norm and post-norm blocks, two-block stacks, GELU and SiLU feedforwards, and a learned positional embedding, each checked for summation-to-delta, batch-size invariance, example independence and a hardcoded value. ``pisa`` gets the stacked block too, since it batches over output positions and keeps its own rule table.
+
+	- Records two limitations rather than leaving them to be rediscovered. ``torch.nn.MultiheadAttention`` and ``TransformerEncoderLayer`` cannot be fully attributed, because their softmax and matmuls are functional calls with no module to hook. Subclassing any registered operation raises a ``KeyError``, because hooks are registered by ``isinstance`` but dispatched by exact ``type``; that predates these rules and reproduces for ``torch.nn.ReLU``, so the test naming it is skipped rather than asserting the current behavior.
 
 	- Moves the tests for the ``tangermeme.design`` subpackage into ``tests/design/`` and the installer test into ``tests/_skills/test_install.py``, so the test tree mirrors the package tree. ``tangermeme.design`` became a subpackage in 1.4.0 but its tests stayed flat in ``tests/``, leaving no way to tell from the test tree which module a file covered.
 	- Rewrites the bundled-skill integrity checks against backticked reference paths rather than Markdown-link syntax. The old check scanned for ``](...)`` and so would have reported success on a skill with no links left in it at all. It now also fails when a Markdown link is reintroduced, and when a ``references/*.md`` file is not reachable from the ``SKILL.md`` router table.

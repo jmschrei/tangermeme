@@ -512,7 +512,7 @@ def shuffle(
 
 	return torch.stack(X_shufs).permute(1, 0, 2, 3)
 
-		
+
 params = 'void(int64, int64, int32[:], int32[:, :], int32[:], '
 params += 'int32[:, :], float32[:, :, :], int32)'
 @numba.jit(params, nopython=False, cache=True)
@@ -604,7 +604,7 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 
 	_fast_shuffle(n_shuffles, n_chars, idxs, next_idxs, next_idxs_counts, 
 		counters, shuffled_sequences, random_state)
-	
+
 	shuffled_sequences = torch.from_numpy(shuffled_sequences)
 
 	conserved = shuffled_sequences[:, :, 1:-1].sum(dim=0)
@@ -707,3 +707,141 @@ def dinucleotide_shuffle(
 		X_shufs.append(X_shuf)
 
 	return torch.stack(X_shufs)
+
+
+def local_dinucleotide_shuffle(
+	X: torch.Tensor,
+	n: int = 20,
+	bin_size: int = 1024,
+	min_bin_size: int = 512,
+	random_state: int | None = None,
+	verbose: bool = False,
+) -> torch.Tensor:
+	"""Dinucleotide-shuffle sequences independently within local bins.
+
+	A dinucleotide shuffle conserves the dinucleotide composition of the
+	sequence as a whole, and in doing so flattens any structure in how that
+	composition varies along it. A genomic window is rarely uniform: GC
+	content, repeat density and nucleotide composition drift across it, and a
+	background that averages all of that away differs from the original in
+	more ways than the motif content a marginalization is trying to isolate.
+
+	This function shuffles within consecutive bins instead, so composition is
+	conserved locally as well as globally. The interface otherwise follows
+	`dinucleotide_shuffle`, with two differences: there is no `start` or `end`
+	because the whole sequence is always shuffled, and `random_state` must be
+	an integer rather than a RandomState.
+
+	The bin boundaries are redrawn for every shuffle. The first cut is placed
+	uniformly at random between `min_bin_size` and `bin_size`, and the rest
+	follow at `bin_size` intervals from there. A dinucleotide shuffle holds
+	the first and last character of the region it is applied to, so fixing the
+	boundaries would pin those positions across every shuffle in the set;
+	redrawing them spreads that over different positions instead. A trailing
+	bin shorter than `min_bin_size` is merged into the one before it, so a bin
+	is never shorter than `min_bin_size` and can be as long as twice
+	`bin_size`.
+
+
+	Parameters
+	----------
+	X: torch.tensor, shape=(-1, len(alphabet), length)
+		A one-hot encoded set of sequences to be shuffled. Any alphabet is
+		accepted, not only DNA.
+
+	n: int, optional
+		The number of times to shuffle each sequence. Each shuffle draws its
+		own bin boundaries. Default is 20.
+
+	bin_size: int, optional
+		The spacing between bin boundaries after the first cut. Must be
+		strictly smaller than the sequence length, or a ValueError is raised;
+		use `dinucleotide_shuffle` directly for a sequence shorter than one
+		bin. A bin whose characters admit only one Eulerian path, as a
+		homopolymer or a short tandem repeat does, has itself as its only
+		possible shuffle and is returned unrandomized; a `TangermemeWarning`
+		reports how many bins that happened to, and raising `bin_size` merges
+		such a region into a more diverse neighborhood. Default is 1024.
+
+	min_bin_size: int, optional
+		The shortest a bin may be, used both as the lower bound on the random
+		first cut and as the threshold below which a trailing bin is merged
+		backwards. Must be no larger than `bin_size`, or a ValueError is
+		raised. Default is 512.
+
+	random_state: int or None, optional
+		Whether to use a specific random seed when generating the shuffle, to
+		ensure reproducibility. It seeds both the bin boundaries and the
+		shuffle within each bin. Unlike `dinucleotide_shuffle`, this cannot be
+		a numpy.random.RandomState object. If None, do not use a reproducible
+		seed. Default is None.
+
+	verbose: bool, optional
+		Whether to print a warning when at least one position is identical
+		across all shuffles of a bin. Each bin is shuffled once, so that
+		condition holds for almost every bin and this emits roughly one
+		warning per bin; the `TangermemeWarning` described under `bin_size` is
+		the useful signal. Default is False.
+
+
+	Returns
+	-------
+	shuffled_sequences: torch.tensor, shape=(-1, n, len(alphabet), length)
+		The shuffled sequences. Dtype and device match the input `X`.
+	"""
+
+	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1)
+
+	if bin_size >= X.shape[-1]:
+		raise ValueError(
+			"Sequence length must be longer than bin_size. "
+			"Use dinucleotide_shuffle directly for shorter sequences."
+		)
+	if min_bin_size > bin_size:
+		raise ValueError("min_bin_size must be <= bin_size")
+
+	rng = numpy.random.RandomState(random_state)
+
+	X_shuf = X.unsqueeze(1).repeat(1, n, 1, 1)
+	n_bins, n_unshuffled = 0, 0
+
+	for i in range(X.shape[0]):
+		for j in range(n):
+			first_cut = rng.randint(min_bin_size, bin_size + 1)
+			boundaries = [0, first_cut]
+			boundaries.extend(range(first_cut + bin_size, X.shape[-1], bin_size))
+			boundaries.append(X.shape[-1])
+
+			bins = list(zip(boundaries[:-1], boundaries[1:]))
+			if bins[-1][1] - bins[-1][0] < min_bin_size:
+				# merge last two bins if the final bin is too small
+				bins[-2] = (bins[-2][0], bins[-1][1])
+				bins.pop()
+
+			for (bin_start, bin_end) in bins:
+				shuffled = dinucleotide_shuffle(
+					X[i:i+1, :, bin_start:bin_end],
+					n=1,
+					random_state=rng.randint(0, 2**31 - 1),
+					verbose=verbose,
+				)
+				X_shuf[i, j, :, bin_start:bin_end] = shuffled[0, 0]
+
+				# `dinucleotide_shuffle` raises when every shuffle of a region
+				# comes back identical, but only when asked for more than one.
+				# It is called once per bin here, so that check cannot fire and
+				# an unshuffleable bin would otherwise pass through silently.
+				n_bins += 1
+				n_unshuffled += torch.equal(shuffled[0, 0].to(X.device),
+					X[i, :, bin_start:bin_end])
+
+	if n_unshuffled > 0:
+		warnings.warn("{} of {} bins came back identical to the input and are "
+			"not randomized in the returned sequences. A bin whose characters "
+			"form a single Eulerian path, such as a homopolymer or a short "
+			"tandem repeat, has only one possible dinucleotide shuffle. "
+			"Raising `bin_size` merges such a region into a more diverse "
+			"neighborhood.".format(n_unshuffled, n_bins), TangermemeWarning,
+			stacklevel=2)
+
+	return X_shuf

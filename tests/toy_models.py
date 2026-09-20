@@ -2,6 +2,10 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import torch
+
+from tangermeme.deep_lift_shap import BilinearOp
+from tangermeme._deep_lift_utils import _hooks_disabled
+
 torch.use_deterministic_algorithms(True, warn_only=True)
 torch.manual_seed(0)
 
@@ -12,6 +16,15 @@ class SumModel(torch.nn.Module):
 		
 	def forward(self, X):
 		return X.sum(axis=-1)
+
+
+class SoftmaxModel(torch.nn.Module):
+	def __init__(self):
+		super(SoftmaxModel, self).__init__()
+		self.softmax = torch.nn.Softmax(dim=-1)
+
+	def forward(self, x):
+		return self.softmax(x)
 
 
 class FlattenDense(torch.nn.Module):
@@ -160,6 +173,221 @@ class Transformer(torch.nn.Module):
 		return self.dense(h.reshape(h.shape[0], -1))
 
 
+class ConvRuleSeq(torch.nn.Module):
+	"""conv -> one newly registered rule -> conv, keeping the length axis.
+
+	`pisa` attributes every output position separately, so it needs a model
+	that still has a length axis at its output rather than one that flattens
+	down to a scalar the way the models above do. `rule` selects which of the
+	operations added to the rule table sits in the middle.
+	"""
+
+	def __init__(self, rule="layernorm", seq_len=15, channels=8):
+		super(ConvRuleSeq, self).__init__()
+		self.rule = rule
+		self.conv = torch.nn.Conv1d(4, channels, (3,), padding='same')
+		self.out = torch.nn.Conv1d(channels, 1, (3,))
+
+		if rule == "layernorm":
+			self.op = torch.nn.LayerNorm([channels, seq_len])
+		elif rule == "rmsnorm":
+			self.op = torch.nn.RMSNorm([channels, seq_len])
+		elif rule == "softmax":
+			self.op = torch.nn.Softmax(dim=-1)
+		elif rule == "bilinear":
+			self.op = BilinearOp("...,...->...")
+			self.gate = torch.nn.Conv1d(4, channels, (3,), padding='same')
+		else:
+			raise ValueError("Unknown rule: {}".format(rule))
+
+	def forward(self, X):
+		h = self.conv(X)
+
+		if self.rule == "bilinear":
+			h = self.op(h, self.gate(X))
+		else:
+			h = self.op(h)
+
+		# `pisa` indexes the output as (example, position), so the channel axis
+		# is squeezed out the same way Conv1 does it.
+		return self.out(h)[:, 0]
+
+
+class MultiHeadAttention(torch.nn.Module):
+	"""Multi-head self-attention built only from modules DeepLIFT can hook.
+
+	`torch.nn.MultiheadAttention` computes its softmax and both of its matmuls
+	functionally, so there is no module for a rule to attach to and the whole
+	attention block is silently treated as linear. Writing the same
+	computation with `BilinearOp` and `torch.nn.Softmax` puts every
+	non-linearity behind a module, which is what makes a transformer block
+	attributable. The scaling sits outside the op, as BilinearOp's contract
+	asks.
+	"""
+
+	def __init__(self, seq_len=100, d_model=8, n_heads=2, n_outputs=1):
+		super(MultiHeadAttention, self).__init__()
+		self.d_model = d_model
+		self.n_heads = n_heads
+		self.head_dim = d_model // n_heads
+
+		self.proj = torch.nn.Conv1d(4, d_model, (3,), padding='same')
+		self.q = torch.nn.Linear(d_model, d_model)
+		self.k = torch.nn.Linear(d_model, d_model)
+		self.v = torch.nn.Linear(d_model, d_model)
+
+		self.scores = BilinearOp("nhld,nhmd->nhlm")
+		self.softmax = torch.nn.Softmax(dim=-1)
+		self.context = BilinearOp("nhlm,nhmd->nhld")
+
+		self.norm = torch.nn.LayerNorm([seq_len, d_model])
+		self.dense = torch.nn.Linear(seq_len * d_model, n_outputs)
+
+	def _split(self, h):
+		n, length, _ = h.shape
+		h = h.reshape(n, length, self.n_heads, self.head_dim)
+		return h.permute(0, 2, 1, 3)
+
+	def forward(self, X, alpha=0, beta=1):
+		h = self.proj(X).permute(0, 2, 1)
+		q, k, v = self._split(self.q(h)), self._split(self.k(h)), self._split(self.v(h))
+
+		a = self.softmax(self.scores(q, k) / (self.head_dim ** 0.5))
+		c = self.context(a, v).permute(0, 2, 1, 3)
+		c = c.reshape(h.shape[0], h.shape[1], self.d_model)
+
+		h = self.norm(c + h)
+		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
+
+
+class TransformerBlock(torch.nn.Module):
+	"""A stackable transformer block built only from modules DeepLIFT can hook.
+
+	`MultiHeadAttention` is the attention operation on its own. This is the
+	block a user actually stacks around it: attention, a residual, two norms
+	and a feedforward with a non-linearity. The arrangement matters to the
+	rules rather than only to the model, because pre-norm and post-norm put
+	the LayerNorm on opposite sides of the residual add, so the norm rule sees
+	a different graph in each and `n_blocks` chains every rule through the
+	output of the block below it.
+
+	A learned positional embedding is a parameter added to the stream, which
+	is linear and needs no rule of its own; it is here to confirm that.
+
+
+	Parameters
+	----------
+	seq_len: int, optional
+		The length of the input sequences. Default is 100.
+
+	d_model: int, optional
+		The width of the residual stream. Default is 8.
+
+	n_heads: int, optional
+		The number of attention heads, which must divide `d_model`. Default
+		is 2.
+
+	n_blocks: int, optional
+		The number of blocks to stack. Default is 1.
+
+	pre_norm: bool, optional
+		Whether to normalize the input of each sublayer and leave the residual
+		path clear (`True`), or normalize the sum afterwards (`False`).
+		Default is False.
+
+	activation: str, optional
+		Either "gelu" or "silu", the non-linearity in the feedforward.
+		Default is "gelu".
+
+	positional: bool, optional
+		Whether to add a learned positional embedding after the input
+		projection. Default is False.
+
+	mask: torch.tensor or None, optional
+		An additive mask, broadcast onto the attention scores before the
+		softmax. If None, no mask is applied. Default is None.
+
+	n_outputs: int, optional
+		The number of outputs. Default is 1.
+	"""
+
+	def __init__(self, seq_len=100, d_model=8, n_heads=2, n_blocks=1,
+			pre_norm=False, activation="gelu", positional=False, mask=None,
+			n_outputs=1):
+		super(TransformerBlock, self).__init__()
+		self.d_model = d_model
+		self.n_heads = n_heads
+		self.head_dim = d_model // n_heads
+		self.n_blocks = n_blocks
+		self.pre_norm = pre_norm
+
+		self.proj = torch.nn.Conv1d(4, d_model, (3,), padding='same')
+
+		self.pos = None
+		if positional:
+			self.pos = torch.nn.Parameter(
+				torch.randn(1, seq_len, d_model) * 0.1)
+
+		# Registered even when None, so that `self.mask` exists either way and
+		# a real mask follows the model onto whatever device it is moved to.
+		self.register_buffer("mask", mask)
+
+		def _stack(fn):
+			return torch.nn.ModuleList([fn() for i in range(n_blocks)])
+
+		self.q = _stack(lambda: torch.nn.Linear(d_model, d_model))
+		self.k = _stack(lambda: torch.nn.Linear(d_model, d_model))
+		self.v = _stack(lambda: torch.nn.Linear(d_model, d_model))
+
+		self.scores = _stack(lambda: BilinearOp("nhld,nhmd->nhlm"))
+		self.softmax = _stack(lambda: torch.nn.Softmax(dim=-1))
+		self.context = _stack(lambda: BilinearOp("nhlm,nhmd->nhld"))
+
+		self.norm1 = _stack(lambda: torch.nn.LayerNorm([seq_len, d_model]))
+		self.norm2 = _stack(lambda: torch.nn.LayerNorm([seq_len, d_model]))
+
+		act = {"gelu": torch.nn.GELU, "silu": torch.nn.SiLU}[activation]
+		self.ff = _stack(lambda: torch.nn.Sequential(
+			torch.nn.Linear(d_model, 2 * d_model),
+			act(),
+			torch.nn.Linear(2 * d_model, d_model)))
+
+		self.dense = torch.nn.Linear(seq_len * d_model, n_outputs)
+
+	def _split(self, h):
+		n, length, _ = h.shape
+		h = h.reshape(n, length, self.n_heads, self.head_dim)
+		return h.permute(0, 2, 1, 3)
+
+	def _attend(self, h, i):
+		q = self._split(self.q[i](h))
+		k = self._split(self.k[i](h))
+		v = self._split(self.v[i](h))
+
+		# The scaling sits outside the op, as BilinearOp's contract asks.
+		s = self.scores[i](q, k) / (self.head_dim ** 0.5)
+		if self.mask is not None:
+			s = s + self.mask
+
+		c = self.context[i](self.softmax[i](s), v).permute(0, 2, 1, 3)
+		return c.reshape(h.shape[0], h.shape[1], self.d_model)
+
+	def forward(self, X, alpha=0, beta=1):
+		h = self.proj(X).permute(0, 2, 1)
+		if self.pos is not None:
+			h = h + self.pos
+
+		for i in range(self.n_blocks):
+			if self.pre_norm:
+				h = h + self._attend(self.norm1[i](h), i)
+				h = h + self.ff[i](self.norm2[i](h))
+			else:
+				h = self.norm1[i](h + self._attend(h, i))
+				h = self.norm2[i](h + self.ff[i](h))
+
+		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
+
+
 class Conv2DExpand(torch.nn.Module):
 	"""Unsqueeze the alphabet axis, Conv2d that collapses height, then dense."""
 
@@ -291,9 +519,164 @@ class ConvLayerNorm(torch.nn.Module):
 		self.relu = torch.nn.ReLU()
 		self.dense = torch.nn.Linear(8 * seq_len, n_outputs)
 
-	def forward(self, X):
+	def forward(self, X, alpha=0, beta=1):
 		h = self.relu(self.ln(self.conv(X)))
-		return self.dense(h.reshape(h.shape[0], -1))
+		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
+
+
+class ConvRMSNorm(torch.nn.Module):
+	"""conv -> RMSNorm over (C, L) -> relu -> dense."""
+
+	def __init__(self, seq_len=100, n_outputs=1):
+		super(ConvRMSNorm, self).__init__()
+		self.conv = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.norm = torch.nn.RMSNorm([8, seq_len])
+		self.relu = torch.nn.ReLU()
+		self.dense = torch.nn.Linear(8 * seq_len, n_outputs)
+
+	def forward(self, X, alpha=0, beta=1):
+		h = self.relu(self.norm(self.conv(X)))
+		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
+
+
+class ConvSoftmax(torch.nn.Module):
+	"""conv -> softmax over a chosen axis -> dense.
+
+	`dim` selects which axis is normalized: -1 for the length axis, 1 for the
+	channel axis. The rule is applied along whichever one the module carries,
+	so both are worth exercising.
+
+	`logit_scale` multiplies the logits before the softmax. Raising it peaks
+	the distribution, which drives most of the exponentials to values small
+	enough that the rule's guarded ratios have to be right about them; a
+	default of 1.0 leaves every other user of this model unchanged.
+	"""
+
+	def __init__(self, seq_len=100, n_outputs=1, dim=-1, channels=8,
+			logit_scale=1.0):
+		super(ConvSoftmax, self).__init__()
+		self.dim = dim
+		self.logit_scale = logit_scale
+		self.conv = torch.nn.Conv1d(4, channels, (3,), padding='same')
+		self.softmax = torch.nn.Softmax(dim=dim)
+		self.dense = torch.nn.Linear(channels * seq_len, n_outputs)
+
+	def forward(self, X, alpha=0, beta=1):
+		h = self.conv(X) * self.logit_scale
+
+		# A softmax over n entries leaves every weight near 1/n, which would push
+		# the attributions below what four decimal places can resolve, so the
+		# distribution is rescaled by the size of the axis it normalized.
+		h = self.softmax(h) * h.shape[self.dim]
+		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
+
+
+class ConvBilinear(torch.nn.Module):
+	"""conv, conv -> elementwise BilinearOp product -> dense."""
+
+	def __init__(self, seq_len=100, n_outputs=1):
+		super(ConvBilinear, self).__init__()
+		self.left = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.right = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.op = BilinearOp("...,...->...")
+		self.dense = torch.nn.Linear(8 * seq_len, n_outputs)
+
+	def forward(self, X, alpha=0, beta=1):
+		h = self.op(self.left(X), self.right(X))
+		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
+
+
+class ConvBilinearMatmul(torch.nn.Module):
+	"""conv, conv -> BilinearOp matmul into a channel Gram matrix -> dense.
+
+	The transpose happens outside the op, because BilinearOp uses its operands
+	exactly as passed. Contracting the length axis keeps the product (C, C)
+	rather than (L, L), which would dominate memory at 30 shuffles.
+	"""
+
+	def __init__(self, seq_len=100, n_outputs=1):
+		super(ConvBilinearMatmul, self).__init__()
+		self.left = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.right = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.op = BilinearOp(None)
+		self.dense = torch.nn.Linear(8 * 8, n_outputs)
+
+	def forward(self, X, alpha=0, beta=1):
+		h = self.op(self.left(X), self.right(X).transpose(1, 2))
+		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
+
+
+class ConvBilinearEinsum(torch.nn.Module):
+	"""conv, conv -> BilinearOp einsum into a channel Gram matrix -> dense."""
+
+	def __init__(self, seq_len=100, n_outputs=1):
+		super(ConvBilinearEinsum, self).__init__()
+		self.left = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.right = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.op = BilinearOp("ncl,ndl->ncd")
+		self.dense = torch.nn.Linear(8 * 8, n_outputs)
+
+	def forward(self, X, alpha=0, beta=1):
+		h = self.op(self.left(X), self.right(X))
+		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
+
+
+class CustomGate(torch.nn.Module):
+	"""A user-defined bilinear op that is absent from the default rule table.
+
+	It satisfies the contract `_bilinear` relies on -- an `equation` attribute
+	and the two operands cached on the module -- without subclassing
+	BilinearOp, so it only attributes correctly when handed to
+	`additional_nonlinear_ops`. Subclassing would not work: hooks are
+	registered by `isinstance` but dispatched by exact `type`.
+	"""
+
+	def __init__(self):
+		super(CustomGate, self).__init__()
+		self.equation = "...,...->..."
+
+	def forward(self, left, right):
+		if hasattr(self, "_NON_LINEAR_OPS") and not _hooks_disabled():
+			self.left = left.detach()
+			self.right = right.detach()
+
+		return left * right
+
+
+class ConvCustomGate(torch.nn.Module):
+	"""conv, conv -> unregistered CustomGate -> dense."""
+
+	def __init__(self, seq_len=100, n_outputs=1):
+		super(ConvCustomGate, self).__init__()
+		self.left = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.right = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.op = CustomGate()
+		self.dense = torch.nn.Linear(8 * seq_len, n_outputs)
+
+	def forward(self, X, alpha=0, beta=1):
+		h = self.op(self.left(X), self.right(X))
+		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
+
+
+class ScaledTanhModule(torch.nn.Module):
+	"""An elementwise nonlinearity with no entry in the default rule table."""
+
+	def forward(self, X):
+		return torch.tanh(X) * 2.0 + 0.5
+
+
+class ConvScaledTanh(torch.nn.Module):
+	"""conv -> unregistered elementwise nonlinearity -> dense."""
+
+	def __init__(self, seq_len=100, n_outputs=1):
+		super(ConvScaledTanh, self).__init__()
+		self.conv = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.act = ScaledTanhModule()
+		self.dense = torch.nn.Linear(8 * seq_len, n_outputs)
+
+	def forward(self, X, alpha=0, beta=1):
+		h = self.act(self.conv(X))
+		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
 
 
 class MultiActivation(torch.nn.Module):
@@ -353,13 +736,14 @@ class MultiInputMultiOutput(torch.nn.Module):
 
 
 class AttributeNameConv(torch.nn.Module):
-	"""conv -> relu -> dense, carrying plain attributes named `input`/`output`.
+	"""conv -> relu -> dense, carrying plain attributes named like the caches.
 
 	The forward hooks cache activations on non-linear modules under those two
-	names, and `_clear_hooks` is applied to every module in the model rather
-	than only the hooked ones. This model puts ordinary, non-tensor attributes
-	of the same name on modules that never get hooked, so that clearing the
-	caches can be checked not to take them along with it.
+	names, BilinearOp caches its operands under `left`/`right`, and
+	`_clear_hooks` is applied to every module in the model rather than only the
+	hooked ones. This model puts ordinary, non-tensor attributes of all four
+	names on modules that never get hooked, so that clearing the caches can be
+	checked not to take them along with it.
 	"""
 
 	def __init__(self, seq_len=100, n_outputs=1):
@@ -372,6 +756,13 @@ class AttributeNameConv(torch.nn.Module):
 		self.output = n_outputs
 		self.conv.input = "kernel"
 		self.conv.output = "logits"
+
+		# BilinearOp caches its two operands under these names, and those caches
+		# are cleared across every module too.
+		self.left = "5-prime"
+		self.right = "3-prime"
+		self.conv.left = "upstream"
+		self.conv.right = "downstream"
 
 	def forward(self, X):
 		h = self.relu(self.conv(X))
