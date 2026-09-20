@@ -117,6 +117,18 @@ Anything not in that list and not linear is a hole. `Conv*`, `Linear`,
 `BatchNorm*`, `Embedding`, `AvgPool*`, adds, concatenations and
 reshapes need no custom rule.
 
+```python
+from tangermeme.deep_lift_shap import _nonlinear
+X_attr = deep_lift_shap(model, X, additional_nonlinear_ops={MyActivation: _nonlinear})
+```
+
+The catch: `_nonlinear` divides `delta_out / delta_in`, so it **must be registered
+on a layer with equal input and output shape**. If your op also reduces (e.g. a
+profile head that does `logits * softmax(logits)` then `.sum()`), split it: put the
+elementwise, shape-preserving part in its own `nn.Module`, register *that*, and do
+the reduction in the parent wrapper. Registering the reducing layer raises a
+size-mismatch error.
+
 ### Precision: CPU vs CUDA, and the fp64 escape hatch
 
 The same model gives **higher deltas on CUDA than CPU** (parallel reductions reorder
