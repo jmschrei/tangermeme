@@ -823,7 +823,7 @@ def _captum_deep_lift_shap(
 				attr = (attr * _X)
 			
 			if return_references:
-				references_.append(_reference.unsqueeze(0))
+				references_.append(_references.unsqueeze(0).cpu())
 
 			attributions.append(attr.cpu())
 
