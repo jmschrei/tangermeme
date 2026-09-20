@@ -30,6 +30,7 @@ from tangermeme._deep_lift_utils import _bilinear
 
 from tangermeme.deep_lift_shap import BilinearOp
 from tangermeme.deep_lift_shap import _clear_hooks, _register_hooks
+from tangermeme.deep_lift_shap import _reset_caches
 from tangermeme.deep_lift_shap import hypothetical_attributions
 
 
@@ -287,6 +288,8 @@ def pisa(
 				xr = (x[:1] - r[:1])
 
 				X_ = torch.cat([x, r])
+
+				model.apply(_reset_caches)
 
 				with torch.autograd.set_grad_enabled(True):
 					if _args is not None:

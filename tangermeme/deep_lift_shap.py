@@ -106,10 +106,32 @@ def _register_hooks(module):
 	if not isinstance(module, tuple(module._NON_LINEAR_OPS.keys())):
 		return
 
+	module._caches = {}
+	module._fwd_counter = 0
+
 	module.handles = []
 	module.handles.append(module.register_forward_hook(_f_hook))
-	module.handles.append(module.register_forward_pre_hook(_fp_hook))
 	module.handles.append(module.register_full_backward_hook(_b_hook))
+
+
+def _reset_caches(module):
+	"""Drop the activations cached during the previous forward pass.
+
+	Called once per forward pass, so that a module holds one pass' worth of
+	activations at a time rather than accumulating them over every batch of a
+	call. The entries cannot be dropped as the backward pass consumes them
+	instead, because `pisa` runs one backward pass per block of output
+	positions over a single forward graph, and every one of them needs the
+	same activations.
+	"""
+
+	if hasattr(module, "_caches"):
+		module._caches.clear()
+		module._fwd_counter = 0
+
+		# Dropping the tag with the entries it indexes keeps it from ever
+		# naming a call from an earlier pass.
+		module.__dict__.pop("_bw_idx", None)
 
 
 def _clear_hooks(module):
@@ -119,36 +141,78 @@ def _clear_hooks(module):
 
 		del module.handles
 
-	# Drop the activations cached by `_fp_hook` and `_f_hook`, along with the
-	# two operands a bilinear op caches for its backward rule. All four are as
-	# large as the activations themselves and would otherwise stay attached to
-	# the module for as long as the model is alive. Only tensors are removed,
-	# so a model carrying its own attribute of one of these names keeps it.
+	# Drop the per-call activations and the operands a bilinear op stages for
+	# them. They are as large as the activations themselves and would
+	# otherwise stay attached to the module for as long as the model is alive.
+	for name in ("_caches", "_fwd_counter", "_bw_idx", "_staged"):
+		if name in module.__dict__:
+			del module.__dict__[name]
+
+	# `_b_hook` puts one call's values under these four names for the duration
+	# of a rule and removes them again, so they are only still here if the
+	# rule raised. Only tensors are removed, so a model carrying its own
+	# attribute of one of these names keeps it.
 	for name in ("input", "output", "left", "right"):
 		if isinstance(module.__dict__.get(name), torch.Tensor):
 			delattr(module, name)
 
 
-def _fp_hook(module, inputs): 
-	if _hooks_disabled():
-		return
-	
-	module.input = inputs[0].clone().detach()
-
-
 def _f_hook(module, inputs, outputs):
 	if _hooks_disabled():
 		return
-	
-	module.output = outputs.clone().detach()
+
+	# A module may cache values of its own during its forward, as `BilinearOp`
+	# does with its two operands. That forward runs before this hook, so take
+	# what it staged whether or not this call is kept, and keep it in the same
+	# entry as the activations.
+	cache = module.__dict__.pop("_staged", {})
+
+	if not outputs.requires_grad:
+		return
+
+	# A module that is called more than once in a forward pass sees a different
+	# input and output each time, and the rules need the pair belonging to the
+	# call the backward pass is currently unwinding. Index the pairs by the
+	# order the calls were made, and have each output tag itself on the way
+	# back so that `_b_hook` knows which one it is in.
+	idx = module._fwd_counter
+	module._fwd_counter += 1
+
+	cache["input"] = inputs[0].clone().detach()
+	cache["output"] = outputs.clone().detach()
+	module._caches[idx] = cache
+
+	def _tag_backward(grad):
+		module._bw_idx = idx
+
+	outputs.register_hook(_tag_backward)
 
 
 def _b_hook(module, grad_input, grad_output):
 	if _hooks_disabled():
 		return
 
-	return module._NON_LINEAR_OPS[type(module)](module, grad_input, 
+	# The tag is set by a hook on the output tensor of one call, which torch
+	# fires immediately before that call's own backward node and so before
+	# this hook, whatever order the surrounding graph is traversed in. It is
+	# missing when the forward hook declined the call, which leaves the
+	# gradient alone.
+	idx = module.__dict__.pop("_bw_idx", None)
+	if idx is None:
+		return grad_input
+
+	cache = module._caches[idx]
+	for name, value in cache.items():
+		setattr(module, name, value)
+
+	multipliers = module._NON_LINEAR_OPS[type(module)](module, grad_input, 
 		grad_output)
+
+	for name in cache:
+		delattr(module, name)
+
+	return multipliers
+
 
 class BilinearOp(torch.nn.Module):
 	"""A bilinear contraction of two tensors, written as a hookable module.
@@ -167,8 +231,9 @@ class BilinearOp(torch.nn.Module):
 
 	The two operands are cached on the module during an attribution call,
 	because the backward rule needs both of them and torch hands a backward
-	hook only the gradients. They are cleared by `_clear_hooks` when the call
-	finishes, and are not cached at all outside one.
+	hook only the gradients. One pair is kept per call, so the op may be used
+	more than once in a forward pass. They are cleared once the backward pass
+	has read them, and are not cached at all outside an attribution call.
 
 
 	Parameters
@@ -207,10 +272,14 @@ class BilinearOp(torch.nn.Module):
 		# DeepLIFT hooks are active, so these large tensors are cached during
 		# an attribution call and never outside one. The second check keeps a
 		# re-entrant pass, such as the one the local-IG rule makes, from
-		# overwriting the operands an enclosing rule is still reading.
+		# overwriting the operands an enclosing rule is still reading. The
+		# forward hook takes them from here and files them under this call,
+		# so that a module used more than once keeps one pair per call.
 		if hasattr(self, "_NON_LINEAR_OPS") and not _hooks_disabled():
-			self.left = left.detach()
-			self.right = right.detach()
+			self._staged = {
+				"left": left.detach(),
+				"right": right.detach(),
+			}
 
 		if self.equation is None:
 			return torch.matmul(left, right)
@@ -600,6 +669,8 @@ def deep_lift_shap(
 						autocast_ctx = torch.autocast(device_type=device.type, dtype=dtype)
 					else:
 						autocast_ctx = contextlib.nullcontext()
+
+					model.apply(_reset_caches)
 
 					# Calculate the gradients using the rescale rule
 					with torch.autograd.set_grad_enabled(True):
