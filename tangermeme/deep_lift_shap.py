@@ -211,7 +211,15 @@ def _b_hook(module, grad_input, grad_output):
 	for name in cache:
 		delattr(module, name)
 
-	return multipliers
+	# torch rejects a backward hook that hands back a gradient in a different
+	# dtype than the one it was given. Under autocast a rule can return
+	# float32 where the gradient it replaces is half precision, because the
+	# activations it reads and the arithmetic it does on them need not stay in
+	# the autocast dtype. Putting the multipliers back in the dtype of the
+	# gradients they replace covers every rule at once, including the ones
+	# passed in through `additional_nonlinear_ops`.
+	return tuple(m if m is None or g is None or m.dtype == g.dtype
+		else m.to(g.dtype) for m, g in zip(multipliers, grad_input))
 
 
 class BilinearOp(torch.nn.Module):

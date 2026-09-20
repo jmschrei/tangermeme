@@ -35,6 +35,7 @@ from .toy_models import FlattenDense
 from .toy_models import Conv
 from .toy_models import Scatter
 from .toy_models import ConvDense
+from .toy_models import ConvAvgDense
 from .toy_models import ConvPoolDense
 from .toy_models import SmallDeepSEA
 from .toy_models import SharedActivation
@@ -3319,17 +3320,29 @@ def test_disable_hooks_stops_activation_caching():
 
 def test_disable_hooks_stops_backward_rule():
 	module = torch.nn.ReLU()
-	module._NON_LINEAR_OPS = {torch.nn.ReLU: lambda *args: "called"}
+	grad_input = (torch.zeros(2, 4),)
+	called = []
+
+	def rule(module, grad_input, grad_output):
+		called.append(True)
+		return (torch.ones(2, 4),)
+
+	module._NON_LINEAR_OPS = {torch.nn.ReLU: rule}
 	module._caches, module._bw_idx = {0: {}}, 0
 
 	with _disable_hooks():
-		assert _b_hook(module, None, None) is None
+		assert _b_hook(module, grad_input, None) is None
+
+	assert called == []
 
 	# Returning None leaves the gradient untouched, which is what a disabled
 	# hook has to do; outside the block the registered rule runs again. The
 	# disabled call must also leave the tag alone, because the forward call it
 	# marks still has to be attributed.
-	assert _b_hook(module, None, None) == "called"
+	multipliers = _b_hook(module, grad_input, None)
+
+	assert called == [True]
+	assert torch.equal(multipliers[0], torch.ones(2, 4))
 
 
 def test_disable_hooks_stops_bilinear_caching():
@@ -3540,3 +3553,82 @@ def test_deep_lift_shap_shared_module_cleanup(X, references):
 		for name in ("handles", "_caches", "_fwd_counter", "_bw_idx",
 			"_staged", "input", "output"):
 			assert name not in module.__dict__
+
+
+###
+
+
+# One model per rule, then two that chain several of them together.
+AUTOCAST_MODELS = {
+	"nonlinear": ConvAvgDense,
+	"maxpool": ConvPoolDense,
+	"layernorm": ConvLayerNorm,
+	"rmsnorm": ConvRMSNorm,
+	"softmax": ConvSoftmax,
+	"bilinear": ConvBilinear,
+	"attention": MultiHeadAttention,
+	"transformer": lambda: TransformerBlock(seq_len=100, n_outputs=1,
+		n_blocks=2),
+}
+
+
+@pytest.mark.parametrize("rule", AUTOCAST_MODELS)
+def test_deep_lift_shap_autocast_bfloat16(X, references, device, rule):
+	torch.manual_seed(0)
+	model = AUTOCAST_MODELS[rule]()
+
+	# torch raises `hook 'hook' has changed the type of value` when a backward
+	# hook returns a gradient in a dtype other than the one it was handed, and
+	# a rule reading half-precision activations does not necessarily compute
+	# in half precision. Only the elementwise rule happened to.
+	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, dtype=torch.bfloat16, random_state=0,
+		warning_threshold=1e9)
+
+	assert X_attr.shape == X[:4].shape
+	assert X_attr.dtype == torch.bfloat16
+
+
+@pytest.mark.parametrize("rule", AUTOCAST_MODELS)
+def test_deep_lift_shap_autocast_float16(X, references, cuda_device, rule):
+	torch.manual_seed(0)
+	model = AUTOCAST_MODELS[rule]()
+
+	# fp16 autocast is CUDA-only, so this cannot use the `device` fixture.
+	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+		device=cuda_device, dtype=torch.float16, random_state=0,
+		warning_threshold=1e9)
+
+	assert X_attr.shape == X[:4].shape
+	assert X_attr.dtype == torch.float16
+
+
+def test_deep_lift_shap_autocast_matches_full_precision(X, references, device):
+	torch.manual_seed(0)
+	model = ConvPoolDense()
+
+	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, random_state=0)
+	X_attr_ = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, dtype=torch.bfloat16, random_state=0,
+		warning_threshold=1e9)
+
+	# Casting the multipliers back must not change which attributions come
+	# out, only their precision.
+	assert_array_almost_equal(X_attr, X_attr_.float(), 2)
+
+
+def test_deep_lift_shap_autocast_additional_nonlinear_ops(X, references,
+	device):
+	torch.manual_seed(0)
+	model = ConvLayerNorm()
+
+	# A rule supplied by the caller has to hold the same dtype contract, and
+	# the local-IG rule computes in whatever dtype its quadrature lands in.
+	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, dtype=torch.bfloat16, random_state=0,
+		warning_threshold=1e9, additional_nonlinear_ops={
+			torch.nn.LayerNorm: integrated_gradients_op(K=4,
+				name="layernorm")})
+
+	assert X_attr.dtype == torch.bfloat16
