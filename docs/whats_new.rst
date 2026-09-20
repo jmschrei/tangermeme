@@ -67,6 +67,7 @@ Documentation
 -------------
 
 	- Four docstrings no longer render mangled on the site. ``recursive_seqlets`` and ``unchunk`` each embed an ASCII diagram that was not marked as a literal block, so docutils reflowed it, collapsed every ``. . . .`` run into an ellipsis, and read ``recursive_seqlets``' ``--------`` rule as a section transition; the seqlet diagram that explains the recursive property was unreadable as published. ``extract_loci``'s three reasons a locus may be dropped were a bullet list whose continuation lines sat at the marker's own indent, which ends the list rather than continuing it. And ``annotate_seqlets`` opened a line with a bare ``**kwargs``, which docutils reads as the start of strong markup. The API pages now build with no warnings.
+	- The two display equations in the "Attribution Trickiness and DeepLiftShap Implementations" vignette now render as mathematics. They were written as raw ``\begin{equation}`` blocks, which nbsphinx passes through to docutils rather than to MathJax; the published page showed the literal text ``begin{equation} sum_{i=0}^{L_s} ...`` with every backslash stripped, so the two equations that state what a DeepLIFT/SHAP attribution sums to were unreadable. They are now ``$$``-delimited, matching the ``$f(X)$`` inline math the same notebook already uses. Only the markdown cells changed; the notebook was not re-executed.
 
 Testing
 -------
