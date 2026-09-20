@@ -145,6 +145,32 @@ def test_insert_raises_ohe(X):
 	assert_raises(ValueError, insert, X, torch.randn(1, 4, 8))
 
 
+def test_insert_X_with_N(X):
+	# Unknown characters in X are all-zero columns. The insertion splices
+	# the sequence in two and so carries them through unchanged.
+	X_n = torch.clone(X)
+	X_n[0, :, 10:14] = 0
+
+	X_insert = insert(X_n, 'CATCAG')
+	start = X.shape[-1] // 2
+
+	assert X_insert.shape[-1] == X.shape[-1] + 6
+	assert_array_almost_equal(X_insert[0, :, 10:14], torch.zeros(4, 4))
+	assert_array_almost_equal(X_insert[:, :, :start], X_n[:, :, :start])
+	assert_array_almost_equal(X_insert[0, :, start:start+6],
+		one_hot_encode('CATCAG'))
+	assert_array_almost_equal(X_insert[:, :, start+6:], X_n[:, :, start:])
+
+
+def test_insert_raises_ohe_X(X):
+	X_multi = torch.clone(X)
+	X_multi[0, :, 5] = 1
+	assert_raises(ValueError, insert, X_multi, 'CATCAG')
+
+	assert_raises(ValueError, insert, torch.clone(X) * 2, 'CATCAG')
+	assert_raises(ValueError, insert, torch.randn(1, 4, 68), 'CATCAG')
+
+
 ###
 
 
@@ -336,6 +362,46 @@ def test_substitute_raises_ohe(X):
 	assert_raises(ValueError, substitute, X, torch.randn(1, 4, 8))
 
 
+def test_substitute_X_with_N(X):
+	# Unknown characters in X are all-zero columns, as `one_hot_encode`
+	# produces for the characters in its `ignore` list. They are valid
+	# input and are left alone when the motif does not cover them.
+	X_n = torch.clone(X)
+	X_n[0, :, 10:14] = 0
+
+	X_substitute = substitute(X_n, 'CATCAG')
+	start = X.shape[-1] // 2 - 3
+
+	assert X_substitute.shape == X_n.shape
+	assert_array_almost_equal(X_substitute[0, :, 10:14], torch.zeros(4, 4))
+	assert_array_almost_equal(X_substitute[:, :, :start], X_n[:, :, :start])
+	assert_array_almost_equal(X_substitute[0, :, start:start+6],
+		one_hot_encode('CATCAG'))
+
+
+def test_substitute_X_with_N_under_motif(X):
+	# An unknown character that the motif covers is overwritten by it.
+	X_n = torch.clone(X)
+	start = X.shape[-1] // 2 - 3
+	X_n[0, :, start:start+2] = 0
+
+	X_substitute = substitute(X_n, 'CATCAG')
+
+	assert_array_almost_equal(X_substitute[0, :, start:start+6],
+		one_hot_encode('CATCAG'))
+
+
+def test_substitute_raises_ohe_X(X):
+	# Allowing all-zero columns must not also allow multi-hot columns or
+	# values outside {0, 1}.
+	X_multi = torch.clone(X)
+	X_multi[0, :, 5] = 1
+	assert_raises(ValueError, substitute, X_multi, 'CATCAG')
+
+	assert_raises(ValueError, substitute, torch.clone(X) * 2, 'CATCAG')
+	assert_raises(ValueError, substitute, torch.randn(1, 4, 68), 'CATCAG')
+
+
 ###
 
 
@@ -372,6 +438,31 @@ def test_delete_raise_ends(X):
 	assert_raises(ValueError, delete, X, start=5, end=5)
 	assert_raises(ValueError, delete, X, start=5, end=3)
 	assert_raises(ValueError, delete, X, start=5, end=100)
+
+
+def test_delete_X_with_N(X):
+	# Unknown characters are all-zero columns and survive the deletion
+	# when they fall outside the deleted portion.
+	X_n = torch.clone(X)
+	X_n[0, :, 10:14] = 0
+
+	X_delete = delete(X_n, start=0, end=5)
+
+	assert X_delete.shape[-1] == X.shape[-1] - 5
+	assert_array_almost_equal(X_delete[0, :, 5:9], torch.zeros(4, 4))
+	assert_array_almost_equal(X_delete, X_n[:, :, 5:])
+
+	# Deleting the unknown characters themselves removes them.
+	X_delete = delete(X_n, start=10, end=14)
+	assert (X_delete.sum(dim=1) == 0).sum() == 0
+
+
+def test_delete_raises_ohe_X(X):
+	X_multi = torch.clone(X)
+	X_multi[0, :, 5] = 1
+	assert_raises(ValueError, delete, X_multi, start=0, end=5)
+
+	assert_raises(ValueError, delete, torch.clone(X) * 2, start=0, end=5)
 
 
 ###
@@ -542,6 +633,23 @@ def test_multisubstitute_spacing(X):
 	assert_raises(ValueError, multisubstitute, X, motifs, [10000])
 
 
+def test_multisubstitute_X_with_N(X):
+	# multisubstitute validates X only through the substitutions it makes,
+	# so it inherits their handling of unknown characters.
+	X_n = torch.clone(X)
+	X_n[0, :, 10:14] = 0
+
+	X_substitute = multisubstitute(X_n, ['CATGG', 'CAGGA'], [3])
+
+	assert X_substitute.shape == X_n.shape
+	assert_array_almost_equal(X_substitute[0, :, 10:14], torch.zeros(4, 4))
+	assert_array_almost_equal(X_substitute[:, :, :10], X_n[:, :, :10])
+
+	X_multi = torch.clone(X)
+	X_multi[0, :, 5] = 1
+	assert_raises(ValueError, multisubstitute, X_multi, ['CATGG', 'CAGGA'], [3])
+
+
 ###
 
 
@@ -615,6 +723,31 @@ def test_randomize_raises_probs(X):
 		probs=[[0.1, 100.8, 0.1]])
 
 
+def test_randomize_X_with_N(X):
+	# Unknown characters outside the randomized portion are kept; ones
+	# inside it are replaced along with the rest of the window.
+	X_n = torch.clone(X)
+	X_n[0, :, 10:14] = 0
+
+	X_rand = randomize(X_n, start=20, end=30, random_state=0)
+
+	assert X_rand.shape == (1, 1, 4, X.shape[-1])
+	assert_array_almost_equal(X_rand[0, 0, :, 10:14], torch.zeros(4, 4))
+	assert_array_almost_equal(X_rand[0, 0, :, :20], X_n[0, :, :20])
+	assert X_rand[0, 0, :, 20:30].sum() == 10
+
+	X_rand = randomize(X_n, start=10, end=14, random_state=0)
+	assert (X_rand[0, 0].sum(dim=0) == 0).sum() == 0
+
+
+def test_randomize_raises_ohe_X(X):
+	X_multi = torch.clone(X)
+	X_multi[0, :, 5] = 1
+	assert_raises(ValueError, randomize, X_multi, start=20, end=30)
+
+	assert_raises(ValueError, randomize, torch.clone(X) * 2, start=20, end=30)
+
+
 ###
 
 
@@ -647,6 +780,33 @@ def test_shuffle_raises_ends(X):
 	assert_raises(ValueError, shuffle, X, start=500, end=10)
 	assert_raises(ValueError, shuffle, X, start=5, end=3)
 	assert_raises(ValueError, shuffle, X, start=5, end=1000)
+
+
+def test_shuffle_X_with_N(X):
+	# The shuffle permutes the columns of the region, so unknown characters
+	# inside it are moved rather than resolved and their count is kept.
+	X_n = torch.clone(X)
+	X_n[0, :, 10:14] = 0
+
+	X_shuf = shuffle(X_n, start=5, end=20, random_state=0)
+
+	assert X_shuf.shape == (1, 1, 4, X.shape[-1])
+	assert (X_shuf[0, 0].sum(dim=0) == 0).sum() == 4
+	assert_array_almost_equal(X_shuf[0, 0, :, :5], X_n[0, :, :5])
+	assert_array_almost_equal(X_shuf[0, 0, :, 20:], X_n[0, :, 20:])
+	assert_array_almost_equal(X_shuf[0, 0].sum(dim=-1), X_n[0].sum(dim=-1))
+
+	# Unknown characters outside the shuffled region stay where they are.
+	X_shuf = shuffle(X_n, start=20, end=40, random_state=0)
+	assert_array_almost_equal(X_shuf[0, 0, :, 10:14], torch.zeros(4, 4))
+
+
+def test_shuffle_raises_ohe_X(X):
+	X_multi = torch.clone(X)
+	X_multi[0, :, 5] = 1
+	assert_raises(ValueError, shuffle, X_multi, start=5, end=20)
+
+	assert_raises(ValueError, shuffle, torch.clone(X) * 2, start=5, end=20)
 
 
 ###
@@ -772,6 +932,9 @@ def test_dinucleotide_shuffle_raises_ohe():
 
 
 def test_dinucleotide_shuffle_raises_N():
+	# Deliberately stricter than the rest of this module: the transition
+	# matrix comes from argmax, which would shuffle an unknown character
+	# as an 'A'. See the note in the `X` docstring.
 	seq = 'ATATATTAAAATNNNATTTAAANNNTTTTTAATA'
 	motif = one_hot_encode(seq).unsqueeze(0)
 	assert_raises(ValueError, dinucleotide_shuffle, motif)
