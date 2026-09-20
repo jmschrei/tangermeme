@@ -8,7 +8,6 @@ import warnings
 import numba
 import numpy
 import torch
-import numpy as np
 
 from tqdm import tqdm
 
@@ -687,6 +686,7 @@ def dinucleotide_shuffle(
 		X_shufs.append(X_shuf)
 
 	return torch.stack(X_shufs)
+
 
 def local_dinucleotide_shuffle(
 	X: torch.Tensor,

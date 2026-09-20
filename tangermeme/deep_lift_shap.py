@@ -520,9 +520,6 @@ def deep_lift_shap(
 
 	device = _resolve_device(device)
 
-	if random_state is not None:
-		print(f"Setting random state to {random_state}")
-
 	if dtype is None:
 		try:
 			dtype = next(model.parameters()).dtype
