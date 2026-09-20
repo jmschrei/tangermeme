@@ -716,11 +716,11 @@ def unchunk(
 	The overlap value should be the same as when the sequence was chunked, and
 	should correspond to the number of positions that are shared across adjacent
 	examples. When overlap is set to a value greater than 0, half of the overlap
-	goes to the elements as follows:
+	goes to the elements as follows::
 
 		<------------*    |
-				  overlap 
-				|    *-----------> 
+		                overlap
+		                |    *----------->
 
 
 	Parameters

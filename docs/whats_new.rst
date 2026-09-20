@@ -63,6 +63,11 @@ pisa
 
 	- Registers the three rules added to ``deep_lift_shap`` in its own rule table, so LayerNorm, RMSNorm and bilinear contractions are attributed there too, and picks up the rewritten softmax rule it already had registered. ``pisa`` keeps a separate copy of that table, so a rule can be correct in one module and missing from the other.
 
+Documentation
+-------------
+
+	- Four docstrings no longer render mangled on the site. ``recursive_seqlets`` and ``unchunk`` each embed an ASCII diagram that was not marked as a literal block, so docutils reflowed it, collapsed every ``. . . .`` run into an ellipsis, and read ``recursive_seqlets``' ``--------`` rule as a section transition; the seqlet diagram that explains the recursive property was unreadable as published. ``extract_loci``'s three reasons a locus may be dropped were a bullet list whose continuation lines sat at the marker's own indent, which ends the list rather than continuing it. And ``annotate_seqlets`` opened a line with a bare ``**kwargs``, which docutils reads as the start of strong markup. The API pages now build with no warnings.
+
 Testing
 -------
 
