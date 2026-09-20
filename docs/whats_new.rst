@@ -6,20 +6,14 @@ Release History
 ===============
 
 
-Version 1.4.1
-=============
+Version 1.5.0 (unreleased)
+==========================
 
 Claude Code skill
 -----------------
 
-	- Corrects the bundled Agent Skill against the library. Claims that did not match the implementation are fixed: ``predict`` returns the model's parameter dtype rather than always float32; the int8 sequences from ``extract_loci`` should be left as int8 because every entry point except ``pisa`` upcasts each batch; ``recursive_seqlets``' ``additional_flanks`` re-sums the reported attribution rather than only padding the coordinates; ``product.apply_pairwise``/``apply_product`` take ``func`` as a required first positional argument and so do not satisfy the ``func=`` contract themselves; ``apply_pairwise`` zips the elements of ``args`` with each other and crosses that list with every example; ``ablate_annotations``' second output axis is always one; ``plot_logo`` reads the annotation label from the first column positionally and filters the plotted window strictly; the DeepLIFT/SHAP hooks cover twenty stock non-linearities rather than five; ``pairwise_annotations`` sorts away input row order under the default ``unique=True``; and the deletion-width guard and the ``max_iter``/``tol`` stop conditions differ per function. Also documents ``saturation_mutagenesis``' own ``func=`` post-processing hook and its int8 truncation warning, and fixes three examples that could not run.
 	- Replaces every cross-reference between skill files with a backticked path, ``references/design.md``, in place of a Markdown link. Nothing that reads a skill renders Markdown, so ``[references/design.md](references/design.md)`` spent twice the characters to show the agent the same path twice; the eighty-eight links in the skill are now single backticked paths. The bare mentions that named a file without its directory, such as ``model-wrapping.md``, are now complete paths, which previously left the reader to work out that the file sits under ``references/``.
 	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
-
-annotate
---------
-
-	- ``pairwise_annotations_spacing`` now raises a ``ValueError`` when two annotations within the same example overlap. The distance between a pair is the gap between the end of the left annotation and the start of the right one, which is negative for overlapping spans; the only guard was on the upper bound, so a negative distance would index from the far end of the distance axis and be recorded as ``max_distance + d``, indistinguishable from a genuine long-range pair. Abutting annotations (a distance of exactly zero) are unaffected.
 
 deep_lift_shap
 --------------
@@ -35,11 +29,6 @@ deep_lift_shap
 	- The softmax rule is rewritten and now applies along whichever axis the module normalizes over. The previous rule never read ``module.dim`` at all, subtracting a mean over the entire tensor, and failed summation-to-delta everywhere, over both the last axis and the channel axis, by enough to cross the default ``warning_threshold`` of 1e-3, so those users were already being warned their attributions did not converge. The rewritten rule decomposes the operation into steps with exact multipliers and chains them in log space, bringing both deltas down to floating-point noise. Only the batch axis is rejected, since DeepLIFT stacks each example with its reference along it and normalizing over that axis would mix the two. The numerator path carries no separately-guarded ``Δlog(a)/Δa`` factor, because it cancels against ``Δa/Δx`` exactly; evaluating the two with independent thresholds broke on a peaked softmax, where most exponentials are small enough to trip one guard but not the other.
 
 	- The rule implementations are in a private ``_deep_lift_utils`` module, with ``BilinearOp`` and ``integrated_gradients_op`` living in ``deep_lift_shap`` alongside the hooks they cooperate with. Every rule is re-exported, so ``from tangermeme.deep_lift_shap import _nonlinear`` continues to work.
-
-design
-------
-
-	- ``greedy_substitution`` and ``beam_substitution`` now raise a ``ValueError`` when ``X`` has a batch size other than one. Both design a single sequence at a time, but the batch dimension was never checked and a larger batch produced more rows than the numba substitution kernel had indices for, reading out of bounds and crashing the interpreter rather than raising.
 
 ersatz
 ------
@@ -68,11 +57,6 @@ pisa
 
 	- Registers the three rules added to ``deep_lift_shap`` in its own rule table, so LayerNorm, RMSNorm and bilinear contractions are attributed there too, and picks up the rewritten softmax rule it already had registered. ``pisa`` keeps a separate copy of that table, so a rule can be correct in one module and missing from the other.
 
-variant_effect
---------------
-
-	- ``substitution_effect`` now raises a ``ValueError`` when two rows of ``substitutions`` target the same ``(example_idx, position)``. The substitutions are applied with two vectorized assignments over an example-shaped tensor, so colliding rows each set their own alphabet index to one and the model was handed a multi-hot column with no error. The same position in different examples is still valid.
-
 Testing
 -------
 
@@ -85,11 +69,35 @@ Testing
 	- Moves the tests for the ``tangermeme.design`` subpackage into ``tests/design/`` and the installer test into ``tests/_skills/test_install.py``, so the test tree mirrors the package tree. ``tangermeme.design`` became a subpackage in 1.4.0 but its tests stayed flat in ``tests/``, leaving no way to tell from the test tree which module a file covered.
 	- Rewrites the bundled-skill integrity checks against backticked reference paths rather than Markdown-link syntax. The old check scanned for ``](...)`` and so would have reported success on a skill with no links left in it at all. It now also fails when a Markdown link is reintroduced, and when a ``references/*.md`` file is not reachable from the ``SKILL.md`` router table.
 
-
 CI / Tooling
 ------------
 
 	- The lockfile no longer holds ``numpy`` at 2.0.1, which had no cp313 wheel and so was compiled from source on every Python 3.13 CI run. ``memelite`` 0.2.0 required ``numpy<=2.0.1``; 0.4.0 drops that ceiling, and ``numpy`` moves to 2.4.6. The 3.13 job spent 227s installing dependencies against 13-25s for the other three in the matrix. Only the lockfile changes: ``pyproject.toml`` already allowed both versions, so a fresh resolve picked them anyway and installs from PyPI were never affected.
+
+
+Version 1.4.1
+=============
+
+Claude Code skill
+-----------------
+
+	- Corrects the bundled Agent Skill against the library. Claims that did not match the implementation are fixed: ``predict`` returns the model's parameter dtype rather than always float32; the int8 sequences from ``extract_loci`` should be left as int8 because every entry point except ``pisa`` upcasts each batch; ``recursive_seqlets``' ``additional_flanks`` re-sums the reported attribution rather than only padding the coordinates; ``product.apply_pairwise``/``apply_product`` take ``func`` as a required first positional argument and so do not satisfy the ``func=`` contract themselves; ``apply_pairwise`` zips the elements of ``args`` with each other and crosses that list with every example; ``ablate_annotations``' second output axis is always one; ``plot_logo`` reads the annotation label from the first column positionally and filters the plotted window strictly; the DeepLIFT/SHAP hooks cover twenty stock non-linearities rather than five; ``pairwise_annotations`` sorts away input row order under the default ``unique=True``; and the deletion-width guard and the ``max_iter``/``tol`` stop conditions differ per function. Also documents ``saturation_mutagenesis``' own ``func=`` post-processing hook and its int8 truncation warning, and fixes three examples that could not run.
+	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
+
+annotate
+--------
+
+	- ``pairwise_annotations_spacing`` now raises a ``ValueError`` when two annotations within the same example overlap. The distance between a pair is the gap between the end of the left annotation and the start of the right one, which is negative for overlapping spans; the only guard was on the upper bound, so a negative distance would index from the far end of the distance axis and be recorded as ``max_distance + d``, indistinguishable from a genuine long-range pair. Abutting annotations (a distance of exactly zero) are unaffected.
+
+design
+------
+
+	- ``greedy_substitution`` and ``beam_substitution`` now raise a ``ValueError`` when ``X`` has a batch size other than one. Both design a single sequence at a time, but the batch dimension was never checked and a larger batch produced more rows than the numba substitution kernel had indices for, reading out of bounds and crashing the interpreter rather than raising.
+
+variant_effect
+--------------
+
+	- ``substitution_effect`` now raises a ``ValueError`` when two rows of ``substitutions`` target the same ``(example_idx, position)``. The substitutions are applied with two vectorized assignments over an example-shaped tensor, so colliding rows each set their own alphabet index to one and the model was handed a multi-hot column with no error. The same position in different examples is still valid.
 
 
 Version 1.4.0
