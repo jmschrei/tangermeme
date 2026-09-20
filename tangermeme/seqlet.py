@@ -1,6 +1,8 @@
 # seqlet.py
 # Authors: Jacob Schreiber <jmschreiber91@gmail.com>
-# adapted from code written by Avanti Shrikumar 
+# adapted from code written by Avanti Shrikumar
+
+from __future__ import annotations
 
 import math
 import numpy
@@ -112,8 +114,8 @@ def _iterative_extract_seqlets(X_sum, window_size, flank, suppress):
 	Returns
 	-------
 	seqlets: list
-		A list of tuples containing the example index, the start of the seqlet,
-		the end of the seqlet, and the sum of attributions within the seqlet.
+		A list of 3-tuples `(example_index, start, end)`. The sum of
+		attributions within the seqlet is NOT included in this output.
 	"""
 
 	n, d = X_sum.shape
@@ -206,9 +208,15 @@ def _isotonic_thresholds(values, null_values, increasing, target_fdr,
 	return values[precisions >= (1 - target_fdr)][0].item()
 
 
-def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2, 
-	min_passing_frac=0.03, max_passing_frac=0.2, 
-	weak_threshold_for_counting_sign=0.8):
+def tfmodisco_seqlets(
+	X_attr: torch.Tensor,
+	window_size: int = 21,
+	flank: int = 10,
+	target_fdr: float = 0.2,
+	min_passing_frac: float = 0.03,
+	max_passing_frac: float = 0.2,
+	weak_threshold_for_counting_sign: float = 0.8,
+) -> pandas.DataFrame:
 	"""Extract seqlets using the procedure from TF-MoDISco.
 
 	Seqlets are contiguous spans of high attribution characters. This method
@@ -261,7 +269,7 @@ def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2,
 
 	weak_threshold_for_counting_sign: float, optional
 		A minimal threshold to use when setting the final threshold value
-		separating seqlets from non-seqlets.
+		separating seqlets from non-seqlets. Default is 0.8.
 
 
 	Returns
@@ -271,7 +279,12 @@ def tfmodisco_seqlets(X_attr, window_size=21, flank=10, target_fdr=0.2,
 		and attribution sum for each seqlet that passes the thresholds.
 	"""
 
-	_validate_input(X_attr, "X_attr", shape=(-1, -1)) 
+	_validate_input(X_attr, "X_attr", shape=(-1, -1))
+
+	if X_attr.shape[0] == 0 or X_attr.shape[1] == 0:
+		raise ValueError("tfmodisco_seqlets requires X_attr to be non-empty; "
+			"got X_attr with shape {}.".format(tuple(X_attr.shape)))
+
 	suppress = int(0.5*window_size) + flank
 
 	X_sum = X_attr.unfold(-1, window_size, 1).sum(dim=-1)
@@ -452,8 +465,14 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	return seqlets
 
 
-def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25, 
-	additional_flanks=0, n_bins=1000):
+def recursive_seqlets(
+	X: torch.Tensor,
+	threshold: float = 0.01,
+	min_seqlet_len: int = 4,
+	max_seqlet_len: int = 25,
+	additional_flanks: int = 0,
+	n_bins: int = 1000,
+) -> pandas.DataFrame:
 	"""A seqlet caller implementing the recursive seqlet algorithm.
 
 	NOTE: Currently only *positive* seqlets will be identified. The easiest way
@@ -467,7 +486,7 @@ def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	seqlet lengths by discretizing the attribution sum into integers. Then,
 	CDFs are calculated for each distribution (or, more specifically, 1-CDFs).
 	Finally, p-values are calculated via lookup to these 1-CDFs for all
-	potential CDFs, yielding a (n_positions, n_lengths) matrix of p-values.
+	potential spans, yielding a (n_positions, n_lengths) matrix of p-values.
 
 	This algorithm then identifies seqlets by defining them to have a key
 	property: all internal spans of a seqlet must also have been called a
@@ -479,17 +498,18 @@ def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	X and ending at Y to be called a seqlet, all the values within the bounds
 	(in addition to X) must also have a p-value below the threshold.
 
+	::
 
-							min_seqlet_len
-                             --------
-	. . . . . . . | . . . . / . . . . . . . .
-	. . . . . . . | . . . / . . . . . . . . .
-	. . . . . . . | . . / . . . . . . . . . .
-	. . . . . . . | . / . . . . . . . . . . .
-	. . . . . . . | / . . . . . . . . . . . .
-	. . . . . . . X . . . . . . . . Y . . . .
-	. . . . . . . . . . . . . . . . . . . . .
-	. . . . . . . . . . . . . . . . . . . . .
+		                        min_seqlet_len
+		                         --------
+		. . . . . . . | . . . . / . . . . . . . .
+		. . . . . . . | . . . / . . . . . . . . .
+		. . . . . . . | . . / . . . . . . . . . .
+		. . . . . . . | . / . . . . . . . . . . .
+		. . . . . . . | / . . . . . . . . . . . .
+		. . . . . . . X . . . . . . . . Y . . . .
+		. . . . . . . . . . . . . . . . . . . . .
+		. . . . . . . . . . . . . . . . . . . . .
 
 	
 	The seqlets identified by this approach will usually be much smaller than
@@ -525,7 +545,8 @@ def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 
 	additional_flanks: int, optional
 		An additional value to subtract from the start, and to add to the end,
-		of all called seqlets. Does not affect the called seqlets.
+		of all called seqlets. Does not affect which seqlets are called, only
+		extends their boundaries after calling. Default is 0.
 
 	n_bins: int, optional
 		The number of bins to use when estimating the PDFs and CDFs. Default is
@@ -546,8 +567,12 @@ def recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	elif not isinstance(X, numpy.ndarray):
 		raise ValueError("`X` must be either a torch.Tensor or numpy.ndarray.")
 
+	if X.size == 0:
+		raise ValueError("recursive_seqlets requires X to be non-empty; got "
+			"X with shape {}.".format(tuple(X.shape)))
+
 	columns = ['example_idx', 'start', 'end', 'attribution', 'p-value']
-	seqlets = _recursive_seqlets(X, threshold, min_seqlet_len, max_seqlet_len, 
+	seqlets = _recursive_seqlets(X, threshold, min_seqlet_len, max_seqlet_len,
 		additional_flanks, n_bins)
 	seqlets = pandas.DataFrame(seqlets, columns=columns)
 	return seqlets.sort_values("p-value").reset_index(drop=True)

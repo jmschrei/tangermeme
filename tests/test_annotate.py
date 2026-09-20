@@ -2,6 +2,7 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 
+import pandas
 import torch
 torch.use_deterministic_algorithms(True, warn_only=True)
 torch.manual_seed(0)
@@ -20,6 +21,9 @@ from tangermeme.seqlet import recursive_seqlets
 from tangermeme.annotate import annotate_seqlets
 from tangermeme.annotate import count_annotations
 from tangermeme.annotate import pairwise_annotations
+from tangermeme.annotate import pairwise_annotations_spacing
+
+from tangermeme.io import read_meme
 
 
 @pytest.fixture
@@ -221,6 +225,198 @@ def test_pairwise_annotations_raises(annotations):
 	assert_raises(ValueError, pairwise_annotations, annotations - 10)
 	assert_raises(ValueError, pairwise_annotations, annotations.T)
 	assert_raises(ValueError, pairwise_annotations, torch.randn(100, 2))
-	assert_raises(ValueError, pairwise_annotations, torch.cat([annotations, 
+	assert_raises(ValueError, pairwise_annotations, torch.cat([annotations,
 		annotations], dim=1))
-	
+
+
+def test_pairwise_annotations_shape(annotations):
+	y = pairwise_annotations(annotations)
+	assert y.shape == (7, 7)
+
+	y = pairwise_annotations(annotations, shape=20)
+	assert y.shape == (20, 20)
+
+	assert_raises(RuntimeError, pairwise_annotations, annotations, shape=3)
+
+
+def test_pairwise_annotations_self_loops():
+	X = torch.tensor([[0, 0], [0, 0], [0, 0]], dtype=torch.int64)
+	y = pairwise_annotations(X, unique=False)
+	assert int(y[0, 0]) == 3
+
+	y = pairwise_annotations(X, unique=True)
+	assert int(y[0, 0]) == 0
+
+
+def test_count_annotations_dim_with_shape(annotations):
+	X = count_annotations(annotations, dim=0, shape=(30, 30))
+	assert X.shape == (30,)
+
+	X = count_annotations(annotations, dim=1, shape=(30, 30))
+	assert X.shape == (30,)
+
+
+def test_count_annotations_tuple_input_numpy(annotations):
+	X_tensor = count_annotations(annotations)
+
+	np0 = annotations[:, 0].numpy()
+	np1 = annotations[:, 1].numpy()
+	X_list = count_annotations([np0, np1])
+
+	assert_array_almost_equal(X_tensor, X_list)
+
+
+###
+
+
+def test_pairwise_annotations_spacing_basic():
+	# (example_idx, annotation_idx, start, end)
+	X = torch.tensor([
+		[0, 0, 0, 5],
+		[0, 1, 10, 15],
+		[0, 1, 20, 25],
+	], dtype=torch.int64)
+
+	y = pairwise_annotations_spacing(X)
+
+	assert y.shape == (2, 2, 100)
+	assert y.dtype == torch.uint8
+
+	assert int(y[0, 1, 5]) == 1
+	assert int(y[1, 0, 5]) == 1
+	assert int(y[0, 1, 15]) == 1
+	assert int(y[1, 0, 15]) == 1
+	assert int(y[1, 1, 5]) == 1
+
+	assert int(y.sum()) == 5
+
+
+def test_pairwise_annotations_spacing_symmetric_false():
+	X = torch.tensor([
+		[0, 0, 0, 5],
+		[0, 1, 10, 15],
+		[0, 1, 20, 25],
+	], dtype=torch.int64)
+
+	y = pairwise_annotations_spacing(X, symmetric=False)
+
+	assert y.shape == (2, 2, 100)
+
+	assert int(y[0, 1, 5]) == 1
+	assert int(y[1, 0, 5]) == 0
+	assert int(y[0, 1, 15]) == 1
+	assert int(y[1, 0, 15]) == 0
+	assert int(y[1, 1, 5]) == 1
+
+	assert int(y.sum()) == 3
+
+
+def test_pairwise_annotations_spacing_at_max_distance():
+	# Two annotations whose gap equals max_distance exactly. The output
+	# tensor's last axis has size `max_distance`, so valid indices are
+	# 0..max_distance-1; a pair at distance == max_distance should be
+	# treated as "outside the window" rather than indexing past the end.
+	X = torch.tensor([
+		[0, 0, 0, 5],       # ends at 5
+		[0, 1, 105, 110],   # starts at 105 -> distance = 100
+	], dtype=torch.int64)
+
+	# Should not raise. Pair at exactly max_distance is excluded.
+	y = pairwise_annotations_spacing(X, max_distance=100)
+
+	assert y.shape == (2, 2, 100)
+	assert int(y.sum()) == 0
+
+
+def test_pairwise_annotations_spacing_rejects_empty():
+	# Empty annotations previously crashed inside the max() reduction.
+	X = torch.zeros(0, 4, dtype=torch.int64)
+	with pytest.raises(ValueError, match="at least one annotation"):
+		pairwise_annotations_spacing(X)
+
+
+def test_pairwise_annotations_spacing_multi_example():
+	# Pairs that cross example boundaries should not be counted.
+	X = torch.tensor([
+		[0, 0, 0, 5],
+		[0, 1, 10, 15],
+		[1, 0, 0, 5],
+		[1, 1, 10, 15],
+	], dtype=torch.int64)
+
+	y = pairwise_annotations_spacing(X)
+
+	# One (0,1) pair in each example, distance 5 -> 2 counts; symmetric
+	# adds 2 to (1,0). No cross-example pairs.
+	assert int(y[0, 1, 5]) == 2
+	assert int(y[1, 0, 5]) == 2
+	assert int(y.sum()) == 4
+
+
+def test_pairwise_annotations_spacing_dataframe_input():
+	# pandas.DataFrame should accept inputs equivalent to the tensor form.
+	X = torch.tensor([
+		[0, 0, 0, 5],
+		[0, 1, 10, 15],
+	], dtype=torch.int64)
+	df = pandas.DataFrame(X.numpy(),
+		columns=['example_idx', 'annotation_idx', 'start', 'end'])
+
+	y_tensor = pairwise_annotations_spacing(X)
+	y_df = pairwise_annotations_spacing(df)
+
+	assert_array_almost_equal(y_tensor, y_df)
+
+
+###
+
+
+def test_annotate_seqlets_dict_motifs(X, X_contrib):
+	seqlets = recursive_seqlets(X_contrib)
+
+	motifs_dict = read_meme("tests/data/test.meme")
+	idxs_d, pvals_d = annotate_seqlets(X, seqlets, motifs_dict)
+	idxs_s, pvals_s = annotate_seqlets(X, seqlets, "tests/data/test.meme")
+
+	assert_array_almost_equal(idxs_d, idxs_s)
+	assert_array_almost_equal(pvals_d, pvals_s)
+
+
+def test_pairwise_annotations_spacing_rejects_overlapping():
+	# Overlapping annotations give start1 - end0 < 0, which would index from
+	# the far end of the distance axis and be indistinguishable from a pair
+	# that is genuinely max_distance + d apart.
+	X = torch.tensor([
+		[0, 0, 10, 30],
+		[0, 1, 20, 40],
+	], dtype=torch.int64)
+
+	with pytest.raises(ValueError, match="overlapping"):
+		pairwise_annotations_spacing(X, max_distance=100)
+
+
+def test_pairwise_annotations_spacing_allows_abutting():
+	# Annotations that touch but do not overlap give a distance of exactly 0.
+	X = torch.tensor([
+		[0, 0, 10, 20],
+		[0, 1, 20, 30],
+	], dtype=torch.int64)
+
+	y = pairwise_annotations_spacing(X, max_distance=100)
+
+	assert int(y[0, 1, 0]) == 1
+	assert int(y[1, 0, 0]) == 1
+	assert int(y.sum()) == 2
+
+
+def test_pairwise_annotations_spacing_overlap_across_examples_ok():
+	# Spans that overlap in coordinate space but sit in different examples
+	# are never paired, so they must not raise.
+	X = torch.tensor([
+		[0, 0, 10, 30],
+		[1, 1, 20, 40],
+	], dtype=torch.int64)
+
+	y = pairwise_annotations_spacing(X, max_distance=100)
+
+	assert int(y.sum()) == 0

@@ -1,6 +1,8 @@
 # kmers.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
 import numpy
 import torch
 import scipy
@@ -13,7 +15,11 @@ key_type = numba.types.int64
 value_type = numba.types.float64
 
 
-def kmers(X, k, scores=None):
+def kmers(
+	X: torch.Tensor,
+	k: int,
+	scores: torch.Tensor | None = None,
+) -> scipy.sparse.csr_matrix:
 	"""Extract all k-mers found in a sequence, optionally weighted by a score.
 
 	This function will count the number of k-mers found in each sequence and
@@ -30,7 +36,13 @@ def kmers(X, k, scores=None):
 
 	k: int
 		The size of the k-mers to consider.
-	
+
+	scores: torch.Tensor, shape=(-1, sequence_length) or None, optional
+		Per-position scores (e.g., attribution values) to weight each k-mer
+		by. When provided, the value stored for each k-mer is the sum of the
+		scores at the k positions it spans. If None, each k-mer instance
+		contributes a count of 1. Default is None.
+
 
 	Returns
 	-------
@@ -151,8 +163,16 @@ def _fast_extract_gkmers(X, min_k, max_k, max_gap, max_len, max_entries):
 
 
 
-def gapped_kmers(X, scores=None, min_k=4, max_k=8, max_gap=2, max_len=10, 
-	max_gkmers=10, max_pos=None):
+def gapped_kmers(
+	X: torch.Tensor,
+	scores: torch.Tensor | None = None,
+	min_k: int = 4,
+	max_k: int = 8,
+	max_gap: int = 2,
+	max_len: int = 10,
+	max_gkmers: int = 10,
+	max_pos: int | None = None,
+) -> scipy.sparse.csr_matrix:
 	"""Extract gapped k-mers from sequences and optionally scores.
 
 	This function will extract the gapped k-mers from a set of sequences that
@@ -168,7 +188,7 @@ def gapped_kmers(X, scores=None, min_k=4, max_k=8, max_gap=2, max_len=10,
 	X: torch.Tensor, shape=(-1, len(alphabet), sequence_length)
 		A one-hot encoded set of sequences.
 
-	attr: torch.Tensor with shape=(-1, sequence_length) or None, optional
+	scores: torch.Tensor with shape=(-1, sequence_length) or None, optional
 		A corresponding set of attribution values to use. If None, return counts
 		instead of sum of attribution values. Default is None.
 
@@ -186,10 +206,15 @@ def gapped_kmers(X, scores=None, min_k=4, max_k=8, max_gap=2, max_len=10,
 		non-gap characters. Default is 10.
 
 	max_gkmers: int, optional
-		The maximum number of gapped k-mers to return.
+		The maximum number of gapped k-mers to return per example, ranked by
+		absolute score. Any gapped k-mers beyond this cap are silently
+		dropped from the output sparse matrix; raise this if your example
+		may contain more than 10 meaningful gapped k-mers. Default is 10.
 
-	top_n_gkmers: int, optional
-		..
+	max_pos: int or None, optional
+		If provided, only consider the top `max_pos` positions per example
+		ranked by score before extracting gapped k-mers. If None, consider
+		all positions. Default is None.
 
 
 	Returns
@@ -201,7 +226,7 @@ def gapped_kmers(X, scores=None, min_k=4, max_k=8, max_gap=2, max_len=10,
 
 
 	X_idxs = X.argmax(axis=1)
-	if not scores:
+	if scores is None:
 		scores = torch.ones_like(X_idxs)
 
 	if max_pos is None:

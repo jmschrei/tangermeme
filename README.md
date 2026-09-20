@@ -2,12 +2,12 @@
 
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/tangermeme?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=ORANGE&left_text=downloads)](https://pepy.tech/projects/tangermeme) [![Unit Tests](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml/badge.svg)](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml) [![Documentation Status](https://readthedocs.org/projects/tangermeme/badge/?version=latest)](https://tangermeme.readthedocs.io/en/latest/?badge=latest)
 
-[[preprint](https://www.biorxiv.org/content/10.1101/2025.08.08.669296v2)][[docs](https://tangermeme.readthedocs.io/en/latest/index.html)][[tutorials](https://github.com/jmschrei/tangermeme/tree/main/docs/tutorials)][[vignettes](https://github.com/jmschrei/tangermeme/tree/main/docs/vignettes)]
+[[preprint](https://www.biorxiv.org/content/10.1101/2025.08.08.669296v2)][[docs](https://tangermeme.readthedocs.io/en/latest/index.html)][[tutorials](https://github.com/jmschrei/tangermeme/tree/main/docs/tutorials)][[vignettes](https://github.com/jmschrei/tangermeme/tree/main/docs/vignettes)][[release notes](https://tangermeme.readthedocs.io/en/latest/whats_new.html)]
 
 > [!NOTE] 
 > If you use tangermeme in your work, please consider citing the [preprint](https://www.biorxiv.org/content/10.1101/2025.08.08.669296v2). Citations allow me to continue developing software like this for the community. 
 
-Training sequence-based (sometimes called sequence-to-function or S2F) machine learning models has become widespread when studying genomics. But, what have these models learned, and what do we even do with them after training? `tangermeme` aims to provide robust and easy-to-use tools for the what-to-do-after-training question. `tangermeme` implements many atomic sequence operations such as adding a motif to a sequence or shuffling it out, efficient tools for applying predictive models to these sequences, methods for dissecting what these predictive models have learned, and tools for designing new sequences using these models. `tangermeme` aims to be assumption free: models can be multi-input or multi-output, functions do not assume a distance and instead return the raw predictions, and when loss functions are necessary they can be supplied by the user. Although we will provide best practices for how to use these functions, our hope is that being assumption-free makes adaptation of tangermeme into your settings as frictionless as possible. All functions are unit-tested and implemented with both compute- and memory-efficient in mind. Finally, although the library was built with operations on DNA sequences in mind, all functions are extensible to any alphabet.
+Training sequence-based (sometimes called sequence-to-function or S2F) machine learning models has become widespread when studying genomics. But, what have these models learned, and what do we even do with them after training? `tangermeme` aims to provide robust and easy-to-use tools for the what-to-do-after-training question. `tangermeme` implements many atomic sequence operations such as adding a motif to a sequence or shuffling it out, efficient tools for applying predictive models to these sequences, methods for dissecting what these predictive models have learned, and tools for designing new sequences using these models. `tangermeme` aims to be assumption free: models can be multi-input or multi-output, functions do not assume a distance and instead return the raw predictions, and when loss functions are necessary they can be supplied by the user. Although we will provide best practices for how to use these functions, our hope is that being assumption-free makes adaptation of tangermeme into your settings as frictionless as possible. All functions are unit-tested and implemented with both compute- and memory-efficiency in mind. Finally, although the library was built with operations on DNA sequences in mind, all functions are extensible to any alphabet.
 
 Please see the documentation and tutorials linked at the top of this README for more extensive documentation. If you only read one vignette, read THIS ONE: [Inspecting what Cis-Regulatory Features a Model has Learned](https://tangermeme.readthedocs.io/en/latest/vignettes/Inspecting_What_Cis-Regulatory_Features_a_Model_Has_Learned.html).
 
@@ -17,9 +17,50 @@ Please see the documentation and tutorials linked at the top of this README for 
 
 ## Installation
 
-`pip install tangermeme`
+```bash
+pip install tangermeme
+```
 
-If PyTorch is already installed, this should take less than five minutes. If PyTorch needs to be installed, this command should do so but may cause the installation to take up to ten minutes. The majority of time will be spend resolving dependencies.
+Or, with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add tangermeme
+```
+
+If PyTorch is already installed, this should take less than five minutes. If PyTorch needs to be installed, this command should do so but may cause the installation to take up to ten minutes. The majority of time will be spent resolving dependencies. `uv` is significantly faster than `pip` at this resolution step.
+
+Optional extras:
+
+- `tangermeme[docs]` — install the Sphinx toolchain (sphinx, sphinx-rtd-theme, nbsphinx, jupyter, nbconvert) for building the documentation site locally.
+
+### Development install
+
+Contributors should clone the repository and use `uv` to create a reproducible environment from `uv.lock`:
+
+```bash
+git clone https://github.com/jmschrei/tangermeme.git
+cd tangermeme
+uv sync --extra dev
+uv run pytest -m "not cmd"
+```
+
+This installs the package in editable mode along with the testing toolchain (`pytest`, `captum`, `ruff`, `build`, `twine`).
+
+## Claude Code Skill
+
+tangermeme ships an [Agent Skill](https://docs.claude.com/en/docs/claude-code/skills) for [Claude Code](https://claude.com/claude-code) that teaches the agent how to use the library correctly — the API contracts, the footguns (e.g., `deep_lift_shap` needs `target=` for multi-task models, `extract_loci` has a variable-length return), and the multi-step workflows. It is bundled with the package but, because Claude Code does not scan installed Python packages, you install it once into your personal skills directory:
+
+```bash
+tangermeme-install-skills
+```
+
+This copies the skill to `~/.claude/skills/tangermeme/`, where it is available to Claude Code in **every** project. Re-run with `--force` after upgrading tangermeme to refresh it. Once installed, just ask Claude Code to do tangermeme tasks ("compute DeepLIFT/SHAP attributions on these peaks", "marginalize this motif", "set up a notebook to inspect what my model learned") and the skill is consulted automatically. The skill is a router (`SKILL.md`) that points to detailed reference files loaded on demand, so it adds essentially no context cost until it is used.
+
+If you would rather not copy files into your home directory, point Claude Code at the bundled copy in place instead:
+
+```bash
+export CLAUDE_SKILLS_PATH="$(tangermeme-install-skills --print-path)"
+```
 
 ## Roadmap
 
@@ -132,6 +173,8 @@ Note that for multi-task models a target must be set to calculate attributions f
 Given a predictive model and a set of known motifs, a common question is to ask what motifs affect the model's predictions. Rather than trying to scan these motifs against the genome and averaging predictions at all sites -- which is challenging and computationally costly -- you can simply substitute in the motif of interest into a background set of sequences and see what the difference in predictions is. Because `tangermeme` aims to be assumption-free, these functions take in a batch of examples that you specify, and return the predictions before and after adding the motif in for each example. If the model is multi-task, `y_before` and `y_after` will be a tuple of outputs. If the model is multi-input, additional inputs can be specified as a tuple passed into `args`. 
 
 ```python
+from tangermeme.marginalize import marginalize
+
 y_before, y_after = marginalize(model, X, "CTCAGTGATG")
 ```
 
@@ -155,6 +198,8 @@ attr_before, attr_after = marginalize(model, X, "CTCAGTGATG", func=deep_lift_sha
 The conceptual opposite of marginalization is ablation; rather than adding information to a sequence in the form of a motif, you remove information from it by shuffling out a portion of the sequence. This function will handle shuffling (or dinucleotide shuffling) the given number of times and returns the predictions for each shuffle. 
 
 ```python
+from tangermeme.ablate import ablate
+
 y_before, y_after = ablate(model, X, 995, 1005)
 ```
 
@@ -167,6 +212,8 @@ As you might expect, if we shuffle a sequence that has the GATA motif in the mid
 Motifs do not occur in isolation in the genome and so, frequently, we want to measure how these motifs interact with each other and how this changes across different spacings. This function takes in a set of motifs and either a fixed distance or one distance for each adjacent pair of motifs, returning the predictions before and after insertion of the full set of motifs.
 
 ```python
+from tangermeme.space import space
+
 y_before, y_after = space(model, X, ["CTCAGTGATG", "CTCAGTGATG"], spacing=10)
 ```
 
@@ -179,7 +226,7 @@ By running this function across several spacings one can, for instance, measure 
 Given an observed sequence a simple question is "what positions are driving model predictions?" One simple way to answer this question is through saturation mutagenesis, i.e., compare the predictions on the original sequence with that of sequences that comprehensively each contain one mutation with respect to that original sequence. This is another form of attribution method that is conceptually similar to deep mutational scanning but using a predictive model instead of running an experiment. In a region with an AP-1 motif, we can run ISM on Beluga and look at AP-1 factor tasks to identify that the AP-1 motif is what is driving the predictions.
 
 ```python
-from tangermeme.ism import saturation_mutagenesis
+from tangermeme.saturation_mutagenesis import saturation_mutagenesis
 
 X_attr = saturation_mutagenesis(model, X)
 ```
@@ -202,7 +249,7 @@ substitutions = torch.tensor([
 ])
 
 y, y_var = substitution_effect(model, X, substitutions)
-````
+```
 
 When using a BPNet model that predicts GATA2 binding, we can see that a single substitution encoded at this position in the example seems to knock out predicted signal in the middle of the window entirely. Quite a strong effect.
 
@@ -220,14 +267,14 @@ y, y_var = insertion_effect(model, X, insertions)
 
 #### Design
 
-Given a trained predictive model, one can try to design a sequence that has desired attributions. Specifically, one can try to design a sequence that causes the model to give desired predictions.
+Given a trained predictive model, one can try to design a sequence that causes the model to give desired predictions.
 
 Currently, the only design algorithm implemented in tangermeme is a greedy substitution algorithm that will try every given motif at every position each iteration, and take the motif + position combo that yields predictions closest to the desired output from the model.
 
 ```python
 from tangermeme.design import greedy_substitution
 
-X_hat = greedy_substitution(model, X, motifs, y, mask=idxs, max_iter=3, verbose=True)
+X_hat = greedy_substitution(model, X, y, motifs, output_mask=idxs, max_iter=3, verbose=True)
 ```
 
 When the model is the Beluga model and the goal is to design a sequence that yields strong AP-1 binding but ignore the effect on all other tasks, this function inserts three AP-1 binding sites close together. The predictions from the model are much higher for the AP-1 tasks on the designed sequence than the original sequence.
@@ -251,6 +298,9 @@ The TF-MoDISco seqlet calling algorithm is also implemented. See the seqlet tuto
 Because seqlets are called entirely based on attributions, it is sometimes unclear whether the sequence content is similar to any known motif. Now, you can use `annotate_seqlets` to match seqlets to a motif database using TOMTOM! By default this will give you the nearest motif match for each seqlet but can give you any number of matches you want.
 
 ```python
+from tangermeme.annotate import annotate_seqlets
+from tangermeme.io import read_meme
+
 motifs = read_meme("motifs.meme.txt")
 motif_idxs, motif_pvalues = annotate_seqlets(X, seqlets, motifs)
 ```

@@ -6,6 +6,328 @@ Release History
 ===============
 
 
+Version 1.5.0 (unreleased)
+==========================
+
+Claude Code skill
+-----------------
+
+	- Replaces every cross-reference between skill files with a backticked path, ``references/design.md``, in place of a Markdown link. Nothing that reads a skill renders Markdown, so ``[references/design.md](references/design.md)`` spent twice the characters to show the agent the same path twice; the eighty-eight links in the skill are now single backticked paths. The bare mentions that named a file without its directory, such as ``model-wrapping.md``, are now complete paths, which previously left the reader to work out that the file sits under ``references/``.
+	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
+
+deep_lift_shap
+--------------
+
+	- ``deep_lift_shap`` and ``pisa`` no longer leak the activations they cache during attribution. The forward hooks store a detached clone of each hooked module's input and output on the module itself, as ``module.input`` and ``module.output``, so that the non-linear rules can read both sides of the reference/example pair. ``_clear_hooks`` removed the hook handles but left those two tensors attached, and because they are as large as the activations themselves they stayed resident -- on GPU, for a model kept alive across calls -- until the model was garbage collected. Repeatedly attributing with one model therefore grew memory by the size of one full activation set per call. Thanks @chang-m-yun!
+
+	- The cache clearing is restricted to values that are actually tensors. ``_clear_hooks`` is run through ``model.apply``, which visits every module in the model rather than only the hooked ones, so deleting any attribute named ``input`` or ``output`` also dropped a user module's own identically named attribute -- silently, and whether or not that module was ever hooked.
+
+	- ``_captum_deep_lift_shap(return_references=True)`` no longer raises ``NameError: name '_reference' is not defined``. The reference-collecting branch named a variable that does not exist, so the call crashed whenever the references were asked for. None of the function's tests set the argument, which is how it went unnoticed. The references now come back on the CPU with shape ``(n_sequences, n_shuffles, len(alphabet), length)``, matching ``deep_lift_shap``.
+
+	- Adds closed-form DeepLIFT rules for ``torch.nn.LayerNorm``, ``torch.nn.RMSNorm`` and bilinear contractions, and rewrites the one for softmax, so that a transformer block can be attributed end to end. None of these layers is elementwise: every output depends on every input in the normalized window, or on both operands of a product, so the rescale rule that covers elementwise-nonlinear activations does not apply and a layer without its own rule is silently treated as linear. Previously the only recourse was to leave those layers unhooked and accept attributions whose convergence guarantee did not hold.
+
+	- Adds ``BilinearOp``, a module wrapping ``torch.matmul``, ``torch.einsum``, or an elementwise product. DeepLIFT attaches its rules to modules, so an operation written as a bare function call has nothing to hook; this is why ``torch.nn.MultiheadAttention`` cannot be attributed directly, as it computes its softmax and both of its matmuls functionally. Writing attention with ``BilinearOp`` and ``torch.nn.Softmax`` instead puts every non-linearity behind a module, which is what makes the block attributable. ``tests/toy_models.py`` carries ``MultiHeadAttention`` as a worked example.
+
+	- The two operands a bilinear op caches for its backward rule are now cleared when the call finishes. They are as large as the activations and would otherwise stay attached for the life of the model, the same retention the other hooks had before ``_clear_hooks`` learned to drop their caches. The attention matrix a context op caches dominates, so the footprint grows with the square of the sequence length and with ``batch_size``. It was bounded rather than unbounded, since repeated calls overwrote rather than accumulated.
+
+	- Adds ``integrated_gradients_op``, a factory returning a rule for any single-input module that has no closed form. The multiplier it implements integrates the module's Jacobian along the straight-line path from the reference activation to the observed one, which is the integrated-gradients construction applied to one layer rather than to a whole model. The integral is approximated by Gauss-Legendre quadrature over ``K`` nodes, and only vector-Jacobian products are computed rather than the full Jacobian. It is not an approximation of the closed-form rules. A path integral and the rescale secant coincide to floating-point noise for an elementwise function, but not for one whose outputs couple across positions, where the two differ by orders of magnitude more and raising ``K`` does not close the gap. Both satisfy summation-to-delta; neither is a more accurate version of the other.
+
+	- The softmax rule is rewritten and now applies along whichever axis the module normalizes over. The previous rule never read ``module.dim`` at all, subtracting a mean over the entire tensor, and failed summation-to-delta everywhere, over both the last axis and the channel axis, by enough to cross the default ``warning_threshold`` of 1e-3, so those users were already being warned their attributions did not converge. The rewritten rule decomposes the operation into steps with exact multipliers and chains them in log space, bringing both deltas down to floating-point noise. Only the batch axis is rejected, since DeepLIFT stacks each example with its reference along it and normalizing over that axis would mix the two. The numerator path carries no separately-guarded ``Δlog(a)/Δa`` factor, because it cancels against ``Δa/Δx`` exactly; evaluating the two with independent thresholds broke on a peaked softmax, where most exponentials are small enough to trip one guard but not the other.
+
+	- The rule implementations are in a private ``_deep_lift_utils`` module, with ``BilinearOp`` and ``integrated_gradients_op`` living in ``deep_lift_shap`` alongside the hooks they cooperate with. Every rule is re-exported, so ``from tangermeme.deep_lift_shap import _nonlinear`` continues to work.
+
+ersatz
+------
+
+	- ``insert``, ``substitute``, ``multisubstitute``, ``delete``, ``randomize`` and ``shuffle`` now accept unknown characters in ``X``, encoded as all-zero columns, which is what ``substitute`` already allowed in ``motif``. ``marginalize`` and ``ablate`` validate their sequences with ``allow_N=True`` and then hand them to ``substitute`` and ``shuffle``, which validated them again without it, so the permission never took effect: a set of sequences containing an ``N`` -- which is what ``extract_loci`` returns for any locus overlapping an assembly gap -- raised ``ValueError: X must be one-hot encoded. and cannot have unknown characters.`` from inside the perturbation rather than being marginalized or ablated. None of these functions read the characters of ``X``; they move, copy or overwrite columns, so an unknown character is carried through wherever the perturbation does not replace it. Multi-hot columns and values outside ``{0, 1}`` are still rejected everywhere.
+	- ``dinucleotide_shuffle`` deliberately keeps rejecting unknown characters, and its docstring now says why. It builds the transition matrix from ``X.argmax(axis=0)``, which maps an all-zero column onto the first character of the alphabet, so accepting one would silently shuffle it as an ``A`` and distort the dinucleotide composition the function exists to preserve. ``deep_lift_shap`` and ``pisa``, which draw their references from it, are unchanged for the same reason.
+
+	- Adds ``local_dinucleotide_shuffle``, which shuffles within consecutive bins rather than across the whole sequence. A dinucleotide shuffle conserves the composition of the sequence as a whole but flattens how that composition varies along it, and a genomic window is rarely uniform; a background that averages away the GC and repeat structure differs from the original in more ways than the motif content a marginalization is trying to isolate. On a 2048bp sequence whose halves sit at 0.80 and 0.18 GC, 128bp bins hold the GC content of every 256bp window to within 0.10, where a whole-sequence shuffle moves it by 0.42. The bin boundaries are redrawn for every shuffle, because a dinucleotide shuffle holds the first and last character of the region it covers and fixed boundaries would pin those positions across the whole set. Any one-hot alphabet is accepted, not only DNA.
+
+	- ``local_dinucleotide_shuffle`` raises a ``TangermemeWarning`` when a bin comes back identical to its input. A region whose characters admit only one Eulerian path, such as a homopolymer or a short tandem repeat, has itself as its only possible dinucleotide shuffle. ``dinucleotide_shuffle`` raises on that condition, but only when asked for more than one shuffle, and each bin here is shuffled once, so the check could never fire. A background built over a repeat-heavy window would otherwise be the original sequence, and therefore not a null, with nothing said about it.
+
+io
+--
+
+	- ``extract_loci`` now coerces the chromosome column of a BED file or DataFrame to a string. pandas reads a chromosome column of "1", "2", ... as ``int64``, but pyfaidx and pybigtools name their records with strings, so genomes using Ensembl-style chromosome names were broken at every ingestion point: an ``exclusion_lists`` lookup raised ``KeyError: 1``, and filtering with ``chroms`` matched nothing and silently dropped every locus, leaving ``extract_loci`` to fail in ``numpy.stack``. The ``chroms`` argument is coerced as well, so ``chroms=[1, 2]`` and ``chroms=['1', '2']`` are equivalent. ``read_vcf`` already forced ``dtype=str`` and is unchanged.
+	- ``exclusion_lists`` now accepts a pandas DataFrame, and a bare filename or DataFrame rather than only a list of filenames.
+	- The three columns of a bed-format DataFrame are now taken positionally and renamed to chrom/start/end, so DataFrames whose columns carry other names work in the ``chroms`` and ``summits`` paths as the docstring already promised.
+
+match
+-----
+
+	- ``extract_matching_loci`` coerces the chromosome column and the ``chroms`` argument to strings for the same reason as ``io.extract_loci``; previously an integer chromosome name was passed to ``pyfaidx.Fasta.__getitem__``, raising a ``TypeError``, and filtering by ``chroms`` returned an empty set of loci. It also accepts a bed-format DataFrame whose columns carry other names, taking the first three positionally. Note that the columns were previously selected by name, so a DataFrame whose chrom/start/end columns are not in bed order is now read positionally rather than by label.
+
+pisa
+----
+
+	- Registers the three rules added to ``deep_lift_shap`` in its own rule table, so LayerNorm, RMSNorm and bilinear contractions are attributed there too, and picks up the rewritten softmax rule it already had registered. ``pisa`` keeps a separate copy of that table, so a rule can be correct in one module and missing from the other.
+
+Documentation
+-------------
+
+	- Four docstrings no longer render mangled on the site. ``recursive_seqlets`` and ``unchunk`` each embed an ASCII diagram that was not marked as a literal block, so docutils reflowed it, collapsed every ``. . . .`` run into an ellipsis, and read ``recursive_seqlets``' ``--------`` rule as a section transition; the seqlet diagram that explains the recursive property was unreadable as published. ``extract_loci``'s three reasons a locus may be dropped were a bullet list whose continuation lines sat at the marker's own indent, which ends the list rather than continuing it. And ``annotate_seqlets`` opened a line with a bare ``**kwargs``, which docutils reads as the start of strong markup. The API pages now build with no warnings.
+	- The two display equations in the "Attribution Trickiness and DeepLiftShap Implementations" vignette now render as mathematics. They were written as raw ``\begin{equation}`` blocks, which nbsphinx passes through to docutils rather than to MathJax; the published page showed the literal text ``begin{equation} sum_{i=0}^{L_s} ...`` with every backslash stripped, so the two equations that state what a DeepLIFT/SHAP attribution sums to were unreadable. They are now ``$$``-delimited, matching the ``$f(X)$`` inline math the same notebook already uses. Only the markdown cells changed; the notebook was not re-executed.
+
+Testing
+-------
+
+	- Covers the new DeepLIFT rules across the settings the stock models are tested against: convergence, batch size, shuffle count, example independence, seed, an explicit reference tensor, input dtype, hypothetical attributions, raw outputs, returned references, and extra forward arguments. Eight models share one forward signature so a single parametrized matrix covers them and a failure localizes to one model by its parametrize id. Two user-defined operations are shown to break summation-to-delta while unregistered and to satisfy it once passed through ``additional_nonlinear_ops``.
+
+	- Covers the transformer arrangements a user actually builds, rather than the attention operation on its own: pre-norm and post-norm blocks, two-block stacks, GELU and SiLU feedforwards, and a learned positional embedding, each checked for summation-to-delta, batch-size invariance, example independence and a hardcoded value. ``pisa`` gets the stacked block too, since it batches over output positions and keeps its own rule table.
+
+	- Records two limitations rather than leaving them to be rediscovered. ``torch.nn.MultiheadAttention`` and ``TransformerEncoderLayer`` cannot be fully attributed, because their softmax and matmuls are functional calls with no module to hook. Subclassing any registered operation raises a ``KeyError``, because hooks are registered by ``isinstance`` but dispatched by exact ``type``; that predates these rules and reproduces for ``torch.nn.ReLU``, so the test naming it is skipped rather than asserting the current behavior.
+
+	- Moves the tests for the ``tangermeme.design`` subpackage into ``tests/design/`` and the installer test into ``tests/_skills/test_install.py``, so the test tree mirrors the package tree. ``tangermeme.design`` became a subpackage in 1.4.0 but its tests stayed flat in ``tests/``, leaving no way to tell from the test tree which module a file covered.
+	- Rewrites the bundled-skill integrity checks against backticked reference paths rather than Markdown-link syntax. The old check scanned for ``](...)`` and so would have reported success on a skill with no links left in it at all. It now also fails when a Markdown link is reintroduced, and when a ``references/*.md`` file is not reachable from the ``SKILL.md`` router table.
+
+CI / Tooling
+------------
+
+	- The lockfile no longer holds ``numpy`` at 2.0.1, which had no cp313 wheel and so was compiled from source on every Python 3.13 CI run. ``memelite`` 0.2.0 required ``numpy<=2.0.1``; 0.4.0 drops that ceiling, and ``numpy`` moves to 2.4.6. The 3.13 job spent 227s installing dependencies against 13-25s for the other three in the matrix. Only the lockfile changes: ``pyproject.toml`` already allowed both versions, so a fresh resolve picked them anyway and installs from PyPI were never affected.
+
+
+Version 1.4.1
+=============
+
+Claude Code skill
+-----------------
+
+	- Corrects the bundled Agent Skill against the library. Claims that did not match the implementation are fixed: ``predict`` returns the model's parameter dtype rather than always float32; the int8 sequences from ``extract_loci`` should be left as int8 because every entry point except ``pisa`` upcasts each batch; ``recursive_seqlets``' ``additional_flanks`` re-sums the reported attribution rather than only padding the coordinates; ``product.apply_pairwise``/``apply_product`` take ``func`` as a required first positional argument and so do not satisfy the ``func=`` contract themselves; ``apply_pairwise`` zips the elements of ``args`` with each other and crosses that list with every example; ``ablate_annotations``' second output axis is always one; ``plot_logo`` reads the annotation label from the first column positionally and filters the plotted window strictly; the DeepLIFT/SHAP hooks cover twenty stock non-linearities rather than five; ``pairwise_annotations`` sorts away input row order under the default ``unique=True``; and the deletion-width guard and the ``max_iter``/``tol`` stop conditions differ per function. Also documents ``saturation_mutagenesis``' own ``func=`` post-processing hook and its int8 truncation warning, and fixes three examples that could not run.
+	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
+
+annotate
+--------
+
+	- ``pairwise_annotations_spacing`` now raises a ``ValueError`` when two annotations within the same example overlap. The distance between a pair is the gap between the end of the left annotation and the start of the right one, which is negative for overlapping spans; the only guard was on the upper bound, so a negative distance would index from the far end of the distance axis and be recorded as ``max_distance + d``, indistinguishable from a genuine long-range pair. Abutting annotations (a distance of exactly zero) are unaffected.
+
+design
+------
+
+	- ``greedy_substitution`` and ``beam_substitution`` now raise a ``ValueError`` when ``X`` has a batch size other than one. Both design a single sequence at a time, but the batch dimension was never checked and a larger batch produced more rows than the numba substitution kernel had indices for, reading out of bounds and crashing the interpreter rather than raising.
+
+variant_effect
+--------------
+
+	- ``substitution_effect`` now raises a ``ValueError`` when two rows of ``substitutions`` target the same ``(example_idx, position)``. The substitutions are applied with two vectorized assignments over an example-shaped tensor, so colliding rows each set their own alphabet index to one and the model was handed a multi-hot column with no error. The same position in different examples is still valid.
+
+
+Version 1.4.0
+=============
+
+design
+------
+
+	- Adds ``design.beam_substitution``, a beam-search generalization of ``greedy_substitution``. Instead of committing to the single best edit each round, it keeps the ``beam_size`` lowest-loss complete sequences and expands all of them, so it can recover good multi-edit combinations that the greedy search prunes after a locally-suboptimal first edit. ``beam_size=1`` reproduces ``greedy_substitution`` exactly. Current beam members are carried forward (the beam never regresses), candidates are ranked by absolute loss, and identical sequences are de-duplicated to avoid the beam collapsing onto a single sequence. ``n_best`` returns the lowest-loss sequences ranked low-to-high. Unlike the greedy functions, ``max_iter=-1`` means no iteration limit (with ``tol`` as the stop), matching ``screen``.
+	- Reorganizes ``tangermeme.design`` from a single module into a subpackage with one module per algorithm (``screen``, ``greedy_substitution``, ``beam_substitution``, ``greedy_marginalize``, plus a private ``_substitute`` numba kernel). This is purely structural: every function is re-exported from ``tangermeme.design``, so imports such as ``from tangermeme.design import greedy_substitution`` are unchanged.
+
+Documentation
+-------------
+
+	- Corrects the stale ``greedy_substitution`` and ``greedy_marginalize`` call signatures in the README and the design tutorial; the current order is ``(model, X, y, motifs, ...)`` with the ``output_mask=`` keyword. The design tutorial (Tutorial B6) was re-executed against the Beluga model and gains a beam-search section comparing ``beam_substitution`` to ``greedy_substitution``.
+	- Renders ``screen`` and ``greedy_marginalize`` on the design API page; they were previously omitted from the autodoc members list.
+
+
+Version 1.3.0
+=============
+
+Claude Code skill
+-----------------
+
+	- Bundles a `Claude Code <https://claude.com/claude-code>`_ Agent Skill (a ``SKILL.md`` router plus on-demand reference files) that documents tangermeme's API contracts, footguns, and multi-step workflows for coding agents.
+	- Adds the ``tangermeme-install-skills`` console script, which copies the bundled skill into ``~/.claude/skills/`` so it is available to Claude Code in every project. Use ``--force`` to refresh after upgrading or ``--print-path`` for the ``CLAUDE_SKILLS_PATH`` route.
+
+saturation_mutagenesis
+----------------------
+
+	- Fixes ``saturation_mutagenesis`` for models that return multiple output tensors: the per-output reshape previously transposed the alphabet and length axes, returning scrambled values on the default span and raising when ``start``/``end`` subset the sequence.
+	- Skips the identity substitution at each position (the "edit" that re-applies the existing base), reconstructing those slots from the reference prediction ``y0`` instead of recomputing them. This removes ~25% of the model forward passes with no change to the output, for a wall-clock speedup that approaches 25% as the model becomes inference-bound.
+	- Adds a ``func=`` argument, forwarded to ``predict`` and applied identically to the reference and perturbed predictions (e.g. to select an output head or apply a final non-linearity).
+	- Validates that ``0 <= start < end <= length`` rather than silently producing out-of-bounds edits, and raises a clear error when a multi-output model is used without ``raw_outputs=True``.
+	- Warns (``TangermemeWarning``) when ``X`` holds non-integer values, which the internal int8 cast would otherwise truncate toward zero.
+
+plot
+----
+
+	- Adds ``plot.interactive_logo``, an interactive counterpart to ``plot_logo``. Annotations are drawn as translucent, pastel boxes (colored by any ``annot_cmap``) behind the logo glyphs, with the motif name in the box corner and a hover tooltip listing the length and every column of the annotation (e.g. seqlet p-value, annotation p-value, summed attribution). Interactivity is provided by ``mpld3``, available via the optional ``interactive`` extra (``pip install tangermeme[interactive]``).
+	- Extends the ``color`` argument of ``plot.plot_logo`` to accept a per-position array-like in addition to the existing ``None``/``str``/``dict`` (per-character) forms. Pass a length-matched sequence of either color specifications (names, hex strings, or RGB(A) values), used verbatim, or numeric values, mapped through ``color_cmap`` with optional ``color_vmin``/``color_vmax`` bounds. The array-like is sliced alongside ``X_attr``; an array-like whose length does not match the sequence raises a ``TangermemeWarning`` and falls back to per-character coloring. ``plot.interactive_logo`` accepts the same ``color`` forms and forwards ``color_cmap``/``color_vmin``/``color_vmax``.
+
+
+Version 1.2.0
+=============
+
+Highlights
+----------
+
+	- Perturbation-style entry points now return public NamedTuple objects so results can be accessed by attribute (``result.y_before``) while remaining tuple-compatible with the existing positional-unpacking API.
+	- Every public module ships type hints.
+	- ``predict``, ``deep_lift_shap``, ``pisa``, ``product.*``, ``saturation_mutagenesis``, and ``design.*`` default ``device=None``, which resolves to CUDA if available and falls back to CPU. The caller's model device and training mode are restored after the call.
+	- ``deep_lift_shap`` and ``pisa`` now preserve model state and clean up registered hooks even when the call raises.
+	- ``additional_func_kwargs`` is now copied defensively in ``ablate``, ``marginalize``, ``space``, ``product.*``, ``variant_effect.*``, and ``design.screen``; passing a dict no longer mutates the caller's object.
+	- Substantial bug fixes, new diagnostics, broad test backfill, and a full docstring sweep.
+
+Breaking changes
+----------------
+
+	- ``plot.plot_pwm`` no longer manages its own figure; callers must pass an ``ax=`` matplotlib axis. The function previously created (and sometimes leaked) its own figure.
+
+results (new module)
+--------------------
+
+	- Adds ``PerturbationResult`` (``ablate``, ``marginalize``, ``variant_effect.*``), ``PerturbationAnnotationsResult`` (``ablate_annotations``, ``marginalize_annotations``), ``AttributionReferencesResult`` (``deep_lift_shap``, ``pisa`` with ``return_references=True``), ``SpaceResult`` (``space``), and ``SaturationMutagenesisRawResult`` (``saturation_mutagenesis(raw_outputs=True)``).
+	- All of these subclass ``tuple``, so positional unpacking and ``isinstance(_, tuple)`` continue to work unchanged.
+
+predict
+-------
+
+	- ``device=None`` auto-resolves to CUDA / CPU; caller's model device and training mode are preserved.
+	- Empty-input rejection with a clear error.
+
+deep_lift_shap / pisa
+---------------------
+
+	- Return ``AttributionReferencesResult`` when ``return_references=True``.
+	- ``device=None`` auto-resolves; model state and hooks are restored on success and on exception.
+	- ``pisa`` now threads ``args`` through every shuffle iteration (previously dropped).
+
+ablate / marginalize / space
+----------------------------
+
+	- Return ``PerturbationResult`` / ``SpaceResult``.
+	- ``additional_func_kwargs`` is copied defensively (no longer mutated).
+	- New device-mismatch errors instead of silent failures when motifs/args sit on a different device than ``X``.
+	- ``plot_attributions`` (and related plot helpers) now honor the ``func=`` argument.
+
+variant_effect
+--------------
+
+	- ``substitution_effect`` / ``deletion_effect`` / ``insertion_effect`` return ``PerturbationResult``.
+	- ``deletion_effect`` rejects ``X`` shorter than the maximum deletion.
+	- ``additional_func_kwargs`` is copied defensively in all three sub-functions.
+
+saturation_mutagenesis
+----------------------
+
+	- ``raw_outputs=True`` returns ``SaturationMutagenesisRawResult``.
+	- ``device=None`` auto-resolves to CUDA / CPU.
+
+design
+------
+
+	- ``device=None`` auto-resolves; ``additional_func_kwargs`` is copied defensively in ``screen``.
+
+product
+-------
+
+	- ``apply_pairwise`` / ``apply_product`` auto-detect device and preserve model state.
+	- ``apply_pairwise`` rejects mismatched ``args`` lengths and empty inputs with a clear error.
+
+ersatz
+------
+
+	- ``dinucleotide_shuffle`` now works on CUDA-resident inputs.
+	- ``randomize`` accepts ``end == X.shape[-1]``.
+	- Switched ``print`` calls to ``warnings.warn`` and dropped unused imports.
+
+io
+--
+
+	- ``extract_loci`` keeps loci whose window ends exactly at the chromosome end.
+	- ``extract_loci`` accepts a pre-opened ``pyfaidx.Fasta`` and respects ownership semantics.
+	- ``_extract_locus_signal`` uses ``warnings.warn`` and narrows bare ``except`` clauses.
+
+annotate
+--------
+
+	- ``pairwise_annotations_spacing`` fixes an ``IndexError`` at ``max_distance`` and rejects empty annotations with a clear error.
+
+match
+-----
+
+	- GC-bin 0 no longer receives spillover from higher bins.
+	- Narrowed bare ``except`` clauses in the bigwig extraction helper.
+
+kmers
+-----
+
+	- ``gapped_kmers`` properly handles ``scores=None``.
+
+seqlet
+------
+
+	- Empty-input validation added to public entry points.
+
+plot
+----
+
+	- ``plot_pwm`` gains an ``ax=`` parameter and no longer manages its own figure (see Breaking changes).
+	- ``plot_attributions`` honors the ``func=`` argument.
+	- ``plot_categorical_scatter`` respects a user-supplied ``ax=``.
+	- ``place_new_box`` / ``place_new_bar`` no longer mutate the caller's ``Bbox``.
+	- Narrowed bare ``ImportError`` clauses.
+
+utils
+-----
+
+	- New diagnostics: ``set_seed``, ``gc_content``, ``entropy``, ``information_content``.
+	- ``_validate_input`` accepts all-zero one-hot columns when ``allow_N=True``.
+	- ``print`` calls replaced with ``warnings.warn``.
+
+Documentation / tests
+---------------------
+
+	- Type hints added across the entire public surface.
+	- Comprehensive new test coverage for ``func=`` plug-points, CUDA paths, ``verbose=True`` smoke, ``args=`` plumbing, dtype matrices, edge cases, and regression values.
+	- Cross-module integration tests for the ``func=`` plug-point in ``ablate``, ``marginalize``, ``space``, ``product.*``, and ``variant_effect.*``.
+	- Sweeping docstring corrections across ``ablate``, ``annotate``, ``deep_lift_shap``, ``design``, ``ersatz``, ``io``, ``kmers``, ``marginalize``, ``match``, ``pisa``, ``plot``, ``predict``, ``product``, ``saturation_mutagenesis``, ``seqlet``, ``space``, ``utils``, and ``variant_effect`` (return types, device assumptions, validation behavior, kwarg collisions, dtype coercion footguns).
+
+
+Version 1.1.0
+=============
+
+Highlights
+----------
+
+	- Migrated the build/install workflow from ``setup.py`` to ``pyproject.toml`` with the hatchling build backend.
+	- Added first-class support for `uv <https://docs.astral.sh/uv/>`_ for development and reproducible environments. ``uv sync --extra dev`` now sets up the contributor environment from ``uv.lock``.
+	- End users can still ``pip install tangermeme`` exactly as before. The wheel and sdist are standard PyPI artifacts; the migration is invisible at install time.
+
+Packaging
+---------
+
+	- The minimum supported Python version is now 3.10. The CI matrix runs on 3.10, 3.11, 3.12, and 3.13.
+	- Dependency floors have been tightened to reflect what the code actually uses, replacing pre-2022 minima inherited from the original ``setup.py``:
+
+		- ``numpy >= 1.23``
+		- ``scipy >= 1.10``
+		- ``pandas >= 2.0``
+		- ``torch >= 2.0``
+		- ``scikit-learn >= 1.3``
+		- ``numba >= 0.58``
+		- ``pybigtools >= 0.2``
+		- ``memelite >= 0.2``
+
+	- New ``[dev]`` extra bundles the contributor toolchain (``pytest``, ``captum``, ``ruff``, ``build``, ``twine``).
+	- New ``[docs]`` extra bundles the Sphinx documentation toolchain. ReadTheDocs now installs via this extra instead of a separate ``docs/requirements.txt`` file.
+	- The package version is now sourced dynamically from ``tangermeme/__init__.py`` so the literal lives in one place.
+
+CI / Tooling
+------------
+
+	- The GitHub Actions workflow now uses ``astral-sh/setup-uv`` with caching, reducing matrix install time by roughly an order of magnitude.
+	- The ``flake8`` CI step (whose checks were already commented out) has been removed; ``ruff`` is available via the ``[dev]`` extra for contributors who want to lint locally.
+	- A ``[tool.pytest.ini_options]`` block registers the ``cmd`` marker and pins the ``not cmd`` default so the documented test invocation works without command-line flags.
+
+Documentation
+-------------
+
+	- ``docs/conf.py`` now sources the displayed version from the installed package metadata rather than a hard-coded literal.
+	- ``docs/api/variant_effect.rst`` has been updated to reference the current function names (``substitution_effect``, ``deletion_effect``, ``insertion_effect``).
+	- ``docs/api/ism.rst`` has been renamed to ``docs/api/saturation_mutagenesis.rst`` to match the actual module name.
+	- ``docs/api/deep_lift_shap.rst``, ``docs/api/plot.rst``, and ``docs/api/saturation_mutagenesis.rst`` are now included in the API toctree.
+	- Removed stale references to ``Tutorial_B8_Seqlets``, ``Tutorial_D1_FIMO``, and ``Tutorial_D2_TOMTOM`` from ``docs/index.rst``.
+
+
 Version 1.0.3
 =============
 
@@ -124,7 +446,7 @@ plot
 seqlet
 ------
 
-	- The `recursive_seqlet` algorithm has been slightly modified to more closely match the provided description. This change involves using the calculated p-values instead of the maximum p-value for each position across all seqlets of smaller size. As a consequence, motifs should not be be shifted to the right anymore.
+	- The `recursive_seqlet` algorithm has been slightly modified to more closely match the provided description. This change involves using the calculated p-values instead of the maximum p-value for each position across all seqlets of smaller size. As a consequence, motifs should no longer be shifted to the right.
 
 
 utils
@@ -169,7 +491,7 @@ Version 0.4.3
 ersatz
 ------
 
-	- Substitute now accepts Ns or all-zeroes positions as inputs and, at those positions, will not alter the original sequence. If only one motif is given, this will be the same across all background sequences. If one motif is given per background sequence, this is done on a per-background example.
+	- Substitute now accepts Ns or all-zero positions as inputs and, at those positions, will not alter the original sequence. If only one motif is given, this will be the same across all background sequences. If one motif is given per background sequence, this is done on a per-background example.
 	- The above change means that higher-level functions like `marginalize` can now be run with motifs that contain missing characters, without any changes needed.
 	- The default `start` and `end` of `dinucleotide_shuffle` have been set to `None` because using `0` and `-1` meant that the last provided position never got shuffled.
 
@@ -285,14 +607,16 @@ utils
 match
 -----
 
-	- Implemented updates to substantially reduce memory use and runtime of extract_matching_loci. This was mainly achieved by
-	1) Avoid using io.extract_loci, which one hot encodes all loci into a single large tensor. Instead, the locus sequences are extracted one by one, keeping only one in memory at a time. The N and GC percentages are calculated directly from the sequence, and only those values are stored.
-	2) Calculate genome wide N and GC percentages by taking slices of the chromosomal DNA sequences and using the count method of python strings. This is significantly faster than the previous approach using numpy isin, and avoids keeping several copies of the sequence in memory at the same time.
+	- Implemented updates to substantially reduce memory use and runtime of extract_matching_loci. This was mainly achieved by:
+
+		1. Avoid using io.extract_loci, which one hot encodes all loci into a single large tensor. Instead, the locus sequences are extracted one by one, keeping only one in memory at a time. The N and GC percentages are calculated directly from the sequence, and only those values are stored.
+		2. Calculate genome wide N and GC percentages by taking slices of the chromosomal DNA sequences and using the count method of python strings. This is significantly faster than the previous approach using numpy isin, and avoids keeping several copies of the sequence in memory at the same time.
 
 	- Various other changes:
-	1) Counts from regions that cannot be extracted from a provided bigwig file (such as for a missing chromosome) are now set to nan rather than 0. This will effect the threshold value used for filtering background regions.
-	2) Small change to the binning strategy for gc values, which could mean that matching loci generated in a previous version will not be reproduced exactly in all cases, even when using the same random seed.
-	3) Enable the handling of 'N' in sequences or [0,0,0,0], i.e. an ambiguous genomic positions. Updated the `characters()` and the `_validate_input()` in `utils` module to enable this.
+
+		1. Counts from regions that cannot be extracted from a provided bigwig file (such as for a missing chromosome) are now set to nan rather than 0. This will affect the threshold value used for filtering background regions.
+		2. Small change to the binning strategy for gc values, which could mean that matching loci generated in a previous version will not be reproduced exactly in all cases, even when using the same random seed.
+		3. Enable the handling of 'N' in sequences or [0,0,0,0], i.e., ambiguous genomic positions. Updated the ``characters()`` and the ``_validate_input()`` in ``utils`` module to enable this.
 
 
 Version 0.2.3
@@ -317,7 +641,7 @@ tools
 -----
 
 	- FIMO is now base 2 instead of base e, to better match the MEME-suite tool. p-values should remain the same but scores will change.
-	- FIMO `hits` will now return p-values, and will longer return an uninformative `attr` column
+	- FIMO `hits` will now return p-values, and will no longer return an uninformative `attr` column
 
 
 product
@@ -350,14 +674,14 @@ Version 0.2.0
 Highlights
 ----------
 
-	- Alters the API of several functions to make them more general, with the option of taking in a function to apply instead of defaulting to predict, while still back compatible
+	- Alters the API of several functions to make them more general, with the option of taking in a function to apply instead of defaulting to predict, while still backwards compatible
 	- Adds in `deep_lift_shap` and `seqlet` to operate on attributions
 
 
 deep_lift_shap
--------------
-	
-	- Added in a stand-alone implementation of deep_lift_shap 
+--------------
+
+	- Added in a stand-alone implementation of deep_lift_shap
 	- This implementation resolves several issues with Captum, e.g., with pooling layers
 	- Allows batching of example-reference pairs across examples (so batch_size can be > than n_shuffles)
 	- Allows batch_size to be much smaller than n_shuffles with the results aggregated once all references have been processed to allow large models to be run
@@ -368,14 +692,14 @@ deep_lift_shap
 ism
 ----
 
-	- Changes the default output from the raw output (which you can get with `raw_output=True`) to defaultly aggregated attribution values to make the API compatible
+	- Changes the default output from the raw output (which you can get with `raw_output=True`) to aggregated attribution values to make the API compatible with the rest of the library
 
 
 marginalize
 ------------
 
 	- Change the signature to take in an optional function that gets applied before/after the substitution, default is predict
-	- Change the signature to take in **kwargs that get passed into the optional function
+	- Change the signature to take in ``**kwargs`` that get passed into the optional function
 	- Change the signature to take in `additional_func_kwargs` that is an alternative and safer way to pass arguments into the function
 
 
@@ -383,7 +707,7 @@ ablate
 ------
 
 	- Change the signature to take in an optional function that gets applied before/after the ablation, default is predict
-	- Change the signature to take in **kwargs that get passed into the optional function
+	- Change the signature to take in ``**kwargs`` that get passed into the optional function
 	- Change the signature to take in `additional_func_kwargs` that is an alternative and safer way to pass arguments into the function
 
 
@@ -391,7 +715,7 @@ space
 ------
 
 	- Change the signature to take in an optional function that gets applied before/after the substitutions, default is predict
-	- Change the signature to take in **kwargs that get passed into the optional function
+	- Change the signature to take in ``**kwargs`` that get passed into the optional function
 	- Change the signature to take in `additional_func_kwargs` that is an alternative and safer way to pass arguments into the function
 
 
@@ -400,13 +724,13 @@ variant_effect
 
 	- Change the name of `marginal_substitution_effect` to `substitution_effect`
 	- Change the API of `substitution_effect` to take in a tensor of original sequences and a tensor of substitutions
-	- Change the API of `substitution_effect` to take in an optional function and **kwargs and `additional_func_kwargs` to pass into `func`
+	- Change the API of `substitution_effect` to take in an optional function and ``**kwargs`` and ``additional_func_kwargs`` to pass into ``func``
 	- Change the name of `marginal_deletion_effect` to `deletion_effect`
 	- Change the API of `deletion_effect` to take in a tensor of original sequences and a tensor of deletions
-	- Change the API of `deletion_effect` to take in an optional function and **kwargs and `additional_func_kwargs` to pass into `func`
+	- Change the API of `deletion_effect` to take in an optional function and ``**kwargs`` and ``additional_func_kwargs`` to pass into ``func``
 	- Change the name of `marginal_insertion_effect` to `insertion_effect`
 	- Change the API of `insertion_effect` to take in a tensor of original sequences and a tensor of insertions
-	- Change the API of `insertion_effect` to take in an optional function and **kwargs and `additional_func_kwargs` to pass into `func`
+	- Change the API of `insertion_effect` to take in an optional function and ``**kwargs`` and ``additional_func_kwargs`` to pass into ``func``
 
 
 seqlet

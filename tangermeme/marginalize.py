@@ -1,6 +1,11 @@
 # marginalize.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
 import numpy
 import torch
 
@@ -9,16 +14,25 @@ from .utils import one_hot_encode
 
 from .ersatz import substitute
 from .predict import predict
+from .results import PerturbationResult, PerturbationAnnotationsResult
 
 
-def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'], 
-	func=predict, additional_func_kwargs={}, **kwargs):
+def marginalize(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	motif: torch.Tensor | str,
+	start: int | None = None,
+	alphabet: list[str] = ['A', 'C', 'G', 'T'],
+	func: Callable[..., Any] = predict,
+	additional_func_kwargs: dict | None = None,
+	**kwargs: Any,
+) -> PerturbationResult:
 	"""Apply a function before and after substituting a motif into sequences.
 
 	A marginalization experiment is one where a function is applied before
-	and after substituting something into a set of sequences. It is named as 
-	such because the sequences are meant to be background sequences and
-	difference in output before and after the substitution represent the
+	and after substituting something into a set of sequences. It is named as
+	such because the sequences are meant to be background sequences and the
+	difference in output before and after the substitution represents the
 	"marginal" effect of adding that something into the sequences. When you are
 	adding a motif to the sequence, the difference in output can be interpreted 
 	as the effect that motif has on the function in isolation.
@@ -26,7 +40,7 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 	By default, `marginalize` will apply the `predict` function to `X` before
 	and after substituting in a one-hot encoded version of `motif`. However,
 	one can pass in any function, including `deep_lift_shap` or even
-	`saturated_mutagenesis`. These functions may have additional arguments
+	`saturation_mutagenesis`. These functions may have additional arguments
 	and those can be passed into `marginalize` as-is and will be passed along
 	to the function. If any arguments would have had the same name as those
 	used by this function, you can use the `additional_func_kwargs` input to
@@ -51,9 +65,11 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences to have a motif inserted into.
 
-	motif: torch.tensor, shape=(-1, len(alphabet), motif_length)
-		A one-hot encoded version of a short motif to insert into the set of
-		sequences.
+	motif: torch.tensor or str
+		Either a one-hot encoded short motif with shape
+		`(-1, len(alphabet), motif_length)` to insert into the set of
+		sequences, or a string that will be one-hot encoded internally using
+		`alphabet` (and the `N` ignore convention from `ersatz.substitute`).
 
 	start: int or None, optional
 		The starting position of where to insert the motif. If None, insert the
@@ -72,12 +88,13 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 		A function to apply before and after making the substitution. Default 
 		is `predict`.
 
-	additional_func_kwargs: dict, optional
+	additional_func_kwargs: dict or None, optional
 		Additional named arguments to pass into the function when it is called.
-		This is provided as an alternate path to route arguments into the 
+		This is provided as an alternate path to route arguments into the
 		function in case they overlap, name-wise, with those in this function,
 		or if you want to be absolutely sure that the arguments are making
-		their way into the function. Default is {}.
+		their way into the function. The dict is not modified in place. Default
+		is None.
 
 	kwargs: optional
 		Additional named arguments that will get passed into the function when
@@ -99,16 +116,27 @@ def marginalize(model, X, motif, start=None, alphabet=['A', 'C', 'G', 'T'],
 	"""
 
 	_validate_input(X, "X", shape=(-1, len(alphabet), -1), ohe=True, allow_N=True)
-	additional_func_kwargs = additional_func_kwargs or {}
+	additional_func_kwargs = dict(additional_func_kwargs or {})
+
+	if isinstance(motif, torch.Tensor) and motif.device != X.device:
+		raise ValueError(
+			f"`motif` and `X` must be on the same device; got motif on "
+			f"{motif.device} and X on {X.device}.")
 
 	X_perturb = substitute(X, motif, start=start, alphabet=alphabet)
 	y_before = func(model, X, **kwargs, **additional_func_kwargs)
 	y_after = func(model, X_perturb, **kwargs, **additional_func_kwargs)
 
-	return y_before, y_after
+	return PerturbationResult(y_before=y_before, y_after=y_after)
 
 
-def marginalize_annotations(model, X, X0, annotations, **kwargs):
+def marginalize_annotations(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	X0: torch.Tensor,
+	annotations: torch.Tensor,
+	**kwargs: Any,
+) -> PerturbationAnnotationsResult:
 	"""Perform marginalizations on each annotation individually.
 
 	This function takes in a model, a set of sequences, a set of background
@@ -141,7 +169,7 @@ def marginalize_annotations(model, X, X0, annotations, **kwargs):
 		the end position (0-indexed, not inclusive).
 
 	kwargs: arguments
-		Additional optional arguments to pass into the `ablate` function.
+		Additional optional arguments to pass into the `marginalize` function.
 
 	
 	Returns
@@ -158,6 +186,10 @@ def marginalize_annotations(model, X, X0, annotations, **kwargs):
 		return that. If the model outputs a list of tensors, it will return
 		those.
 	"""
+
+	if len(annotations) == 0:
+		raise ValueError("marginalize_annotations requires at least one "
+			"annotation; got an empty annotations tensor.")
 
 	y_befores, y_afters = [], []
 
@@ -177,5 +209,4 @@ def marginalize_annotations(model, X, X0, annotations, **kwargs):
 		y_afters = [torch.stack([x[i] for x in y_afters]) for i in range(len(
 			y_afters))]
 
-	return y_befores, y_afters
-	
+	return PerturbationAnnotationsResult(y_befores=y_befores, y_afters=y_afters)

@@ -68,3 +68,53 @@ def test_gkmers(X):
 
 	assert isinstance(X_kmers, scipy.sparse._csr.csr_matrix)
 	assert X_kmers.shape == (1, 9765625)
+
+
+###
+
+
+def test_kmers_k_equals_seqlen(X):
+	X_kmers = kmers(X, k=X.shape[-1])
+
+	assert X_kmers.shape == (1, 4 ** X.shape[-1])
+	assert X_kmers.sum() == 1
+
+
+def test_kmers_k_one(X):
+	X_kmers = kmers(X, k=1)
+
+	assert X_kmers.shape == (1, 4)
+	assert_array_almost_equal(X_kmers[0], X.sum(dim=-1)[0])
+
+
+def test_kmers_batched():
+	X = torch.stack([
+		one_hot_encode('ACTACTGCAT'),
+		one_hot_encode('GGGGGGGGGG'),
+	])
+
+	X_kmers = kmers(X, k=3)
+
+	assert X_kmers.shape == (2, 64)
+	assert int(X_kmers[0].sum()) == 8
+	assert int(X_kmers[1].sum()) == 8
+
+	# The all-G sequence collapses to a single column counted 8 times.
+	assert int(X_kmers[1].max()) == 8
+	assert int((X_kmers[1] > 0).sum()) == 1
+
+
+def test_kmers_scores_zero(X):
+	scores = torch.zeros(1, X.shape[-1])
+	X_kmers = kmers(X, k=5, scores=scores)
+
+	assert X_kmers.shape == (1, 4 ** 5)
+	assert X_kmers.sum() == 0
+
+
+def test_gkmers_min_k_lt_max_k(X):
+	X_kmers = gapped_kmers(X, min_k=4, max_k=6)
+
+	assert isinstance(X_kmers, scipy.sparse._csr.csr_matrix)
+	assert X_kmers.shape == (1, 9765625)
+	assert X_kmers.sum() > 0

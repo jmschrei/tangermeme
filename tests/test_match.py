@@ -315,6 +315,59 @@ def test_extract_matching_loci():
 	assert X1[:, [1, 2]].sum() == 13
 
 
+def test_extract_matching_loci_int_chroms():
+	# Genomes whose chromosomes are named "1", "2", etc. would otherwise get
+	# read in as integers by pandas and fail to match the string names used
+	# by pyfaidx.
+	regions = extract_matching_loci("tests/data/test_int.bed",
+		"tests/data/test_int_chroms.fa", chroms=['1'], in_window=10,
+		out_window=10, random_state=0)
+
+	regions0 = extract_matching_loci("tests/data/test.bed",
+		"tests/data/test.fa", chroms=['chr1'], in_window=10, out_window=10,
+		random_state=0)
+
+	assert regions.shape == (3, 3)
+	assert tuple(regions.columns) == ('chrom', 'start', 'end')
+	assert tuple(numpy.unique(regions['chrom'])) == ('1',)
+	assert tuple(regions['start']) == tuple(regions0['start'])
+	assert tuple(regions['end']) == tuple(regions0['end'])
+
+	# Integer chromosome names are coerced to strings as well
+	regions = extract_matching_loci("tests/data/test_int.bed",
+		"tests/data/test_int_chroms.fa", chroms=[1], in_window=10,
+		out_window=10, random_state=0)
+
+	assert tuple(numpy.unique(regions['chrom'])) == ('1',)
+	assert tuple(regions['start']) == tuple(regions0['start'])
+
+
+def test_extract_matching_loci_int_chroms_df():
+	loci = pandas.read_csv("tests/data/test_int.bed", sep='\t', header=None)
+
+	regions = extract_matching_loci(loci, "tests/data/test_int_chroms.fa",
+		chroms=['1'], in_window=10, out_window=10, random_state=0)
+
+	assert regions.shape == (3, 3)
+	assert tuple(numpy.unique(regions['chrom'])) == ('1',)
+
+
+def test_extract_matching_loci_int_chroms_default():
+	# When chroms is None the set is derived from the loci themselves, so the
+	# coercion has to happen before numpy.unique rather than only on a
+	# user-provided chroms list.
+	regions = extract_matching_loci("tests/data/test_int.bed",
+		"tests/data/test_int_chroms.fa", in_window=10, out_window=10,
+		random_state=0)
+
+	regions0 = extract_matching_loci("tests/data/test.bed",
+		"tests/data/test.fa", in_window=10, out_window=10, random_state=0)
+
+	assert tuple(numpy.unique(regions['chrom'])) == ('1', '2')
+	assert tuple(regions['start']) == tuple(regions0['start'])
+	assert tuple(regions['end']) == tuple(regions0['end'])
+
+
 def test_extract_matching_loci_start_edge():
 	peaks = pandas.DataFrame({
 		'chrom': ['chr1', 'chr1', 'chr1'],
@@ -339,13 +392,36 @@ def test_extract_matching_loci_end_edge():
 		'end': [270, 280, 290]
 	})
 
-	regions = extract_matching_loci(peaks, "tests/data/test.fa", 
+	regions = extract_matching_loci(peaks, "tests/data/test.fa",
 		chroms=['chr1'], in_window=10, out_window=10, random_state=0)
 	assert regions.shape == (2, 3)
 
 
-	regions = extract_matching_loci(peaks, "tests/data/test.fa", 
+	regions = extract_matching_loci(peaks, "tests/data/test.fa",
 		chroms=['chr1'], in_window=20, out_window=10, random_state=0)
+	assert regions.shape == (1, 3)
+
+
+def test_extract_matching_loci_bin_0_spillover(tmp_path):
+	# bin 0 (the lowest GC bin) previously couldn't receive spillover from
+	# a peak in a higher bin: the spillover loop guarded with `idx > 0`
+	# instead of `>= 0`. Construct a chromosome where the only available
+	# backgrounds are at GC=0 and the lone peak is at GC=1.0, so the
+	# matching algorithm has nowhere else to go.
+	fa_path = tmp_path / "tiny.fa"
+	fa_path.write_text(">chr1\n" + "A"*100 + "G"*10 + "A"*90 + "\n")
+
+	peaks = pandas.DataFrame({
+		'chrom': ['chr1'],
+		'start': [100],
+		'end':   [110],
+	})
+
+	regions = extract_matching_loci(peaks, str(fa_path), in_window=10,
+		out_window=10, max_n_perc=1.0, random_state=0)
+
+	# Without the fix this returns zero rows; with the fix the peak finds
+	# a GC=0 background to match against.
 	assert regions.shape == (1, 3)
 
 
@@ -401,8 +477,8 @@ def test_extract_matching_loci_allow_N():
 		'end': [10, 100, 110]
 	})
 
-	regions = extract_matching_loci(peaks, "tests/data/test.fa", 
-		chroms=['chr4'], in_window=10, out_window=10, max_n_perc=1.1, 
+	regions = extract_matching_loci(peaks, "tests/data/test.fa",
+		chroms=['chr4'], in_window=10, out_window=10, max_n_perc=1.1,
 		random_state=0)
 
 	assert isinstance(regions, pandas.DataFrame)
@@ -412,3 +488,41 @@ def test_extract_matching_loci_allow_N():
 	assert tuple(regions['chrom']) == ('chr4', 'chr4', 'chr4')
 	assert tuple(regions['start']) == (70, 120, 140)
 	assert tuple(regions['end']) == (80, 130, 150)
+
+
+###
+
+
+def test_extract_matching_loci_determinism():
+	regions0 = extract_matching_loci("tests/data/test.bed", "tests/data/test.fa",
+		chroms=['chr1'], in_window=10, out_window=10, random_state=0)
+	regions1 = extract_matching_loci("tests/data/test.bed", "tests/data/test.fa",
+		chroms=['chr1'], in_window=10, out_window=10, random_state=0)
+
+	pandas.testing.assert_frame_equal(regions0, regions1)
+
+
+def test_extract_matching_loci_n_jobs_parallel():
+	regions0 = extract_matching_loci("tests/data/test.bed", "tests/data/test.fa",
+		chroms=['chr1'], in_window=10, out_window=10, random_state=0,
+		n_jobs=1)
+	regions1 = extract_matching_loci("tests/data/test.bed", "tests/data/test.fa",
+		chroms=['chr1'], in_window=10, out_window=10, random_state=0,
+		n_jobs=2)
+
+	pandas.testing.assert_frame_equal(
+		regions0.reset_index(drop=True), regions1.reset_index(drop=True))
+
+
+def test_extract_matching_loci_chroms_none():
+	peaks = pandas.DataFrame({
+		'chrom': ['chr1', 'chr1', 'chr1'],
+		'start': [10, 50, 100],
+		'end': [20, 60, 110],
+	})
+
+	regions = extract_matching_loci(peaks, "tests/data/test.fa",
+		in_window=10, out_window=10, random_state=0)
+
+	assert isinstance(regions, pandas.DataFrame)
+	assert tuple(regions.columns) == ('chrom', 'start', 'end')

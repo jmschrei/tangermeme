@@ -1,26 +1,34 @@
 # ersatz.py
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
+import warnings
+
 import numba
 import numpy
 import torch
-import pandas
 
 from tqdm import tqdm
-from itertools import compress
 
 from .utils import _validate_input
 from .utils import one_hot_encode
 from .utils import random_one_hot
+from .utils import TangermemeWarning
 
 
-def insert(X, motif, start=None, alphabet=list("ACGT")):
+def insert(
+	X: torch.Tensor | str,
+	motif: torch.Tensor | str,
+	start: int | None = None,
+	alphabet: list[str] = list("ACGT"),
+) -> torch.Tensor:
 	"""Insert a motif into a set of sequences at a defined position.
 
 	This function will take in a tensor of one-hot encoded sequences or a string
 	that can be one-hot encoded and insert the motif into the defined 
 	position. It will then return a copy of the data with the insertion, 
-	leaving the  original data unperturbed.
+	leaving the original data unperturbed.
 
 	Importantly, an *insertion* means that the entire original sequence is still
 	present, albeit in two halves with the inserted motif in the middle.
@@ -32,24 +40,26 @@ def insert(X, motif, start=None, alphabet=list("ACGT")):
 	If the motif is a string, it will be one-hot encoded according to the
 	alphabet that is provided. If a motif with batch size of 1 is provided, 
 	the same motif will be inserted into all sequences. If a motif with a 
-	batch size equal to that of X is provided, there will be  1-1 correspondance 
-	between the motifs and the sequence, i.e., that motif at index 5 will be 
+	batch size equal to that of X is provided, there will be 1-1 correspondence
+	between the motifs and the sequence, i.e., the motif at index 5 will be
 	substituted into the sequence at index 5.
 
 
 	Parameters
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to have a motif substituted into.
+		A one-hot encoded set of sequences to have a motif inserted into.
+		Unknown characters are allowed and must be encoded as all-zero
+		columns; they are carried through into the returned sequences.
 
 	motif: torch.tensor, shape=(-1, len(alphabet), motif_length)
-		A one-hot encoded version of a short motif to substitute into the set of
+		A one-hot encoded version of a short motif to insert into the set of
 		sequences.
 
 	start: int or None, optional
-		The starting position of where to substitute the motif. If None,
-		substitute the motif into the middle of the sequence such that the 
-		middle of the motif occurs at the middle of the sequence. Default is 
+		The starting position of where to insert the motif. If None,
+		insert the motif into the middle of the sequence such that the
+		middle of the motif occurs at the middle of the sequence. Default is
 		None.
 
 	alphabet: set or tuple or list, optional
@@ -63,8 +73,8 @@ def insert(X, motif, start=None, alphabet=list("ACGT")):
 
 	Returns
 	-------
-	Y: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences that each have the motif substituted
+	Y: torch.tensor, shape=(-1, len(alphabet), length + motif_length)
+		A one-hot encoded set of sequences that each have the motif inserted
 		at the same position.
 	"""
 
@@ -74,7 +84,7 @@ def insert(X, motif, start=None, alphabet=list("ACGT")):
 	if motif.shape[0] == 1:
 		motif = motif.repeat(X.shape[0], 1, 1)
 
-	_validate_input(X, "X", ohe=True, ohe_dim=1)
+	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
 	_validate_input(motif, "motif", shape=(-1, X.shape[1], -1), ohe=True)
 
 	if start is not None:
@@ -86,13 +96,19 @@ def insert(X, motif, start=None, alphabet=list("ACGT")):
 	return torch.cat([X[:, :, :start], motif, X[:, :, start:]], dim=-1)
 
 
-def substitute(X, motif, start=None, alphabet=list("ACGT"), ignore=["N"]):
+def substitute(
+	X: torch.Tensor | str,
+	motif: torch.Tensor | str,
+	start: int | None = None,
+	alphabet: list[str] = list("ACGT"),
+	ignore: list[str] = ["N"],
+) -> torch.Tensor:
 	"""Substitute a motif into a set of sequences at a defined position.
 
 	This function will take in a tensor of one-hot encoded sequences or a string
 	that can be one-hot encoded and will substitute a motif at a defined 
 	position. It will then return a copy of the data with the substitution, 
-	leaving the  original data unperturbed.
+	leaving the original data unperturbed.
 
 	Importantly, a *substitution* means that part of the original sequence will
 	be missing. Specifically, if we have an original sequence AAAAAACCCCAAAAAA 
@@ -104,8 +120,8 @@ def substitute(X, motif, start=None, alphabet=list("ACGT"), ignore=["N"]):
 	If the motif is a string, it will be one-hot encoded according to the
 	alphabet that is provided. If a motif with batch size of 1 is provided, 
 	the same motif will be substituted into all sequences. If a motif with a 
-	batch size equal to that of X is provided, there will be  1-1 correspondance 
-	between the motifs and the sequence, i.e., that motif at index 5 will be 
+	batch size equal to that of X is provided, there will be 1-1 correspondence
+	between the motifs and the sequence, i.e., the motif at index 5 will be
 	substituted into the sequence at index 5.
 
 	Finally, if all-zeros positions are present in a motif -- or if a string
@@ -119,6 +135,9 @@ def substitute(X, motif, start=None, alphabet=list("ACGT"), ignore=["N"]):
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences to have a motif substituted into.
+		Unknown characters are allowed and must be encoded as all-zero
+		columns, as `one_hot_encode` does for the characters in its `ignore`
+		list. Those columns are left as-is unless the motif covers them.
 
 	motif: torch.tensor, shape=(-1, len(alphabet), motif_length)
 		A one-hot encoded version of a short motif to substitute into the set of
@@ -156,7 +175,7 @@ def substitute(X, motif, start=None, alphabet=list("ACGT"), ignore=["N"]):
 		motif = one_hot_encode(motif, alphabet=alphabet, ignore=ignore)
 		motif = motif.unsqueeze(0)
 
-	_validate_input(X, "X", ohe=True)
+	_validate_input(X, "X", ohe=True, allow_N=True)
 	_validate_input(motif, "motif", shape=(-1, X.shape[1], -1), ohe=True,
 		allow_N=True)
 
@@ -181,14 +200,20 @@ def substitute(X, motif, start=None, alphabet=list("ACGT"), ignore=["N"]):
 	return X
 
 
-def multisubstitute(X, motifs, spacing, start=None, alphabet=list("ACGT"),
-	ignore=["N"]):
-	"""Substitute a set of motif into sequences with provided spacings.
+def multisubstitute(
+	X: torch.Tensor,
+	motifs: list[torch.Tensor | str],
+	spacing: list[int],
+	start: int | None = None,
+	alphabet: list[str] = list("ACGT"),
+	ignore: list[str] = ["N"],
+) -> torch.Tensor:
+	"""Substitute a set of motifs into sequences with provided spacings.
 
-	This function will take in a list of tensors of one-hot encoded sequences 
-	or of strings that can be one-hot encoded and will substitute the motifs 
-	into the sequences given the provided spacings. It will then return a copy 
-	of the data with the substitutions leaving the  original data unperturbed.
+	This function will take in a list of tensors of one-hot encoded sequences
+	or of strings that can be one-hot encoded and will substitute the motifs
+	into the sequences given the provided spacings. It will then return a copy
+	of the data with the substitutions, leaving the original data unperturbed.
 
 	This function is largely just a wrapper around the substitute function,
 	calling it multiple times and figuring out the exact positioning internally.
@@ -196,8 +221,8 @@ def multisubstitute(X, motifs, spacing, start=None, alphabet=list("ACGT"),
 	If the motif is a string, it will be one-hot encoded according to the
 	alphabet that is provided. If a motif with batch size of 1 is provided, 
 	the same motifs will be substituted into all sequences. If a motif with a 
-	batch size equal to that of X is provided, there will be  1-1 correspondance 
-	between the motifs and the sequence, i.e., that motif at index 5 will be 
+	batch size equal to that of X is provided, there will be 1-1 correspondence
+	between the motifs and the sequence, i.e., the motif at index 5 will be
 	substituted into the sequence at index 5.
 
 
@@ -207,7 +232,7 @@ def multisubstitute(X, motifs, spacing, start=None, alphabet=list("ACGT"),
 		A one-hot encoded set of sequences to have a motif substituted into.
 
 	motifs: list of torch.tensor, shape=(-1, len(alphabet), motif_length)
-		A list of strings or of one-hot encoded version of a short motif to 
+		A list of strings or of one-hot encoded versions of short motifs to
 		substitute into the set of sequences.
 
 	spacing: list or int
@@ -217,10 +242,9 @@ def multisubstitute(X, motifs, spacing, start=None, alphabet=list("ACGT"),
 		distance after the $i$-th motif that the $i+1$-th motif begins.
 
 	start: int or None, optional
-		The starting position of where to substitute the motifs. If None,
-		substitute the motif into the middle of the sequence such that the 
-		middle of the motif occurs at the middle of the sequence. Default is 
-		None.
+		The starting position of where to substitute the motifs. If None, the
+		full motif arrangement is centered such that its midpoint coincides
+		with the middle of the sequence. Default is None.
 
 	alphabet : set or tuple or list, optional
 		A pre-defined alphabet where the ordering of the symbols is the same
@@ -278,7 +302,7 @@ def multisubstitute(X, motifs, spacing, start=None, alphabet=list("ACGT"),
 	return X
 
 
-def delete(X, start, end):
+def delete(X: torch.Tensor, start: int, end: int) -> torch.Tensor:
 	"""Delete a portion of a sequence.
 
 	This function will take in a tensor of one-hot encoded sequences and a pair
@@ -294,7 +318,9 @@ def delete(X, start, end):
 	Parameters
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to have a motif substituted into.
+		A one-hot encoded set of sequences to have a portion deleted from.
+		Unknown characters are allowed and must be encoded as all-zero
+		columns; those outside the deleted portion are kept.
 
 	start: int
 		The starting position to remove, inclusive.
@@ -317,12 +343,18 @@ def delete(X, start, end):
 		raise ValueError("End must come after start, must be greater " +
 			"than zero, and cannot be greater than the length of the sequence.")
 
-	_validate_input(X, "X", ohe=True, ohe_dim=1)	
+	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
 	return torch.cat([X[:, :, :start], X[:, :, end:]], dim=-1)
 
 
-def randomize(X, start, end, probs=[[0.25, 0.25, 0.25, 0.25]], n=1,
-	random_state=None):
+def randomize(
+	X: torch.Tensor,
+	start: int,
+	end: int,
+	probs: list | tuple | numpy.ndarray | torch.Tensor = [[0.25, 0.25, 0.25, 0.25]],
+	n: int = 1,
+	random_state: int | numpy.random.RandomState | None = None,
+) -> torch.Tensor:
 	"""Replace a region of the provided loci with randomly drawn sequence.
 
 	This function will take in a batch of sequences and replace region specified
@@ -341,6 +373,10 @@ def randomize(X, start, end, probs=[[0.25, 0.25, 0.25, 0.25]], n=1,
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences where a portion should be randomized.
+		Unknown characters are allowed and must be encoded as all-zero
+		columns. Those inside the randomized portion are replaced along with
+		everything else, so the returned sequences only keep the ones outside
+		it.
 
 	start: int
 		The starting position of where to randomize the sequence, inclusive. 
@@ -377,13 +413,13 @@ def randomize(X, start, end, probs=[[0.25, 0.25, 0.25, 0.25]], n=1,
 	if not isinstance(random_state, numpy.random.RandomState):
 		random_state = numpy.random.RandomState(random_state)
 
-	_validate_input(X, "X", ohe=True)
+	_validate_input(X, "X", ohe=True, allow_N=True)
 	_validate_input(probs, "Probs", shape=(-1, -1), min_value=0, max_value=1)
 
 	if end <= start:
 		raise ValueError("End must come after start.")
 
-	if end >= X.shape[-1] or start < 0:
+	if end > X.shape[-1] or start < 0:
 		raise ValueError("Start or end are falling off the edge of X.")
 
 	X_rands = []
@@ -397,7 +433,13 @@ def randomize(X, start, end, probs=[[0.25, 0.25, 0.25, 0.25]], n=1,
 	return torch.stack(X_rands).permute(1, 0, 2, 3)
 
 
-def shuffle(X, start=0, end=-1, n=1, random_state=None):
+def shuffle(
+	X: torch.Tensor,
+	start: int = 0,
+	end: int = -1,
+	n: int = 1,
+	random_state: int | numpy.random.RandomState | None = None,
+) -> torch.Tensor:
 	"""Replace a region of the provided loci with a shuffled version.
 
 	This function will take in a batch of sequences and shuffle the specified
@@ -416,6 +458,10 @@ def shuffle(X, start=0, end=-1, n=1, random_state=None):
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences where a portion will be shuffled.
+		Unknown characters are allowed and must be encoded as all-zero
+		columns. The shuffle is a permutation of the columns in the region,
+		so unknown characters inside it are moved rather than resolved and
+		the number of them is preserved.
 
 	start: int, optional
 		The starting position of where to randomize the sequence, inclusive.
@@ -441,8 +487,8 @@ def shuffle(X, start=0, end=-1, n=1, random_state=None):
 		A one-hot encoded set of sequences that each have a shuffled portion.
 	"""
 
-	_validate_input(X, "X", ohe=True)
-	
+	_validate_input(X, "X", ohe=True, allow_N=True)
+
 	if end < 0:
 		end = X.shape[-1] + 1 + end
 
@@ -466,7 +512,7 @@ def shuffle(X, start=0, end=-1, n=1, random_state=None):
 
 	return torch.stack(X_shufs).permute(1, 0, 2, 3)
 
-		
+
 params = 'void(int64, int64, int32[:], int32[:, :], int32[:], '
 params += 'int32[:, :], float32[:, :, :], int32)'
 @numba.jit(params, nopython=False, cache=True)
@@ -515,29 +561,24 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 
 	Parameters
 	----------
-	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to be shuffled.
+	X: torch.tensor, shape=(len(alphabet), length)
+		A single one-hot encoded sequence to be shuffled.
 
-	start: int, optional
-		The starting position of where to randomize the sequence, inclusive.
-		Default is 0, shuffling the entire sequence.
+	n_shuffles: int, optional
+		The number of shuffled sequences to produce. Default is 1.
 
-	end: int, optional
-		The ending position of where to randomize the sequence, not inclusive.
-		Default is -1, shuffling the entire sequence.
+	random_state: int or None, optional
+		The random seed to use when generating shuffles. If None, draw a new
+		seed at random. Default is None.
 
-	n: int, optional
-		The number of times to shuffle that region. Default is 1.
-
-	random_state: int, numpy.random.RandomState, or None, optional
-		Whether to use a specific random seed when generating the shuffle,
-		to ensure reproducibility. If None, do not use a reproducible seed.
-		Default is None.
+	verbose: bool, optional
+		Whether to print a warning when at least one position is identical
+		across all shuffles. Default is False.
 
 
 	Returns
 	-------
-	shuffled_sequences: torch.tensor, shape=(n, k, -1)
+	shuffled_sequences: torch.tensor, shape=(n_shuffles, len(alphabet), length)
 		The shuffled sequences.
 	"""
 
@@ -545,7 +586,7 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 		random_state = numpy.random.randint(0, 9999999)
 
 	n_chars, seq_len = X.shape
-	idxs = X.argmax(axis=0).numpy().astype(numpy.int32)
+	idxs = X.argmax(axis=0).cpu().numpy().astype(numpy.int32)
 
 	next_idxs = numpy.zeros((n_chars, seq_len), dtype=numpy.int32)
 	next_idxs_counts = numpy.zeros(n_chars, dtype=numpy.int32)
@@ -563,14 +604,15 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 
 	_fast_shuffle(n_shuffles, n_chars, idxs, next_idxs, next_idxs_counts, 
 		counters, shuffled_sequences, random_state)
-	
+
 	shuffled_sequences = torch.from_numpy(shuffled_sequences)
 
 	conserved = shuffled_sequences[:, :, 1:-1].sum(dim=0)
 	if conserved.max() == n_shuffles:
 		if verbose:
-			print("Warning: At least one position in dinucleotide shuffle " +
-				"is identical across all positions.")
+			warnings.warn(
+				"At least one position in dinucleotide shuffle is identical "
+				"across all positions.", TangermemeWarning, stacklevel=2)
 	if conserved.max(dim=0).values.min() == n_shuffles and n_shuffles > 1:
 		raise ValueError("All dinucleotide shuffles yield identical " +
 			"sequences, potentially due to a lack of diversity in sequence.")
@@ -578,8 +620,14 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 	return shuffled_sequences
 
 
-def dinucleotide_shuffle(X, start=0, end=-1, n=20, random_state=None, 
-	verbose=False):
+def dinucleotide_shuffle(
+	X: torch.Tensor,
+	start: int = 0,
+	end: int = -1,
+	n: int = 20,
+	random_state: int | numpy.random.RandomState | None = None,
+	verbose: bool = False,
+) -> torch.Tensor:
 	"""Given a one-hot encoded sequence, dinucleotide shuffle it.
 
 	This function takes in a one-hot encoded sequence (not a string) and
@@ -599,7 +647,13 @@ def dinucleotide_shuffle(X, start=0, end=-1, n=20, random_state=None,
 	Parameters
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to be shuffled.
+		A one-hot encoded set of sequences to be shuffled. Unlike the other
+		functions in this module, unknown characters are *not* allowed:
+		the transition matrix is built from `X.argmax(axis=0)`, which maps
+		an all-zero column to the first character of the alphabet, so an
+		unknown character would silently be shuffled as an `A` and would
+		distort the dinucleotide composition the shuffle exists to preserve.
+		Remove or resolve them before calling this.
 
 	start: int, optional
 		The starting position of where to randomize the sequence, inclusive.
@@ -614,16 +668,25 @@ def dinucleotide_shuffle(X, start=0, end=-1, n=20, random_state=None,
 		The number of times to shuffle that region. Default is 20.
 
 	random_state: int or None, optional
-		Whether to use a specific random seed when generating the random insert,
+		Whether to use a specific random seed when generating the shuffle,
 		to ensure reproducibility. If None, do not use a reproducible seed.
-		Unlike other methods, cannot be a numpy.random.RandomState object. 
+		Unlike other methods, cannot be a numpy.random.RandomState object.
+		Note: the seed used for the i-th sequence in the batch is
+		`random_state + i`, so the per-sequence stream depends on batch
+		position. Two calls with the same `random_state` but different batch
+		sizes will agree on the leading prefix of sequences (positions where
+		both batches contain that index) but diverge otherwise; this also
+		means sequence 0 of one batch is reproduced as sequence 0 of any
+		other batch that uses the same `random_state`.
 		Default is None.
 
 
 	Returns
 	-------
-	shuffled_sequences: torch.tensor, shape=(-1, n, k, -1)
-		The shuffled sequences.
+	shuffled_sequences: torch.tensor, shape=(-1, n, len(alphabet), length)
+		The shuffled sequences. Dtype and device match the input `X` (the
+		internal float32 buffer is cast on assignment back into a clone of
+		`X`).
 	"""
 
 	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1)
@@ -636,11 +699,149 @@ def dinucleotide_shuffle(X, start=0, end=-1, n=20, random_state=None,
 
 	X_shufs = []
 	for i in range(X.shape[0]):
-		insert_ = _dinucleotide_shuffle(X[i, :, start:end], n_shuffles=n, 
+		insert_ = _dinucleotide_shuffle(X[i, :, start:end], n_shuffles=n,
 			random_state=random_state+i, verbose=verbose)
 
 		X_shuf = torch.clone(X[i:i+1]).repeat(n, 1, 1)
-		X_shuf[:, :, start:end] = insert_
+		X_shuf[:, :, start:end] = insert_.to(X.device)
 		X_shufs.append(X_shuf)
 
 	return torch.stack(X_shufs)
+
+
+def local_dinucleotide_shuffle(
+	X: torch.Tensor,
+	n: int = 20,
+	bin_size: int = 1024,
+	min_bin_size: int = 512,
+	random_state: int | None = None,
+	verbose: bool = False,
+) -> torch.Tensor:
+	"""Dinucleotide-shuffle sequences independently within local bins.
+
+	A dinucleotide shuffle conserves the dinucleotide composition of the
+	sequence as a whole, and in doing so flattens any structure in how that
+	composition varies along it. A genomic window is rarely uniform: GC
+	content, repeat density and nucleotide composition drift across it, and a
+	background that averages all of that away differs from the original in
+	more ways than the motif content a marginalization is trying to isolate.
+
+	This function shuffles within consecutive bins instead, so composition is
+	conserved locally as well as globally. The interface otherwise follows
+	`dinucleotide_shuffle`, with two differences: there is no `start` or `end`
+	because the whole sequence is always shuffled, and `random_state` must be
+	an integer rather than a RandomState.
+
+	The bin boundaries are redrawn for every shuffle. The first cut is placed
+	uniformly at random between `min_bin_size` and `bin_size`, and the rest
+	follow at `bin_size` intervals from there. A dinucleotide shuffle holds
+	the first and last character of the region it is applied to, so fixing the
+	boundaries would pin those positions across every shuffle in the set;
+	redrawing them spreads that over different positions instead. A trailing
+	bin shorter than `min_bin_size` is merged into the one before it, so a bin
+	is never shorter than `min_bin_size` and can be as long as twice
+	`bin_size`.
+
+
+	Parameters
+	----------
+	X: torch.tensor, shape=(-1, len(alphabet), length)
+		A one-hot encoded set of sequences to be shuffled. Any alphabet is
+		accepted, not only DNA.
+
+	n: int, optional
+		The number of times to shuffle each sequence. Each shuffle draws its
+		own bin boundaries. Default is 20.
+
+	bin_size: int, optional
+		The spacing between bin boundaries after the first cut. Must be
+		strictly smaller than the sequence length, or a ValueError is raised;
+		use `dinucleotide_shuffle` directly for a sequence shorter than one
+		bin. A bin whose characters admit only one Eulerian path, as a
+		homopolymer or a short tandem repeat does, has itself as its only
+		possible shuffle and is returned unrandomized; a `TangermemeWarning`
+		reports how many bins that happened to, and raising `bin_size` merges
+		such a region into a more diverse neighborhood. Default is 1024.
+
+	min_bin_size: int, optional
+		The shortest a bin may be, used both as the lower bound on the random
+		first cut and as the threshold below which a trailing bin is merged
+		backwards. Must be no larger than `bin_size`, or a ValueError is
+		raised. Default is 512.
+
+	random_state: int or None, optional
+		Whether to use a specific random seed when generating the shuffle, to
+		ensure reproducibility. It seeds both the bin boundaries and the
+		shuffle within each bin. Unlike `dinucleotide_shuffle`, this cannot be
+		a numpy.random.RandomState object. If None, do not use a reproducible
+		seed. Default is None.
+
+	verbose: bool, optional
+		Whether to print a warning when at least one position is identical
+		across all shuffles of a bin. Each bin is shuffled once, so that
+		condition holds for almost every bin and this emits roughly one
+		warning per bin; the `TangermemeWarning` described under `bin_size` is
+		the useful signal. Default is False.
+
+
+	Returns
+	-------
+	shuffled_sequences: torch.tensor, shape=(-1, n, len(alphabet), length)
+		The shuffled sequences. Dtype and device match the input `X`.
+	"""
+
+	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1)
+
+	if bin_size >= X.shape[-1]:
+		raise ValueError(
+			"Sequence length must be longer than bin_size. "
+			"Use dinucleotide_shuffle directly for shorter sequences."
+		)
+	if min_bin_size > bin_size:
+		raise ValueError("min_bin_size must be <= bin_size")
+
+	rng = numpy.random.RandomState(random_state)
+
+	X_shuf = X.unsqueeze(1).repeat(1, n, 1, 1)
+	n_bins, n_unshuffled = 0, 0
+
+	for i in range(X.shape[0]):
+		for j in range(n):
+			first_cut = rng.randint(min_bin_size, bin_size + 1)
+			boundaries = [0, first_cut]
+			boundaries.extend(range(first_cut + bin_size, X.shape[-1], bin_size))
+			boundaries.append(X.shape[-1])
+
+			bins = list(zip(boundaries[:-1], boundaries[1:]))
+			if bins[-1][1] - bins[-1][0] < min_bin_size:
+				# merge last two bins if the final bin is too small
+				bins[-2] = (bins[-2][0], bins[-1][1])
+				bins.pop()
+
+			for (bin_start, bin_end) in bins:
+				shuffled = dinucleotide_shuffle(
+					X[i:i+1, :, bin_start:bin_end],
+					n=1,
+					random_state=rng.randint(0, 2**31 - 1),
+					verbose=verbose,
+				)
+				X_shuf[i, j, :, bin_start:bin_end] = shuffled[0, 0]
+
+				# `dinucleotide_shuffle` raises when every shuffle of a region
+				# comes back identical, but only when asked for more than one.
+				# It is called once per bin here, so that check cannot fire and
+				# an unshuffleable bin would otherwise pass through silently.
+				n_bins += 1
+				n_unshuffled += torch.equal(shuffled[0, 0].to(X.device),
+					X[i, :, bin_start:bin_end])
+
+	if n_unshuffled > 0:
+		warnings.warn("{} of {} bins came back identical to the input and are "
+			"not randomized in the returned sequences. A bin whose characters "
+			"form a single Eulerian path, such as a homopolymer or a short "
+			"tandem repeat, has only one possible dinucleotide shuffle. "
+			"Raising `bin_size` merges such a region into a more diverse "
+			"neighborhood.".format(n_unshuffled, n_bins), TangermemeWarning,
+			stacklevel=2)
+
+	return X_shuf

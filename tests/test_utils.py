@@ -4,9 +4,16 @@
 import numpy
 import torch
 import pandas
+import pytest
 
 
 from tangermeme.utils import _validate_input
+from tangermeme.utils import validate_input
+from tangermeme.utils import TangermemeWarning
+from tangermeme.utils import set_seed
+from tangermeme.utils import gc_content
+from tangermeme.utils import entropy
+from tangermeme.utils import information_content
 from tangermeme.utils import characters
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import reverse_complement
@@ -14,6 +21,8 @@ from tangermeme.utils import random_one_hot
 from tangermeme.utils import chunk
 from tangermeme.utils import unchunk
 from tangermeme.utils import extract_signal
+from tangermeme.utils import pwm_consensus
+from tangermeme.utils import example_to_fasta_coords
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -75,8 +84,8 @@ def test_validate_input_max_value():
 	_validate_input(X, "X", max_value=0.0)
 
 
-def test_validate_input_ohe():
-	X = random_one_hot((1, 4, 10), random_state=0)
+def test_validate_input_ohe(device):
+	X = random_one_hot((1, 4, 10), random_state=0).to(device)
 
 	_validate_input(X, "X", ohe=True, ohe_dim=1)
 	_validate_input(X.type(torch.float64), "X", ohe=True, ohe_dim=1)
@@ -108,8 +117,8 @@ def test_validate_input_ohe():
 	assert_raises(IndexError, _validate_input, X, "X", ohe=True, ohe_dim=1)
 
 
-def test_validate_input_allow_N():
-	X = random_one_hot((2, 4, 10), random_state=0)
+def test_validate_input_allow_N(device):
+	X = random_one_hot((2, 4, 10), random_state=0).to(device)
 	_validate_input(X, "X", ohe=True, ohe_dim=1)
 
 	X[0, :, 0] = 0
@@ -131,12 +140,38 @@ def test_validate_input_allow_N():
 	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1,
 		allow_N=True)
 
-	X = random_one_hot((2, 4, 10), random_state=0).float()
+	X = random_one_hot((2, 4, 10), random_state=0).float().to(device)
 	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
 
 	X[0, 1, 0] = 0.5
 	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1,
 		allow_N=True)
+
+
+def test_validate_input_all_zero_with_allow_N(device):
+	# An all-zero tensor represents a sequence where every position is
+	# unknown (N). With allow_N=True this is a valid one-hot encoding
+	# and must not be rejected. The previous len(unique(X)) == 2 check
+	# tripped on this case because unique returned just [0].
+	X = torch.zeros(1, 4, 5, dtype=torch.int8).to(device)
+	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
+
+	# Without allow_N, every position must have exactly one 1; an all-N
+	# input must still raise.
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1)
+
+
+def test_public_validate_input_wrapper(device):
+	# The public validate_input forwards to the internal helper.
+	X = random_one_hot((2, 4, 10), random_state=0).to(device)
+	validate_input(X, "X", ohe=True, ohe_dim=1)
+
+	# Bad input raises as expected.
+	assert_raises(ValueError, validate_input, X + 0.5, "X", ohe=True)
+
+	# only_warn=True surfaces a TangermemeWarning instead of raising.
+	with pytest.warns(TangermemeWarning):
+		validate_input(X + 0.5, "X", ohe=True, only_warn=True)
 
 
 ##
@@ -607,7 +642,7 @@ def test_unchunk_raises():
 ###
 
 
-def test_extract_signal():
+def test_extract_signal(device):
 	loci = pandas.DataFrame({
 		'example_idxs': [0, 0, 1, 2],
 		'start': [1, 9, 2, 4],
@@ -615,12 +650,12 @@ def test_extract_signal():
 	})
 
 	X = numpy.random.RandomState(0).randn(3, 1, 15)
-	X = torch.from_numpy(X)
+	X = torch.from_numpy(X).to(device)
 
 	y = extract_signal(loci, X)
 	
 	assert y.shape == (4, 1)
-	assert_array_almost_equal(y, [[ 5.3088  ],
+	assert_array_almost_equal(y.cpu(), [[ 5.3088  ],
                   [ 2.891628],
                   [-0.253532],
                   [-0.917093]])
@@ -629,3 +664,176 @@ def test_extract_signal():
 	assert y[1, 0] == X[0, :, 9:14].sum()
 	assert y[2, 0] == X[1, :, 2:10].sum()
 	assert y[3, 0] == X[2, :, 4:12].sum()
+
+
+###
+
+
+def test_pwm_consensus_basic():
+	pwm = torch.tensor([
+		[0.7, 0.1, 0.1, 0.1],
+		[0.1, 0.7, 0.1, 0.1],
+		[0.1, 0.1, 0.7, 0.1],
+		[0.1, 0.1, 0.1, 0.7],
+	])
+	# pwm_consensus expects shape=(alphabet_len, pwm_len)
+	Y = pwm_consensus(pwm.T)
+
+	assert Y.shape == pwm.T.shape
+	assert int(Y.sum()) == pwm.shape[0]
+	assert_array_almost_equal(Y, torch.eye(4))
+
+
+def test_pwm_consensus_zero_column():
+	pwm = torch.tensor([
+		[0.7, 0.0, 0.1, 0.1],
+		[0.1, 0.0, 0.7, 0.1],
+		[0.1, 0.0, 0.1, 0.7],
+		[0.1, 0.0, 0.1, 0.1],
+	])
+	Y = pwm_consensus(pwm)
+
+	# The all-zero column stays all-zero.
+	assert int(Y[:, 1].sum()) == 0
+	assert int(Y[:, 0].sum()) == 1
+
+
+def test_random_one_hot_with_probs():
+	X = random_one_hot((100, 4, 200), probs=[[1.0, 0.0, 0.0, 0.0]],
+		random_state=0)
+
+	assert X.shape == (100, 4, 200)
+	# every position is the first character
+	assert int(X[:, 0].sum()) == 100 * 200
+	assert int(X[:, 1:].sum()) == 0
+
+
+def test_example_to_fasta_coords_basic():
+	loci_df = pandas.DataFrame({
+		'chrom': ['chr1', 'chr2'],
+		'start': [100, 500],
+		'end': [200, 600],
+	})
+	example_df = pandas.DataFrame({
+		'example_idx': [0, 1, 0],
+		'start': [5, 10, 50],
+		'end': [15, 20, 60],
+		'score': [1.0, 2.0, 3.0],
+	})
+
+	out = example_to_fasta_coords(example_df, loci_df)
+
+	assert list(out.columns) == ['chrom', 'start', 'end', 'score']
+	assert list(out['chrom']) == ['chr1', 'chr2', 'chr1']
+	assert list(out['start']) == [105, 510, 150]
+	assert list(out['end']) == [115, 520, 160]
+	assert list(out['score']) == [1.0, 2.0, 3.0]
+
+
+def test_example_to_fasta_coords_window():
+	loci_df = pandas.DataFrame({
+		'chrom': ['chr1'],
+		'start': [100],
+		'end': [200],
+	})
+	example_df = pandas.DataFrame({
+		'example_idx': [0],
+		'start': [10],
+		'end': [20],
+	})
+
+	out = example_to_fasta_coords(example_df, loci_df, window=50)
+
+	# midpoint of (100, 200) is 150; window=50 centers at 150-25=125;
+	# example start=10 -> 135, end=20 -> 145.
+	assert int(out['start'].iloc[0]) == 135
+	assert int(out['end'].iloc[0]) == 145
+
+
+##
+
+
+def test_set_seed_is_deterministic():
+	# After calling set_seed with the same seed twice, all RNGs should
+	# produce identical sequences.
+	import random
+
+	set_seed(0)
+	a_py = random.random()
+	a_np = numpy.random.rand()
+	a_torch = torch.rand(1).item()
+
+	set_seed(0)
+	b_py = random.random()
+	b_np = numpy.random.rand()
+	b_torch = torch.rand(1).item()
+
+	assert a_py == b_py
+	assert a_np == b_np
+	assert a_torch == b_torch
+
+	set_seed(1)
+	c_torch = torch.rand(1).item()
+	assert a_torch != c_torch
+
+
+def test_gc_content_basic():
+	# Build a tensor where the first sequence is all-A (GC=0), the second
+	# all-G (GC=1), the third half C / half T (GC=0.5).
+	X = torch.zeros(3, 4, 4, dtype=torch.float32)
+	X[0, 0, :] = 1  # AAAA
+	X[1, 2, :] = 1  # GGGG
+	X[2, 1, :2] = 1  # CC..
+	X[2, 3, 2:] = 1  # ..TT
+
+	gc = gc_content(X)
+	assert gc.shape == (3,)
+	assert float(gc[0]) == 0.0
+	assert float(gc[1]) == 1.0
+	assert float(gc[2]) == 0.5
+
+
+def test_gc_content_all_N_is_zero():
+	X = torch.zeros(1, 4, 5, dtype=torch.float32)
+	gc = gc_content(X)
+	assert float(gc[0]) == 0.0
+
+
+def test_entropy_uniform_is_log2_4():
+	# A perfectly uniform PWM has entropy = log2(4) = 2 bits per position.
+	X = torch.full((1, 4, 3), 0.25)
+	H = entropy(X)
+	assert H.shape == (1, 3)
+	assert_array_almost_equal(H, [[2.0, 2.0, 2.0]], 4)
+
+
+def test_entropy_one_hot_is_zero():
+	X = torch.zeros(1, 4, 3)
+	X[0, 0, 0] = 1.0
+	X[0, 1, 1] = 1.0
+	X[0, 2, 2] = 1.0
+	H = entropy(X)
+	assert_array_almost_equal(H, [[0.0, 0.0, 0.0]], 4)
+
+
+def test_entropy_all_N_column_is_zero():
+	X = torch.zeros(1, 4, 1)
+	H = entropy(X)
+	assert float(H[0, 0]) == 0.0
+
+
+def test_information_content_complementary_to_entropy():
+	X = torch.full((1, 4, 3), 0.25)
+	IC = information_content(X)
+	assert_array_almost_equal(IC, [[0.0, 0.0, 0.0]], 4)
+
+	X = torch.zeros(1, 4, 3)
+	X[0, 0, :] = 1.0
+	IC = information_content(X)
+	assert_array_almost_equal(IC, [[2.0, 2.0, 2.0]], 4)
+
+
+def test_information_content_all_N_is_zero():
+	X = torch.zeros(1, 4, 1)
+	IC = information_content(X)
+	assert float(IC[0, 0]) == 0.0

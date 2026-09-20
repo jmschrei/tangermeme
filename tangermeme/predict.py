@@ -1,14 +1,29 @@
 # predict.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
+import contextlib
+from collections.abc import Callable, Sequence
+from typing import Any
+
 import torch
-import itertools
 
 from tqdm import trange
 
+from ._compat import _autocast_supported, _preserve_model_state, _resolve_device
 
-def predict(model, X, args=None, func=None, batch_size=32, dtype=None, 
-	device='cuda', verbose=False):
+
+def predict(
+	model: torch.nn.Module,
+	X: torch.Tensor,
+	args: Sequence[torch.Tensor] | None = None,
+	func: Callable[..., Any] | None = None,
+	batch_size: int = 32,
+	dtype: str | torch.dtype | None = None,
+	device: str | torch.device | None = None,
+	verbose: bool = False,
+) -> torch.Tensor | list[torch.Tensor]:
 	"""Make batched predictions in a memory-efficient manner.
 
 	This function will take a PyTorch model and make predictions from it using
@@ -41,7 +56,10 @@ def predict(model, X, args=None, func=None, batch_size=32, dtype=None,
 		provided, each element in the tuple or list is one input to the model
 		and the element must be formatted to be the same batch size as `X`. If
 		None, no additional arguments are passed into the forward function.
-		Default is None.
+		Each per-batch slice is cast to `dtype` before being passed to the
+		model — integer index tensors and boolean masks will be silently
+		coerced to float, so pre-cast them or pass non-floating-point
+		auxiliary inputs through a model wrapper instead. Default is None.
 
 	func: function or None, optional 
 		A function to apply to a batch of predictions after they have been made.
@@ -53,12 +71,13 @@ def predict(model, X, args=None, func=None, batch_size=32, dtype=None,
 	dtype: str or torch.dtype or None, optional
 		The dtype to use with mixed precision autocasting. If None, use the dtype of
 		the *model*. This allows you to use int8 to represent large data sets and
-		only convert batches to the higher precision, saving memory. Defailt is None.
+		only convert batches to the higher precision, saving memory. Default is None.
 
-	device: str or torch.device, optional
+	device: str or torch.device or None, optional
 		The device to move the model and batches to when making predictions. If
-		set to 'cuda' without a GPU, this function will crash and must be set
-		to 'cpu'. Default is 'cuda'. 
+		None, use CUDA when available and fall back to CPU otherwise. The model's
+		original device and training mode are restored after the call. Default
+		is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar during predictions. Default is False.
@@ -66,20 +85,25 @@ def predict(model, X, args=None, func=None, batch_size=32, dtype=None,
 
 	Returns
 	-------
-	y: torch.Tensor or list/tuple of torch.Tensors
+	y: torch.Tensor or list of torch.Tensors
 		The output from the model for each input example. The precise format
 		is determined by the model. If the model outputs a single tensor,
 		y is a single tensor concatenated across all batches. If the model
-		outputs multiple tensors, y is a list of tensors which are each
-		concatenated across all batches.
+		outputs multiple tensors (list or tuple), y is always returned as a
+		list (the original tuple container type is not preserved) of tensors
+		which are each concatenated across all batches.
 	"""
 
-	model = model.to(device).eval()
-	
+	if X.shape[0] == 0:
+		raise ValueError("predict requires at least one example; got X "
+			"with shape[0] == 0.")
+
+	device = _resolve_device(device)
+
 	if dtype is None:
 		try:
 			dtype = next(model.parameters()).dtype
-		except:
+		except (StopIteration, AttributeError):
 			dtype = torch.float32
 	elif isinstance(dtype, str):
 		dtype = getattr(torch, dtype)
@@ -92,8 +116,10 @@ def predict(model, X, args=None, func=None, batch_size=32, dtype=None,
 
 	###
 
+	use_autocast = _autocast_supported(device, dtype)
+
 	y = []
-	with torch.no_grad():
+	with _preserve_model_state(model, device), torch.no_grad():
 		batch_size = min(batch_size, X.shape[0])
 
 		for start in trange(0, X.shape[0], batch_size, disable=not verbose):
@@ -103,7 +129,12 @@ def predict(model, X, args=None, func=None, batch_size=32, dtype=None,
 			if X_.shape[0] == 0:
 				continue
 
-			with torch.autocast(device_type=device, dtype=dtype):
+			if use_autocast:
+				autocast_ctx = torch.autocast(device_type=device.type, dtype=dtype)
+			else:
+				autocast_ctx = contextlib.nullcontext()
+
+			with autocast_ctx:
 				if args is not None:
 					args_ = [a[start:end].type(dtype).to(device) for a in args]
 					y_ = model(X_, *args_)

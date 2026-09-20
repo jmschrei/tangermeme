@@ -4,25 +4,53 @@
    contain the root `toctree` directive.
 
 
-    .. image:: logo/pomegranate-logo.png
-        :width: 300px
-
-
-    .. image:: https://readthedocs.org/projects/pomegranate/badge/?version=latest
-       :target: http://pomegranate.readthedocs.io/en/latest/?badge=latest
-
-
 tangermeme
 ==========
 
 tangermeme is a Python package that implements the basic operations necessary to perform sophisticated genomic analyses using machine learning models. Essentially, tangermeme aims to implement everything except for the model that you'd like to use, including I/O, identifying matched region sets, altering sequences (e.g., inserting a motif or scrambling out a motif), running marginalization experiments, and annotating regions. These functions are meant to be used by themselves but also can easily be built on top of if you'd like to customize your analyses. 
 
-Another way of looking at tangermeme is that, if the MEME suite is meant to do sequence analyses when you have nly biological sequences (or maybe priors derived from experimental data), tangermeme is meant to do sequence analyses when you have these sequences *and* a predictive machine learning model. How does motif discovery or annotation differ when you have attribution values highlighting nucleotides based on how important they are to the predictions? Accordingly, tangermeme implements several command-line tools that are similar to those in the MEME suite, such as FIMO/TOMTOM/MEME, but also extends the capabilities of these tools to handle attributions, and implements new methods that answer additional questions.
+Another way of looking at tangermeme is that, if the MEME suite is meant to do sequence analyses when you have only biological sequences (or maybe priors derived from experimental data), tangermeme is meant to do sequence analyses when you have these sequences *and* a predictive machine learning model. How does motif discovery or annotation differ when you have attribution values highlighting nucleotides based on how important they are to the predictions? tangermeme extends classic MEME-suite-style analyses to handle attributions, and implements new methods that answer additional questions. The FIMO and TOMTOM tools themselves now live in `memesuite-lite <https://github.com/jmschrei/memesuite-lite>`_, where they can be used without a PyTorch dependency.
 
 Installation
 ============
 
-`pip install tangermeme`
+.. code-block:: bash
+
+    pip install tangermeme
+
+Or, with `uv <https://docs.astral.sh/uv/>`_:
+
+.. code-block:: bash
+
+    uv add tangermeme
+
+Optional extras:
+
+- ``tangermeme[docs]`` — install the Sphinx toolchain for building this documentation site locally.
+
+Development install
+-------------------
+
+Contributors should clone the repository and use ``uv`` to create a reproducible environment from ``uv.lock``:
+
+.. code-block:: bash
+
+    git clone https://github.com/jmschrei/tangermeme.git
+    cd tangermeme
+    uv sync --extra dev
+    uv run pytest -m "not cmd"
+
+
+Claude Code Skill
+-----------------
+
+tangermeme ships an `Agent Skill <https://docs.claude.com/en/docs/claude-code/skills>`_ for `Claude Code <https://claude.com/claude-code>`_ that teaches the agent how to use the library correctly — the API contracts, the common footguns, and the multi-step workflows. It is bundled with the package, but because Claude Code does not scan installed Python packages you install it once into your personal skills directory:
+
+.. code-block:: bash
+
+    tangermeme-install-skills
+
+This copies the skill to ``~/.claude/skills/tangermeme/``, where it is available to Claude Code in every project (re-run with ``--force`` after upgrading to refresh it). Once installed, simply ask Claude Code to perform tangermeme tasks and the skill is consulted automatically. To instead point Claude Code at the bundled copy in place, set ``CLAUDE_SKILLS_PATH`` to the output of ``tangermeme-install-skills --print-path``.
 
 
 Thank You
@@ -34,7 +62,7 @@ No good project is done alone, and so I'd like to thank everyone who tested tang
 Contributions
 =============
 
-Contributions are eagerly accepted! If you would like to contribute a feature then fork the master branch and be sure to run the tests before changing any code. Let us know what you want to do on the issue tracker just in case we're already working on an implementation of something similar. Also, please don't forget to add tests for any new functions. 
+Contributions are eagerly accepted! If you would like to contribute a feature then fork the main branch and be sure to run the tests before changing any code. Let us know what you want to do on the issue tracker just in case we're already working on an implementation of something similar. Also, please don't forget to add tests for any new functions. 
 
 .. toctree::
    :maxdepth: 1
@@ -61,11 +89,8 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
    tutorials/Tutorial_B5_Variant_Effect.ipynb
    tutorials/Tutorial_B6_Design.ipynb
    tutorials/Tutorial_B7_Cartesian_Product.ipynb
-   tutorials/Tutorial_B8_Seqlets.ipynb
    tutorials/Tutorial_C1_IO_and_Data_Loading.ipynb
    tutorials/Tutorial_C2_Plotting.ipynb
-   tutorials/Tutorial_D1_FIMO.ipynb
-   tutorials/Tutorial_D2_TOMTOM.ipynb
 
 .. toctree::
    :maxdepth: 1
@@ -98,14 +123,18 @@ Contributions are eagerly accepted! If you would like to contribute a feature th
 
    api/ablate.rst
    api/annotate.rst
+   api/deep_lift_shap.rst
    api/design.rst
    api/ersatz.rst
    api/io.rst
-   api/ism.rst
+   api/kmers.rst
    api/marginalize.rst
    api/match.rst
+   api/pisa.rst
+   api/plot.rst
    api/predict.rst
    api/product.rst
+   api/saturation_mutagenesis.rst
    api/seqlet.rst
    api/space.rst
    api/utils.rst

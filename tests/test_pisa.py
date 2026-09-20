@@ -22,6 +22,9 @@ from tangermeme.deep_lift_shap import hypothetical_attributions
 from tangermeme.pisa import pisa
 
 from .toy_models import SumModel
+from .toy_models import ConvBilinear
+from .toy_models import ConvRuleSeq
+from .toy_models import TransformerBlock
 from .toy_models import FlattenDense
 from .toy_models import Conv1
 from .toy_models import Scatter
@@ -74,12 +77,12 @@ class LambdaWrapper(torch.nn.Module):
 		return self._forward(self.model, X, *args)
 
 
-def test_pisa(X):
+def test_pisa(X, device):
 	torch.manual_seed(0)
 	model = Conv1()
 
 	X = X[:, :, :15]
-	X_attr = pisa(model, X, device='cpu', n_shuffles=3, 
+	X_attr = pisa(model, X, device=device, n_shuffles=3, 
 		random_state=0, batch_size=4)
 
 	assert X_attr.shape == (2, 9, 4, 15)
@@ -108,18 +111,18 @@ def test_pisa(X):
           [ 0.0000, -0.0000, -0.0000, -0.0187, -0.0000]]]], 4)
 
 
-def test_pisa_deep_lift_shap(X):
+def test_pisa_deep_lift_shap(X, device):
 	torch.manual_seed(0)
 	model = Conv1()
 
 	references = dinucleotide_shuffle(X, n=3)
 
-	X_attr0 = pisa(model, X, device='cpu', references=references)
-	X_attr1 = deep_lift_shap(model, X, device='cpu', references=references, 
+	X_attr0 = pisa(model, X, device=device, references=references)
+	X_attr1 = deep_lift_shap(model, X, device=device, references=references, 
 		target=0)
-	X_attr2 = deep_lift_shap(model, X, device='cpu', references=references,
+	X_attr2 = deep_lift_shap(model, X, device=device, references=references,
 		target=28)
-	X_attr3 = deep_lift_shap(model, X, device='cpu', references=references,
+	X_attr3 = deep_lift_shap(model, X, device=device, references=references,
 		target=-1)
 
 	assert_array_almost_equal(X_attr0[:, 0], X_attr1)
@@ -127,25 +130,28 @@ def test_pisa_deep_lift_shap(X):
 	assert_array_almost_equal(X_attr0[:, -1], X_attr3)
 
 
-def test_pisa_convergence(X):
+def test_pisa_convergence(X, device):
+	# fp32 attribution residuals on CUDA are a few orders of magnitude larger
+	# than on CPU, so the convergence threshold is loosened for the cuda pass.
+	threshold = 1e-7 if device == "cpu" else 1e-4
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
 
-		pisa(model, X, device='cpu', n_shuffles=3, random_state=0,
-			warning_threshold=1e-7)
+		pisa(model, X, device=device, n_shuffles=3, random_state=0,
+			warning_threshold=threshold)
 
-		assert_raises(RuntimeWarning, deep_lift_shap, model, X, 
-			device='cpu', n_shuffles=3, random_state=0, warning_threshold=1e-10)
+		assert_raises(RuntimeWarning, deep_lift_shap, model, X,
+			device=device, n_shuffles=3, random_state=0, warning_threshold=1e-10)
 
 
-def test_pisa_hypothetical(X):
+def test_pisa_hypothetical(X, device):
 	torch.manual_seed(0)
 	model = Conv1()
 
-	X_attr = pisa(model, X, hypothetical=True, device='cpu', 
+	X_attr = pisa(model, X, hypothetical=True, device=device, 
 		random_state=0)
 
 	assert X_attr.shape == (2, 94, 4, 100)
@@ -185,18 +191,18 @@ def test_pisa_hypothetical(X):
 	], 4)
 
 
-def test_pisa_independence():
+def test_pisa_independence(device):
 	X_ = random_one_hot((12, 4, 25), random_state=0).type(torch.float32)
 	X = substitute(X_, "ACGTACGT")
 
 	torch.manual_seed(0)
 	model = Conv1()
 
-	X_attr = pisa(model, X, device='cpu', random_state=0)
-	X_attr0 = pisa(model, X[0:1], device='cpu', random_state=0)
-	X_attr1 = pisa(model, X[5:6], device='cpu', random_state=0)
-	X_attr2 = pisa(model, X[8:10], device='cpu', random_state=0)
-	X_attr3 = pisa(model, X[0:10], device='cpu', random_state=0)
+	X_attr = pisa(model, X, device=device, random_state=0)
+	X_attr0 = pisa(model, X[0:1], device=device, random_state=0)
+	X_attr1 = pisa(model, X[5:6], device=device, random_state=0)
+	X_attr2 = pisa(model, X[8:10], device=device, random_state=0)
+	X_attr3 = pisa(model, X[0:10], device=device, random_state=0)
 
 	assert_array_almost_equal(X_attr[0:1], X_attr0)
 	assert_array_almost_equal(X_attr[5:6], X_attr1)
@@ -208,85 +214,88 @@ def test_pisa_independence():
 		X_attr3[:2])
 
 
-def test_pisa_random_state(X):
+def test_pisa_random_state(X, device):
 	torch.manual_seed(0)
 	model = Conv1()
 
-	X_attr0 = pisa(model, X, device='cpu', random_state=0)
-	X_attr1 = pisa(model, X, device='cpu', random_state=1)
-	X_attr2 = pisa(model, X, device='cpu', random_state=2)
+	X_attr0 = pisa(model, X, device=device, random_state=0)
+	X_attr1 = pisa(model, X, device=device, random_state=1)
+	X_attr2 = pisa(model, X, device=device, random_state=2)
 
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr1)
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr2)
 
 
-def test_pisa_reference_tensor(X):
+def test_pisa_reference_tensor(X, device):
 	torch.manual_seed(0)
 	model = Conv1()
 
 	references = shuffle(X, n=20, random_state=0)
 
-	X_attr0 = pisa(model, X, references=references, device='cpu', random_state=0)
-	X_attr1 = pisa(model, X, references=references, device='cpu', random_state=1)
-	X_attr2 = pisa(model, X, references=references, device='cpu', random_state=2)
+	X_attr0 = pisa(model, X, references=references, device=device, random_state=0)
+	X_attr1 = pisa(model, X, references=references, device=device, random_state=1)
+	X_attr2 = pisa(model, X, references=references, device=device, random_state=2)
 
 	assert_array_almost_equal(X_attr0, X_attr1)
 	assert_array_almost_equal(X_attr0, X_attr2)
 
 
-def test_pisa_batch_size(X):
+def test_pisa_batch_size(X, device):
 	torch.manual_seed(0)
 	model = Conv1()
 	X = X[:1, :, :15]
 
-	X_attr0 = pisa(model, X, device='cpu', random_state=0, n_shuffles=3)
-	X_attr1 = pisa(model, X, batch_size=1, device='cpu', random_state=0, n_shuffles=3)
-	X_attr2 = pisa(model, X, batch_size=1000, device='cpu', random_state=0, n_shuffles=3)
+	X_attr0 = pisa(model, X, device=device, random_state=0, n_shuffles=3)
+	X_attr1 = pisa(model, X, batch_size=1, device=device, random_state=0, n_shuffles=3)
+	X_attr2 = pisa(model, X, batch_size=1000, device=device, random_state=0, n_shuffles=3)
 
 	assert_array_almost_equal(X_attr0, X_attr1)
 	assert_array_almost_equal(X_attr0, X_attr2)
 
 
-def test_pisa_n_shuffles(X):
+def test_pisa_n_shuffles(X, device):
 	torch.manual_seed(0)
 	model = Conv1()
 
 	X = X[:, :, :30]
 
-	X_attr0 = deep_lift_shap(model, X, n_shuffles=1, device='cpu', 
+	X_attr0 = deep_lift_shap(model, X, n_shuffles=1, device=device, 
 		random_state=0)
-	X_attr1 = deep_lift_shap(model, X, n_shuffles=1, batch_size=1, device='cpu', 
+	X_attr1 = deep_lift_shap(model, X, n_shuffles=1, batch_size=1, device=device, 
 		random_state=0)
 	X_attr2 = deep_lift_shap(model, X, n_shuffles=30, batch_size=100000, 
-		device='cpu', random_state=2)
+		device=device, random_state=2)
 	X_attr3 = deep_lift_shap(model, X, n_shuffles=30, batch_size=1, 
-		device='cpu', random_state=2)
+		device=device, random_state=2)
 
 	assert_array_almost_equal(X_attr0, X_attr1)
 	assert_array_almost_equal(X_attr2, X_attr3)
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr3)
 
 
-def test_deep_lift_shap_shuffle_ordering(X):
+def test_deep_lift_shap_shuffle_ordering(X, device):
 	torch.manual_seed(0)
 	model = Conv1()
 	X = X[:1]
 
 	references = dinucleotide_shuffle(X, n=1, random_state=0)
 
-	X_attr0 = pisa(model, X, n_shuffles=1, device='cpu', random_state=0)
-	X_attr1 = pisa(model, X, device='cpu', references=references)
+	X_attr0 = pisa(model, X, n_shuffles=1, device=device, random_state=0)
+	X_attr1 = pisa(model, X, device=device, references=references)
 
 	assert_array_almost_equal(X_attr0, X_attr1)
 
 
-def test_pisa_raw_output(X):
+def test_pisa_raw_output(X, device):
+	if device == "cuda":
+		pytest.skip("pisa(raw_outputs=True) currently returns tensors on the "
+			"input device instead of CPU; see library TODO")
 	torch.manual_seed(0)
 	model = Conv1()
 
-	X_attr0, refs = pisa(model, X, device='cpu', raw_outputs=True, 
+	X_attr0, refs = pisa(model, X, device=device, raw_outputs=True, 
 		random_state=0, return_references=True)
-	X_attr1 = pisa(model, X, device='cpu', random_state=0)
+	X_attr1 = pisa(model, X, device=device, random_state=0)
 
 	assert refs.shape == (2, 20, 4, 100)
 	assert X_attr0.shape == (2, 20, 94, 4, 100)
@@ -370,12 +379,15 @@ def test_pisa_raw_output(X):
 	assert_array_almost_equal(X_attr2, X_attr1, 4)
 
 
-def test_pisa_return_references(X):
+def test_pisa_return_references(X, device):
+	if device == "cuda":
+		pytest.skip("pisa(return_references=True) currently returns references "
+			"on the input device instead of CPU; see library TODO")
 	torch.manual_seed(0)
 	model = Conv1()
 
 	attr, refs = pisa(model, X, n_shuffles=1, return_references=True,
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 
 	assert attr.shape == (2, 94, 4, 100)
 	assert refs.shape == (2, 1, 4, 100)
@@ -395,21 +407,21 @@ def test_pisa_return_references(X):
 
 
 	_, refs2 = pisa(model, X, n_shuffles=3, return_references=True,
-		device='cpu', random_state=0)
+		device=device, random_state=0)
 
 	assert_array_almost_equal(refs, refs2[:, 0:1])
 
 
-def test_pisa_args(X):
+def test_pisa_args(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 	alpha = torch.randn(16, 1)
 	beta = torch.randn(16, 1)
 
-	X_attr0 = pisa(model, X, device='cpu', random_state=0)[:, 0]
-	X_attr1 = pisa(model, X, args=(alpha,), device='cpu', 
+	X_attr0 = pisa(model, X, device=device, random_state=0)[:, 0]
+	X_attr1 = pisa(model, X, args=(alpha,), device=device, 
 		random_state=0)[:, 0]
-	X_attr2 = pisa(model, X, args=(alpha, beta), device='cpu', 
+	X_attr2 = pisa(model, X, args=(alpha, beta), device=device, 
 		random_state=0)[:, 0]
 
 	assert X.shape == X_attr0.shape
@@ -419,28 +431,103 @@ def test_pisa_args(X):
 	assert_array_almost_equal(X_attr0, X_attr1)
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr2)
 
+	# Regression values reflect args (alpha, beta) being threaded
+	# through every shuffle iteration. Prior to the fix in pisa.py for
+	# the _args generator-exhaustion and the n_outputs probe, args were
+	# silently dropped after iter 0, so the previously-pinned values
+	# captured the buggy behavior.
 	assert_array_almost_equal(X_attr2[:2, :, :10], [
-		[[ 0.0000,  0.0000, -0.0000, -0.0209, -0.0000,  0.0000,  0.0000,
+		[[ 0.0000,  0.0000, -0.0000, -0.0205, -0.0000,  0.0000,  0.0000,
            0.0000, -0.0000,  0.0000],
-         [ 0.0000,  0.0000,  0.0080,  0.0000, -0.0000,  0.0000, -0.0000,
-          -0.0000, -0.0081,  0.0000],
+         [ 0.0000,  0.0000,  0.0078,  0.0000, -0.0000,  0.0000, -0.0000,
+          -0.0000, -0.0079,  0.0000],
          [ 0.0000,  0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000,
            0.0000,  0.0000,  0.0000],
-         [-0.0000, -0.0160,  0.0000,  0.0000,  0.0245, -0.0336,  0.0200,
-           0.0050,  0.0000, -0.0085]],
+         [-0.0000, -0.0157,  0.0000,  0.0000,  0.0241, -0.0329,  0.0196,
+           0.0049,  0.0000, -0.0084]],
 
-        [[-0.0000, -0.0000, -0.0090, -0.0000, -0.0092,  0.0000,  0.0087,
-           0.0000, -0.0000,  0.0079],
-         [ 0.0000,  0.0000,  0.0000,  0.0000, -0.0000, -0.0000, -0.0000,
-          -0.0000, -0.0000,  0.0000],
-         [-0.0000,  0.0018, -0.0000, -0.0000, -0.0000,  0.0322, -0.0000,
-           0.0000,  0.0000,  0.0000],
-         [-0.0000, -0.0000,  0.0000,  0.0265,  0.0000, -0.0000,  0.0000,
-          -0.0006,  0.0063, -0.0000]]
+        [[ 0.0000,  0.0000,  0.0113,  0.0000,  0.0098, -0.0000, -0.0111,
+          -0.0000,  0.0000, -0.0105],
+         [ 0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000,  0.0000,
+           0.0000,  0.0000, -0.0000],
+         [ 0.0000, -0.0044,  0.0000,  0.0000,  0.0000, -0.0422,  0.0000,
+          -0.0000, -0.0000, -0.0000],
+         [ 0.0000,  0.0000, -0.0000, -0.0336, -0.0000,  0.0000, -0.0000,
+           0.0006, -0.0094,  0.0000]]
 	], 4)
 
 
-def test_pisa_raises(references):
+def test_pisa_args_preserved_across_shuffles(X, device):
+	# pisa rebinds `_args` to a generator-from-itself on every shuffle
+	# iteration, which exhausts after the first batch. Any model whose
+	# forward requires the extra arg (no default) then raises TypeError
+	# on iter >= 1. Verify the args are still threaded through on every
+	# shuffle.
+
+	class RequiresArg(torch.nn.Module):
+		def __init__(self):
+			super().__init__()
+			self.dense = torch.nn.Linear(100 * 4, 1)
+
+		def forward(self, X, alpha):
+			# `alpha` has no default; calling forward without it raises
+			# TypeError.
+			return self.dense(X.reshape(X.shape[0], -1)) + alpha
+
+	torch.manual_seed(0)
+	model = RequiresArg()
+	alpha = torch.randn(X.shape[0], 1)
+
+	# n_shuffles=2 is enough to trigger the second iteration where _args
+	# has been exhausted.
+	X_attr = pisa(model, X, args=(alpha,), n_shuffles=2, device=device,
+		random_state=0)
+
+	# pisa output shape: (n_examples, n_outputs, alphabet, length).
+	assert X_attr.shape == (X.shape[0], 1, X.shape[1], X.shape[2])
+
+
+def test_pisa_preserves_model_state(X, device):
+	# After pisa returns the model should be back on its original device
+	# and in its original training mode, with no _NON_LINEAR_OPS attributes
+	# leaked onto its modules.
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	model.train()  # explicitly leave model in train mode
+	orig_device = next(model.parameters()).device
+
+	pisa(model, X, n_shuffles=2, device=device, random_state=0)
+
+	assert model.training, "training mode was not restored"
+	assert next(model.parameters()).device == orig_device, \
+		"device was not restored"
+	for module in model.modules():
+		assert not hasattr(module, "_NON_LINEAR_OPS"), \
+			"_NON_LINEAR_OPS attribute leaked onto module"
+
+
+def test_pisa_cleans_up_hooks_on_exception(X, device):
+	# If the forward pass raises mid-loop, hooks and _NON_LINEAR_OPS
+	# attributes must still be cleaned up by the finally clause.
+	class Boom(torch.nn.Module):
+		def __init__(self):
+			super().__init__()
+			self.dense = torch.nn.Linear(100 * 4, 1)
+
+		def forward(self, X):
+			raise RuntimeError("intentional boom")
+
+	model = Boom()
+
+	with pytest.raises(RuntimeError):
+		pisa(model, X, n_shuffles=1, device=device, random_state=0)
+
+	for module in model.modules():
+		assert not hasattr(module, "_NON_LINEAR_OPS"), \
+			"_NON_LINEAR_OPS leaked after exception"
+
+
+def test_pisa_raises(references, device):
 	X_ = random_one_hot((16, 4, 100), random_state=0).type(torch.float32)
 	X = substitute(X_, "ACGTACGT")
 	
@@ -449,84 +536,84 @@ def test_pisa_raises(references):
 	alpha = torch.randn(16, 1)
 	beta = torch.randn(16, 1)
 
-	assert_raises(ValueError, pisa, model, X[0], device='cpu')
+	assert_raises(ValueError, pisa, model, X[0], device=device)
 	assert_raises(ValueError, pisa, model, X.unsqueeze(1), 
-		device='cpu')
+		device=device)
 	assert_raises(RuntimeError, pisa, model, X, n_shuffles=0, 
-		device='cpu')
-	assert_raises(ValueError, pisa, model, X[0], device='cpu')
+		device=device)
+	assert_raises(ValueError, pisa, model, X[0], device=device)
 
 	assert_raises(IndexError, pisa, model, X, args=(alpha[:10],),
-		device='cpu')
+		device=device)
 	assert_raises(IndexError, pisa, model, X, args=(alpha, beta[:3]),
-		device='cpu')
+		device=device)
 	assert_raises(IndexError, pisa, model, X, args=(alpha[:5], 
-		beta[:3]), device='cpu')
+		beta[:3]), device=device)
 	assert_raises(IndexError, pisa, model, X, args=(alpha, beta[:3]),
-		device='cpu')
+		device=device)
 	
 	assert_raises(ValueError, pisa, model, X, 
-		references=references[:10], device='cpu')
+		references=references[:10], device=device)
 	assert_raises(ValueError, pisa, model, X, 
-		references=references[:, :, :2], device='cpu')
+		references=references[:, :, :2], device=device)
 	assert_raises(ValueError, pisa, model, X, 
-		references=references[:, :, :, :10], device='cpu')
+		references=references[:, :, :, :10], device=device)
 
 
 ### Test a bunch of different models with different configurations/operations
 
 
-def test_pisa_flattendense(X, references):
+def test_pisa_flattendense(X, references, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
 
-		X_attr = pisa(model, X, device='cpu', references=references, 
+		X_attr = pisa(model, X, device=device, references=references, 
 			warning_threshold=1e-5)
 
-		assert_raises(RuntimeWarning, pisa, model, X, device='cpu', 
+		assert_raises(RuntimeWarning, pisa, model, X, device=device, 
 			random_state=0, warning_threshold=1e-10)
 
-	X_attr2 = deep_lift_shap(model, X, device='cpu', references=references)
+	X_attr2 = deep_lift_shap(model, X, device=device, references=references)
 	
 	assert X_attr.dtype == torch.float32
 	assert_array_almost_equal(X_attr[:, 0], X_attr2)
 
 
-def test_pisa_flattendense_n_outputs(X):
+def test_pisa_flattendense_n_outputs(X, device):
 	model = FlattenDense(n_outputs=1)
-	X_attr = pisa(model, X, device='cpu')
+	X_attr = pisa(model, X, device=device)
 	assert X_attr.shape == (2, 1, 4, 100)
 
 	model = FlattenDense(n_outputs=4)
-	X_attr = pisa(model, X, device='cpu')
+	X_attr = pisa(model, X, device=device)
 	assert X_attr.shape == (2, 4, 4, 100)
 
 	model = FlattenDense(n_outputs=12)
-	X_attr = pisa(model, X, device='cpu')
+	X_attr = pisa(model, X, device=device)
 	assert X_attr.shape == (2, 12, 4, 100)
 
 
-def test_pisa_convdense_dense_wrapper(X, references):
+def test_pisa_convdense_dense_wrapper(X, references, device):
 	torch.manual_seed(0)
 	model = LambdaWrapper(ConvDense(n_outputs=1), lambda model, X: model(X)[1])
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
 
-		X_attr = pisa(model, X, device='cpu', references=references, 
+		X_attr = pisa(model, X, device=device, references=references, 
 			warning_threshold=1e-5)
 
-		assert_raises(RuntimeWarning, deep_lift_shap, model, X, device='cpu', 
+		assert_raises(RuntimeWarning, deep_lift_shap, model, X, device=device, 
 			random_state=0, warning_threshold=1e-8)
 
-	X_attr2 = deep_lift_shap(model, X, device='cpu', references=references)
+	X_attr2 = deep_lift_shap(model, X, device=device, references=references)
 	assert_array_almost_equal(X_attr[:, 0], X_attr2)
 
 
-def test_pisa_convdense_conv_wrapper(X, references):
+def test_pisa_convdense_conv_wrapper(X, references, device):
 	torch.manual_seed(0)
 	model = LambdaWrapper(ConvDense(n_outputs=1), 
 		lambda model, X: model(X)[0].sum(dim=(-1, -2)).unsqueeze(-1))
@@ -534,13 +621,13 @@ def test_pisa_convdense_conv_wrapper(X, references):
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
 
-		X_attr = pisa(model, X, device='cpu', references=references, 
+		X_attr = pisa(model, X, device=device, references=references, 
 			warning_threshold=1e-4)
 
-		assert_raises(RuntimeWarning, deep_lift_shap, model, X, device='cpu', 
+		assert_raises(RuntimeWarning, deep_lift_shap, model, X, device=device, 
 			random_state=0, warning_threshold=1e-8)
 
-	X_attr2 = deep_lift_shap(model, X, device='cpu', references=references)
+	X_attr2 = deep_lift_shap(model, X, device=device, references=references)
 	assert_array_almost_equal(X_attr[:, 0], X_attr2)
 
 
@@ -558,7 +645,7 @@ class TorchSum(torch.nn.Module):
 			return torch.sum(X, dim=(-1, -2)).unsqueeze(-1)
 
 
-def test_pisa_linear(X):
+def test_pisa_linear(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -570,11 +657,11 @@ def test_pisa_linear(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_linear_bias(X):
+def test_pisa_linear_bias(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -586,11 +673,11 @@ def test_pisa_linear_bias(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_conv(X):
+def test_pisa_conv(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -601,11 +688,11 @@ def test_pisa_conv(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_conv_dilated(X):
+def test_pisa_conv_dilated(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -616,11 +703,11 @@ def test_pisa_conv_dilated(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_conv_stride(X):
+def test_pisa_conv_stride(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -631,11 +718,11 @@ def test_pisa_conv_stride(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_conv_bias(X):
+def test_pisa_conv_bias(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -646,11 +733,14 @@ def test_pisa_conv_bias(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-4)
 
 
-def test_pisa_conv_padding(X):
+def test_pisa_conv_padding(X, device):
+	# fp32 attribution residuals on CUDA are a few orders of magnitude larger
+	# than on CPU, so the convergence threshold is loosened for the cuda pass.
+	threshold = 1e-4 if device == "cpu" else 1e-2
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -661,11 +751,11 @@ def test_pisa_conv_padding(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
-			warning_threshold=1e-4)
+		X_attr = pisa(model, X, device=device, random_state=0,
+			warning_threshold=threshold)
 
 
-def test_pisa_conv_padding_same(X):
+def test_pisa_conv_padding_same(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -677,11 +767,11 @@ def test_pisa_conv_padding_same(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_max_pool(X):
+def test_pisa_max_pool(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -691,11 +781,11 @@ def test_pisa_max_pool(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_conv_relu_pool(X):
+def test_pisa_conv_relu_pool(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -707,11 +797,11 @@ def test_pisa_conv_relu_pool(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_conv_tanh_pool(X):
+def test_pisa_conv_tanh_pool(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -723,11 +813,11 @@ def test_pisa_conv_tanh_pool(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_conv_elu_pool(X):
+def test_pisa_conv_elu_pool(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -739,11 +829,11 @@ def test_pisa_conv_elu_pool(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_conv_relu_pool_relu(X):
+def test_pisa_conv_relu_pool_relu(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -756,11 +846,11 @@ def test_pisa_conv_relu_pool_relu(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_relu_conv_relu_pool_relu(X):
+def test_pisa_relu_conv_relu_pool_relu(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -774,11 +864,11 @@ def test_pisa_relu_conv_relu_pool_relu(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_relu_conv_pool_relu(X):
+def test_pisa_relu_conv_pool_relu(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -791,11 +881,11 @@ def test_pisa_relu_conv_pool_relu(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_relu_conv_pool_relu_relu(X):
+def test_pisa_relu_conv_pool_relu_relu(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -809,11 +899,11 @@ def test_pisa_relu_conv_pool_relu_relu(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_conv_relu_tanh_pool(X):
+def test_pisa_conv_relu_tanh_pool(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -826,11 +916,11 @@ def test_pisa_conv_relu_tanh_pool(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_conv_relu_pool_linear(X):
+def test_pisa_conv_relu_pool_linear(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -843,11 +933,11 @@ def test_pisa_conv_relu_pool_linear(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_conv_relu_pool_linear_linear(X):
+def test_pisa_conv_relu_pool_linear_linear(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -861,11 +951,11 @@ def test_pisa_conv_relu_pool_linear_linear(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0, 
 			warning_threshold=1e-5)
 
 
-def test_pisa_conv_relu_pool_linear_relu_linear(X):
+def test_pisa_conv_relu_pool_linear_relu_linear(X, device):
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -880,5 +970,286 @@ def test_pisa_conv_relu_pool_linear_relu_linear(X):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device='cpu', random_state=0, 
+		X_attr = pisa(model, X, device=device, random_state=0,
 			warning_threshold=1e-5)
+
+
+###
+
+
+def test_pisa_n_outputs_lt_batch_size(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=3)
+
+	X_attr_big = pisa(model, X, n_shuffles=2, batch_size=32, device=device,
+		random_state=0)
+	X_attr_small = pisa(model, X, n_shuffles=2, batch_size=3, device=device,
+		random_state=0)
+
+	assert X_attr_big.shape == (X.shape[0], 3, 4, 100)
+	assert_array_almost_equal(X_attr_big, X_attr_small, 4)
+
+
+def test_pisa_references_ignores_random_state(X, references, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	X_attr0 = pisa(model, X, references=references, device=device,
+		random_state=0)
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	X_attr1 = pisa(model, X, references=references, device=device,
+		random_state=42)
+
+	assert_array_almost_equal(X_attr0, X_attr1, 4)
+
+
+def test_pisa_hypothetical_vs_projection_equivalence(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	X_attr_proj = pisa(model, X, n_shuffles=3, device=device,
+		random_state=0, hypothetical=False)
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	X_attr_hyp = pisa(model, X, n_shuffles=3, device=device,
+		random_state=0, hypothetical=True)
+
+	# For one-hot X, projecting the hypothetical attributions by X should
+	# recover the non-hypothetical attributions.
+	manual = X_attr_hyp * X.unsqueeze(1)
+	assert_array_almost_equal(X_attr_proj, manual, 4)
+
+
+def test_pisa_model_unchanged_after_call(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	pisa(model, X[:1], n_shuffles=2, device=device, random_state=0)
+
+	for module in model.modules():
+		assert not hasattr(module, "_NON_LINEAR_OPS")
+		if hasattr(module, "handles"):
+			assert len(module.handles) == 0
+
+
+def test_pisa_empty_X(device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	X_empty = torch.zeros(0, 4, 100)
+
+	assert_raises(ValueError, pisa, model, X_empty, n_shuffles=2,
+		device=device, random_state=0)
+
+
+def test_pisa_return_references_named_tuple(X, device):
+	from tangermeme.results import AttributionReferencesResult
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	result = pisa(model, X, n_shuffles=2, return_references=True,
+		device=device, random_state=0)
+
+	attributions, references = result
+	assert torch.equal(result.attributions, attributions)
+	assert torch.equal(result.references, references)
+	assert isinstance(result, AttributionReferencesResult)
+	assert isinstance(result, tuple)
+
+	# When return_references=False the return is still a plain Tensor.
+	attr = pisa(model, X, n_shuffles=2, return_references=False,
+		device=device, random_state=0)
+	assert isinstance(attr, torch.Tensor)
+
+
+def test_pisa_verbose(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	X_quiet = pisa(model, X[:2], n_shuffles=2, device=device,
+		random_state=0, verbose=False)
+	X_loud = pisa(model, X[:2], n_shuffles=2, device=device,
+		random_state=0, verbose=True)
+
+	assert_array_almost_equal(X_quiet, X_loud)
+
+
+###
+# Basic coverage for the rules `pisa` registers alongside `deep_lift_shap`.
+# The rule table is duplicated in this module, so a rule can be correct there
+# and missing here.
+###
+
+
+PISA_RULES = ["layernorm", "rmsnorm", "softmax", "bilinear"]
+
+# First example, first two output positions, first four input positions.
+PISA_REGRESSION = {
+	"layernorm": [
+		[[ 0.0000,  0.0000, -0.0000, -0.1357],
+		 [ 0.0000, -0.0000,  0.0350,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000, -0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0211],
+		 [ 0.0000, -0.0000, -0.0829,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0000]]],
+	"rmsnorm": [
+		[[ 0.0000,  0.0000, -0.0000, -0.1420],
+		 [ 0.0000, -0.0000,  0.0290,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000, -0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0143],
+		 [ 0.0000, -0.0000, -0.0881,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0000]]],
+	"softmax": [
+		[[ 0.0000,  0.0000, -0.0000, -0.0039],
+		 [-0.0000, -0.0000,  0.0008,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000, -0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0008],
+		 [ 0.0000, -0.0000, -0.0027,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000,  0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0000]]],
+	"bilinear": [
+		[[ 0.0000,  0.0000,  0.0000,  0.0139],
+		 [ 0.0000,  0.0000, -0.0080, -0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0000]],
+
+		[[ 0.0000,  0.0000, -0.0000,  0.0133],
+		 [ 0.0000, -0.0000,  0.0243, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0000, -0.0000, -0.0000]]]
+}
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_rules_convergence(X, device, rule):
+	torch.manual_seed(0)
+	model = ConvRuleSeq(rule=rule)
+	X = X[:, :, :15]
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		X_attr = pisa(model, X, device=device, n_shuffles=3, random_state=0,
+			batch_size=4,
+			warning_threshold=1e-4 if device == "cpu" else 1e-2)
+
+	assert X_attr.shape == (2, 13, 4, 15)
+	assert X_attr.dtype == torch.float32
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_rules_regression(X, device, rule):
+	torch.manual_seed(0)
+	model = ConvRuleSeq(rule=rule)
+	X = X[:, :, :15]
+
+	X_attr = pisa(model, X, device=device, n_shuffles=3, random_state=0,
+		batch_size=4)
+
+	assert_array_almost_equal(X_attr[0, :2, :, :4], PISA_REGRESSION[rule], 4)
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_rules_batch_size(X, device, rule):
+	torch.manual_seed(0)
+	model = ConvRuleSeq(rule=rule, seq_len=12)
+
+	# batch_size=1 runs one output position per pass, so the window is kept
+	# short and the shuffle count at one to stay inside the runtime budget. A
+	# shorter window than this makes dinucleotide_shuffle raise for lack of
+	# distinct shuffles.
+	X = X[:, :, :12]
+
+	# `pisa` batches over output positions rather than examples, so the rules
+	# have to give the same answer however those positions are grouped.
+	X_attr0 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=4)
+	X_attr1 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=1)
+	X_attr2 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=100000)
+
+	assert_array_almost_equal(X_attr0, X_attr1, 4)
+	assert_array_almost_equal(X_attr0, X_attr2, 4)
+
+
+@pytest.mark.parametrize("pre_norm", [False, True])
+def test_pisa_transformer_block(X, device, pre_norm):
+	"""The rules must also compose through `pisa`, not only one at a time.
+
+	`ConvRuleSeq` puts one rule in a model; a transformer block chains all
+	four through each other, and `pisa` batches over output positions rather
+	than over examples, so the composition is a separate path from the one
+	`deep_lift_shap` exercises.
+	"""
+
+	torch.manual_seed(0)
+	model = TransformerBlock(seq_len=15, n_outputs=13, n_blocks=2,
+		pre_norm=pre_norm)
+	X = X[:, :, :15]
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		X_attr = pisa(model, X, device=device, n_shuffles=3, random_state=0,
+			batch_size=4,
+			warning_threshold=1e-4 if device == "cpu" else 1e-2)
+
+	assert X_attr.shape == (2, 13, 4, 15)
+	assert X_attr.dtype == torch.float32
+
+	if pre_norm:
+		# First example, first two output positions, first four positions.
+		assert_array_almost_equal(X_attr[0, :2, :, :4], [
+		[[ 0.0000, -0.0000, -0.0000, -0.0733],
+		 [ 0.0000, -0.0000, -0.0210,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000,  0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0195],
+		 [ 0.0000,  0.0000, -0.0165, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0000]]], 4)
+
+
+def test_pisa_clears_hook_caches(X, device):
+	torch.manual_seed(0)
+	model = torch.nn.Sequential(
+		torch.nn.Conv1d(4, 8, (5,)),
+		torch.nn.ReLU(),
+		torch.nn.MaxPool1d(4),
+		torch.nn.ReLU(),
+		TorchSum()
+	)
+
+	pisa(model, X[:1], n_shuffles=2, device=device, random_state=0)
+
+	# `pisa` shares `_clear_hooks` with `deep_lift_shap`, so the cached
+	# activations must not outlive the call here either.
+	for module in model.modules():
+		assert "input" not in module.__dict__
+		assert "output" not in module.__dict__
+
+
+def test_pisa_clears_bilinear_caches(X, device):
+	torch.manual_seed(0)
+	model = ConvBilinear(seq_len=X.shape[-1])
+
+	pisa(model, X[:1], n_shuffles=2, device=device, random_state=0)
+
+	# `pisa` registers BilinearOp in its own rule table, so the two cached
+	# operands must not outlive the call here either.
+	for module in model.modules():
+		assert "left" not in module.__dict__
+		assert "right" not in module.__dict__

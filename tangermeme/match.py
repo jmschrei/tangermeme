@@ -7,6 +7,8 @@ Provides functions for the calculation of GC-content genome-wide and the
 sampling of GC-matched negatives.
 """
 
+from __future__ import annotations
+
 import numpy
 import pandas
 import pyfaidx
@@ -44,7 +46,7 @@ def _loci_coords_generator(loci_df, width = None):
 	return g if width is None else _resize_coords_generator(g, width)
 
 def _valid_locus(chrom, start, end, chrom_sizes):
-	"""Returns a bool telling whehter the specificed locus is valid, i.e the `chrom`
+	"""Returns a bool telling whether the specified locus is valid, i.e., the `chrom`
 	is found in the `chrom_sizes` dictionary and `start` and `end` are within bounds."""
 	return (chrom in chrom_sizes) and (start >= 0) and (end <= chrom_sizes[chrom])
 
@@ -101,7 +103,7 @@ def _extract_counts(chrom, start, end, bw_stream):
 	try:
 		value = bw_stream.values(chrom, start, end, bins=1, summary="sum", exact=True)[0]
 		return value if value is not None else 0
-	except:
+	except (RuntimeError, ValueError, KeyError, IndexError):
 		return float('nan')
 
 def _count_generator(coords, bw_stream, buffer = False):
@@ -135,7 +137,7 @@ def _count_generator_buffered(coords, bw_stream):
 			buffer_chrom = chrom
 			try:
 				buffer_signal = bw_stream.values(chrom, 0, None)
-			except:
+			except (RuntimeError, ValueError, KeyError):
 				buffer_signal = None
 		if buffer_signal is not None:
 			yield numpy.nansum(buffer_signal[start:end]).item()
@@ -174,7 +176,7 @@ def _char_perc_from_coords(fasta, coords, chars, num_regions=-1, buffer=False, v
 		Should only be set to true if there are many regions
 		on the same chromosome, such as when calculating GC content for
 		an entire chromosome. It is not recommend to use buffering if
-		calculating char pecentages for only peak regions, but if done
+		calculating char percentages for only peak regions, but if done
 		anyway for some reason, the peaks should be sorted by chromosome.
 		If set to false, will instead only load the sequence for a single
 		region at a time into memory. Default is False.
@@ -197,17 +199,16 @@ def _char_perc_from_coords(fasta, coords, chars, num_regions=-1, buffer=False, v
 	return perc
 
 def _counts_from_coords(bigwig, coords, num_regions=-1, buffer=False, verbose=False):
-	"""An internal function returning the percentage of `chars` for each sequence
-	with `coords` extracted from the `fasta` file.
+	"""An internal function returning the summed signal in each region of `coords`
+	extracted from the `bigwig` file.
 
-	This method will take in a `fasta` file and return the percentage of `chars`
-	in the sequences extracted from the fasta file and defined by the list of `coords`.
-	This is usually used to calculate GC percentage but can also be used to calculate
-	the percentage of N's.
+	This method will take in a `bigwig` file and return the summed signal in
+	each region defined by `coords`. If signal cannot be extracted from a
+	region, NaN is returned for that region.
 
 	Parameters
 	----------
-	fasta: str
+	bigwig: str
 		The path to a bigwig file to extract counts from.
 
 	coords: list, tuple or generator of such
@@ -368,9 +369,20 @@ def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 	return gc_perc
 
 
-def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000, 
-	max_n_perc=0.1, gc_bin_width=0.02, bigwig=None, signal_beta=0.5, 
-	chroms=None, random_state=None, n_jobs=1, verbose=False):
+def extract_matching_loci(
+	loci: str | pandas.DataFrame,
+	fasta: str,
+	in_window: int = 2114,
+	out_window: int = 1000,
+	max_n_perc: float = 0.1,
+	gc_bin_width: float = 0.02,
+	bigwig: str | None = None,
+	signal_beta: float = 0.5,
+	chroms: list[str] | None = None,
+	random_state: int | numpy.random.RandomState | None = None,
+	n_jobs: int = 1,
+	verbose: bool = False,
+) -> pandas.DataFrame:
 	"""Extract matching loci given a fasta file.
 
 	This function takes in a set of loci (a bed file or a pandas dataframe in
@@ -390,7 +402,10 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 	Parameters
 	----------
 	loci: str or pandas dataframe
-		A filepath to a bed file, or a pandas dataframe in bed format.
+		A filepath to a bed file, or a pandas dataframe in bed format. The
+		first three columns are taken as the chrom, start, and end regardless
+		of what they are named, and the chromosome column is coerced to a
+		string so that it matches the record names used by the FASTA.
 
 	fasta: str
 		The filepath to the FASTA file to extract sequences from.
@@ -416,15 +431,18 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 		from this bigwig. If None, do not filter based on signal strength.
 		Default is None.
 
-	signal_beta: float or None, optional
+	signal_beta: float, optional
 		A multiplier of the robust minimum signal calculated from `loci` that
-		each background region must have fewer reads then. Only relevant if a
-		bigwig is passed in. Default is 0.5.
+		each background region must have fewer reads than. Only relevant if a
+		bigwig is passed in. Must be a number when `bigwig` is set (the code
+		computes `robust_min * signal_beta`); passing `None` together with a
+		`bigwig` raises a `TypeError`. Default is 0.5.
 
 	chroms: list, tuple, or None, optional
-		A set of chromosomes to use when choosing matching loci. If None, only
-		use chromosomes that the loci themselves are drawn from. Default is
-		None.
+		A set of chromosomes to use when choosing matching loci. Entries are
+		coerced to strings, so `[1, 2]` and `['1', '2']` are equivalent.
+		If None, only use chromosomes that the loci themselves are drawn from.
+		Default is None.
 
 	random_state: numpy.random.RandomState, int or None, optional
 		A random state to use for sampling loci. If a RandomState object or
@@ -432,8 +450,8 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 		will be different each time. Default is None.
 
 	n_jobs: integer, optional
-		Number of parallel processes to use for extracting background gc content.
-		-1 means use all available CPUs. Default is -1.
+		Number of parallel processes to use for extracting background GC content.
+		-1 means use all available CPUs. Default is 1.
 
 	verbose: bool, optional
 		Whether to print display bars and diagnostics to ensure that the
@@ -453,11 +471,21 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 	if not isinstance(random_state, numpy.random.RandomState):
 		random_state = numpy.random.RandomState(random_state)
 
+	names = ['chrom', 'start', 'end']
 	if isinstance(loci, str):
 		loci = pandas.read_csv(loci, sep='\t', usecols=[0, 1, 2], header=None,
-			index_col=False, names=['chrom', 'start', 'end'])
+			index_col=False, names=names)
+	else:
+		loci = loci.iloc[:, [0, 1, 2]].copy()
+		loci.columns = names
+
+	# Chromosome names must be strings so that they match the names used by
+	# pyfaidx/pybigtools. Otherwise, genomes whose chromosomes are named "1",
+	# "2", etc. get read in as integers by pandas and fail to match.
+	loci['chrom'] = loci['chrom'].astype(str)
 
 	if chroms is not None:
+		chroms = [str(chrom) for chrom in chroms]
 		loci = loci[numpy.isin(loci['chrom'], chroms)]
 	else:
 		chroms = numpy.unique(loci['chrom'])
@@ -556,7 +584,7 @@ def extract_matching_loci(loci, fasta, in_window=2114, out_window=1000,
 				break
 
 			idx = i - offset
-			if idx > 0:
+			if idx >= 0:
 				count = min(bg_bin_count[idx], loci_bin_count[i])
 				bg_bin_count[idx] -= count
 				loci_bin_count[i] -= count

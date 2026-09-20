@@ -1,21 +1,48 @@
 # utils.py
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 
+from __future__ import annotations
+
+import random
+import warnings
+from typing import Any
+
 import numpy
 import numba
+import pandas
 import torch
 
 from tqdm import tqdm
 
 
-def _warn_or_raise(error, message, only_warn):
+class TangermemeWarning(UserWarning):
+	"""A category for warnings emitted by tangermeme so callers can filter on
+	`tangermeme.utils.TangermemeWarning` specifically (e.g. via
+	`warnings.simplefilter('error', TangermemeWarning)`)."""
+
+
+def _warn_or_raise(
+	error: type[Exception],
+	message: str,
+	only_warn: bool,
+) -> None:
 	if only_warn:
-		print("Warning: {}".format(message))
+		warnings.warn(message, TangermemeWarning, stacklevel=3)
 	else:
 		raise error(message)
 
-def _validate_input(X, name, shape=None, dtype=None, min_value=None,
-	max_value=None, ohe=False, ohe_dim=1, allow_N=False, only_warn=False):
+def _validate_input(
+	X: torch.Tensor,
+	name: str,
+	shape: tuple[int, ...] | None = None,
+	dtype: torch.dtype | None = None,
+	min_value: float | None = None,
+	max_value: float | None = None,
+	ohe: bool = False,
+	ohe_dim: int = 1,
+	allow_N: bool = False,
+	only_warn: bool = False,
+) -> torch.Tensor:
 	"""An internal function for validating properties of the input.
 	
 	This function will take in an object and verify characteristics of it, such
@@ -51,7 +78,11 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 	ohe: bool, optional
 		Whether the input must be a one-hot encoding, i.e., only consist of
 		zeroes and ones. Default is False.
-	
+
+	ohe_dim: int, optional
+		When `ohe=True`, the axis along which the one-hot encoding should sum
+		to 1 (or, with `allow_N=True`, sum to at most 1). Default is 1.
+
 	allow_N: bool, optional
 		Whether to allow the return of the character 'N' in the sequence, i.e.
 		if pwm at a position is all 0's return N. Default is False.
@@ -92,32 +123,66 @@ def _validate_input(X, name, shape=None, dtype=None, min_value=None,
 			name, min_value), only_warn)
 	
 	if max_value is not None and X.max() > max_value:
-		raise ValueError("{} cannot have a value above {}".format(name,
-			max_value), only_warn)
+		_warn_or_raise(ValueError, "{} cannot have a value above {}".format(
+			name, max_value), only_warn)
 	
 	if ohe:
 		values = torch.unique(X)
 		msg = "{} must be one-hot encoded.".format(name)
-		
-		if len(values) != 2:
+
+		# Values must be a subset of {0, 1}. Previously this enforced
+		# `len(unique) == 2`, which incorrectly rejected all-zero
+		# (all-N) inputs that contain only the value 0.
+		if not torch.all((values == 0) | (values == 1)):
 			_warn_or_raise(ValueError, msg, only_warn)
-	
-		if not all(values == torch.tensor([0, 1], device=X.device)):
-			_warn_or_raise(ValueError, msg, only_warn)
-	
+
 		if allow_N:
 			if not torch.all(torch.sum(X, axis=ohe_dim) <= 1):
-				_warn_or_raise(ValueError, msg + "and contain unknown" \
+				_warn_or_raise(ValueError, msg + " and contain unknown"
 					" characters as all-zeroes.", only_warn)
 		else:
 			if not torch.all(X.sum(axis=ohe_dim) == 1):
-				_warn_or_raise(ValueError, msg + "and cannot have unknown" \
-					" characters.", only_warn)			
-	
+				_warn_or_raise(ValueError, msg + " and cannot have unknown"
+					" characters.", only_warn)
+
 	return X
 
 
-def _cast_as_tensor(value, dtype=None):
+def validate_input(
+	X: torch.Tensor,
+	name: str = "input",
+	shape: tuple[int, ...] | None = None,
+	dtype: torch.dtype | None = None,
+	min_value: float | None = None,
+	max_value: float | None = None,
+	ohe: bool = False,
+	ohe_dim: int = 1,
+	allow_N: bool = False,
+	only_warn: bool = False,
+) -> torch.Tensor:
+	"""Public wrapper around the input-validation routine.
+
+	Forwards every argument to `_validate_input`. Use this when you want to
+	pre-flight your own tensor against the same shape / dtype / one-hot /
+	value-range checks the library applies internally; with `only_warn=True`
+	you can get a non-raising mode that emits a `TangermemeWarning` instead.
+
+	The underscored `_validate_input` is retained as an alias for backward
+	compatibility with code (including tests and tutorials) that already
+	imports it.
+	"""
+
+	return _validate_input(
+		X, name, shape=shape, dtype=dtype, min_value=min_value,
+		max_value=max_value, ohe=ohe, ohe_dim=ohe_dim, allow_N=allow_N,
+		only_warn=only_warn,
+	)
+
+
+def _cast_as_tensor(
+	value: Any,
+	dtype: torch.dtype | None = None,
+) -> torch.Tensor | None:
 	"""Cast your input as a torch tensor.
 
 	This function will take some array-like input and cast it as a torch
@@ -165,7 +230,12 @@ def _cast_as_tensor(value, dtype=None):
 			return torch.tensor(value, dtype=dtype)
 
 
-def example_to_fasta_coords(example_df, loci_df, window=None, one_indexed=False):
+def example_to_fasta_coords(
+	example_df: pandas.DataFrame,
+	loci_df: pandas.DataFrame,
+	window: int | None = None,
+	one_indexed: bool = False,
+) -> pandas.DataFrame:
 	"""Converts coordinates within a given example to those in a FASTA file.
 	
 	Many analyses involve extracting windows from the genome and processing them
@@ -265,7 +335,12 @@ def example_to_fasta_coords(example_df, loci_df, window=None, one_indexed=False)
 	return coords_df
 
 
-def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False, allow_N=False):
+def characters(
+	pwm: torch.Tensor | numpy.ndarray,
+	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
+	force: bool = False,
+	allow_N: bool = False,
+) -> str:
 	"""Converts a PWM/one-hot encoding to a string sequence.
 
 	This function takes in a PWM or one-hot encoding and converts it to the
@@ -287,7 +362,7 @@ def characters(pwm, alphabet=['A', 'C', 'G', 'T'], force=False, allow_N=False):
 
 	force: bool, optional
 		Whether to force a sequence to be produced even when there are ties.
-		At each position that there is a tight, the character earlier in the
+		At each position that there is a tie, the character earlier in the
 		sequence will be used. Default is False.
   
 	allow_N: bool, optional
@@ -349,8 +424,15 @@ def _fast_one_hot_encode(X_ohe, seq, mapping):
 		X_ohe[i, idx] = 1
 
 
-def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype=torch.int8, 
-	ignore=['N'], desc=None, verbose=False, **kwargs):
+def one_hot_encode(
+	sequence: str | list[str],
+	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
+	dtype: str | torch.dtype = torch.int8,
+	ignore: list[str] = ['N'],
+	desc: str | None = None,
+	verbose: bool = False,
+	**kwargs: Any,
+) -> torch.Tensor:
 	"""Converts a string or list of characters into a one-hot encoding.
 
 	This function will take in either a string or a list and convert it into a
@@ -386,8 +468,8 @@ def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype=torch.int8,
 
 	Returns
 	-------
-	ohe : numpy.ndarray
-		A binary matrix of shape (alphabet_size, sequence_length) where
+	ohe : torch.Tensor
+		A binary tensor of shape (alphabet_size, sequence_length) where
 		alphabet_size is the number of unique elements in the sequence and
 		sequence_length is the length of the input sequence.
 	"""
@@ -422,8 +504,11 @@ def one_hot_encode(sequence, alphabet=['A', 'C', 'G', 'T'], dtype=torch.int8,
 	return torch.from_numpy(one_hot_encoding).type(dtype).T
 
 
-def reverse_complement(seq, complement_map={"A": "T", "C": "G", "G": "C", 
-	"T": "A"}, allow_N=True):
+def reverse_complement(
+	seq: str | torch.Tensor,
+	complement_map: dict[str, str] = {"A": "T", "C": "G", "G": "C", "T": "A"},
+	allow_N: bool = True,
+) -> str | torch.Tensor:
 	"""Return the reverse complement of a single sequence.
 
 	This function will take in a single one-hot encoding of a sequence, or a
@@ -455,7 +540,17 @@ def reverse_complement(seq, complement_map={"A": "T", "C": "G", "G": "C",
 	Returns
 	-------
 	rev_comp: str or torch.Tensor w/ shape (alphabet_size, length)
-		The reverse complemented string or 
+		The reverse complemented string or tensor, matching the type of `seq`.
+
+	Notes
+	-----
+	The tensor path is 2-D only (shape `(alphabet_size, length)`). Passing a
+	batched tensor with shape `(N, A, L)` is NOT rejected but produces silently
+	wrong output: `torch.flip(..., dims=(-1,))` flips the last axis as
+	intended, but the subsequent `[idxs]` indexing permutes the *first* axis,
+	which on a batched input is the batch dimension instead of the alphabet
+	axis. Iterate over the batch (or unsqueeze and call once per row) until a
+	proper batched path is added.
 	"""
 
 	if isinstance(seq, str):
@@ -481,12 +576,17 @@ def reverse_complement(seq, complement_map={"A": "T", "C": "G", "G": "C",
 	return seq_rc
 
 
-def random_one_hot(shape, probs=None, dtype='int8', random_state=None):
+def random_one_hot(
+	shape: tuple[int, int, int],
+	probs: list | tuple | numpy.ndarray | None = None,
+	dtype: str | numpy.dtype = 'int8',
+	random_state: int | numpy.random.RandomState | None = None,
+) -> torch.Tensor:
 	"""Generate random one-hot encodings. Useful for debugging.
 
 	This function will generate random one-hot encodings where the second to
 	last dimension has a single element being a one and every other element
-	being a zero. Primary used for debugging. 
+	being a zero. Primarily used for debugging.
 
 
 	Parameters
@@ -497,12 +597,12 @@ def random_one_hot(shape, probs=None, dtype='int8', random_state=None):
 	probs: tuple, list, numpy.ndarray, or None optional
 		A 2D array of probabilities where the first dimension is the batch size
 		equal to the batch size of `X` and the second dimension is the alphabet
-		size. The values should be the probability of that character occuring
+		size. The values should be the probability of that character occurring
 		in that sequence. If a batch size of 1 is used when the batch size of
 		X is greater than 1, the same probabilities are used for each sequence.
 		The sum of probabilities across the alphabet axis must be equal to 1.
 		If None, use a uniform distribution across the axis specified in shape.
-		Default is [[0.25, 0.25, 0.25, 0.25]].
+		Default is None.
 
 	dtype: str or numpy.dtype, optional
 		The datatype to return the matrix as. Default is 'int8'.
@@ -546,7 +646,11 @@ def random_one_hot(shape, probs=None, dtype='int8', random_state=None):
 	return torch.from_numpy(ohe)
 
 
-def chunk(X, size=1024, overlap=0):
+def chunk(
+	X: list[torch.Tensor],
+	size: int = 1024,
+	overlap: int = 0,
+) -> torch.Tensor:
 	"""Chunk a set of sequences into overlapping blocks.
 
 	This function will take a set of sequences of variable length and will
@@ -595,7 +699,11 @@ def chunk(X, size=1024, overlap=0):
 		for x in X], dim=0)
 
 
-def unchunk(X, lengths=None, overlap=0):
+def unchunk(
+	X: list | numpy.ndarray | torch.Tensor,
+	lengths: list | numpy.ndarray | torch.Tensor | None = None,
+	overlap: int = 0,
+) -> list[torch.Tensor]:
 	"""Unchunk fixed-length segments back into variable-length sequences.
 
 	After chunking a set of variable length sequences into fixed-length chunks
@@ -608,11 +716,11 @@ def unchunk(X, lengths=None, overlap=0):
 	The overlap value should be the same as when the sequence was chunked, and
 	should correspond to the number of positions that are shared across adjacent
 	examples. When overlap is set to a value greater than 0, half of the overlap
-	goes to the elements as follows:
+	goes to the elements as follows::
 
 		<------------*    |
-				  overlap 
-				|    *-----------> 
+		                overlap
+		                |    *----------->
 
 
 	Parameters
@@ -621,11 +729,13 @@ def unchunk(X, lengths=None, overlap=0):
 		A set of fixed-length tensors for any number of outputs. Usually the
 		result of applying `chunk` and then some form of model.
 
-	lengths: list or numpy.ndarray or torch.tensor, shape=(-1,) or None
+	lengths: list or numpy.ndarray or torch.tensor, shape=(-1,)
 		The *original lengths* of the elements that were chunked. This is not
 		the number of chunks produced, which will be influenced by the overlap,
-		but the actual length in bp of the original sequences. If None, assume
-		that all chunks in `X` come from a single variable-length sequence.
+		but the actual length in bp of the original sequences. Note: the
+		signature also lists `None` as the type, but the current
+		implementation calls `_validate_input(_cast_as_tensor(lengths), ...)`
+		which rejects `None`; a length tensor must be provided in practice.
 		Default is None.
 
 	overlap: int, optional
@@ -676,7 +786,7 @@ def unchunk(X, lengths=None, overlap=0):
 	return y
 	
 
-def pwm_consensus(X):
+def pwm_consensus(X: torch.Tensor | numpy.ndarray) -> torch.Tensor:
 	"""Take in a PWM and return the consensus.
 
 	This function will take in a PWM that encodes the probabilities of each
@@ -712,7 +822,11 @@ def pwm_consensus(X):
 	return Y
 
 
-def extract_signal(loci, X, verbose=False):
+def extract_signal(
+	loci: pandas.DataFrame,
+	X: torch.Tensor | numpy.ndarray,
+	verbose: bool = False,
+) -> torch.Tensor:
 	"""Extracts the signal at coordinates from a tensor of examples.
 
 	This function takes in a dataframe with the first three columns being the
@@ -755,3 +869,148 @@ def extract_signal(loci, X, verbose=False):
 		Y[i] = X[idx, :, start:end].sum(dim=-1)
 
 	return Y
+
+
+def set_seed(seed: int) -> None:
+	"""Seed every RNG that tangermeme code paths might touch.
+
+	Calls `random.seed`, `numpy.random.seed`, `torch.manual_seed`, and
+	`torch.cuda.manual_seed_all`. This is a convenience for the common
+	case where a notebook or script wants "one seed for everything";
+	functions that accept a `random_state=` keyword still take precedence
+	when one is provided.
+
+	Parameters
+	----------
+	seed: int
+		The seed to use for all RNGs.
+	"""
+
+	random.seed(seed)
+	numpy.random.seed(seed)
+	torch.manual_seed(seed)
+	if torch.cuda.is_available():
+		torch.cuda.manual_seed_all(seed)
+
+
+def gc_content(
+	X: torch.Tensor,
+	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
+) -> torch.Tensor:
+	"""Compute the GC content of one-hot encoded sequences.
+
+	The GC content is the fraction of positions whose character is either
+	G or C. Positions that are all-N (sum == 0 along the alphabet axis)
+	are excluded from both numerator and denominator. If a sequence has
+	zero non-N positions its GC content is reported as 0.
+
+	Parameters
+	----------
+	X: torch.Tensor, shape=(-1, len(alphabet), length)
+		A one-hot encoded set of sequences.
+
+	alphabet: list[str] or tuple[str, ...], optional
+		The alphabet whose ordering matches `X`'s second axis. Used only
+		to locate G and C; the rest of the alphabet is ignored. Default
+		is ['A', 'C', 'G', 'T'].
+
+
+	Returns
+	-------
+	gc: torch.Tensor, shape=(-1,)
+		The GC content of each sequence, as a float in [0, 1].
+	"""
+
+	_validate_input(X, "X", shape=(-1, len(alphabet), -1), ohe=True, allow_N=True)
+
+	gc_idxs = [i for i, c in enumerate(alphabet) if c in ('G', 'C')]
+	if len(gc_idxs) == 0:
+		raise ValueError("Alphabet {} does not contain G or C; gc_content "
+			"is only defined for alphabets containing both.".format(alphabet))
+
+	X_float = X.float()
+	non_n = X_float.sum(dim=1)  # (-1, length)
+	gc = X_float[:, gc_idxs].sum(dim=(1, 2))
+	total = non_n.sum(dim=-1)
+	return torch.where(total > 0, gc / total.clamp(min=1), torch.zeros_like(gc))
+
+
+def entropy(
+	X: torch.Tensor,
+	eps: float = 1e-9,
+) -> torch.Tensor:
+	"""Compute the Shannon entropy (in bits) at each position.
+
+	Each position is treated as a probability distribution over the
+	alphabet axis. `X` may already be a PWM (probabilities) or a one-hot
+	encoding; columns are renormalized to sum to 1 before the entropy
+	is computed. Columns whose values sum to 0 contribute zero entropy.
+
+	Parameters
+	----------
+	X: torch.Tensor, shape=(-1, alphabet, length)
+		The input PWM or one-hot encoding.
+
+	eps: float, optional
+		A small constant added under the log to avoid log(0). Default
+		is 1e-9.
+
+
+	Returns
+	-------
+	H: torch.Tensor, shape=(-1, length)
+		The per-position entropy in bits.
+	"""
+
+	X_float = X.float()
+	col_sum = X_float.sum(dim=1, keepdim=True)
+	probs = X_float / col_sum.clamp(min=eps)
+	zero_col = (col_sum.squeeze(1) == 0)
+
+	H = -(probs * torch.log2(probs + eps)).sum(dim=1)
+	H[zero_col] = 0.0
+	return H
+
+
+def information_content(
+	X: torch.Tensor,
+	alphabet_size: int | None = None,
+	eps: float = 1e-9,
+) -> torch.Tensor:
+	"""Compute per-position information content (in bits).
+
+	Information content is `log2(alphabet_size) - entropy`. Columns
+	that sum to zero are reported as 0 (rather than the maximum,
+	`log2(alphabet_size)`) so all-N positions do not appear informative.
+
+	Parameters
+	----------
+	X: torch.Tensor, shape=(-1, alphabet, length)
+		The input PWM or one-hot encoding.
+
+	alphabet_size: int or None, optional
+		The size of the alphabet to use when computing the maximum
+		entropy. If None, use `X.shape[1]`. Default is None.
+
+	eps: float, optional
+		A small constant for numerical stability in the entropy
+		computation. Default is 1e-9.
+
+
+	Returns
+	-------
+	IC: torch.Tensor, shape=(-1, length)
+		The per-position information content in bits.
+	"""
+
+	if alphabet_size is None:
+		alphabet_size = X.shape[1]
+
+	X_float = X.float()
+	col_sum = X_float.sum(dim=1, keepdim=True)
+	zero_col = (col_sum.squeeze(1) == 0)
+
+	max_h = float(numpy.log2(alphabet_size))
+	IC = max_h - entropy(X_float, eps=eps)
+	IC[zero_col] = 0.0
+	return IC

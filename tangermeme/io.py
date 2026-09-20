@@ -2,6 +2,10 @@
 # Author: Jacob Schreiber <jmschreiber91@gmail.com>
 # Code adapted from Alex Tseng, Avanti Shrikumar, and Ziga Avsec
 
+from __future__ import annotations
+
+import warnings
+
 import numpy
 import torch
 import pandas
@@ -13,6 +17,7 @@ from tqdm import tqdm
 
 from .utils import one_hot_encode
 from .utils import characters
+from .utils import TangermemeWarning
 
 from memelite.io import read_meme as memelite_read_meme
 
@@ -23,14 +28,9 @@ def _load_exclusion_zones(chrom_lengths, exclusion_lists):
 		exclusion_zones = {}
 		for chrom, size in chrom_lengths.items():
 			exclusion_zones[chrom] = numpy.zeros(size // 100 + 1, dtype='bool')
-		
-		# Fill in the exclusion zones using the provided coordinates
-		names = 'chrom', 'start', 'end'
 
-		exclusion_list = pandas.concat([
-			pandas.read_csv(elist, sep="\t", names=names, header=None, 
-				usecols=(0, 1, 2)) for elist in exclusion_lists 
-		])
+		# Fill in the exclusion zones using the provided coordinates
+		exclusion_list = _interleave_loci(exclusion_lists)
 
 		for _, (chrom, start, end) in exclusion_list.iterrows():
 			start = start // 100
@@ -88,6 +88,8 @@ def _interleave_loci(loci, chroms=None, summits=False):
 		if not isinstance(chroms, (list, tuple)):
 			raise ValueError("Provided chroms must be a list.")
 
+		chroms = [str(chrom) for chrom in chroms]
+
 	if isinstance(loci, (str, pandas.DataFrame)):
 		loci = [loci]
 	elif not isinstance(loci, (list, tuple)):
@@ -103,13 +105,19 @@ def _interleave_loci(loci, chroms=None, summits=False):
 	for i, df in enumerate(loci):
 		# Extract the relevant columns from the dataframes
 		if isinstance(df, str):
-			df = pandas.read_csv(df, sep='\t', usecols=cols, 
+			df = pandas.read_csv(df, sep='\t', usecols=cols,
 				header=None, index_col=False, names=names)
 		elif isinstance(df, pandas.DataFrame):
 			df = df.iloc[:, cols].copy()
+			df.columns = names
 		else:
 			raise ValueError("Provided loci must be a string or pandas " +
 				"DataFrame, or a list/tuple of those.")
+
+		# Chromosome names must be strings so that they match the names used by
+		# pyfaidx/pybigtools. Otherwise, genomes whose chromosomes are named
+		# "1", "2", etc. get read in as integers by pandas and fail to match.
+		df['chrom'] = df['chrom'].astype(str)
 
 		# If using summits, correct the coordinates to be centered on them
 		if summits:
@@ -206,6 +214,14 @@ def _extract_locus_signal(signals, chrom, start, end):
 	-------
 	values: list of numpy.ndarrays, shape=(len(signals), end-start)
 		The extracted signal from each of the signal files.
+
+	Notes
+	-----
+	When `signal` is a dict, each `signal[chrom]` is assumed to be a 1-D
+	array indexable by genomic position. Passing a `(n_tracks, length)`
+	array under a single chromosome key will silently slice the first axis
+	instead of positions and yield mis-shaped output; provide one signal
+	dict per track in the outer `signals` list instead.
 	"""
 
 	if not isinstance(signals, (list, tuple)):
@@ -218,10 +234,11 @@ def _extract_locus_signal(signals, chrom, start, end):
 		else:
 			try:
 				values_ = numpy.array(signal.values(chrom, start, end), dtype=numpy.float32)
-			except:
-				print(f"Warning: {chrom} {start} {end} not " +
-					"valid bigwig indexes. Using zeros instead.")
-				values_ = numpy.zeros(end-start,dtype=numpy.float32)
+			except (RuntimeError, ValueError, KeyError):
+				warnings.warn(
+					f"{chrom} {start} {end} not valid bigwig indexes. "
+					"Using zeros instead.", TangermemeWarning, stacklevel=2)
+				values_ = numpy.zeros(end-start, dtype=numpy.float32)
 				
 		values_ = numpy.nan_to_num(values_)
 		values.append(values_)
@@ -229,42 +246,57 @@ def _extract_locus_signal(signals, chrom, start, end):
 	return values
 
 
-def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None, 
-	in_window=2114, out_window=1000, max_jitter=0, min_counts=None,
-	max_counts=None, target_idx=0, n_loci=None, summits=False,
-	alphabet=['A', 'C', 'G', 'T'], ignore=['N'], exclusion_lists=None, 
-	return_mask=False, verbose=False):
+def extract_loci(
+	loci: str | list[str] | pandas.DataFrame | list[pandas.DataFrame],
+	sequences: str | pyfaidx.Fasta | dict,
+	signals: list | None = None,
+	in_signals: list | None = None,
+	chroms: list[str] | None = None,
+	in_window: int = 2114,
+	out_window: int = 1000,
+	max_jitter: int = 0,
+	min_counts: float | None = None,
+	max_counts: float | None = None,
+	target_idx: int = 0,
+	n_loci: int | None = None,
+	summits: bool = False,
+	alphabet: list[str] = ['A', 'C', 'G', 'T'],
+	ignore: list[str] = ['N'],
+	exclusion_lists: str | pandas.DataFrame | list | None = None,
+	return_mask: bool = False,
+	verbose: bool = False,
+) -> tuple:
 	"""Extract sequence and signal information for each provided locus.
 
 	This function will take in a set of loci, sequences, and optionally signals,
 	and return the sequences and signals at each of the loci. Each of these
 	parameters can be a filename, which is loaded internally, or an appropriate
-	Python object (see below for details). The nomenclature `in/out` refer to
-	he expected inputs and outputs of the downstream machine learning model, 
+	Python object (see below for details). The nomenclature `in/out` refers to
+	the expected inputs and outputs of the downstream machine learning model,
 	not this function.
 
 	For each locus a sequence window of size `in_window` will be extracted from
-	the sequences file and each of the `input_signals` files if provided, and
+	the sequences file and each of the `in_signals` files if provided, and
 	a window of size `out_window` will be extracted from each of the `signals`
 	files if provided. These windows are centered at the middle of the provided
-	regions but all be of the same size, regardless of the size of the peak.
+	regions but will all be of the same size, regardless of the size of the peak.
 
 	If `max_jitter` is provided, it will expand the windows for both the input
 	and output. The results are not actually jittered, but this expanded window
-	allows for downstream data generators to created jittered data while
+	allows for downstream data generators to create jittered data while
 	reducing the memory footprint of the returned data.
 
 	There are a few reasons that the returned elements may not match one-to-one
 	with the provided loci:
 
 		- (1) If any of the coordinates fall off the end of chromosomes after
-		accounting for jitter, the locus will be removed.
+		  accounting for jitter, the locus will be removed.
 
 		- (2) If any of the loci fall on chromosomes not in a provided list,
-		they will be removed.
+		  they will be removed.
 
-		- (3) If min_counts or max_counts are specified and the locus has a 
-		number of counts not in those boundaries.
+		- (3) If min_counts or max_counts are specified and the locus has a
+		  number of counts not in those boundaries, the locus will be removed.
 
 	If exclusion lists are provided, they will be used to filter out loci that
 	fall in 100bp chunks that also include any of the regions in any of the
@@ -273,7 +305,7 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 
 		chr7    108    234
 
-	loci will be removed if and of their bp fall within chr7 100 300.
+	loci will be removed if any of their bp fall within chr7 100 300.
  
 
 	Parameters
@@ -281,13 +313,16 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 	loci: str or pandas.DataFrame or list/tuple of such
 		Either the path to a bed file or a pandas DataFrame object containing
 		three columns: the chromosome, the start, and the end, of each locus
-		to train on. Alternatively, a list or tuple of strings/DataFrames where
-		the intention is to train on the interleaved concatenation, i.e., when
-		you want to train on peaks and negatives.
+		to train on. The three columns are taken positionally regardless of
+		what they are named, and the chromosome column is coerced to a string
+		so that it matches the record names used by the sequences.
+		Alternatively, a list or tuple of strings/DataFrames where the
+		intention is to train on the interleaved concatenation, i.e., when you
+		want to train on peaks and negatives.
 
 	sequences: str or dictionary
 		Either the path to a fasta file to read from or a dictionary where the
-		keys are the unique set of chromosoms and the values are one-hot
+		keys are the unique set of chromosomes and the values are one-hot
 		encoded sequences as numpy arrays or memory maps.
 
 	signals: list of strs or list of dictionaries or None, optional
@@ -296,16 +331,17 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		set of unique chromosomes and the values are numpy arrays or memory
 		maps. If None, no signal tensor is returned. Default is None.
 
-	input_signals: list of strs or list of dictionaries or None, optional
+	in_signals: list of strs or list of dictionaries or None, optional
 		A list of filepaths to bigwig files, where each filepath will be read
 		using pybigtools, or a list of dictionaries where the keys are the same
 		set of unique chromosomes and the values are numpy arrays or memory
-		maps. If None, no tensor is returned. Default is None. 
+		maps. If None, no tensor is returned. Default is None.
 
 	chroms: list or None, optional
-		A set of chromosomes to extact loci from. Loci in other chromosomes
-		in the locus file are ignored. If None, all loci are used. Default is
-		None.
+		A set of chromosomes to extract loci from. Loci in other chromosomes
+		in the locus file are ignored. Entries are coerced to strings, so
+		`[1, 2]` and `['1', '2']` are equivalent. If None, all loci are
+		used. Default is None.
 
 	in_window: int, optional
 		The input window size. Default is 2114.
@@ -357,10 +393,11 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		sum across characters is equal to 1 for all positions except those
 		where the original sequence is in this list. Default is ['N'].
 
-	exclusion_lists: list or None, optional
-		A list of strings of filenames to BED-formatted files containing exclusion
-		lists, i.e., regions where overlapping loci should be filtered out. If None,
-		no filtering is performed based on exclusion zones. Default is None.
+	exclusion_lists: str, pandas.DataFrame, list, or None, optional
+		Regions where overlapping loci should be filtered out, given either as a
+		filename to a BED-formatted file, a pandas DataFrame in bed-format, or a
+		list of either. If None, no filtering is performed based on exclusion
+		zones. Default is None.
 
 	return_mask: bool, optional
 		Whether to return a tensor containing whether each element in the provided
@@ -383,17 +420,17 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		the second dimension is in the same order as the list of signal files.
 		If no signal files are given, this is not returned.
 
-	in_signals: torch.tensor, shape=(n, len(in_signals),out_window+2*max_jitter)
+	in_signals: torch.tensor, shape=(n, len(in_signals), in_window+2*max_jitter)
 		The extracted in signals where the first dimension is in the same order
 		as loci in the locus file after optional filtering by chromosome and
 		the second dimension is in the same order as the list of in signal files.
 		If no in signal files are given, this is not returned.
-	
+
 	kept_mask: torch.tensor, shape=(n0,), dtype=bool
 		A boolean vector of length equal to the number of pre-filtered peaks, with
-		entries being True if they were kept and False if they were filted out.
+		entries being True if they were kept and False if they were filtered out.
 		Applying this mask to the complete set of interleaved peaks will yield
-		the returned values. Only returned if `return_idxs=True`.
+		the returned values. Only returned if `return_mask=True`.
 	"""
 
 	seqs, signals_, in_signals_ = [], [], []
@@ -402,10 +439,17 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 	if signals is None and in_signals is None:
 		out_width = 0
 
-	# Extract the length of each chromosome
+	# Extract the length of each chromosome. Track whether we opened the
+	# fasta ourselves so we know whether we are allowed to close it on
+	# exit; a caller-provided pyfaidx.Fasta is theirs to manage.
 	chrom_lengths = {}
+	opened_fasta = False
 	if isinstance(sequences, str):
 		sequences = pyfaidx.Fasta(sequences)
+		opened_fasta = True
+		for key, value in sequences.items():
+			chrom_lengths[str(key)] = len(value)
+	elif isinstance(sequences, pyfaidx.Fasta):
 		for key, value in sequences.items():
 			chrom_lengths[str(key)] = len(value)
 	else:
@@ -433,7 +477,7 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		end = mid + max(out_width, in_width) + max_jitter
 
 		# Does it fall off the end of a chromosome?
-		if start < 0 or end >= chrom_lengths[str(chrom)]:
+		if start < 0 or end > chrom_lengths[str(chrom)]:
 			kept_mask.append(False)
 			continue
 
@@ -481,7 +525,7 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 		if n_loci is not None and len(seqs) == n_loci:
 			break 
 
-	if not isinstance(sequences, dict):
+	if opened_fasta:
 		sequences.close()
 		
 	# Figure out how to format the outputs depending on the provided parameters
@@ -501,13 +545,39 @@ def extract_loci(loci, sequences, signals=None, in_signals=None, chroms=None,
 	return y_return[0] if len(y_return) == 1 else y_return
 
 
-def one_hot_to_fasta(X, filename, mode='w', headers=None, 
-	alphabet=['A', 'C', 'G', 'T']):
+def one_hot_to_fasta(
+	X: torch.Tensor | numpy.ndarray,
+	filename: str,
+	mode: str = 'w',
+	headers: list[str] | None = None,
+	alphabet: list[str] = ['A', 'C', 'G', 'T'],
+) -> None:
 	"""Write out one-hot encoded sequences to a FASTA file.
-	
-	This function will take a set of one-hot encoded sequences and convert them to
-	characters and write them out in FASTA format. If headers are provided for
-	each sequence, these are used, otherwise the numeric index is used.
+
+	This function will take a set of one-hot encoded sequences and convert them
+	to characters and write them out in FASTA format. If headers are provided
+	for each sequence, these are used, otherwise the numeric index is used.
+
+
+	Parameters
+	----------
+	X: torch.Tensor, shape=(-1, len(alphabet), length)
+		A set of one-hot encoded sequences to write out.
+
+	filename: str
+		The path to the FASTA file to write to.
+
+	mode: str, optional
+		The file mode to open `filename` with, e.g. 'w' to overwrite or 'a' to
+		append. Default is 'w'.
+
+	headers: list of str or None, optional
+		A list of one header per sequence in `X`. If None, the numeric index of
+		each sequence is used as its header. Default is None.
+
+	alphabet: set or tuple or list, optional
+		A pre-defined alphabet where the ordering of the symbols is the same as
+		the index into the one-hot encoding. Default is ['A', 'C', 'G', 'T'].
 	"""
 	
 	with open(filename, mode=mode) as outfile:
@@ -525,7 +595,7 @@ def one_hot_to_fasta(X, filename, mode='w', headers=None,
 			outfile.write("\n")
 
 
-def read_meme(filename, n_motifs=None):
+def read_meme(filename: str, n_motifs: int | None = None) -> dict[str, torch.Tensor]:
 	"""Read a MEME file and return a dictionary of PWMs.
 
 	This method takes in the filename of a MEME-formatted file to read in
@@ -539,7 +609,11 @@ def read_meme(filename, n_motifs=None):
 	Parameters
 	----------
 	filename: str
-		The filename of the MEME-formatted file to read in
+		The filename of the MEME-formatted file to read in.
+
+	n_motifs: int or None, optional
+		If provided, stop reading after this many motifs have been parsed. If
+		None, read all motifs in the file. Default is None.
 
 
 	Returns
@@ -553,23 +627,31 @@ def read_meme(filename, n_motifs=None):
 	return motifs
 
 
-def read_vcf(filename):
+def read_vcf(filename: str) -> pandas.DataFrame:
 	"""Read a VCF file into a pandas DataFrame
 
 	This function takes in the name of a file that is VCF formatted and returns
 	a pandas DataFrame with the comments filtered out. This will only return the
-	columns that are most commonly provided in VCF files.
+	first 9 columns (CHROM, POS, ID, REF, ALT, QUAL, FILTER, INFO, FORMAT); any
+	per-sample genotype columns past column 9 are silently dropped.
+
+	Compressed VCFs are read transparently when pandas detects the compression
+	from the filename extension (e.g., `.vcf.gz` works via `pandas.read_csv`).
+	BCF (binary VCF) files are NOT supported by this function.
 
 
 	Parameters
 	----------
 	filename: str
+		The path to the VCF-formatted file to read in. May be plain `.vcf` or
+		gzip-compressed `.vcf.gz`.
 
 
 	Returns
 	-------
 	vcf: pandas.DataFrame
-		A pandas DataFrame containing the rows.
+		A pandas DataFrame containing the rows, with columns CHROM, POS, ID,
+		REF, ALT, QUAL, FILTER, INFO, FORMAT.
 	"""
 
 	names = ["CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", 
