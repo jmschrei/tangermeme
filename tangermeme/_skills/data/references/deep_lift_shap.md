@@ -137,6 +137,13 @@ float sums) — thresholds tuned on CPU may need raising on GPU. To disambiguate
 genuinely precision-driven deltas, `deep_lift_shap(model.double(), X.double(),
 references=refs.double(), ...)` drops them to ~1e-16 (slower; fp64).
 
+`dtype=torch.bfloat16` or `dtype=torch.float16` runs the pass under autocast and
+returns attributions in that dtype. Expect deltas an order of magnitude above the
+fp32 ones; raise `warning_threshold` accordingly rather than reading them as an
+unhooked op. Before tangermeme 1.5.0 this raised `RuntimeError: hook 'hook' has
+changed the type of value` for any model containing a max-pool, a norm, a softmax
+or a bilinear op.
+
 When the delta is real rather than precision noise, the next two sections find
 the op responsible and fix it. When a closed-form rule is impractical to derive,
 reach for `integrated_gradients_op` instead. When nothing can be hooked at all,
