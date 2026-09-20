@@ -498,17 +498,18 @@ def recursive_seqlets(
 	X and ending at Y to be called a seqlet, all the values within the bounds
 	(in addition to X) must also have a p-value below the threshold.
 
+	::
 
-							min_seqlet_len
-                             --------
-	. . . . . . . | . . . . / . . . . . . . .
-	. . . . . . . | . . . / . . . . . . . . .
-	. . . . . . . | . . / . . . . . . . . . .
-	. . . . . . . | . / . . . . . . . . . . .
-	. . . . . . . | / . . . . . . . . . . . .
-	. . . . . . . X . . . . . . . . Y . . . .
-	. . . . . . . . . . . . . . . . . . . . .
-	. . . . . . . . . . . . . . . . . . . . .
+		                        min_seqlet_len
+		                         --------
+		. . . . . . . | . . . . / . . . . . . . .
+		. . . . . . . | . . . / . . . . . . . . .
+		. . . . . . . | . . / . . . . . . . . . .
+		. . . . . . . | . / . . . . . . . . . . .
+		. . . . . . . | / . . . . . . . . . . . .
+		. . . . . . . X . . . . . . . . Y . . . .
+		. . . . . . . . . . . . . . . . . . . . .
+		. . . . . . . . . . . . . . . . . . . . .
 
 	
 	The seqlets identified by this approach will usually be much smaller than

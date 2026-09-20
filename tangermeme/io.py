@@ -290,13 +290,13 @@ def extract_loci(
 	with the provided loci:
 
 		- (1) If any of the coordinates fall off the end of chromosomes after
-		accounting for jitter, the locus will be removed.
+		  accounting for jitter, the locus will be removed.
 
 		- (2) If any of the loci fall on chromosomes not in a provided list,
-		they will be removed.
+		  they will be removed.
 
 		- (3) If min_counts or max_counts are specified and the locus has a
-		number of counts not in those boundaries, the locus will be removed.
+		  number of counts not in those boundaries, the locus will be removed.
 
 	If exclusion lists are provided, they will be used to filter out loci that
 	fall in 100bp chunks that also include any of the regions in any of the
