@@ -86,6 +86,12 @@ Testing
 	- Rewrites the bundled-skill integrity checks against backticked reference paths rather than Markdown-link syntax. The old check scanned for ``](...)`` and so would have reported success on a skill with no links left in it at all. It now also fails when a Markdown link is reintroduced, and when a ``references/*.md`` file is not reachable from the ``SKILL.md`` router table.
 
 
+CI / Tooling
+------------
+
+	- The lockfile no longer holds ``numpy`` at 2.0.1, which had no cp313 wheel and so was compiled from source on every Python 3.13 CI run. ``memelite`` 0.2.0 required ``numpy<=2.0.1``; 0.4.0 drops that ceiling, and ``numpy`` moves to 2.4.6. The 3.13 job spent 227s installing dependencies against 13-25s for the other three in the matrix. Only the lockfile changes: ``pyproject.toml`` already allowed both versions, so a fresh resolve picked them anyway and installs from PyPI were never affected.
+
+
 Version 1.4.0
 =============
 
