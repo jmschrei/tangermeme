@@ -720,7 +720,7 @@ def local_dinucleotide_shuffle(
 	"""Dinucleotide-shuffle sequences independently within local bins.
 
 	A dinucleotide shuffle conserves the dinucleotide composition of the
-	sequence as a whole, which also flattens any structure in how that
+	sequence as a whole, and in doing so flattens any structure in how that
 	composition varies along it. A genomic window is rarely uniform: GC
 	content, repeat density and nucleotide composition drift across it, and a
 	background that averages all of that away differs from the original in
@@ -728,9 +728,9 @@ def local_dinucleotide_shuffle(
 
 	This function shuffles within consecutive bins instead, so composition is
 	conserved locally as well as globally. The interface otherwise follows
-	`dinucleotide_shuffle`, with two differences: there is no `start` or `end`,
-	the whole sequence always being shuffled, and `random_state` must be an
-	integer rather than a RandomState.
+	`dinucleotide_shuffle`, with two differences: there is no `start` or `end`
+	because the whole sequence is always shuffled, and `random_state` must be
+	an integer rather than a RandomState.
 
 	The bin boundaries are redrawn for every shuffle. The first cut is placed
 	uniformly at random between `min_bin_size` and `bin_size`, and the rest

@@ -229,24 +229,23 @@ def integrated_gradients_op(
 	of `deep_lift_shap` or `pisa`, keyed by the module type it should handle,
 	the same way the built-in rules are registered.
 
-	For certain non-linear operations a closed-form DeepLIFT rule can be challenging
-	and/or impractical to derive by hand. This function can be used in those cases.
-	The multiplier it implements is the Jacobian of the module integrated along the
-	straight-line path from the reference activation ``z0`` to the actual activation ``z``.
-	This is essentially the original integrated-gradients construction (Sundararajan et al,
-	PMLR 2017) applied to one layer rather than to the whole model. The integral is numerically
-	approximated by Gauss-Legendre quadrature over ``K`` nodes.
+	Use this where a closed-form DeepLIFT rule is impractical to derive by
+	hand. The multiplier it implements is the Jacobian of the module
+	integrated along the straight-line path from the reference activation
+	``z0`` to the observed activation ``z``, which is the integrated-gradients
+	construction of Sundararajan et al (PMLR 2017) applied to one layer rather
+	than to a whole model. The integral is approximated by Gauss-Legendre
+	quadrature over ``K`` nodes.
 
 	Only vector-Jacobian products are computed, never a full Jacobian. All
 	quadrature nodes and both halves of the upstream gradient are packed into
 	a single autograd call, so the cost is one backward pass over a batch
 	``2 * K`` times the size of the input rather than ``2 * K`` separate
 	passes.
-	
-	The module's forward and backward hooks are disabled during that pass
-	for two reasons: it stops re-entering the module from overwriting the cached
-	activations the rule reads, and, more importantly, it prevents an infinite
-	recursion in which the backward hook keeps re-triggering itself.
+
+	The module's forward and backward hooks are disabled during that pass, so
+	that re-entering the module neither overwrites the cached activations the
+	rule reads nor re-triggers the backward hook into infinite recursion.
 
 
 	Parameters

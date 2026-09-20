@@ -220,16 +220,17 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 
 	where δ_ij is the Kronecker delta, equal to 1 if i = j and 0 otherwise.
 
-	Multiplying by the upstream gradient g_i (short for grad_out_i) and summing over
-	the outputs gives the vectorized form actually computed below, in two terms
+	Multiplying by the upstream gradient g_i and summing over the outputs gives
+	the vectorized form computed below, in two terms
 
 		grad_in_j = (v + v_ref)/2 * (g_tilde_j - mean(g_tilde_j))   [Term 1]
 			+ (Δv / Δ(σ^2)) * (a_j + a_ref_j)/(2D) * sum_i[g_tilde_i * (a_i + a_ref_i)]   [Term 2]
 
-	where g_tilde_i = g_i * γ_i, is the upstream gradient scaled by the affine weight.
+	where g_tilde_i = g_i * γ_i is the upstream gradient scaled by the affine
+	weight.
 
-	RMSNorm is the same expression with a_i = x_i, no mean subtraction, and so no mean
-	term in the first half.
+	RMSNorm is the same expression with a_i = x_i and no mean subtraction, and
+	so has no mean term in the first half.
 
 	The ratio Δv / Δ(σ^2) is evaluated in closed form as
 	-v^2 * v_ref^2 / (v + v_ref) rather than as a difference quotient, which
@@ -409,26 +410,23 @@ def _rmsnorm(module, grad_input, grad_output):
 
 
 def _bilinear(module, grad_input, grad_output):
-	"""An internal function implementing the correction for bilinear tensor products
-	using the DeepLIFT midpoint product rule.
+	"""An internal function implementing the correction for bilinear tensor
+	products using the DeepLIFT midpoint product rule.
 
-	The midpoint product rule for scalar products (y=ab) yields multipliers:
-	m_{a -> y} = (b + b_ref) / 2
-	m_{b -> y} = (a + a_ref) / 2
-	
-	We can see that the DeepLIFT multipliers defined above are exactly the ordinary
-	derivative of y evaluated at the midpoint of a straight-line path between the observed
-	and reference values. The same can be shown for bilinear tensor products.
+	For a scalar product y = ab the rule gives the multipliers
 
-	Another way to say this is that the DeepLIFT multiplier matrix for a bilinear tensor
-	product (using the midpoint product rule) is equal to the ordinary Jacobian of the tensor
-	product evaluated at the midpoint on a straight-line path from reference to observed.
-	This simplifies implementation in PyTorch as we can leverage `torch.autograd.grad` to
-	efficiently compute the Jacobian-vector product with the upstream gradient vector, simply
-	by evaluating the Jacobian at the midpoint.
+		m_{a -> y} = (b + b_ref) / 2
+		m_{b -> y} = (a + a_ref) / 2
 
-	Note that unlike most other rules here this returns two multipliers rather than one,
-	since the module takes two inputs.
+	which are the ordinary derivatives of y at the midpoint of a straight-line
+	path from the reference values to the observed ones. The same holds for a
+	bilinear tensor product, whose multiplier matrix is the ordinary Jacobian
+	evaluated at that midpoint. `torch.autograd.grad` can therefore produce the
+	Jacobian-vector product against the upstream gradient directly, without
+	materializing the Jacobian.
+
+	Unlike the other rules here this returns two multipliers rather than one,
+	because the module takes two operands.
 
 
 	Parameters
@@ -563,14 +561,10 @@ def _softmax(module, grad_input, grad_output):
 	a_ref = torch.exp(x_ref - c)
 	s = a.sum(dim=dim, keepdim=True)
 	s_ref = a_ref.sum(dim=dim, keepdim=True)
-	# Defensive guard against s (or s_ref) underflowing to exactly 0, which makes
-	# the reciprocal +inf and then poisons the backward pass with NaN via log(v).
-	# This needs a whole softmax window to sit ~88 (fp32) below the shared max c,
-	# i.e. the example and reference logits to diverge that much across the window.
-	# The current call sites can't do this: c is taken over both sides, so a mask
-	# shared by an example and its reference cancels out and leaves a saturated
-	# row uniform, not underflowed. A mask that differs between the two could
-	# reach it. The clamp keeps the reciprocal finite; a fully-underflowed row
+	# Guard against s underflowing to exactly zero, which would make the
+	# reciprocal +inf and reach log(v) below as NaN. It takes a whole softmax
+	# window sitting ~88 (fp32) below the shared max c, so only a mask that
+	# differs between an example and its reference gets there. Such a row
 	# carries no attribution mass, so the clamped value itself does not matter.
 	tiny = torch.finfo(s.dtype).tiny
 	v = s.clamp_min(tiny).reciprocal()
@@ -615,18 +609,14 @@ def _softmax(module, grad_input, grad_output):
 	#             * (Δy_i / Δlog(y_i))
 	#             * (Δlog(v) / Δv)
 	#
-	# The numerator path carries no factor of m_{x_j -> a_j}, because the two
-	# ratios it would be built from cancel exactly:
-	#
-	#     m_{x_j -> a_j} * (Δlog(a_j) / Δa_j) = Δlog(a_j) / Δx_j = 1
-	#
-	# since log(a_j) is x_j - c and the same c is subtracted from both sides.
-	# Evaluating the two separately, each with its own threshold, is what
-	# breaks on a peaked softmax: most of the exponentials are small enough
-	# that Δa trips its guard while Δx does not, the Δlog(a)/Δa fallback
-	# returns 1/a_ref, and the product is nowhere near one. Folding them out
-	# also removes the 0 * inf that a fully masked logit used to produce,
-	# since Δy is zero there and no reciprocal of a_ref is taken at all.
+	# The numerator path carries no factor of m_{x_j -> a_j}, because
+	# m_{x_j -> a_j} * (Δlog(a_j) / Δa_j) is Δlog(a_j) / Δx_j, which is one:
+	# log(a_j) is x_j - c, and the same c is subtracted from both sides.
+	# Guarding the two ratios separately is what breaks on a peaked softmax,
+	# where Δa trips its threshold while Δx does not and the Δlog(a)/Δa
+	# fallback returns 1/a_ref. Folding them out also removes the 0 * inf a
+	# fully masked logit used to produce, since no reciprocal of a_ref is
+	# taken at all.
 	reciprocal_mult = -v * v_ref # reuse the clamped reciprocals
 	grad_in = (
 		grad_out * delta_y_over_delta_log_y
@@ -647,8 +637,8 @@ def _softmax(module, grad_input, grad_output):
 def _gauss_legendre(n_points):
 	"""Return Gauss-Legendre nodes and weights mapped from [-1, 1] to [0, 1].
 
-	Gauss-Legendre quadrature is defined on [-1, 1], but we use it for a path
-	integral that runs from the reference activation to the observed one,
+	Gauss-Legendre quadrature is defined on [-1, 1], but the path integral it
+	approximates here runs from the reference activation to the observed one,
 	parameterized over [0, 1]. Both the nodes and the weights are rescaled
 	once, when the hook is built, rather than on every backward pass.
 

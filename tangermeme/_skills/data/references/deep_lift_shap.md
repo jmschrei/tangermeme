@@ -138,9 +138,9 @@ genuinely precision-driven deltas, `deep_lift_shap(model.double(), X.double(),
 references=refs.double(), ...)` drops them to ~1e-16 (slower; fp64).
 
 When the delta is real rather than precision noise, the next two sections find
-the op responsible and fix it. When nothing can be hooked, or when custom closed-form
-rules are difficult or impractical to derive, consider using local integrated gradients.
-If for some reason that cannot work either, switch to ISM, see `references/saturation_mutagenesis.md`.
+the op responsible and fix it. When a closed-form rule is impractical to derive,
+reach for `integrated_gradients_op` instead. When nothing can be hooked at all,
+switch to ISM — see `references/saturation_mutagenesis.md`.
 
 ## Auditing a model for unhooked operations
 
@@ -386,8 +386,8 @@ A path integral and the rescale secant coincide only for an elementwise function
   — they agree to floating-point noise.
 - coupling across positions (`RMSNorm`, closed form vs. `integrated_gradients_op`)
   — they differ by orders of magnitude more, and **raising `K` does not close the
-  gap**. That invariance is the tell: quadrature error shrinks with `K`, a
-  difference in method does not.
+  gap**. That is how you tell the two apart: quadrature error shrinks with
+  `K`, a difference in method does not.
 
 Both satisfy summation-to-delta. Neither is a more accurate version of the other,
 so a disagreement tells you nothing about which is right. Summation-to-delta is
