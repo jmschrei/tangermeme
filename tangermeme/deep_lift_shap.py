@@ -157,7 +157,7 @@ class BilinearOp(torch.nn.Module):
 	be attributed if it lives inside a module. Bilinear operations like `matmul`,
 	`einsum`, and elementwise tensor products have no dedicated `nn` module and
 	are usually written as bare function calls, which have nothing for a rule to
-	attach to. This module wraps such operations so that they becomes something
+	attach to. This module wraps such operations so that they become something
 	the `_bilinear` rule can hook.
 
 	The contraction performed depends on `equation`. The operands are used
@@ -176,9 +176,8 @@ class BilinearOp(torch.nn.Module):
 	equation: str or None, optional
 		The contraction to perform. If None, `torch.matmul(left, right)`. If
 		the string "...,...->...", the elementwise product `left * right`,
-		special-cased because einsum is needlessly slow for it. Any other
-		string is passed to `torch.einsum` with the two operands. Default is
-		None.
+		written directly rather than handed to einsum. Any other string is
+		passed to `torch.einsum` with the two operands. Default is None.
 	"""
 
 	def __init__(self, equation: str | None = None):
@@ -432,10 +431,10 @@ def deep_lift_shap(
 		operations that can be handled by DeepLIFT/SHAP, pass a dictionary here
 		where the keys are class types and the values are the name of the
 		function that handle that sort of class. Make sure that the signature
-		matches those of `_nonlinear` and `_maxpool` above. This can also be
-		used to overwrite the hard-coded operations by passing in a dictionary
-		with overlapping key names. If None, do not add any additional 
-		operations. Default is None.
+		matches those of `_nonlinear` and `_maxpool` in `_deep_lift_utils`.
+		This can also be used to overwrite the hard-coded operations by
+		passing in a dictionary with overlapping key names. If None, do not
+		add any additional operations. Default is None.
 
 	print_convergence_deltas: bool, optional
 		Whether to print the convergence deltas for each example when using

@@ -132,10 +132,10 @@ def pisa(
 		operations that can be handled by DeepLIFT/SHAP, pass a dictionary here
 		where the keys are class types and the values are the name of the
 		function that handle that sort of class. Make sure that the signature
-		matches those of `_nonlinear` and `_maxpool` above. This can also be
-		used to overwrite the hard-coded operations by passing in a dictionary
-		with overlapping key names. If None, do not add any additional 
-		operations. Default is None.
+		matches those of `_nonlinear` and `_maxpool` in `_deep_lift_utils`.
+		This can also be used to overwrite the hard-coded operations by
+		passing in a dictionary with overlapping key names. If None, do not
+		add any additional operations. Default is None.
 
 	print_convergence_deltas: bool, optional
 		Whether to print the convergence deltas for each example when using
