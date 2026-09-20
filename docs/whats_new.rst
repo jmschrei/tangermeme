@@ -26,6 +26,12 @@ design
 
 	- ``greedy_substitution`` and ``beam_substitution`` now raise a ``ValueError`` when ``X`` has a batch size other than one. Both design a single sequence at a time, but the batch dimension was never checked and a larger batch produced more rows than the numba substitution kernel had indices for, reading out of bounds and crashing the interpreter rather than raising.
 
+ersatz
+------
+
+	- ``insert``, ``substitute``, ``multisubstitute``, ``delete``, ``randomize`` and ``shuffle`` now accept unknown characters in ``X``, encoded as all-zero columns, which is what ``substitute`` already allowed in ``motif``. ``marginalize`` and ``ablate`` validate their sequences with ``allow_N=True`` and then hand them to ``substitute`` and ``shuffle``, which validated them again without it, so the permission never took effect: a set of sequences containing an ``N`` -- which is what ``extract_loci`` returns for any locus overlapping an assembly gap -- raised ``ValueError: X must be one-hot encoded. and cannot have unknown characters.`` from inside the perturbation rather than being marginalized or ablated. None of these functions read the characters of ``X``; they move, copy or overwrite columns, so an unknown character is carried through wherever the perturbation does not replace it. Multi-hot columns and values outside ``{0, 1}`` are still rejected everywhere.
+	- ``dinucleotide_shuffle`` deliberately keeps rejecting unknown characters, and its docstring now says why. It builds the transition matrix from ``X.argmax(axis=0)``, which maps an all-zero column onto the first character of the alphabet, so accepting one would silently shuffle it as an ``A`` and distort the dinucleotide composition the function exists to preserve. ``deep_lift_shap`` and ``pisa``, which draw their references from it, are unchanged for the same reason.
+
 io
 --
 

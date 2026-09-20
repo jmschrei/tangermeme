@@ -18,6 +18,9 @@ effect = y_after - y_before
   preserved). `start=` is the **first position** of the substitution (not the
   center); the default centers the motif.
 - `X` should be background sequences so the delta reflects the motif "in isolation".
+- `X` may carry unknown characters as all-zero columns, as `extract_loci` returns for
+  a locus over an assembly gap; they survive the substitution unless the motif covers
+  them. Multi-hot columns are still rejected.
 
 ### Choosing backgrounds — the GC mirage (important)
 
@@ -48,6 +51,9 @@ y_before, y_after = ablate(model, X, start=990, end=1010, n=20, random_state=0)
   pass a seed when you need reproducible / regression values.
 - Conceptual opposite of marginalize: ablate removes signal from real sequences;
   marginalize adds signal into backgrounds.
+- `X` may carry unknown characters, as with marginalize. The one exception in
+  `ersatz` is `dinucleotide_shuffle`, which rejects them rather than shuffle them
+  as `A`s, so `deep_lift_shap` and `pisa` references still need N-free input.
 
 ## space — distance dependence between motifs
 
