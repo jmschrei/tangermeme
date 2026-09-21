@@ -23,6 +23,8 @@ from tangermeme.deep_lift_shap import _captum_deep_lift_shap
 from tangermeme.deep_lift_shap import _f_hook
 from tangermeme.deep_lift_shap import _b_hook
 from tangermeme._deep_lift_utils import _nonlinear
+from tangermeme._deep_lift_utils import _maxpool
+from tangermeme._deep_lift_utils import _windows_overlap
 from tangermeme._deep_lift_utils import _bilinear
 from tangermeme._deep_lift_utils import _HookState
 from tangermeme._deep_lift_utils import _disable_hooks
@@ -1010,6 +1012,203 @@ def test_deep_lift_shap_max_pool(X, device):
 		 [ 0.0000, -0.0000, -0.0000, -0.0000,  0.0000, -0.0000,  0.0000, -0.0000,  0.0000, -0.0000],
 		 [-0.0000,  0.2000, -0.0000, -0.0000, -0.0000, -0.0500, -0.0000, -0.0000,  0.0000, -0.0000],
 		 [-0.0000, -0.0000, -0.0000,  0.5500, -0.0000, -0.0000, -0.0000,  0.1500, -0.3500, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_overlapping_max_pool(X, device):
+	# MaxPool1d with kernel_size > stride makes the pooling windows overlap,
+	# so one input position can be the argmax of several output positions.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.MaxPool1d(4, 2),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_conv_relu_overlapping_pool(X, device):
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.Conv1d(4, 8, (5,)),
+		torch.nn.ReLU(),
+		torch.nn.MaxPool1d(10, 5),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_overlapping_max_pool_nondivisor_stride(X, device):
+	# A stride that does not divide the length of the sequence: X is 100 long
+	# and the windows step by 3, so the final window ends at 97 and the last
+	# two positions fall outside every window.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.MaxPool1d(5, 3),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert_array_almost_equal(X_attr[:, :, -2:], torch.zeros(16, 4, 2), 4)
+
+
+def test_deep_lift_shap_overlapping_max_pool_ceil_mode(X, device):
+	# `ceil_mode` keeps a final, partial window, which pools fewer positions
+	# than the rest.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.MaxPool1d(5, 3, ceil_mode=True),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_overlapping_max_pool_padding(X, device):
+	# Padding shifts every window left, so the indices the pool reports no
+	# longer line up with the positions a window would cover unpadded.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.MaxPool1d(5, 3, padding=2),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_stacked_overlapping_max_pools(X, device):
+	# Three overlapping pools in one model, so the corrected multipliers of
+	# one have to feed the rule of the next.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.Conv1d(4, 8, (5,)),
+		torch.nn.ReLU(),
+		torch.nn.MaxPool1d(4, 2),
+		torch.nn.Conv1d(8, 8, (3,)),
+		torch.nn.ReLU(),
+		torch.nn.MaxPool1d(5, 3),
+		torch.nn.MaxPool1d(3, 2),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_stacked_max_pool_zero_denominator(X, device):
+	# Two stacked pools, neither overlapping, so this is not the overlap bug.
+	# The first pool's rule reads both halves of the gradient the second one
+	# hands back, so the second one has to give both halves the same value
+	# even where its denominator is zero and it falls back.
+	torch.manual_seed(11)
+
+	model = torch.nn.Sequential(
+		torch.nn.Conv1d(4, 8, (5,), bias=False),
+		torch.nn.MaxPool1d(2),
+		torch.nn.Conv1d(8, 8, (3,), bias=False),
+		torch.nn.MaxPool1d(2),
+		torch.nn.Flatten(),
+		torch.nn.Linear(184, 1)
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			n_shuffles=5, warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+
+
+def test_maxpool_rule_returns_the_same_multiplier_for_both_halves(device):
+	# The observed and the reference half carry one multiplier between them,
+	# and a pooling rule further up reads both. Where the denominator is
+	# exactly zero the rule substitutes something else, and that substitute
+	# has to agree across the halves too.
+	torch.manual_seed(0)
+
+	pool = torch.nn.MaxPool1d(2).to(device)
+	X = torch.randn(8, 4, 20, device=device)
+
+	# Half the rows mirror the other half, so most denominators are exactly
+	# zero; every third position is perturbed so some are not.
+	X[4:] = X[:4]
+	X[4:, :, ::3] += 1.0
+
+	pool.input = X
+	pool.output = pool(X)
+
+	grad_input = (torch.randn_like(X),)
+	grad_output = (torch.randn_like(pool.output),)
+
+	grad, = _maxpool(pool, grad_input, grad_output)
+	observed, reference = grad.chunk(2)
+
+	assert_array_almost_equal(observed.cpu(), reference.cpu(), 6)
+
+
+@pytest.mark.parametrize("kernel_size,stride,dilation,overlap", [
+	(4, 4, 1, False), (3, 3, 1, False), (2, 2, 1, False), (15, 15, 1, False),
+	(3, 5, 1, False), (4, None, 1, False),
+	(4, 2, 1, True), (5, 3, 1, True), (10, 5, 1, True), (20, 3, 1, True),
+	(3, 3, 2, True), (2, 3, 3, True),
+])
+def test_windows_overlap_1d(kernel_size, stride, dilation, overlap):
+	# Which routing primitive the max-pool rule may use turns on this, and
+	# picking the cheaper one when the windows do overlap is a wrong answer.
+	pool = torch.nn.MaxPool1d(kernel_size, stride, dilation=dilation)
+	assert _windows_overlap(pool) == overlap
+
+
+@pytest.mark.parametrize("kernel_size,stride,overlap", [
+	((3, 3), (3, 3), False), ((2, 2), (2, 2), False), ((1, 4), (1, 4), False),
+	((3, 3), (3, 1), True), ((3, 3), (1, 3), True), ((4, 2), (2, 2), True),
+])
+def test_windows_overlap_2d(kernel_size, stride, overlap):
+	# A 2D pool overlaps if either axis does, so both are checked.
+	pool = torch.nn.MaxPool2d(kernel_size, stride)
+	assert _windows_overlap(pool) == overlap
+
+
+def test_windows_overlap_defaults_stride_to_kernel_size(device):
+	# torch fills stride in from kernel_size when it is not given, and that
+	# default is the common non-overlapping case.
+	assert _windows_overlap(torch.nn.MaxPool1d(4)) is False
+	assert _windows_overlap(torch.nn.MaxPool2d(3)) is False
 
 
 def test_deep_lift_shap_conv_relu_pool(X, device):

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import math
+
 from contextlib import contextmanager
 
 import torch
@@ -123,6 +125,83 @@ def _nonlinear(module, grad_input, grad_output):
 	return (torch.where(idxs, grad_input[0], grad_output[0] * delta),)
 
 
+def _windows_overlap(module):
+	"""Whether any two of a pooling module's windows can share an input.
+
+	A window spans `dilation * (kernel_size - 1) + 1` positions, so the
+	windows tile without touching exactly when that span fits inside the
+	stride. Each of the three parameters is a scalar for a 1D pool and may be
+	a pair for a 2D one, so every axis is checked.
+
+	Parameters
+	----------
+	module: torch.nn.Module
+		A MaxPool1d or MaxPool2d, or anything else carrying `kernel_size`,
+		`stride` and `dilation`.
+
+
+	Returns
+	-------
+	overlap: bool
+		Whether one input position can win more than one window.
+	"""
+
+	def _tuple(value):
+		return value if isinstance(value, (tuple, list)) else (value,)
+
+	kernel = _tuple(module.kernel_size)
+	stride = _tuple(module.stride)
+	dilation = _tuple(module.dilation)
+
+	def _axis(value, i):
+		return value[i] if len(value) > 1 else value[0]
+
+	n = max(len(kernel), len(stride), len(dilation))
+	return any(_axis(dilation, i) * (_axis(kernel, i) - 1) + 1 > _axis(stride, i)
+		for i in range(n))
+
+
+def _unpool(values, indices, shape):
+	"""Route pooled values back to the input positions that won each max.
+
+	`torch.nn.functional.max_unpool1d` and its 2D counterpart assign rather
+	than accumulate, so when one input position is the argmax of more than one
+	output window -- which happens whenever the pooling windows overlap, as
+	they do for `MaxPool1d(4, 2)` -- every contribution but one is silently
+	dropped. Scatter-adding keeps all of them, which is what the rescale rule
+	needs for the routed change to sum to the change in the pooled output.
+	The two agree exactly when the windows do not overlap.
+
+	Parameters
+	----------
+	values: torch.tensor
+		The values to route back, shaped like the pooled output.
+
+	indices: torch.tensor
+		The argmax indices returned by `max_pool1d` or `max_pool2d` when
+		called with `return_indices=True`, which index into the flattened
+		spatial dimensions of the un-pooled input.
+
+	shape: torch.Size or tuple
+		The shape of the un-pooled input, `(batch, channels, *spatial)`.
+
+
+	Returns
+	-------
+	unpooled: torch.tensor
+		`values` accumulated into a tensor of shape `shape`.
+	"""
+
+	n, d = shape[0], shape[1]
+
+	unpooled = torch.zeros(n, d, math.prod(shape[2:]), dtype=values.dtype,
+		device=values.device)
+	unpooled.scatter_add_(-1, indices.reshape(n, d, -1),
+		values.reshape(n, d, -1))
+
+	return unpooled.reshape(shape)
+
+
 def _maxpool(module, grad_input, grad_output):
 	"""An internal function implementing a max-pooling correction.
 
@@ -132,10 +211,11 @@ def _maxpool(module, grad_input, grad_output):
 
 	Pooling is not elementwise, so the rescale rule cannot be applied
 	position by position. Instead the change in the pooled output is routed
-	back through the pooling indices with an unpool, which sends each
-	output's share to whichever input position won the max, and the result is
-	divided by the change in the input. Despite the name, both MaxPool1d and
-	MaxPool2d are handled; anything else raises.
+	back through the pooling indices, which sends each output's share to
+	whichever input position won the max and accumulates the shares landing
+	on the same position, and the result is divided by the change in the
+	input. Despite the name, both MaxPool1d and MaxPool2d are handled;
+	anything else raises.
 	
 	Parameters
 	----------
@@ -148,8 +228,9 @@ def _maxpool(module, grad_input, grad_output):
 	grad_input: tuple of torch.tensor
 		What torch would pass to a full backward hook as the gradient with
 		respect to the module's inputs: the upstream gradient propagated through
-		this module's ordinary local gradient. Used as the fallback wherever the
-		rescale ratio is numerically unstable.
+		this module's ordinary local gradient. Its observed half is substituted
+		at the positions where the input does not change at all, which are the
+		only ones without a well-defined ratio.
 
 	grad_output: tuple of torch.tensor
 		The upstream gradient handed to a full backward hook: the gradient of
@@ -180,7 +261,6 @@ def _maxpool(module, grad_input, grad_output):
 
 	with torch.no_grad():
 		delta_in_ = torch.sub(*module.input.chunk(2))
-		delta_in = torch.cat([delta_in_, delta_in_])
 
 		output, output_ref = module.output.chunk(2)
 		delta_out_xmax = torch.max(output, output_ref)
@@ -190,16 +270,38 @@ def _maxpool(module, grad_input, grad_output):
 		_, indices = pool_func(module.input, module.kernel_size, module.stride, 
 			module.padding, module.dilation, module.ceil_mode, True)
 
-		unpool_ = unpool_func(grad_output[0] * delta_out, indices, 
-			module.kernel_size, module.stride, module.padding, 
-			list(module.input.shape))
+		# `max_unpool` gets this wrong when the windows overlap, but it is
+		# one kernel where the scatter-add is a fill and a scatter, and that
+		# second launch is worth about 15% of a whole attribution on a
+		# pool-heavy model. The two give identical answers when no two
+		# windows can share a winner, so the scatter-add is used only where
+		# it is the one that is right.
+		if _windows_overlap(module):
+			unpool_ = _unpool(grad_output[0] * delta_out, indices,
+				module.input.shape)
+		else:
+			unpool_ = unpool_func(grad_output[0] * delta_out, indices,
+				module.kernel_size, module.stride, module.padding,
+				list(module.input.shape))
 		unpool_delta, unpool_ref_delta = torch.chunk(unpool_, 2)
 
 	unpool_delta_ = unpool_delta + unpool_ref_delta
-	unpool_delta = torch.cat([unpool_delta_, unpool_delta_])
-	idxs = torch.abs(delta_in) < 1e-7
 
-	new_grad_inp = torch.where(idxs, grad_input[0], unpool_delta / delta_in)
+	# A position only picks up routed change when it wins a window, and that
+	# change is bounded by the change in the position itself, so the quotient
+	# cannot blow up however small the denominator gets and only an exact zero
+	# needs guarding. Whatever is substituted there has to be a value the two
+	# halves agree on, because a pooling rule further up reads both of them;
+	# substituting `grad_input` whole, as this used to, does not, and that is
+	# enough to stop the pair summing to delta. The multiplier is the same for
+	# both halves, so it is built once at half width.
+	idxs_ = delta_in_ == 0
+	denominator_ = delta_in_.masked_fill(idxs_, 1)
+
+	half = torch.where(idxs_, grad_input[0].chunk(2)[0],
+		unpool_delta_ / denominator_)
+
+	new_grad_inp = torch.cat([half, half])
 	return (new_grad_inp,)
 
 
