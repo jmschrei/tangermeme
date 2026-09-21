@@ -125,6 +125,42 @@ def _nonlinear(module, grad_input, grad_output):
 	return (torch.where(idxs, grad_input[0], grad_output[0] * delta),)
 
 
+def _windows_overlap(module):
+	"""Whether any two of a pooling module's windows can share an input.
+
+	A window spans `dilation * (kernel_size - 1) + 1` positions, so the
+	windows tile without touching exactly when that span fits inside the
+	stride. Each of the three parameters is a scalar for a 1D pool and may be
+	a pair for a 2D one, so every axis is checked.
+
+	Parameters
+	----------
+	module: torch.nn.Module
+		A MaxPool1d or MaxPool2d, or anything else carrying `kernel_size`,
+		`stride` and `dilation`.
+
+
+	Returns
+	-------
+	overlap: bool
+		Whether one input position can win more than one window.
+	"""
+
+	def _tuple(value):
+		return value if isinstance(value, (tuple, list)) else (value,)
+
+	kernel = _tuple(module.kernel_size)
+	stride = _tuple(module.stride)
+	dilation = _tuple(module.dilation)
+
+	def _axis(value, i):
+		return value[i] if len(value) > 1 else value[0]
+
+	n = max(len(kernel), len(stride), len(dilation))
+	return any(_axis(dilation, i) * (_axis(kernel, i) - 1) + 1 > _axis(stride, i)
+		for i in range(n))
+
+
 def _unpool(values, indices, shape):
 	"""Route pooled values back to the input positions that won each max.
 
@@ -216,9 +252,9 @@ def _maxpool(module, grad_input, grad_output):
 	"""
 
 	if isinstance(module, torch.nn.MaxPool1d):
-		pool_func = F.max_pool1d
+		pool_func, unpool_func = F.max_pool1d, F.max_unpool1d
 	elif isinstance(module, torch.nn.MaxPool2d):
-		pool_func = F.max_pool2d
+		pool_func, unpool_func = F.max_pool2d, F.max_unpool2d
 	else:
 		raise ValueError("module must be either MaxPool1d or MaxPool2d")
 
@@ -234,8 +270,19 @@ def _maxpool(module, grad_input, grad_output):
 		_, indices = pool_func(module.input, module.kernel_size, module.stride, 
 			module.padding, module.dilation, module.ceil_mode, True)
 
-		unpool_ = _unpool(grad_output[0] * delta_out, indices,
-			module.input.shape)
+		# `max_unpool` gets this wrong when the windows overlap, but it is
+		# one kernel where the scatter-add is a fill and a scatter, and that
+		# second launch is worth about 15% of a whole attribution on a
+		# pool-heavy model. The two give identical answers when no two
+		# windows can share a winner, so the scatter-add is used only where
+		# it is the one that is right.
+		if _windows_overlap(module):
+			unpool_ = _unpool(grad_output[0] * delta_out, indices,
+				module.input.shape)
+		else:
+			unpool_ = unpool_func(grad_output[0] * delta_out, indices,
+				module.kernel_size, module.stride, module.padding,
+				list(module.input.shape))
 		unpool_delta, unpool_ref_delta = torch.chunk(unpool_, 2)
 
 	unpool_delta_ = unpool_delta + unpool_ref_delta

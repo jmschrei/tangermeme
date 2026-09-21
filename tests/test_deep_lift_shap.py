@@ -24,6 +24,7 @@ from tangermeme.deep_lift_shap import _f_hook
 from tangermeme.deep_lift_shap import _b_hook
 from tangermeme._deep_lift_utils import _nonlinear
 from tangermeme._deep_lift_utils import _maxpool
+from tangermeme._deep_lift_utils import _windows_overlap
 from tangermeme._deep_lift_utils import _bilinear
 from tangermeme._deep_lift_utils import _HookState
 from tangermeme._deep_lift_utils import _disable_hooks
@@ -1178,6 +1179,36 @@ def test_maxpool_rule_returns_the_same_multiplier_for_both_halves(device):
 	observed, reference = grad.chunk(2)
 
 	assert_array_almost_equal(observed.cpu(), reference.cpu(), 6)
+
+
+@pytest.mark.parametrize("kernel_size,stride,dilation,overlap", [
+	(4, 4, 1, False), (3, 3, 1, False), (2, 2, 1, False), (15, 15, 1, False),
+	(3, 5, 1, False), (4, None, 1, False),
+	(4, 2, 1, True), (5, 3, 1, True), (10, 5, 1, True), (20, 3, 1, True),
+	(3, 3, 2, True), (2, 3, 3, True),
+])
+def test_windows_overlap_1d(kernel_size, stride, dilation, overlap):
+	# Which routing primitive the max-pool rule may use turns on this, and
+	# picking the cheaper one when the windows do overlap is a wrong answer.
+	pool = torch.nn.MaxPool1d(kernel_size, stride, dilation=dilation)
+	assert _windows_overlap(pool) == overlap
+
+
+@pytest.mark.parametrize("kernel_size,stride,overlap", [
+	((3, 3), (3, 3), False), ((2, 2), (2, 2), False), ((1, 4), (1, 4), False),
+	((3, 3), (3, 1), True), ((3, 3), (1, 3), True), ((4, 2), (2, 2), True),
+])
+def test_windows_overlap_2d(kernel_size, stride, overlap):
+	# A 2D pool overlaps if either axis does, so both are checked.
+	pool = torch.nn.MaxPool2d(kernel_size, stride)
+	assert _windows_overlap(pool) == overlap
+
+
+def test_windows_overlap_defaults_stride_to_kernel_size(device):
+	# torch fills stride in from kernel_size when it is not given, and that
+	# default is the common non-overlapping case.
+	assert _windows_overlap(torch.nn.MaxPool1d(4)) is False
+	assert _windows_overlap(torch.nn.MaxPool2d(3)) is False
 
 
 def test_deep_lift_shap_conv_relu_pool(X, device):
