@@ -109,12 +109,19 @@ A rule is registered per module *type*. These are the types `deep_lift_shap` and
 - **Elementwise activations** (rescale rule) — `ReLU`, `ReLU6`, `LeakyReLU`,
   `RReLU`, `PReLU`, `ELU`, `CELU`, `SELU`, `GELU`, `SiLU`, `Mish`, `GLU`,
   `Sigmoid`, `LogSigmoid`, `Tanh`, `Softplus`, `Softshrink`.
-- **Pooling** — `MaxPool1d`, `MaxPool2d`. Before tangermeme 1.5.0 the rule was
-  wrong when the windows overlapped (`kernel_size > stride`, e.g.
-  `MaxPool1d(4, 2)`): it dropped the contributions of every output position but
-  one wherever two windows shared a winning input position, giving large deltas
-  on *every* example that neither the CPU nor fp64 fixed. Non-overlapping
-  pooling was always fine.
+- **Pooling** — `MaxPool1d`, `MaxPool2d`. Two separate bugs here were fixed in
+  tangermeme 1.5.0, and neither one goes away on the CPU or at fp64, so a model
+  that pools and has stubborn deltas on an older version is very likely hitting
+  one of them. **Overlapping windows** (`kernel_size > stride`, e.g.
+  `MaxPool1d(4, 2)`) dropped the contribution of every output position but one
+  wherever two windows shared a winning input position, giving large deltas on
+  *every* example. **Two or more pools stacked** hit the second one, whatever
+  the window sizes: where an input did not change at all between example and
+  reference the rule substituted a value that differed between the two halves
+  it carries, and the next pool up reads both. That one is intermittent at
+  fp32/fp64, where it needs a particular example-reference pair, but systematic
+  in bf16/fp16, where coarse rounding makes unchanged inputs common — it cost
+  `SharedPool` a factor of 60 in fp16.
 - **Coupling ops with closed forms** — `Softmax`, `LayerNorm`, `RMSNorm`, and
   `tangermeme.deep_lift_shap.BilinearOp`.
 
@@ -138,7 +145,9 @@ size-mismatch error.
 
 The same model gives **higher deltas on CUDA than CPU** (parallel reductions reorder
 float sums) — thresholds tuned on CPU may need raising on GPU. To disambiguate
-"unregistered op" from "precision noise," re-run a few examples on CPU. For
+"unregistered op" from "precision noise," re-run a few examples on CPU. (A
+delta that survives fp64 is *usually* an unregistered op, but before 1.5.0 a
+stacked max-pool would also do it — see the pooling entry above.) For
 genuinely precision-driven deltas, `deep_lift_shap(model.double(), X.double(),
 references=refs.double(), ...)` drops them to ~1e-16 (slower; fp64).
 
