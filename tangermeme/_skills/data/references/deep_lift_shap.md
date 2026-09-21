@@ -231,7 +231,7 @@ def audit(model, X, extra_rules=()):
     return sorted(found)
 ```
 
-Each finding is `(owning module type, operation)`. Measured on four models:
+Each finding is `(owning module type, operation)`. Measured on five models:
 
 | model | `audit` reports | meaning |
 |---|---|---|
@@ -239,6 +239,7 @@ Each finding is `(owning module type, operation)`. Measured on four models:
 | `TransformerEncoderLayer` | the above, plus `('TransformerEncoderLayer', 'relu')` | functional activation, rewritable |
 | the `Gated` model below, `torch.softmax(a(X), -1) * b(X)` | `('Gated', 'mul')`, `('Gated', 'softmax')` | functional ops, rewritable |
 | attention built from `BilinearOp` + `nn.Softmax` | only the constant `'div'` and `'mul'` | false positives — see below |
+| conv + `enformer_pytorch`-style `AttentionPool` | `('AttentionPool', 'mul')`, `('AttentionPool', 'softmax')` | two functional ops in one pooling layer, both rewritable |
 
 **`mul`, `div`, `matmul`, `bmm` and `einsum` are reported deliberately.** A product
 is linear when one operand is a constant (`scores / head_dim ** 0.5`, a `* beta`
@@ -413,6 +414,96 @@ A path integral and the rescale secant coincide only for an elementwise function
 Both satisfy summation-to-delta. Neither is a more accurate version of the other,
 so a disagreement tells you nothing about which is right. Summation-to-delta is
 the only property to check.
+
+### Worked example — attention pooling (Enformer)
+
+Attention pooling takes a weighted average within each pool window instead of the
+max or the mean: a 1x1 convolution scores the entries of the window, a softmax
+turns those scores into weights, and the pooled value is the window multiplied by
+its weights and summed. `enformer_pytorch`'s `AttentionPool` writes both the
+softmax and the product as function calls, so the layer has **two** unhooked
+non-linearities and `audit` reports both. Swapping only the softmax for
+`torch.nn.Softmax` leaves the delta where it was; the product is the second one.
+
+Route 1, the rewrite. Two attributes and two lines of `forward` change, and the
+parameter set is untouched, so the weights of a trained Enformer load straight in:
+
+```python
+import torch
+from tangermeme.deep_lift_shap import BilinearOp
+
+
+class AttentionPool(torch.nn.Module):
+    """`enformer_pytorch`'s layer with the two function calls made modules."""
+
+    def __init__(self, dim, pool_size=2):
+        super().__init__()
+        self.pool_size = pool_size
+        self.to_attn_logits = torch.nn.Conv2d(dim, dim, 1, bias=False)
+        torch.nn.init.dirac_(self.to_attn_logits.weight)
+        with torch.no_grad():
+            self.to_attn_logits.weight.mul_(2)
+
+        self.softmax = torch.nn.Softmax(dim=-1)      # was logits.softmax(-1)
+        self.prod = BilinearOp("...,...->...")       # was (x * attn)
+
+    def _window(self, x):
+        b, d, n = x.shape
+        return x.reshape(b, d, n // self.pool_size, self.pool_size)
+
+    def forward(self, x):
+        b, _, n = x.shape
+        remainder = n % self.pool_size
+
+        if remainder > 0:
+            pad = self.pool_size - remainder
+            x = torch.nn.functional.pad(x, (0, pad), value=0)
+            mask = torch.zeros((b, 1, n), dtype=torch.bool, device=x.device)
+            mask = self._window(torch.nn.functional.pad(mask, (0, pad),
+                value=True))
+
+        x = self._window(x)
+        logits = self.to_attn_logits(x)
+
+        # A mask applied here, outside the softmax module, is fine: the rule
+        # reads the module's own input, which is the masked logits.
+        if remainder > 0:
+            logits = logits.masked_fill(mask, -torch.finfo(logits.dtype).max)
+
+        return self.prod(x, self.softmax(logits)).sum(dim=-1)
+```
+
+Route 2, no rewrite at all. The whole layer takes one tensor and returns one
+tensor, which is all `integrated_gradients_op` needs, so a checkpoint tied to a
+published layer definition can be attributed as it stands:
+
+```python
+from enformer_pytorch.modeling_enformer import AttentionPool
+from tangermeme.deep_lift_shap import deep_lift_shap, integrated_gradients_op
+
+X_attr = deep_lift_shap(model, X, references=refs, random_state=0,
+    additional_nonlinear_ops={AttentionPool: integrated_gradients_op(K=8)})
+```
+
+Both converge to floating-point noise, with and without a padded window, and they
+agree to 4e-4 on attributions whose scale is 2.7e-2 — the usual closed-form
+versus path-integral difference described above, and it does not shrink with `K`.
+
+Two things to get right:
+
+- **Register the pooling layer, not the block around it.** A block that also
+  contains a ReLU puts a kink in the integration path, where Gauss-Legendre
+  quadrature converges slowly: on the model in `tests/toy_models.py`, registering
+  the pooling layer converges at `K=4` while registering the enclosing model still
+  crossed the warning threshold at `K=8`.
+- **`masked_fill` in the audit output is a false positive.** Filling with a
+  constant is linear, as is the `mul` of an output scaling. The findings that
+  matter are `softmax` and the `mul` of two activations.
+
+`AttentionPool` and `ConvAttentionPool` in `tests/toy_models.py` are the worked
+pair, with `hookable=False` selecting the shipped form. `enformer_pytorch`'s
+`Attention` has the same problem for the same reason (`einsum` and `.softmax()` as
+function calls) and both routes apply to it as well.
 
 ## Known limitations
 
