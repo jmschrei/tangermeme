@@ -20,7 +20,6 @@ from tangermeme.ersatz import dinucleotide_shuffle
 from tangermeme.deep_lift_shap import hypothetical_attributions
 from tangermeme.deep_lift_shap import deep_lift_shap
 from tangermeme.deep_lift_shap import _captum_deep_lift_shap
-from tangermeme.deep_lift_shap import _fp_hook
 from tangermeme.deep_lift_shap import _f_hook
 from tangermeme.deep_lift_shap import _b_hook
 from tangermeme._deep_lift_utils import _nonlinear
@@ -36,8 +35,13 @@ from .toy_models import FlattenDense
 from .toy_models import Conv
 from .toy_models import Scatter
 from .toy_models import ConvDense
+from .toy_models import ConvAvgDense
 from .toy_models import ConvPoolDense
 from .toy_models import SmallDeepSEA
+from .toy_models import SharedActivation
+from .toy_models import SharedPool
+from .toy_models import SharedBranch
+from .toy_models import SharedRuleSeq
 from .toy_models import ResidualConv
 from .toy_models import Conv2DExpand
 from .toy_models import CustomLinear
@@ -2277,15 +2281,15 @@ def test_deep_lift_shap_dilated_conv(X, references, device):
 	assert X_attr.shape == X.shape
 	assert X_attr.dtype == torch.float32
 	assert_array_almost_equal(X_attr[:2, :, :4], [
-		[[ 0.0000, -0.0000, -0.0000, -0.0008],
-		 [ 0.0000,  0.0000, -0.0004,  0.0000],
-		 [ 0.0000, -0.0000,  0.0000,  0.0000],
-		 [-0.0000,  0.0016,  0.0000, -0.0000]],
+		[[ 0.0010,  0.0000,  0.0000,  0.0001],
+		 [ 0.0000,  0.0000, -0.0008, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0009,  0.0000, -0.0000]],
 
-		[[-0.0000, -0.0000, -0.0024, -0.0000],
-		 [ 0.0004, -0.0000, -0.0000,  0.0000],
-		 [ 0.0000, -0.0016,  0.0000,  0.0000],
-		 [-0.0000,  0.0000,  0.0000, -0.0006]]], 4)
+		[[ 0.0000,  0.0000,  0.0006,  0.0000],
+		 [ 0.0001,  0.0000,  0.0000, -0.0000],
+		 [ 0.0000,  0.0013, -0.0000, -0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0003]]], 4)
 
 
 def test_deep_lift_shap_multi_activation(X, references, device):
@@ -3296,35 +3300,49 @@ def test_disable_hooks_restores_disabled_state():
 
 def test_disable_hooks_stops_activation_caching():
 	module = torch.nn.ReLU()
-	X = torch.randn(2, 4)
+	module._caches, module._fwd_counter = {}, 0
+	X = torch.randn(2, 4, requires_grad=True)
 
 	with _disable_hooks():
-		_fp_hook(module, (X,))
 		_f_hook(module, (X,), X)
 
 	# `integrated_gradients_op` re-runs the module from inside its own backward
-	# hook. If the forward hooks still fired there they would overwrite the
-	# activations the rule is in the middle of reading.
-	assert "input" not in module.__dict__
-	assert "output" not in module.__dict__
+	# hook. If the forward hook still fired there it would file that re-entrant
+	# call alongside the ones the backward pass is in the middle of reading.
+	assert module._caches == {}
+	assert module._fwd_counter == 0
 
-	_fp_hook(module, (X,))
 	_f_hook(module, (X,), X)
 
-	assert "input" in module.__dict__
-	assert "output" in module.__dict__
+	assert module._fwd_counter == 1
+	assert sorted(module._caches[0]) == ["input", "output"]
 
 
 def test_disable_hooks_stops_backward_rule():
 	module = torch.nn.ReLU()
-	module._NON_LINEAR_OPS = {torch.nn.ReLU: lambda *args: "called"}
+	grad_input = (torch.zeros(2, 4),)
+	called = []
+
+	def rule(module, grad_input, grad_output):
+		called.append(True)
+		return (torch.ones(2, 4),)
+
+	module._NON_LINEAR_OPS = {torch.nn.ReLU: rule}
+	module._caches, module._bw_idx = {0: {}}, 0
 
 	with _disable_hooks():
-		assert _b_hook(module, None, None) is None
+		assert _b_hook(module, grad_input, None) is None
+
+	assert called == []
 
 	# Returning None leaves the gradient untouched, which is what a disabled
-	# hook has to do; outside the block the registered rule runs again.
-	assert _b_hook(module, None, None) == "called"
+	# hook has to do; outside the block the registered rule runs again. The
+	# disabled call must also leave the tag alone, because the forward call it
+	# marks still has to be attributed.
+	multipliers = _b_hook(module, grad_input, None)
+
+	assert called == [True]
+	assert torch.equal(multipliers[0], torch.ones(2, 4))
 
 
 def test_disable_hooks_stops_bilinear_caching():
@@ -3334,8 +3352,8 @@ def test_disable_hooks_stops_bilinear_caching():
 	left, right = torch.randn(2, 4), torch.randn(2, 4)
 	op(left, right)
 
-	assert torch.equal(op.left, left)
-	assert torch.equal(op.right, right)
+	assert torch.equal(op._staged["left"], left)
+	assert torch.equal(op._staged["right"], right)
 
 	other = torch.ones(2, 4)
 	with _disable_hooks():
@@ -3343,8 +3361,8 @@ def test_disable_hooks_stops_bilinear_caching():
 
 	# The operands cached by the original forward pass must survive a
 	# re-entrant call, because `_bilinear` reads them after it returns.
-	assert torch.equal(op.left, left)
-	assert torch.equal(op.right, right)
+	assert torch.equal(op._staged["left"], left)
+	assert torch.equal(op._staged["right"], right)
 
 
 def test_bilinear_does_not_cache_without_hooks():
@@ -3356,5 +3374,261 @@ def test_bilinear_does_not_cache_without_hooks():
 	# Outside an attribution call there is no `_NON_LINEAR_OPS`, so the op is
 	# a plain elementwise product and caches nothing.
 	assert torch.equal(out, left * right)
+	assert "_staged" not in op.__dict__
 	assert "left" not in op.__dict__
 	assert "right" not in op.__dict__
+
+
+###
+
+
+def test_deep_lift_shap_shared_activation(X, references, device):
+	torch.manual_seed(0)
+	shared = SharedActivation(share=True)
+	separate = SharedActivation(share=False)
+	separate.load_state_dict(shared.state_dict())
+
+	X_attr = deep_lift_shap(shared, X, references=references, device=device,
+		random_state=0)
+	X_attr_ = deep_lift_shap(separate, X, references=references,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+
+	# The two models are the same function, differing only in whether the
+	# activation is one module called twice or two modules called once.
+	assert_array_almost_equal(X_attr, X_attr_, 5)
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[ 0.0002, -0.0000,  0.0000,  0.0001],
+		 [-0.0000, -0.0000, -0.0001,  0.0000],
+		 [ 0.0000, -0.0000,  0.0000,  0.0000],
+		 [ 0.0000, -0.0003, -0.0000, -0.0000]],
+
+		[[ 0.0000,  0.0000, -0.0012, -0.0000],
+		 [ 0.0002, -0.0000, -0.0000, -0.0000],
+		 [-0.0000, -0.0024,  0.0000,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000, -0.0002]]], 4)
+
+
+def test_deep_lift_shap_shared_pool(X, references, device):
+	torch.manual_seed(0)
+	shared = SharedPool(share=True)
+	separate = SharedPool(share=False)
+	separate.load_state_dict(shared.state_dict())
+
+	X_attr = deep_lift_shap(shared, X, references=references, device=device,
+		random_state=0)
+	X_attr_ = deep_lift_shap(separate, X, references=references,
+		device=device, random_state=0)
+
+	assert_array_almost_equal(X_attr, X_attr_, 5)
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[-0.0006,  0.0000, -0.0000,  0.0017],
+		 [-0.0000,  0.0000, -0.0047, -0.0000],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0011, -0.0000, -0.0000]],
+
+		[[-0.0000, -0.0000,  0.0002, -0.0000],
+		 [ 0.0001, -0.0000, -0.0000,  0.0000],
+		 [-0.0000, -0.0045,  0.0000,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0002]]], 4)
+
+
+def test_deep_lift_shap_shared_branch(X, references, device):
+	torch.manual_seed(0)
+	shared = SharedBranch(share=True)
+	separate = SharedBranch(share=False)
+	separate.load_state_dict(shared.state_dict())
+
+	X_attr = deep_lift_shap(shared, X, references=references, device=device,
+		random_state=0)
+	X_attr_ = deep_lift_shap(separate, X, references=references,
+		device=device, random_state=0)
+
+	assert_array_almost_equal(X_attr, X_attr_, 5)
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[-0.0038, -0.0000,  0.0000, -0.0008],
+		 [-0.0000, -0.0000,  0.0018, -0.0000],
+		 [ 0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0012, -0.0000, -0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0095,  0.0000],
+		 [-0.0148, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000, -0.0139, -0.0000,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000, -0.0108]]], 4)
+
+
+def test_deep_lift_shap_shared_dilated_conv(X, references, device):
+	torch.manual_seed(0)
+	shared = DilatedConv(share=True)
+	separate = DilatedConv(share=False)
+	separate.load_state_dict(shared.state_dict())
+
+	X_attr = deep_lift_shap(shared, X, references=references, device=device,
+		random_state=0)
+	X_attr_ = deep_lift_shap(separate, X, references=references,
+		device=device, random_state=0)
+
+	assert_array_almost_equal(X_attr, X_attr_, 5)
+
+
+@pytest.mark.parametrize("rule", ["layernorm", "rmsnorm", "softmax",
+	"bilinear"])
+def test_deep_lift_shap_shared_rules(X, device, rule):
+	torch.manual_seed(0)
+	shared = SharedRuleSeq(rule=rule, share=True)
+	separate = SharedRuleSeq(rule=rule, share=False)
+	separate.load_state_dict(shared.state_dict())
+
+	X = X[:4, :, :15]
+
+	# `target` picks one output position, since these models keep the length
+	# axis rather than reducing to a scalar.
+	X_attr = deep_lift_shap(shared, X, target=6, n_shuffles=3, device=device,
+		random_state=0)
+	X_attr_ = deep_lift_shap(separate, X, target=6, n_shuffles=3,
+		device=device, random_state=0)
+
+	assert_array_almost_equal(X_attr, X_attr_, 5)
+
+
+@pytest.mark.parametrize("model_cls", [SharedActivation, SharedPool,
+	SharedBranch, DilatedConv])
+def test_deep_lift_shap_shared_convergence(X, references, device, model_cls):
+	torch.manual_seed(0)
+	model = model_cls()
+
+	# Reusing a module used to leave every call but the last one attributed
+	# against the wrong activations, which breaks summation-to-delta.
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		deep_lift_shap(model, X[:4], references=references[:4], device=device,
+			random_state=0, warning_threshold=1e-4)
+
+
+def test_deep_lift_shap_shared_integrated_gradients_op(X, device):
+	torch.manual_seed(0)
+	shared = SharedRuleSeq(rule="layernorm", share=True)
+	separate = SharedRuleSeq(rule="layernorm", share=False)
+	separate.load_state_dict(shared.state_dict())
+
+	X = X[:4, :, :15]
+
+	# The local-IG rule re-runs its module from inside its own backward hook.
+	# That inner pass must not file itself as another call of the module the
+	# outer pass is still unwinding.
+	ops = {torch.nn.LayerNorm: integrated_gradients_op(K=4, name="layernorm")}
+	X_attr = deep_lift_shap(shared, X, target=6, n_shuffles=3, device=device,
+		random_state=0, additional_nonlinear_ops=ops)
+	X_attr_ = deep_lift_shap(separate, X, target=6, n_shuffles=3,
+		device=device, random_state=0, additional_nonlinear_ops=ops)
+
+	assert_array_almost_equal(X_attr, X_attr_, 5)
+
+
+def test_deep_lift_shap_shared_batch_size(X, references):
+	torch.manual_seed(0)
+	model = SharedActivation()
+
+	X_attr0 = deep_lift_shap(model, X[:4], references=references[:4],
+		batch_size=1, device='cpu', random_state=0)
+	X_attr1 = deep_lift_shap(model, X[:4], references=references[:4],
+		batch_size=10000, device='cpu', random_state=0)
+
+	assert_array_almost_equal(X_attr0, X_attr1, 5)
+
+
+def test_deep_lift_shap_shared_module_cleanup(X, references):
+	torch.manual_seed(0)
+	model = SharedActivation()
+
+	deep_lift_shap(model, X[:4], references=references[:4], device='cpu',
+		random_state=0)
+
+	# The per-call activations must not outlive the attribution, the same way
+	# `module.input` and `module.output` must not.
+	for module in model.modules():
+		for name in ("handles", "_caches", "_fwd_counter", "_bw_idx",
+			"_staged", "input", "output"):
+			assert name not in module.__dict__
+
+
+###
+
+
+# One model per rule, then two that chain several of them together.
+AUTOCAST_MODELS = {
+	"nonlinear": ConvAvgDense,
+	"maxpool": ConvPoolDense,
+	"layernorm": ConvLayerNorm,
+	"rmsnorm": ConvRMSNorm,
+	"softmax": ConvSoftmax,
+	"bilinear": ConvBilinear,
+	"attention": MultiHeadAttention,
+	"transformer": lambda: TransformerBlock(seq_len=100, n_outputs=1,
+		n_blocks=2),
+}
+
+
+@pytest.mark.parametrize("rule", AUTOCAST_MODELS)
+def test_deep_lift_shap_autocast_bfloat16(X, references, device, rule):
+	torch.manual_seed(0)
+	model = AUTOCAST_MODELS[rule]()
+
+	# torch raises `hook 'hook' has changed the type of value` when a backward
+	# hook returns a gradient in a dtype other than the one it was handed, and
+	# a rule reading half-precision activations does not necessarily compute
+	# in half precision. Only the elementwise rule happened to.
+	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, dtype=torch.bfloat16, random_state=0,
+		warning_threshold=1e9)
+
+	assert X_attr.shape == X[:4].shape
+	assert X_attr.dtype == torch.bfloat16
+
+
+@pytest.mark.parametrize("rule", AUTOCAST_MODELS)
+def test_deep_lift_shap_autocast_float16(X, references, cuda_device, rule):
+	torch.manual_seed(0)
+	model = AUTOCAST_MODELS[rule]()
+
+	# fp16 autocast is CUDA-only, so this cannot use the `device` fixture.
+	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+		device=cuda_device, dtype=torch.float16, random_state=0,
+		warning_threshold=1e9)
+
+	assert X_attr.shape == X[:4].shape
+	assert X_attr.dtype == torch.float16
+
+
+def test_deep_lift_shap_autocast_matches_full_precision(X, references, device):
+	torch.manual_seed(0)
+	model = ConvPoolDense()
+
+	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, random_state=0)
+	X_attr_ = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, dtype=torch.bfloat16, random_state=0,
+		warning_threshold=1e9)
+
+	# Casting the multipliers back must not change which attributions come
+	# out, only their precision.
+	assert_array_almost_equal(X_attr, X_attr_.float(), 2)
+
+
+def test_deep_lift_shap_autocast_additional_nonlinear_ops(X, references,
+	device):
+	torch.manual_seed(0)
+	model = ConvLayerNorm()
+
+	# A rule supplied by the caller has to hold the same dtype contract, and
+	# the local-IG rule computes in whatever dtype its quadrature lands in.
+	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, dtype=torch.bfloat16, random_state=0,
+		warning_threshold=1e9, additional_nonlinear_ops={
+			torch.nn.LayerNorm: integrated_gradients_op(K=4,
+				name="layernorm")})
+
+	assert X_attr.dtype == torch.bfloat16

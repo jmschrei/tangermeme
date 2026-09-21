@@ -137,6 +137,13 @@ float sums) — thresholds tuned on CPU may need raising on GPU. To disambiguate
 genuinely precision-driven deltas, `deep_lift_shap(model.double(), X.double(),
 references=refs.double(), ...)` drops them to ~1e-16 (slower; fp64).
 
+`dtype=torch.bfloat16` or `dtype=torch.float16` runs the pass under autocast and
+returns attributions in that dtype. Expect deltas an order of magnitude above the
+fp32 ones; raise `warning_threshold` accordingly rather than reading them as an
+unhooked op. Before tangermeme 1.5.0 this raised `RuntimeError: hook 'hook' has
+changed the type of value` for any model containing a max-pool, a norm, a softmax
+or a bilinear op.
+
 When the delta is real rather than precision noise, the next two sections find
 the op responsible and fix it. When a closed-form rule is impractical to derive,
 reach for `integrated_gradients_op` instead. When nothing can be hooked at all,
@@ -414,43 +421,18 @@ the only property to check.
   Use a large finite mask instead, which softmaxes that row to uniform. Check
   `torch.isfinite(model(X)).all()` first when your model masks attention.
 
-### Reused modules corrupt attributions — check for this
+## Reused modules are handled
 
 A module assigned once and called several times, the common `self.relu` reused
-across layers, is a single instance in the module tree. The forward hooks cache
-`module.input` and `module.output` on that one instance, so the second call
-overwrites what the first stored and the backward rule reads the wrong
-activations. Weight sharing is the same problem.
+across layers, is a single instance in the module tree, and so is a genuinely
+weight-shared parameterized layer. The activations are cached per call, so the
+rules read the pair belonging to whichever call the backward pass is unwinding
+and a model does not have to be rewritten with one instance per call site.
 
-It is not silent, but it surfaces as a raised convergence delta rather than as
-anything naming the cause, so it is easy to misread as an unhooked op. When the
-call sites see different shapes it raises instead, usually a shape mismatch from
-inside a hook.
-
-```python
-from collections import Counter
-
-def find_reused_modules(model, X):
-	"""Modules called more than once in a forward pass, with their counts."""
-	counts, handles = Counter(), []
-	for name, module in model.named_modules():
-		handles.append(module.register_forward_hook(
-			lambda mod, inp, out, n=name: counts.update([n])))
-	try:
-		model(X)
-	finally:
-		for h in handles:
-			h.remove()
-	return {n: c for n, c in counts.items() if c > 1 and n != ""}
-
-find_reused_modules(model, X)   # {} is clean; {'relu': 2} is the problem
-```
-
-Report any hit whose type has a rule in the table above. The fix is to give
-each call site its own instance — `self.relu1`, `self.relu2` — which changes
-nothing about the model, since these ops are parameterless. For a genuinely
-weight-shared parameterized layer, instantiate one module per call site and tie
-the parameters instead of the modules.
+Before tangermeme 1.5.0 the cache held one pair per module rather than one per
+call, so every call but the last was attributed against the wrong activations.
+Attributions taken with an earlier version on a model that reuses a module are
+wrong and should be recomputed.
 
 ## hypothetical vs projected attributions
 

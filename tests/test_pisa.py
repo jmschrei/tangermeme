@@ -24,6 +24,7 @@ from tangermeme.pisa import pisa
 from .toy_models import SumModel
 from .toy_models import ConvBilinear
 from .toy_models import ConvRuleSeq
+from .toy_models import SharedRuleSeq
 from .toy_models import TransformerBlock
 from .toy_models import FlattenDense
 from .toy_models import Conv1
@@ -1253,3 +1254,59 @@ def test_pisa_clears_bilinear_caches(X, device):
 	for module in model.modules():
 		assert "left" not in module.__dict__
 		assert "right" not in module.__dict__
+
+
+###
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_shared_rules(X, device, rule):
+	torch.manual_seed(0)
+	shared = SharedRuleSeq(rule=rule, share=True)
+	separate = SharedRuleSeq(rule=rule, share=False)
+	separate.load_state_dict(shared.state_dict())
+
+	X = X[:1, :, :15]
+
+	X_attr = pisa(shared, X, device=device, n_shuffles=3, random_state=0,
+		batch_size=4)
+	X_attr_ = pisa(separate, X, device=device, n_shuffles=3, random_state=0,
+		batch_size=4)
+
+	# The two models are the same function, differing only in whether the
+	# operation is one module called twice or two modules called once.
+	assert_array_almost_equal(X_attr, X_attr_, 5)
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_shared_rules_batch_size(X, device, rule):
+	torch.manual_seed(0)
+	model = SharedRuleSeq(rule=rule, share=True, seq_len=12)
+	X = X[:1, :, :12]
+
+	# `pisa` takes one backward pass per block of output positions over a
+	# single forward graph, so the activations a reused module caches have to
+	# survive every pass rather than only the first. When they did not, the
+	# rule was skipped from the second block on and the answer depended on
+	# how the output positions happened to be grouped.
+	X_attr0 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=1)
+	X_attr1 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=4)
+	X_attr2 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=100000)
+
+	assert_array_almost_equal(X_attr0, X_attr1, 4)
+	assert_array_almost_equal(X_attr0, X_attr2, 4)
+
+
+def test_pisa_shared_module_cleanup(X):
+	torch.manual_seed(0)
+	model = SharedRuleSeq(rule="bilinear", share=True, seq_len=12)
+
+	pisa(model, X[:1, :, :12], device='cpu', n_shuffles=1, random_state=0)
+
+	for module in model.modules():
+		for name in ("handles", "_caches", "_fwd_counter", "_bw_idx",
+			"_staged", "input", "output", "left", "right"):
+			assert name not in module.__dict__

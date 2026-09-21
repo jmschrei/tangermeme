@@ -87,9 +87,10 @@ def _nonlinear(module, grad_input, grad_output):
 	Parameters
 	----------
 	module: torch.nn.Module
-		The module being corrected. The forward hooks have already cached
-		`module.input` and `module.output` on it, each holding the observed
-		batch concatenated with the reference batch along the first axis.
+		The module being corrected. The backward hook has put `module.input`
+		and `module.output` on it for the forward call being unwound, each
+		holding the observed batch concatenated with the reference batch along
+		the first axis.
 
 	grad_input: tuple of torch.tensor
 		What torch would pass to a full backward hook as the gradient with
@@ -139,9 +140,10 @@ def _maxpool(module, grad_input, grad_output):
 	Parameters
 	----------
 	module: torch.nn.Module
-		The module being corrected. The forward hooks have already cached
-		`module.input` and `module.output` on it, each holding the observed
-		batch concatenated with the reference batch along the first axis.
+		The module being corrected. The backward hook has put `module.input`
+		and `module.output` on it for the forward call being unwound, each
+		holding the observed batch concatenated with the reference batch along
+		the first axis.
 
 	grad_input: tuple of torch.tensor
 		What torch would pass to a full backward hook as the gradient with
@@ -240,9 +242,10 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 	Parameters
 	----------
 	module: torch.nn.Module
-		The module being corrected. The forward hooks have already cached
-		`module.input` and `module.output` on it, each holding the observed
-		batch concatenated with the reference batch along the first axis.
+		The module being corrected. The backward hook has put `module.input`
+		and `module.output` on it for the forward call being unwound, each
+		holding the observed batch concatenated with the reference batch along
+		the first axis.
 
 	grad_input: tuple of torch.tensor
 		What torch would pass to a full backward hook as the gradient with
@@ -340,9 +343,10 @@ def _layernorm(module, grad_input, grad_output):
 	Parameters
 	----------
 	module: torch.nn.LayerNorm
-		The module being corrected. The forward hooks have already cached
-		`module.input` and `module.output` on it, each holding the observed
-		batch concatenated with the reference batch along the first axis.
+		The module being corrected. The backward hook has put `module.input`
+		and `module.output` on it for the forward call being unwound, each
+		holding the observed batch concatenated with the reference batch along
+		the first axis.
 
 	grad_input: tuple of torch.tensor
 		What torch would pass to a full backward hook as the gradient with
@@ -382,9 +386,10 @@ def _rmsnorm(module, grad_input, grad_output):
 	Parameters
 	----------
 	module: torch.nn.RMSNorm
-		The module being corrected. The forward hooks have already cached
-		`module.input` and `module.output` on it, each holding the observed
-		batch concatenated with the reference batch along the first axis.
+		The module being corrected. The backward hook has put `module.input`
+		and `module.output` on it for the forward call being unwound, each
+		holding the observed batch concatenated with the reference batch along
+		the first axis.
 
 	grad_input: tuple of torch.tensor
 		What torch would pass to a full backward hook as the gradient with

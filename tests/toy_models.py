@@ -471,20 +471,28 @@ class CustomSqrt(torch.nn.Module):
 
 
 class DilatedConv(torch.nn.Module):
-	"""Three Conv1d layers with dilation 1, 2, 4, padding='same'."""
+	"""Three Conv1d layers with dilation 1, 2, 4, padding='same'.
 
-	def __init__(self, seq_len=100, n_outputs=1):
+	One `ReLU` is called after each convolution. `share=True` calls a single
+	instance three times, which is how the model is usually written and the
+	reason it exercises a module used more than once in a forward pass;
+	`share=False` spells the same function out with three instances.
+	"""
+
+	def __init__(self, seq_len=100, n_outputs=1, share=True):
 		super(DilatedConv, self).__init__()
 		self.conv1 = torch.nn.Conv1d(4, 8, (3,), dilation=1, padding='same')
 		self.conv2 = torch.nn.Conv1d(8, 8, (3,), dilation=2, padding='same')
 		self.conv3 = torch.nn.Conv1d(8, 8, (3,), dilation=4, padding='same')
 		self.relu = torch.nn.ReLU()
+		self.relu2 = self.relu if share else torch.nn.ReLU()
+		self.relu3 = self.relu if share else torch.nn.ReLU()
 		self.dense = torch.nn.Linear(8 * seq_len, n_outputs)
 
 	def forward(self, X):
 		h = self.relu(self.conv1(X))
-		h = self.relu(self.conv2(h))
-		h = self.relu(self.conv3(h))
+		h = self.relu2(self.conv2(h))
+		h = self.relu3(self.conv3(h))
 		return self.dense(h.reshape(h.shape[0], -1))
 
 
@@ -767,3 +775,134 @@ class AttributeNameConv(torch.nn.Module):
 	def forward(self, X):
 		h = self.relu(self.conv(X))
 		return self.dense(h.reshape(h.shape[0], -1))
+
+
+class SharedActivation(torch.nn.Module):
+	"""Two convolutions whose activation is one module called twice, or two.
+
+	A module called more than once in a forward pass sees a different input
+	and output each time, and a rule needs the pair belonging to the call the
+	backward pass is unwinding. The two convolutions change the number of
+	channels, so the two calls differ in shape as well as in value and pairing
+	them up wrongly cannot go unnoticed. `share=False` builds the same
+	function out of two instances, which is the answer the shared version has
+	to match.
+	"""
+
+	def __init__(self, share=True, seq_len=100, n_outputs=1):
+		super(SharedActivation, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (5,))
+		self.conv2 = torch.nn.Conv1d(8, 4, (3,))
+		self.relu1 = torch.nn.ReLU()
+		self.relu2 = self.relu1 if share else torch.nn.ReLU()
+		self.dense = torch.nn.Linear(4 * (seq_len - 6), n_outputs)
+
+	def forward(self, X):
+		h = self.relu1(self.conv1(X))
+		h = self.relu2(self.conv2(h))
+		return self.dense(h.reshape(h.shape[0], -1))
+
+
+class SharedPool(torch.nn.Module):
+	"""Two convolutions whose max-pool is one module called twice, or two.
+
+	The max-pool rule reads the cached input to recover the pooling indices,
+	so it needs the right call's activations for a different reason than the
+	elementwise rules do. The two calls see different lengths.
+	"""
+
+	def __init__(self, share=True, seq_len=100, n_outputs=1):
+		super(SharedPool, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.conv2 = torch.nn.Conv1d(8, 8, (3,), padding='same')
+		self.relu1 = torch.nn.ReLU()
+		self.relu2 = torch.nn.ReLU()
+		self.pool1 = torch.nn.MaxPool1d(2)
+		self.pool2 = self.pool1 if share else torch.nn.MaxPool1d(2)
+		self.dense = torch.nn.Linear(8 * (seq_len // 4), n_outputs)
+
+	def forward(self, X):
+		h = self.pool1(self.relu1(self.conv1(X)))
+		h = self.pool2(self.relu2(self.conv2(h)))
+		return self.dense(h.reshape(h.shape[0], -1))
+
+
+class SharedBranch(torch.nn.Module):
+	"""One activation used on two parallel branches rather than in sequence.
+
+	The two calls are siblings in the graph instead of one being nested inside
+	the other, so the backward pass does not reach them along a single chain.
+	Pairing a call with its activations by position in the forward order, or
+	by the reverse of it, gets this model wrong.
+	"""
+
+	def __init__(self, share=True, seq_len=100, n_outputs=1):
+		super(SharedBranch, self).__init__()
+		self.conv_a = torch.nn.Conv1d(4, 8, (3,), padding='same')
+		self.conv_b = torch.nn.Conv1d(4, 6, (3,), padding='same')
+		self.relu_a = torch.nn.ReLU()
+		self.relu_b = self.relu_a if share else torch.nn.ReLU()
+		self.dense = torch.nn.Linear(14 * seq_len, n_outputs)
+
+	def forward(self, X):
+		a = self.relu_a(self.conv_a(X))
+		b = self.relu_b(self.conv_b(X))
+		h = torch.cat([a, b], dim=1)
+		return self.dense(h.reshape(h.shape[0], -1))
+
+
+class SharedRuleSeq(torch.nn.Module):
+	"""`ConvRuleSeq` with its operation applied twice, as one module or two.
+
+	Every rule reads activations cached by the forward hooks, and `BilinearOp`
+	caches its two operands itself, so each of them has to be given the values
+	from the right call. The length axis is kept so that `pisa` can use this
+	model as well as `deep_lift_shap`.
+	"""
+
+	def __init__(self, rule="layernorm", share=True, seq_len=15, channels=8):
+		super(SharedRuleSeq, self).__init__()
+		self.rule = rule
+		self.conv = torch.nn.Conv1d(4, channels, (3,), padding='same')
+		self.mid = torch.nn.Conv1d(channels, channels, (3,), padding='same')
+		self.out = torch.nn.Conv1d(channels, 1, (3,))
+
+		def op():
+			if rule == "layernorm":
+				return torch.nn.LayerNorm([channels, seq_len])
+			elif rule == "rmsnorm":
+				return torch.nn.RMSNorm([channels, seq_len])
+			elif rule == "softmax":
+				return torch.nn.Softmax(dim=-1)
+			elif rule == "bilinear":
+				return BilinearOp("...,...->...")
+			raise ValueError("Unknown rule: {}".format(rule))
+
+		self.op1 = op()
+		self.op2 = self.op1 if share else op()
+
+		# LayerNorm and RMSNorm initialize to a weight of one and a bias of
+		# zero, which two separate instances share by accident. Moving them
+		# off the defaults is what makes the shared case a genuinely
+		# weight-shared layer rather than two parameterless ones.
+		with torch.no_grad():
+			for parameter in self.op1.parameters():
+				parameter.normal_(mean=1.0, std=0.1)
+
+		if rule == "bilinear":
+			self.gate = torch.nn.Conv1d(4, channels, (3,), padding='same')
+
+	def forward(self, X):
+		h = self.conv(X)
+
+		if self.rule == "bilinear":
+			gate = self.gate(X)
+			h = self.op1(h, gate)
+			h = self.op2(self.mid(h), gate)
+		else:
+			h = self.op1(h)
+			h = self.op2(self.mid(h))
+
+		# `pisa` indexes the output as (example, position), so the channel axis
+		# is squeezed out the same way ConvRuleSeq does it.
+		return self.out(h)[:, 0]
