@@ -109,7 +109,12 @@ A rule is registered per module *type*. These are the types `deep_lift_shap` and
 - **Elementwise activations** (rescale rule) — `ReLU`, `ReLU6`, `LeakyReLU`,
   `RReLU`, `PReLU`, `ELU`, `CELU`, `SELU`, `GELU`, `SiLU`, `Mish`, `GLU`,
   `Sigmoid`, `LogSigmoid`, `Tanh`, `Softplus`, `Softshrink`.
-- **Pooling** — `MaxPool1d`, `MaxPool2d`.
+- **Pooling** — `MaxPool1d`, `MaxPool2d`. Before tangermeme 1.5.0 the rule was
+  wrong when the windows overlapped (`kernel_size > stride`, e.g.
+  `MaxPool1d(4, 2)`): it dropped the contributions of every output position but
+  one wherever two windows shared a winning input position, giving large deltas
+  on *every* example that neither the CPU nor fp64 fixed. Non-overlapping
+  pooling was always fine.
 - **Coupling ops with closed forms** — `Softmax`, `LayerNorm`, `RMSNorm`, and
   `tangermeme.deep_lift_shap.BilinearOp`.
 
