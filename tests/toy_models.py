@@ -388,6 +388,113 @@ class TransformerBlock(torch.nn.Module):
 		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
 
 
+class AttentionPool(torch.nn.Module):
+	"""Attention pooling, the layer Enformer pools with.
+
+	Attention pooling takes a weighted average within each pool window rather
+	than the max or the mean: a 1x1 convolution scores the entries of the
+	window, a softmax turns those scores into weights, and the pooled value
+	is the window multiplied by its weights and summed. `enformer_pytorch`
+	writes both the softmax and the product as function calls, so neither has
+	a module for a rule to attach to and DeepLIFT silently treats a
+	non-linear layer as linear.
+
+	`hookable` selects between the two forms. When True the softmax sits
+	behind `torch.nn.Softmax` and the product behind `BilinearOp`, which is
+	what makes the layer attributable; when False the functional form is
+	reproduced, and with it the missing rules. The functional form can still
+	be attributed by registering this class with `integrated_gradients_op`,
+	which needs no rule for the operations inside it.
+
+	Unlike the rules' other users this layer changes the length of what it is
+	handed, and pads when the length is not a multiple of `pool_size`. The
+	padded entries are masked out of the softmax, which is the part of the
+	arrangement worth its own test, since the mask is applied outside the
+	softmax module and so has to be in the activations the rule reads.
+
+
+	Parameters
+	----------
+	channels: int, optional
+		The number of channels being pooled. Default is 8.
+
+	pool_size: int, optional
+		The number of positions averaged into each output position. Default
+		is 2.
+
+	hookable: bool, optional
+		Whether to write the softmax and the product as modules (`True`) or
+		as function calls (`False`). Default is True.
+	"""
+
+	def __init__(self, channels=8, pool_size=2, hookable=True):
+		super(AttentionPool, self).__init__()
+		self.pool_size = pool_size
+		self.hookable = hookable
+
+		# Enformer's initialization: a Dirac 1x1 convolution scaled by two, so
+		# that the layer begins as a soft maximum over each window instead of
+		# at an arbitrary set of weights.
+		self.logits = torch.nn.Conv2d(channels, channels, 1, bias=False)
+		torch.nn.init.dirac_(self.logits.weight)
+		with torch.no_grad():
+			self.logits.weight.mul_(2)
+
+		self.softmax = torch.nn.Softmax(dim=-1)
+		self.prod = BilinearOp("...,...->...")
+
+	def _window(self, X):
+		n, channels, length = X.shape
+		return X.reshape(n, channels, length // self.pool_size, self.pool_size)
+
+	def forward(self, X):
+		n, _, length = X.shape
+		remainder = length % self.pool_size
+
+		if remainder > 0:
+			pad = self.pool_size - remainder
+			X = torch.nn.functional.pad(X, (0, pad), value=0)
+
+			mask = torch.zeros((n, 1, length), dtype=torch.bool,
+				device=X.device)
+			mask = self._window(torch.nn.functional.pad(mask, (0, pad),
+				value=True))
+
+		X = self._window(X)
+		logits = self.logits(X)
+
+		if remainder > 0:
+			logits = logits.masked_fill(mask, -torch.finfo(logits.dtype).max)
+
+		if self.hookable:
+			return self.prod(X, self.softmax(logits)).sum(dim=-1)
+		return (X * logits.softmax(dim=-1)).sum(dim=-1)
+
+
+class ConvAttentionPool(torch.nn.Module):
+	"""conv -> attention pooling -> dense.
+
+	The model `AttentionPool` is tested through. `pool_size=3` on the default
+	length of 100 leaves a remainder, which is how the layer's padded and
+	masked path is reached.
+	"""
+
+	def __init__(self, seq_len=100, n_outputs=1, channels=8, pool_size=2,
+			hookable=True):
+		super(ConvAttentionPool, self).__init__()
+		self.conv = torch.nn.Conv1d(4, channels, (3,), padding='same')
+		self.relu = torch.nn.ReLU()
+		self.pool = AttentionPool(channels=channels, pool_size=pool_size,
+			hookable=hookable)
+		self.dense = torch.nn.Linear(
+			channels * -(-seq_len // pool_size), n_outputs)
+
+	def forward(self, X, alpha=0, beta=1):
+		h = self.pool(self.relu(self.conv(X)))
+		h = self.dense(h.reshape(h.shape[0], -1))
+		return h * beta + alpha
+
+
 class Conv2DExpand(torch.nn.Module):
 	"""Unsqueeze the alphabet axis, Conv2d that collapses height, then dense."""
 
