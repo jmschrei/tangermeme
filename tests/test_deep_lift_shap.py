@@ -23,6 +23,7 @@ from tangermeme.deep_lift_shap import _captum_deep_lift_shap
 from tangermeme.deep_lift_shap import _f_hook
 from tangermeme.deep_lift_shap import _b_hook
 from tangermeme._deep_lift_utils import _nonlinear
+from tangermeme._deep_lift_utils import _maxpool
 from tangermeme._deep_lift_utils import _bilinear
 from tangermeme._deep_lift_utils import _HookState
 from tangermeme._deep_lift_utils import _disable_hooks
@@ -1126,6 +1127,57 @@ def test_deep_lift_shap_stacked_overlapping_max_pools(X, device):
 			warning_threshold=1e-5)
 
 	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_stacked_max_pool_zero_denominator(X, device):
+	# Two stacked pools, neither overlapping, so this is not the overlap bug.
+	# The first pool's rule reads both halves of the gradient the second one
+	# hands back, so the second one has to give both halves the same value
+	# even where its denominator is zero and it falls back.
+	torch.manual_seed(11)
+
+	model = torch.nn.Sequential(
+		torch.nn.Conv1d(4, 8, (5,), bias=False),
+		torch.nn.MaxPool1d(2),
+		torch.nn.Conv1d(8, 8, (3,), bias=False),
+		torch.nn.MaxPool1d(2),
+		torch.nn.Flatten(),
+		torch.nn.Linear(184, 1)
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			n_shuffles=5, warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+
+
+def test_maxpool_rule_returns_the_same_multiplier_for_both_halves(device):
+	# The observed and the reference half carry one multiplier between them,
+	# and a pooling rule further up reads both. Where the denominator is
+	# exactly zero the rule substitutes something else, and that substitute
+	# has to agree across the halves too.
+	torch.manual_seed(0)
+
+	pool = torch.nn.MaxPool1d(2).to(device)
+	X = torch.randn(8, 4, 20, device=device)
+
+	# Half the rows mirror the other half, so most denominators are exactly
+	# zero; every third position is perturbed so some are not.
+	X[4:] = X[:4]
+	X[4:, :, ::3] += 1.0
+
+	pool.input = X
+	pool.output = pool(X)
+
+	grad_input = (torch.randn_like(X),)
+	grad_output = (torch.randn_like(pool.output),)
+
+	grad, = _maxpool(pool, grad_input, grad_output)
+	observed, reference = grad.chunk(2)
+
+	assert_array_almost_equal(observed.cpu(), reference.cpu(), 6)
 
 
 def test_deep_lift_shap_conv_relu_pool(X, device):
