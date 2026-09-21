@@ -66,6 +66,8 @@ from .toy_models import ScaledTanhModule
 from .toy_models import MultiHeadAttention
 from .toy_models import TransformerBlock
 from .toy_models import Transformer
+from .toy_models import AttentionPool
+from .toy_models import ConvAttentionPool
 
 from tangermeme.deep_lift_shap import BilinearOp
 from .toy_models import AttributeNameConv
@@ -3428,6 +3430,179 @@ def test_deep_lift_shap_preserves_user_attributes(X, device):
 
 
 ###
+# Attention pooling, the layer Enformer pools with. It is the first user of
+# these rules to change the length of what it is handed, and the softmax it
+# takes over each window can be applied to masked logits, so the rule has to
+# be right about activations the layer wrote outside of it.
+###
+
+
+ATTENTION_POOLS = [
+	{"pool_size": 2},
+	{"pool_size": 3},
+	{"pool_size": 5},
+]
+
+ATTENTION_POOL_IDS = ["even", "padded", "wide"]
+
+
+@pytest.mark.parametrize("kwargs", ATTENTION_POOLS, ids=ATTENTION_POOL_IDS)
+def test_deep_lift_shap_attention_pool(X, references, device, kwargs):
+	"""Attention pooling written from hookable modules converges.
+
+	The softmax and the product are the two non-linearities in the layer, and
+	each has a rule only when it is a module, so the guarantee holds across
+	the pooling layer rather than only around it. `pool_size=3` does not
+	divide the length of 100, which sends the layer through its padded and
+	masked path.
+	"""
+
+	torch.manual_seed(0)
+	model = ConvAttentionPool(**kwargs)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+			device=device, random_state=0,
+			warning_threshold=_rule_threshold(device))
+
+	assert X_attr.shape == X[:4].shape
+	assert X_attr.dtype == torch.float32
+
+
+def test_deep_lift_shap_attention_pool_values(X, references, device):
+	torch.manual_seed(0)
+	model = ConvAttentionPool()
+
+	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, random_state=0)
+
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[-0.0038,  0.0000,  0.0000, -0.0013],
+		 [ 0.0000, -0.0000, -0.0012, -0.0000],
+		 [-0.0000, -0.0000,  0.0000,  0.0000],
+		 [ 0.0000,  0.0058,  0.0000, -0.0000]],
+
+		[[-0.0000, -0.0000, -0.0036, -0.0000],
+		 [ 0.0024, -0.0000,  0.0000, -0.0000],
+		 [-0.0000,  0.0063,  0.0000,  0.0000],
+		 [ 0.0000,  0.0000,  0.0000,  0.0010]]], 4)
+
+
+def test_deep_lift_shap_attention_pool_padded_values(X, references, device):
+	torch.manual_seed(0)
+	model = ConvAttentionPool(pool_size=3)
+
+	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, random_state=0)
+
+	assert_array_almost_equal(X_attr[:2, :, :4], [
+		[[ 0.0008,  0.0000,  0.0000, -0.0086],
+		 [ 0.0000, -0.0000, -0.0010, -0.0000],
+		 [-0.0000,  0.0000,  0.0000,  0.0000],
+		 [-0.0000, -0.0094, -0.0000, -0.0000]],
+
+		[[ 0.0000,  0.0000, -0.0007,  0.0000],
+		 [ 0.0031,  0.0000,  0.0000, -0.0000],
+		 [ 0.0000,  0.0207,  0.0000,  0.0000],
+		 [-0.0000, -0.0000,  0.0000,  0.0006]]], 4)
+
+
+def test_deep_lift_shap_attention_pool_batch_size(X, references, device):
+	torch.manual_seed(0)
+	model = ConvAttentionPool()
+
+	X, references = X[:4], references[:4]
+
+	X_attr0 = deep_lift_shap(model, X, references=references, device=device,
+		random_state=0)
+	X_attr1 = deep_lift_shap(model, X, references=references, batch_size=1,
+		device=device, random_state=0)
+	X_attr2 = deep_lift_shap(model, X, references=references, batch_size=100000,
+		device=device, random_state=0)
+
+	# Pooling mixes across the length axis but never across the batch, so the
+	# result must not depend on how the pairs are grouped into batches.
+	assert_array_almost_equal(X_attr0, X_attr1, 4)
+	assert_array_almost_equal(X_attr0, X_attr2, 4)
+
+
+def test_deep_lift_shap_attention_pool_independence(X, references, device):
+	torch.manual_seed(0)
+	model = ConvAttentionPool()
+
+	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, random_state=0)
+	X_attr0 = deep_lift_shap(model, X[0:1], references=references[0:1],
+		device=device, random_state=0)
+	X_attr2 = deep_lift_shap(model, X[2:4], references=references[2:4],
+		device=device, random_state=0)
+
+	assert_array_almost_equal(X_attr[0:1], X_attr0, 4)
+	assert_array_almost_equal(X_attr[2:4], X_attr2, 4)
+
+
+@pytest.mark.parametrize("kwargs", ATTENTION_POOLS, ids=ATTENTION_POOL_IDS)
+def test_deep_lift_shap_attention_pool_functional_ops(X, references, device,
+	kwargs):
+	"""The form `enformer_pytorch` ships cannot be attributed as it stands.
+
+	Its softmax and its product are function calls, so there is no module for
+	either rule to attach to and both are silently treated as linear. The
+	convergence delta is the symptom, and it is asserted here so the
+	limitation is recorded rather than rediscovered. Swapping the softmax for
+	`torch.nn.Softmax` on its own does not fix it, since the product is the
+	second non-linearity; both have to become modules.
+	"""
+
+	torch.manual_seed(0)
+	model = ConvAttentionPool(hookable=False, **kwargs)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		assert_raises(RuntimeWarning, deep_lift_shap, model, X[:4],
+			references=references[:4], device=device, random_state=0,
+			warning_threshold=_rule_threshold(device))
+
+
+@pytest.mark.parametrize("kwargs", ATTENTION_POOLS, ids=ATTENTION_POOL_IDS)
+def test_deep_lift_shap_attention_pool_integrated_gradients_op(X, references,
+	device, kwargs):
+	"""The functional form converges once the whole layer gets a rule.
+
+	`integrated_gradients_op` needs nothing of the operations inside the
+	module it is registered for, so it attributes the layer as shipped
+	without rewriting the softmax or the product. That is the route for a
+	model whose weights are tied to a published layer definition.
+	"""
+
+	torch.manual_seed(0)
+	model = ConvAttentionPool(hookable=False, **kwargs)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+			device=device, random_state=0,
+			warning_threshold=_rule_threshold(device),
+			additional_nonlinear_ops={
+				AttentionPool: integrated_gradients_op(K=8, name="attnpool")})
+
+	torch.manual_seed(0)
+	X_attr_ = deep_lift_shap(ConvAttentionPool(**kwargs), X[:4],
+		references=references[:4], device=device, random_state=0)
+
+	# The path-integrated multiplier and the rescale rule are not the same
+	# attribution for a non-linear layer, so the two routes agree to within a
+	# fraction of the attribution scale rather than exactly. The gap does not
+	# shrink with K, which is what says it is the rules differing rather than
+	# the quadrature being coarse.
+	assert_array_almost_equal(X_attr, X_attr_, 3)
+
+
+###
 # The hook switch in `_deep_lift_utils`, which lets a rule re-run its own
 # module without the forward hooks overwriting the activations it is reading.
 ###
@@ -3766,6 +3941,7 @@ AUTOCAST_MODELS = {
 	"softmax": ConvSoftmax,
 	"bilinear": ConvBilinear,
 	"attention": MultiHeadAttention,
+	"attention_pool": lambda: ConvAttentionPool(pool_size=3),
 	"transformer": lambda: TransformerBlock(seq_len=100, n_outputs=1,
 		n_blocks=2),
 }
