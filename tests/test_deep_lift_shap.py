@@ -1012,6 +1012,122 @@ def test_deep_lift_shap_max_pool(X, device):
 		 [-0.0000, -0.0000, -0.0000,  0.5500, -0.0000, -0.0000, -0.0000,  0.1500, -0.3500, -0.0000]]], 4)
 
 
+def test_deep_lift_shap_overlapping_max_pool(X, device):
+	# MaxPool1d with kernel_size > stride makes the pooling windows overlap,
+	# so one input position can be the argmax of several output positions.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.MaxPool1d(4, 2),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_conv_relu_overlapping_pool(X, device):
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.Conv1d(4, 8, (5,)),
+		torch.nn.ReLU(),
+		torch.nn.MaxPool1d(10, 5),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_overlapping_max_pool_nondivisor_stride(X, device):
+	# A stride that does not divide the length of the sequence: X is 100 long
+	# and the windows step by 3, so the final window ends at 97 and the last
+	# two positions fall outside every window.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.MaxPool1d(5, 3),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+	assert_array_almost_equal(X_attr[:, :, -2:], torch.zeros(16, 4, 2), 4)
+
+
+def test_deep_lift_shap_overlapping_max_pool_ceil_mode(X, device):
+	# `ceil_mode` keeps a final, partial window, which pools fewer positions
+	# than the rest.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.MaxPool1d(5, 3, ceil_mode=True),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_overlapping_max_pool_padding(X, device):
+	# Padding shifts every window left, so the indices the pool reports no
+	# longer line up with the positions a window would cover unpadded.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.MaxPool1d(5, 3, padding=2),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+
+
+def test_deep_lift_shap_stacked_overlapping_max_pools(X, device):
+	# Three overlapping pools in one model, so the corrected multipliers of
+	# one have to feed the rule of the next.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.Conv1d(4, 8, (5,)),
+		torch.nn.ReLU(),
+		torch.nn.MaxPool1d(4, 2),
+		torch.nn.Conv1d(8, 8, (3,)),
+		torch.nn.ReLU(),
+		torch.nn.MaxPool1d(5, 3),
+		torch.nn.MaxPool1d(3, 2),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-5)
+
+	assert X_attr.shape == X.shape
+
+
 def test_deep_lift_shap_conv_relu_pool(X, device):
 	torch.manual_seed(0)
 

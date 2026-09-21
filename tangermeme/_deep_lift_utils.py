@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import math
+
 from contextlib import contextmanager
 
 import torch
@@ -123,6 +125,47 @@ def _nonlinear(module, grad_input, grad_output):
 	return (torch.where(idxs, grad_input[0], grad_output[0] * delta),)
 
 
+def _unpool(values, indices, shape):
+	"""Route pooled values back to the input positions that won each max.
+
+	`torch.nn.functional.max_unpool1d` and its 2D counterpart assign rather
+	than accumulate, so when one input position is the argmax of more than one
+	output window -- which happens whenever the pooling windows overlap, i.e.
+	`kernel_size` is larger than `stride` -- every contribution but one is
+	silently dropped. Scatter-adding keeps all of them, which is what the
+	rescale rule needs for the routed change to sum to the change in the
+	pooled output. The two agree exactly when the windows do not overlap.
+
+	Parameters
+	----------
+	values: torch.tensor
+		The values to route back, shaped like the pooled output.
+
+	indices: torch.tensor
+		The argmax indices returned by `max_pool1d` or `max_pool2d` when
+		called with `return_indices=True`, which index into the flattened
+		spatial dimensions of the un-pooled input.
+
+	shape: torch.Size or tuple
+		The shape of the un-pooled input, `(batch, channels, *spatial)`.
+
+
+	Returns
+	-------
+	unpooled: torch.tensor
+		`values` accumulated into a tensor of shape `shape`.
+	"""
+
+	n, d = shape[0], shape[1]
+
+	unpooled = torch.zeros(n, d, math.prod(shape[2:]), dtype=values.dtype,
+		device=values.device)
+	unpooled.scatter_add_(-1, indices.reshape(n, d, -1),
+		values.reshape(n, d, -1))
+
+	return unpooled.reshape(shape)
+
+
 def _maxpool(module, grad_input, grad_output):
 	"""An internal function implementing a max-pooling correction.
 
@@ -171,9 +214,9 @@ def _maxpool(module, grad_input, grad_output):
 	"""
 
 	if isinstance(module, torch.nn.MaxPool1d):
-		pool_func, unpool_func = F.max_pool1d, F.max_unpool1d
+		pool_func = F.max_pool1d
 	elif isinstance(module, torch.nn.MaxPool2d):
-		pool_func, unpool_func = F.max_pool2d, F.max_unpool2d
+		pool_func = F.max_pool2d
 	else:
 		raise ValueError("module must be either MaxPool1d or MaxPool2d")
 
@@ -190,9 +233,8 @@ def _maxpool(module, grad_input, grad_output):
 		_, indices = pool_func(module.input, module.kernel_size, module.stride, 
 			module.padding, module.dilation, module.ceil_mode, True)
 
-		unpool_ = unpool_func(grad_output[0] * delta_out, indices, 
-			module.kernel_size, module.stride, module.padding, 
-			list(module.input.shape))
+		unpool_ = _unpool(grad_output[0] * delta_out, indices,
+			module.input.shape)
 		unpool_delta, unpool_ref_delta = torch.chunk(unpool_, 2)
 
 	unpool_delta_ = unpool_delta + unpool_ref_delta
