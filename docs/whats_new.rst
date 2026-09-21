@@ -16,6 +16,8 @@ Claude Code skill
 
 	- The ``deep_lift_shap`` reference no longer tells the reader to rewrite a model that reuses a module, and no longer carries the helper that found them. Reused modules are attributed correctly now, so that advice would have had an agent restructure a model to work around something that is fixed.
 
+	- The ``deep_lift_shap`` reference gains attention pooling as a worked example, the layer Enformer pools with. ``enformer_pytorch``'s version writes both its softmax and its window product as function calls, so the layer carries two unhooked non-linearities rather than one, and swapping only the softmax for ``torch.nn.Softmax`` leaves the convergence delta where it was. Both routes out are written down: a rewrite that leaves the parameter set untouched, so a trained checkpoint loads straight into it, and registering the layer as shipped with ``integrated_gradients_op``, which asks only that the module take one tensor. The op has to be registered for the pooling layer rather than for a block that also contains a ReLU, whose kink slows the quadrature enough that ``K=8`` still warns. The audit table gains a row for the model, along with the note that the ``masked_fill`` of a padding mask it reports is a false positive.
+
 	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
 
 deep_lift_shap
