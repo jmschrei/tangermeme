@@ -397,10 +397,11 @@ def integrated_gradients_op(
 	quadrature over ``K`` nodes.
 
 	Only vector-Jacobian products are computed, never a full Jacobian. All
-	quadrature nodes and both halves of the upstream gradient are packed into
-	a single autograd call, so the cost is one backward pass over a batch
-	``2 * K`` times the size of the input rather than ``2 * K`` separate
-	passes.
+	quadrature nodes are packed into one batch, so the module is evaluated
+	once over a batch ``K`` times the size of the input rather than once per
+	node. The two halves of the upstream gradient are integrated along the
+	same path, so they share that forward pass and take one backward pass
+	each.
 
 	The module's forward and backward hooks are disabled during that pass, so
 	that re-entering the module neither overwrites the cached activations the
@@ -412,7 +413,7 @@ def integrated_gradients_op(
 	K: int, optional
 		The number of Gauss-Legendre quadrature points used to approximate the
 		path integral. Higher values give a more accurate multiplier at a
-		proportionally larger batch in the single autograd call. Default is 8.
+		proportionally larger batch in the forward pass. Default is 8.
 
 	name: str or None, optional
 		A suffix for the returned hook's ``__name__``, which is otherwise
