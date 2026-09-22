@@ -16,16 +16,24 @@ from tangermeme.utils import random_one_hot
 from tangermeme.ersatz import substitute
 from tangermeme.ersatz import shuffle
 from tangermeme.ersatz import dinucleotide_shuffle
+from tangermeme.ersatz import local_dinucleotide_shuffle
 
 from tangermeme.deep_lift_shap import hypothetical_attributions
 from tangermeme.deep_lift_shap import deep_lift_shap
+from tangermeme.pisa import pisa
 from tangermeme.deep_lift_shap import _captum_deep_lift_shap
 from tangermeme.deep_lift_shap import _f_hook
 from tangermeme.deep_lift_shap import _b_hook
 from tangermeme._deep_lift_utils import _nonlinear
 from tangermeme._deep_lift_utils import _maxpool
 from tangermeme._deep_lift_utils import _windows_overlap
+from tangermeme._deep_lift_utils import _is_dilated
 from tangermeme._deep_lift_utils import _bilinear
+from tangermeme._deep_lift_utils import _glu
+from tangermeme._deep_lift_utils import _build_nonlinear_ops
+from tangermeme._deep_lift_utils import _softmax
+from tangermeme._deep_lift_utils import _layernorm
+from tangermeme._deep_lift_utils import _rmsnorm
 from tangermeme._deep_lift_utils import _HookState
 from tangermeme._deep_lift_utils import _disable_hooks
 from tangermeme._deep_lift_utils import _hooks_disabled
@@ -56,6 +64,7 @@ from .toy_models import MultiInputMultiOutput
 from .toy_models import ConvLayerNorm
 from .toy_models import ConvRMSNorm
 from .toy_models import ConvSoftmax
+from .toy_models import ConvGLU
 from .toy_models import ConvBilinear
 from .toy_models import ConvBilinearMatmul
 from .toy_models import ConvBilinearEinsum
@@ -385,6 +394,93 @@ def test_deep_lift_shap_reference_tensor(X, device):
            0.0000,  0.0000, -0.0000],
          [-0.0000, -0.0000,  0.0000,  0.0258,  0.0000, -0.0000,  0.0000,
           -0.0055,  0.0078, -0.0000]]], 4)
+
+
+def test_deep_lift_shap_local_dinucleotide_shuffle_references(device):
+	"""`local_dinucleotide_shuffle` satisfies the `references=` contract.
+
+	It is called with `n=1` and, when seeded, with `random_state=`, and has
+	to return `(batch, 1, *X.shape[1:])`. `bin_size` defaults to 1024 and
+	must be shorter than the sequence, so a window narrower than that needs
+	the argument bound first.
+	"""
+
+	torch.manual_seed(0)
+	X_ = random_one_hot((2, 4, 2048), random_state=0).type(torch.float32)
+	model = torch.nn.Sequential(
+		torch.nn.Conv1d(4, 8, (5,)),
+		torch.nn.ReLU(),
+		TorchSum()
+	)
+
+	# `TorchSum` reduces eight channels over 2044 positions, so the output,
+	# and with it the floating-point residual, is larger than the 100bp
+	# models' by about the same factor.
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X_,
+			references=local_dinucleotide_shuffle, n_shuffles=2,
+			device=device, random_state=0,
+			warning_threshold=1e-3 if device == "cpu" else 1e-2)
+
+	assert X_attr.shape == X_.shape
+	assert X_attr.dtype == torch.float32
+
+	# Seeded, so a second call reproduces the first.
+	X_attr_ = deep_lift_shap(model, X_,
+		references=local_dinucleotide_shuffle, n_shuffles=2, device=device,
+		random_state=0)
+	assert_array_almost_equal(X_attr, X_attr_, 6)
+
+
+def test_deep_lift_shap_local_dinucleotide_shuffle_bin_size(X, device):
+	# A window shorter than one bin raises from inside the shuffle, which is
+	# every sequence under 1024bp at the default `bin_size`.
+	assert_raises(ValueError, deep_lift_shap, torch.nn.Sequential(TorchSum()),
+		X, references=local_dinucleotide_shuffle, n_shuffles=2, device=device)
+
+
+@pytest.mark.parametrize("entry_point", ["tensor", "callable"])
+def test_deep_lift_shap_all_zeros_reference(X, device, entry_point):
+	"""An all-zeros baseline has to work through both `references=` paths.
+
+	A reference tensor is validated and a reference callable's output is not,
+	so the tensor path used to reject the all-zeros baseline the callable
+	path ran without complaint. Values outside {0, 1} are still rejected,
+	which is checked below.
+	"""
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	def zeros(X, n, random_state=None):
+		return torch.zeros(X.shape[0], n, *X.shape[1:])
+
+	if entry_point == "tensor":
+		references = torch.zeros(X.shape[0], 1, *X.shape[1:])
+	else:
+		references = zeros
+
+	X_attr = deep_lift_shap(model, X, references=references, n_shuffles=1,
+		device=device, random_state=0)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+
+
+def test_deep_lift_shap_non_ohe_reference_tensor_raises(X, device):
+	# Allowing an all-zero column must not also allow a multi-hot column or a
+	# value that is neither zero nor one.
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	uniform = torch.full((X.shape[0], 1, *X.shape[1:]), 0.25)
+	multi_hot = torch.ones(X.shape[0], 1, *X.shape[1:])
+
+	assert_raises(ValueError, deep_lift_shap, model, X, references=uniform,
+		device=device)
+	assert_raises(ValueError, deep_lift_shap, model, X, references=multi_hot,
+		device=device)
 
 
 def test_deep_lift_shap_batch_size(X, device):
@@ -759,6 +855,20 @@ class TorchSum(torch.nn.Module):
 			return torch.sum(X, dim=(-1, -2)).unsqueeze(-1)
 
 
+class Unsqueeze(torch.nn.Module):
+	"""Add the height axis a Conv2d takes, so a 2D pool can be tested."""
+
+	def forward(self, X):
+		return X.unsqueeze(1)
+
+
+class SumAll(torch.nn.Module):
+	"""Reduce whatever shape it is handed to `(batch, 1)`."""
+
+	def forward(self, X):
+		return X.reshape(X.shape[0], -1).sum(dim=-1, keepdims=True)
+
+
 def test_deep_lift_shap_linear(X, device):
 	torch.manual_seed(0)
 
@@ -1108,6 +1218,94 @@ def test_deep_lift_shap_overlapping_max_pool_padding(X, device):
 	assert X_attr.shape == X.shape
 
 
+def test_deep_lift_shap_dilated_max_pool(X, device):
+	# A dilated pool whose windows do not overlap: the span is
+	# dilation * (kernel_size - 1) + 1 = 3, which fits inside the stride of 3.
+	# `max_unpool1d` has no dilation argument and sizes its output as though
+	# there were none, so routing a dilated pool to it raised
+	# `ValueError: invalid output_size` on the true length of the input.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.MaxPool1d(2, 3, dilation=2),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X[:, :, :20], device=device,
+			random_state=0, warning_threshold=1e-5)
+
+	assert X_attr.shape == (16, 4, 20)
+
+
+def test_deep_lift_shap_dilated_overlapping_max_pool(X, device):
+	# The same layer with a stride shorter than the dilated span, so the
+	# windows overlap as well as skipping positions.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		torch.nn.MaxPool1d(3, 2, dilation=2),
+		TorchSum()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X[:, :, :20], device=device,
+			random_state=0, warning_threshold=1e-5)
+
+	assert X_attr.shape == (16, 4, 20)
+
+
+def test_deep_lift_shap_max_pool_2d(X, device):
+	# MaxPool2d is in the rule table and `_unpool` flattens both spatial axes
+	# to scatter into, which is a different index space from the 1D case.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		Unsqueeze(),
+		torch.nn.Conv2d(1, 4, (2, 3), padding='same'),
+		torch.nn.ReLU(),
+		torch.nn.MaxPool2d(2),
+		SumAll()
+	)
+
+	# `SumAll` reduces four channels over 400 positions, so the output is a
+	# couple of orders of magnitude larger than the 1D models' and the
+	# floating-point residual scales with it.
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-4)
+
+	assert X_attr.shape == X.shape
+
+
+@pytest.mark.parametrize("kernel_size,stride", [
+	((3, 3), (3, 1)), ((2, 4), (2, 2)), ((3, 3), (1, 1)),
+])
+def test_deep_lift_shap_overlapping_max_pool_2d(X, device, kernel_size,
+	stride):
+	# One input position can win several windows on either axis, so the
+	# scatter-add has to accumulate across both.
+	torch.manual_seed(0)
+
+	model = torch.nn.Sequential(
+		Unsqueeze(),
+		torch.nn.Conv2d(1, 4, (2, 3), padding='same'),
+		torch.nn.ReLU(),
+		torch.nn.MaxPool2d(kernel_size, stride),
+		SumAll()
+	)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
+			warning_threshold=1e-4)
+
+	assert X_attr.shape == X.shape
+
+
 def test_deep_lift_shap_stacked_overlapping_max_pools(X, device):
 	# Three overlapping pools in one model, so the corrected multipliers of
 	# one have to feed the rule of the next.
@@ -1188,6 +1386,7 @@ def test_maxpool_rule_returns_the_same_multiplier_for_both_halves(device):
 	(3, 5, 1, False), (4, None, 1, False),
 	(4, 2, 1, True), (5, 3, 1, True), (10, 5, 1, True), (20, 3, 1, True),
 	(3, 3, 2, True), (2, 3, 3, True),
+	(2, 3, 2, False), (3, 5, 2, False), (2, 4, 3, False),
 ])
 def test_windows_overlap_1d(kernel_size, stride, dilation, overlap):
 	# Which routing primitive the max-pool rule may use turns on this, and
@@ -1211,6 +1410,19 @@ def test_windows_overlap_defaults_stride_to_kernel_size(device):
 	# default is the common non-overlapping case.
 	assert _windows_overlap(torch.nn.MaxPool1d(4)) is False
 	assert _windows_overlap(torch.nn.MaxPool2d(3)) is False
+
+
+@pytest.mark.parametrize("pool,dilated", [
+	(torch.nn.MaxPool1d(4), False),
+	(torch.nn.MaxPool1d(2, 3, dilation=2), True),
+	(torch.nn.MaxPool2d(3), False),
+	(torch.nn.MaxPool2d(3, dilation=(1, 2)), True),
+	(torch.nn.MaxPool2d(3, dilation=(2, 2)), True),
+])
+def test_is_dilated(pool, dilated):
+	# `max_unpool` takes no dilation argument, so this decides whether the
+	# rule may use it at all, independently of whether the windows overlap.
+	assert _is_dilated(pool) == dilated
 
 
 def test_deep_lift_shap_conv_relu_pool(X, device):
@@ -1887,6 +2099,35 @@ def test_deep_lift_shap_rmsnorm_explicit_eps(X, references, device):
 	assert X_attr.shape == X.shape
 
 
+@pytest.mark.parametrize("model_cls,norm_cls,attr", [
+	(ConvLayerNorm, torch.nn.LayerNorm, "ln"),
+	(ConvRMSNorm, torch.nn.RMSNorm, "norm"),
+])
+def test_deep_lift_shap_norm_without_affine(X, references, device, model_cls,
+	norm_cls, attr):
+	"""`elementwise_affine=False` leaves `module.weight` as None.
+
+	The rule scales the upstream gradient by the affine weight, so the
+	no-affine layer takes the branch that substitutes a scalar one for it.
+	Both norms default to carrying a weight, so nothing else here reaches it.
+	"""
+
+	torch.manual_seed(0)
+	model = model_cls(seq_len=X.shape[-1])
+	setattr(model, attr, norm_cls([8, X.shape[-1]], elementwise_affine=False))
+	assert getattr(model, attr).weight is None
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		X_attr = deep_lift_shap(model, X, references=references,
+			device=device, random_state=0,
+			warning_threshold=1e-4 if device == "cpu" else 1e-2)
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+
+
 def test_deep_lift_shap_softmax(X, references, device):
 	# fp32 attribution residuals on CUDA are a few orders of magnitude larger
 	# than on CPU, so the convergence threshold is loosened for the cuda pass.
@@ -1935,6 +2176,7 @@ RULE_MODELS = [
 	(ConvLayerNorm, None),
 	(ConvRMSNorm, None),
 	(ConvSoftmax, None),
+	(ConvGLU, None),
 	(ConvBilinear, None),
 	(ConvBilinearMatmul, None),
 	(ConvBilinearEinsum, None),
@@ -1942,7 +2184,7 @@ RULE_MODELS = [
 	(ConvCustomGate, CustomGate),
 ]
 
-RULE_IDS = ["layernorm", "rmsnorm", "softmax", "bilinear_elementwise",
+RULE_IDS = ["layernorm", "rmsnorm", "softmax", "glu", "bilinear_elementwise",
 	"bilinear_matmul", "bilinear_einsum", "custom_nonlinear", "custom_bilinear"]
 
 RULE_PARAMS = pytest.mark.parametrize("model_cls,op", RULE_MODELS, ids=RULE_IDS)
@@ -2229,6 +2471,17 @@ RULE_REGRESSION = {
 		 [-0.0007,  0.0000,  0.0000, -0.0000],
 		 [-0.0000,  0.0145,  0.0000, -0.0000],
 		 [ 0.0000, -0.0000,  0.0000,  0.0052]]],
+
+	"ConvGLU": [
+		[[-0.0011,  0.0000, -0.0000,  0.0102],
+		 [ 0.0000,  0.0000,  0.0088, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000],
+		 [ 0.0000, -0.0103,  0.0000,  0.0000]],
+
+		[[ 0.0000,  0.0000, -0.0091,  0.0000],
+		 [ 0.0046,  0.0000,  0.0000, -0.0000],
+		 [-0.0000, -0.0011,  0.0000, -0.0000],
+		 [ 0.0000, -0.0000,  0.0000,  0.0055]]],
 
 	"ConvBilinear": [
 		[[-0.0004,  0.0000,  0.0000,  0.0040],
@@ -2907,13 +3160,14 @@ def test_deep_lift_shap_softmax_axes_agree(X, references, device):
 def test_deep_lift_shap_softmax_peaked_logits(X, references, device):
 	"""A peaked softmax still has to satisfy summation-to-delta.
 
-	The rule guards two ratios separately, `delta_a / delta_x` and
-	`delta_log(a) / delta_a`, whose product is `delta_log(a) / delta_x` and so
-	is exactly one. Peaking the distribution drives most of the exponentials
-	small enough that the second guard trips while the first does not, and the
-	product stops being one. The failure is in the guard rather than in
-	floating point, so it does not go away in float64 and it grows with the
-	spread of the logits.
+	The rule folds `delta_a / delta_x` and `delta_log(a) / delta_a` together
+	rather than evaluating each behind its own threshold, since their product
+	is `delta_log(a) / delta_x` and so is exactly one. Peaking the
+	distribution is what separates the two: it drives most of the
+	exponentials small enough that one threshold would trip while the other
+	does not. Any formulation that guards them independently fails here in a
+	way that is not floating point, so it does not go away in float64 and it
+	grows with the spread of the logits.
 	"""
 
 	torch.manual_seed(0)
@@ -2931,6 +3185,83 @@ def test_deep_lift_shap_softmax_peaked_logits(X, references, device):
 
 	deltas = X_attr.sum(dim=(1, 2)).cpu() - (y - y_ref).cpu()
 	assert_array_almost_equal(deltas, numpy.zeros(X.shape[0]), 4)
+
+
+def test_deep_lift_shap_glu_length_axis(X, references, device):
+	"""The rule follows `module.dim` rather than assuming the channel axis.
+
+	`dim=-1` halves the length instead, which swaps which axis the two
+	operands are split along and which one the output keeps.
+	"""
+
+	torch.manual_seed(0)
+	model = ConvGLU(seq_len=X.shape[-1], dim=-1)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		X_attr = deep_lift_shap(model, X, references=references,
+			device=device, random_state=0,
+			warning_threshold=_rule_threshold(device))
+
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+
+
+def test_glu_rule_batch_axis_raises(device):
+	# DeepLIFT stacks each example with its reference along the batch axis,
+	# so gating over it would pair an example against its own reference. The
+	# rule is called directly because a model shaped to survive the halving
+	# would have to be built around the invalid layer.
+	torch.manual_seed(0)
+
+	glu = torch.nn.GLU(dim=0).to(device)
+	X_ = torch.randn(8, 4, 20, device=device)
+
+	glu.input = X_
+	glu.output = glu(X_)
+
+	grad_input = (torch.randn_like(X_),)
+	grad_output = (torch.randn_like(glu.output),)
+
+	assert_raises(ValueError, _glu, glu, grad_input, grad_output)
+
+
+def test_deep_lift_shap_glu_matches_explicit_gate(X, references, device):
+	"""`_glu` must agree with the same gate written out of hookable modules.
+
+	`a * sigmoid(b)` built from `torch.nn.Sigmoid` and `BilinearOp` is the
+	same function attributed through two rules that were already covered, so
+	it is an independent check on the single closed-form rule rather than a
+	restatement of it.
+	"""
+
+	class ExplicitGate(torch.nn.Module):
+		def __init__(self, source):
+			super().__init__()
+			self.conv = source.conv
+			self.sigmoid = torch.nn.Sigmoid()
+			self.prod = BilinearOp("...,...->...")
+			self.dense = source.dense
+
+		def forward(self, X, alpha=0, beta=1):
+			a, b = self.conv(X).chunk(2, dim=1)
+			h = self.prod(a, self.sigmoid(b))
+			return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
+
+	torch.manual_seed(0)
+	model = ConvGLU(seq_len=X.shape[-1])
+	explicit = ExplicitGate(model)
+
+	with torch.no_grad():
+		assert torch.allclose(model(X), explicit(X), atol=1e-6)
+
+	X_attr = deep_lift_shap(model, X, references=references, device=device,
+		random_state=0)
+	X_attr_ = deep_lift_shap(explicit, X, references=references,
+		device=device, random_state=0)
+
+	assert_array_almost_equal(X_attr, X_attr_, 5)
 
 
 def test_deep_lift_shap_softmax_batch_axis_raises(X, references, device):
@@ -3603,6 +3934,86 @@ def test_deep_lift_shap_attention_pool_integrated_gradients_op(X, references,
 
 
 ###
+# The rule table, which `deep_lift_shap` and `pisa` share.
+###
+
+
+def _captured_ops(entry_point, X):
+	"""Return the rule table `entry_point` attaches to the model's modules."""
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	captured = {}
+
+	# The table is attached to every module for the duration of the call and
+	# deleted in the `finally`, so it has to be read from inside one.
+	original = torch.nn.Module.__setattr__
+
+	def _setattr(self, name, value):
+		if name == "_NON_LINEAR_OPS" and not captured:
+			captured.update(value)
+		original(self, name, value)
+
+	torch.nn.Module.__setattr__ = _setattr
+	try:
+		entry_point(model, X, device="cpu", n_shuffles=2, random_state=0)
+	finally:
+		torch.nn.Module.__setattr__ = original
+
+	return captured
+
+
+def test_deep_lift_shap_and_pisa_share_one_rule_table():
+	"""Both entry points must register the same rule for the same type.
+
+	They each attach a table to every module in the model and the hooks read
+	it from there, so a rule present in one table and missing from the other
+	would be correct through one entry point and silently treated as linear
+	through the other. Building the table in one place is what keeps them
+	from drifting; this is the check that they have not.
+	"""
+
+	X_ = random_one_hot((2, 4, 100), random_state=0).type(torch.float32)
+
+	dls_ops = _captured_ops(deep_lift_shap, X_)
+	pisa_ops = _captured_ops(pisa, X_)
+
+	assert dls_ops == pisa_ops
+	assert dls_ops == _build_nonlinear_ops()
+
+
+def test_build_nonlinear_ops_covers_the_documented_types():
+	ops = _build_nonlinear_ops()
+
+	assert ops[torch.nn.ReLU] is _nonlinear
+	assert ops[torch.nn.MaxPool1d] is _maxpool
+	assert ops[torch.nn.MaxPool2d] is _maxpool
+	assert ops[torch.nn.Softmax] is _softmax
+	assert ops[torch.nn.LayerNorm] is _layernorm
+	assert ops[torch.nn.RMSNorm] is _rmsnorm
+	assert ops[torch.nn.GLU] is _glu
+	assert ops[BilinearOp] is _bilinear
+
+	# Nothing linear may be in the table; a rule for one of these would be
+	# applied where none is needed.
+	for cls in (torch.nn.Conv1d, torch.nn.Linear, torch.nn.BatchNorm1d,
+		torch.nn.AvgPool1d, torch.nn.Embedding, torch.nn.Dropout):
+		assert cls not in ops
+
+
+def test_build_nonlinear_ops_returns_a_fresh_table():
+	# Both callers overwrite entries from `additional_nonlinear_ops`, so a
+	# shared instance would leak one call's overrides into the next.
+	first = _build_nonlinear_ops()
+	second = _build_nonlinear_ops({torch.nn.ReLU: _maxpool})
+
+	assert first is not second
+	assert first[torch.nn.ReLU] is _nonlinear
+	assert second[torch.nn.ReLU] is _maxpool
+	assert _build_nonlinear_ops()[torch.nn.ReLU] is _nonlinear
+
+
+###
 # The hook switch in `_deep_lift_utils`, which lets a rule re-run its own
 # module without the forward hooks overwriting the activations it is reading.
 ###
@@ -3847,7 +4258,7 @@ def test_deep_lift_shap_shared_dilated_conv(X, references, device):
 	assert_array_almost_equal(X_attr, X_attr_, 5)
 
 
-@pytest.mark.parametrize("rule", ["layernorm", "rmsnorm", "softmax",
+@pytest.mark.parametrize("rule", ["layernorm", "rmsnorm", "softmax", "glu",
 	"bilinear"])
 def test_deep_lift_shap_shared_rules(X, device, rule):
 	torch.manual_seed(0)

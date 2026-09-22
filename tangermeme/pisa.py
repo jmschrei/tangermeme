@@ -9,7 +9,6 @@ import warnings
 from collections.abc import Callable
 from typing import Any
 
-import numpy
 import torch
 
 from tqdm import trange
@@ -21,15 +20,9 @@ from .results import AttributionReferencesResult
 from tangermeme.predict import predict
 from tangermeme.utils import _validate_input
 
-from tangermeme._deep_lift_utils import _nonlinear
-from tangermeme._deep_lift_utils import _maxpool
-from tangermeme._deep_lift_utils import _softmax
-from tangermeme._deep_lift_utils import _layernorm
-from tangermeme._deep_lift_utils import _rmsnorm
-from tangermeme._deep_lift_utils import _bilinear
+from tangermeme._deep_lift_utils import _build_nonlinear_ops
 
-from tangermeme.deep_lift_shap import BilinearOp
-from tangermeme.deep_lift_shap import _clear_hooks, _register_hooks
+from tangermeme.deep_lift_shap import _attributing
 from tangermeme.deep_lift_shap import _reset_caches
 from tangermeme.deep_lift_shap import hypothetical_attributions
 
@@ -48,7 +41,7 @@ def pisa(
 	print_convergence_deltas: bool = False,
 	raw_outputs: bool = False,
 	device: str | torch.device | None = None,
-	random_state: int | numpy.random.RandomState | None = None,
+	random_state: int | None = None,
 	verbose: bool = False,
 ) -> torch.Tensor | AttributionReferencesResult:
 	"""An implementation of Pairwise Influence by Sequence Attribution (PISA).
@@ -66,7 +59,6 @@ def pisa(
 	seems to not be the case. This is, in part, due to DeepLIFT/SHAP overriding
 	some of the gradient operations in ways that do not play nicely with some
 	of PyTorch's built-in functions.
-
 
 	Parameters
 	----------
@@ -102,8 +94,12 @@ def pisa(
 		should serve to transform a sequence into some form of signal-null
 		background, such as by shuffling it. If a torch.Tensor is passed in,
 		that tensor must have shape `(len(X), n_shuffles, *X.shape[1:])`, in
-		that for each sequence a number of shuffles are provided. Default is
-		the function `dinucleotide_shuffle`. 
+		that for each sequence a number of shuffles are provided, and must be
+		one-hot encoded, though an all-zero column is allowed so that an
+		all-zeros baseline can be passed as a tensor. A baseline that is not
+		one-hot at all, such as 0.25 everywhere, has to go through a callable,
+		which is not validated. Default is the function
+		`dinucleotide_shuffle`. 
 
 	n_shuffles: int, optional
 		The number of shuffles to use if a function is given for `references`.
@@ -152,13 +148,15 @@ def pisa(
 		None, use CUDA when available and fall back to CPU otherwise. Default
 		is None.
 
-	random_state: int or None or numpy.random.RandomState, optional
-		The random seed to use to ensure determinism. If None, the
-		process is not deterministic. Default is None. 
+	random_state: int or None, optional
+		The random seed to use to ensure determinism. Must be an int (or
+		None); the value is handed to the `references` callable, which adds
+		an integer offset to it, so `numpy.random.RandomState` instances are
+		not supported here. If None, the process is not deterministic.
+		Default is None. 
 
 	verbose: bool, optional
 		Whether to display a progress bar. Default is False.
-
 
 	Returns
 	-------
@@ -193,62 +191,18 @@ def pisa(
 		raise ValueError("pisa requires at least one example; got X with "
 			"shape[0] == 0.")
 
-	_NON_LINEAR_OPS = {
-		torch.nn.ReLU: _nonlinear,
-		torch.nn.ReLU6: _nonlinear,
-		torch.nn.RReLU: _nonlinear,
-		torch.nn.SELU: _nonlinear,
-		torch.nn.CELU: _nonlinear,
-		torch.nn.GELU: _nonlinear,
-		torch.nn.SiLU: _nonlinear,
-		torch.nn.Mish: _nonlinear,
-		torch.nn.GLU: _nonlinear,
-		torch.nn.ELU: _nonlinear,
-		torch.nn.LeakyReLU: _nonlinear,
-		torch.nn.Sigmoid: _nonlinear,
-		torch.nn.Tanh: _nonlinear,
-		torch.nn.Softplus: _nonlinear,
-		torch.nn.Softshrink: _nonlinear,
-		torch.nn.LogSigmoid: _nonlinear,
-		torch.nn.PReLU: _nonlinear,
-		torch.nn.MaxPool1d: _maxpool,
-		torch.nn.MaxPool2d: _maxpool,
-		torch.nn.Softmax: _softmax,
-		torch.nn.LayerNorm: _layernorm,
-		torch.nn.RMSNorm: _rmsnorm,
-		BilinearOp: _bilinear,
-	}
-
-	# Misc. set up for overriding operations
-
-	if additional_nonlinear_ops is not None:
-		for key, value in additional_nonlinear_ops.items():
-			_NON_LINEAR_OPS[key] = value
+	# `deep_lift_shap` and `pisa` share the hooks that read this table, so it
+	# is built in one place rather than written out in each of them.
+	_NON_LINEAR_OPS = _build_nonlinear_ops(additional_nonlinear_ops)
 
 	device = _resolve_device(device)
-	try:
-		_orig_device = next(model.parameters()).device
-	except StopIteration:
-		_orig_device = None
-	_was_training = model.training
 
-	model.to(device).eval()
-
-	try:
-		for module in model.modules():
-			module._NON_LINEAR_OPS = _NON_LINEAR_OPS
-
-		try:
-			model.apply(_register_hooks)
-		except Exception as e:
-			model.apply(_clear_hooks)
-			raise(e)
-
+	with _attributing(model, device, _NON_LINEAR_OPS):
 		# Begin PISA procedure    
 		attributions, references_ = [], [] 
 		if isinstance(references, torch.Tensor):
 			_validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
-				X.shape[2]), ohe=True, allow_N=False, ohe_dim=-2)
+				X.shape[2]), ohe=True, allow_N=True, ohe_dim=-2)
 			n_shuffles = references.shape[1]
 
 		_probe_args = None if args is None else tuple(a[:1] for a in args)
@@ -350,20 +304,9 @@ def pisa(
 
 			attributions.append(attr)
 
-
 		attributions = torch.stack(attributions).detach()
 
 		if return_references:
 			return AttributionReferencesResult(attributions=attributions,
 				references=torch.stack(references_).detach())
 		return attributions
-	finally:
-		model.apply(_clear_hooks)
-		for module in model.modules():
-			if hasattr(module, "_NON_LINEAR_OPS"):
-				del module._NON_LINEAR_OPS
-
-		if _was_training:
-			model.train()
-		if _orig_device is not None and _orig_device != device:
-			model.to(_orig_device)
