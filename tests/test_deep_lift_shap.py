@@ -4002,7 +4002,7 @@ def test_build_nonlinear_ops_covers_the_documented_types():
 
 
 def test_build_nonlinear_ops_returns_a_fresh_table():
-	# Both callers overwrite entries from `additional_nonlinear_ops`, so a
+	# `additional_nonlinear_ops` is merged into the returned table, so a
 	# shared instance would leak one call's overrides into the next.
 	first = _build_nonlinear_ops()
 	second = _build_nonlinear_ops({torch.nn.ReLU: _maxpool})

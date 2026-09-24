@@ -22,10 +22,8 @@ from ._deep_lift_utils import _hooks_disabled
 from ._deep_lift_utils import _disable_hooks
 from ._deep_lift_utils import _gauss_legendre
 
-# The rules themselves live in `_deep_lift_utils` but are re-exported here, so
-# that `from tangermeme.deep_lift_shap import _nonlinear` keeps working. The
-# redundant `as` spelling marks them as deliberate re-exports rather than
-# unused imports.
+# Re-exported so `from tangermeme.deep_lift_shap import _nonlinear` keeps
+# working; the redundant `as` marks each as deliberate rather than unused.
 from ._deep_lift_utils import _nonlinear as _nonlinear
 from ._deep_lift_utils import _maxpool as _maxpool
 from ._deep_lift_utils import _softmax as _softmax
@@ -185,11 +183,9 @@ def _f_hook(module, inputs, outputs):
 	idx = module._fwd_counter
 	module._fwd_counter += 1
 
-	# Only what the rule will actually read is cloned. Detaching first keeps
-	# the clone off the autograd graph.
-	# The table is attached to every module for the duration of a call, but
-	# fall back to caching both when it is not there, which is both the safe
-	# default and what an unknown rule gets.
+	# Clone only the activations the rule declares in `_reads`; a rule that
+	# declares nothing gets both. Detaching first keeps the clone off the
+	# autograd graph.
 	ops = getattr(module, "_NON_LINEAR_OPS", None) or {}
 	reads = getattr(ops.get(type(module)), "_reads", _READS_BOTH)
 
@@ -244,15 +240,10 @@ def _b_hook(module, grad_input, grad_output):
 def _attributing(model, device, nonlinear_ops):
 	"""Hold a model in the state an attribution pass needs, then put it back.
 
-	`deep_lift_shap` and `pisa` need exactly the same thing here: the rule
-	table on every module, the hooks registered, the model on `device` and in
-	eval mode, and all four undone afterwards however the pass exits. Both
-	carried their own copy of it, which is the kind of duplication that lets
-	one of them quietly stop restoring something the other still does.
-
-	The teardown runs on the way out of a raise as well as a return, so a
-	model is never left carrying hooks, a rule table, or an activation cache
-	from a call that failed.
+	Attaches the rule table to every module, registers the hooks, and moves
+	the model to `device` in eval mode. All four are undone on exit, including
+	on a raise, so a failed call leaves no hooks, rule table, or activation
+	cache behind.
 
 
 	Parameters
@@ -318,11 +309,9 @@ class BilinearOp(torch.nn.Module):
 	The two operands are cached on the module during an attribution call,
 	because the backward rule needs both of them and torch hands a backward
 	hook only the gradients. One pair is kept per call, so the op may be used
-	more than once in a forward pass. A pair is held for the whole forward
-	pass it belongs to rather than dropped as the backward reads it, since
-	`pisa` takes several backward passes over one forward graph and each of
-	them needs the same operands; the next forward pass replaces it and the
-	end of the attribution call drops it. Nothing is cached outside an
+	more than once in a forward pass. A pair lives until the next forward
+	pass rather than being dropped once read, because `pisa` runs several
+	backward passes over one forward graph. Nothing is cached outside an
 	attribution call.
 
 
@@ -396,14 +385,12 @@ def integrated_gradients_op(
 	than to a whole model. The integral is approximated by Gauss-Legendre
 	quadrature over ``K`` nodes.
 
-	Only vector-Jacobian products are computed, never a full Jacobian. All
-	quadrature nodes are packed into one batch, so the module is evaluated
-	once over a batch ``K`` times the size of the input rather than once per
-	node. The quantity integrated along the path is the Jacobian, and it is
-	the same multiplier for both halves of the batch; the upstream gradient
-	is constant along the path and only sets the vector each half contracts
-	that multiplier with. So the forward runs once and each half costs one
-	backward pass.
+	Only vector-Jacobian products are computed, never a full Jacobian. The
+	``K`` path points for each example-reference pair are packed into one
+	batch, so the module runs one forward pass over ``K`` times as many rows
+	as there are pairs. Both halves of the batch contract the same integrated
+	Jacobian with their own upstream gradient, which is constant along the
+	path, so they share that forward pass and take one backward pass each.
 
 	The module's forward and backward hooks are disabled during that pass, so
 	that re-entering the module neither overwrites the cached activations the
@@ -461,20 +448,16 @@ def integrated_gradients_op(
 		nodes, _ = _grid(z.dtype, z.device, z.ndim)
 		_, weights = _grid(q.dtype, q.device, q.ndim)
 
-		# One row per (quadrature node, example), so the module sees a batch
-		# `K` times the size of the input and the whole integral is one pass.
+		# One row per (quadrature node, pair), so one forward pass covers
+		# every node.
 		z_path = (z0 + nodes * (z - z0)).reshape(-1, *z_tail)
 		z_path = z_path.detach().requires_grad_()
 
 		with torch.enable_grad(), _disable_hooks():
 			y_path = module(z_path)
 
-			# Both halves contract the same integrated Jacobian; the
-			# upstream gradient is constant along the path and only sets
-			# the vector. So the forward is shared and only the backward is
-			# run twice. Evaluating the module on the path twice instead,
-			# as this used to, doubles both the forward and the graph it
-			# has to keep.
+			# The halves differ only in the upstream gradient, so they
+			# share the forward and each takes its own backward.
 			grads = [torch.autograd.grad(
 				y_path,
 				z_path,
@@ -582,11 +565,10 @@ def deep_lift_shap(
 		The function should transform a sequence into some form of signal-null
 		background, such as by shuffling it. If a torch.Tensor is passed in,
 		that tensor must have shape `(len(X), n_shuffles, *X.shape[1:])`, in
-		that for each sequence a number of shuffles are provided, and must be
-		one-hot encoded, though an all-zero column is allowed so that an
-		all-zeros baseline can be passed as a tensor. A baseline that is not
-		one-hot at all, such as 0.25 everywhere, has to go through a callable,
-		which is not validated. Default is the function
+		that for each sequence a number of shuffles are provided. It must be
+		one-hot encoded, except that all-zero columns are allowed. A baseline
+		that is not one-hot, such as 0.25 everywhere, must come from a
+		callable, whose output is not validated. Default is the function
 		`dinucleotide_shuffle`.
 
 	n_shuffles: int, optional
@@ -677,8 +659,6 @@ def deep_lift_shap(
 		raise ValueError("deep_lift_shap requires at least one example; got "
 			"X with shape[0] == 0.")
 
-	# `deep_lift_shap` and `pisa` share the hooks that read this table, so it
-	# is built in one place rather than written out in each of them.
 	_NON_LINEAR_OPS = _build_nonlinear_ops(additional_nonlinear_ops)
 
 	device = _resolve_device(device)

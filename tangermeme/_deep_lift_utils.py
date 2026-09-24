@@ -116,9 +116,8 @@ def _nonlinear(module, grad_input, grad_output):
 	delta_in = torch.sub(*module.input.chunk(2))
 	delta_out = torch.sub(*module.output.chunk(2))
 
-	# The secant is a function of the activations alone, so both halves of
-	# the batch share it. Dividing at half width and tiling the result costs
-	# one pass over the observed half rather than several over both.
+	# The secant depends only on the activations, so it is computed at half
+	# width and tiled over both halves of the batch.
 	delta = delta_out / delta_in
 	idxs = torch.abs(delta_in) < 1e-6
 
@@ -168,10 +167,9 @@ def _windows_overlap(module):
 def _is_dilated(module):
 	"""Whether a pooling module spaces the entries of its windows apart.
 
-	`torch.nn.functional.max_unpool1d` and its 2D counterpart take no
-	dilation argument, and validate the output size they are handed against
-	a window span computed as though there were none, so a dilated pool has
-	to be routed around them whether or not its windows overlap.
+	`max_unpool1d` and `max_unpool2d` take no dilation argument and check
+	the output size against an undilated window span, so they can reject the
+	true input length of a dilated pool whether or not its windows overlap.
 
 	Parameters
 	----------
@@ -306,9 +304,8 @@ def _maxpool(module, grad_input, grad_output):
 		# second launch is worth about 15% of a whole attribution on a
 		# pool-heavy model. The two give identical answers when no two
 		# windows can share a winner, so the scatter-add is used only where
-		# it is the one that is right. A dilated pool goes to the scatter-add
-		# as well, overlapping or not, because `max_unpool` has no dilation
-		# argument and rejects the true input length as an output size.
+		# it is the one that is right. A dilated pool always takes the
+		# scatter-add; see `_is_dilated`.
 		if _windows_overlap(module) or _is_dilated(module):
 			unpool_ = _unpool(grad_output[0] * delta_out, indices,
 				module.input.shape)
@@ -353,13 +350,12 @@ def _glu(module, grad_input, grad_output):
 		m_{a -> y} = (s + s_ref) / 2
 		m_{b -> y} = (a + a_ref) / 2 * Δs / Δb
 
-	which are exact rather than approximate
+	which sum to delta exactly, because the cross terms cancel:
 
 		Δa * (s + s_ref)/2 + (a + a_ref)/2 * Δs = a * s - a_ref * s_ref
 
-	as the cross terms cancel. Only the sigmoid's own secant Δs/Δb needs a
-	guard, and it falls back to the derivative at the reference where the two
-	logits are too close to divide by.
+	Only the secant Δs/Δb needs a guard; it falls back to the sigmoid's
+	derivative at the reference when the two logits are too close.
 
 
 	Parameters
@@ -544,8 +540,7 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 	#       = -v^2 * v_ref^2 / (2 * v_avg)
 	ratio = (-(v ** 2) * (v_ref ** 2)) / (2 * v_avg)
 
-	# Term 2's leading factor depends only on the activations, so it is the
-	# same for both halves and is built once rather than inside each call.
+	# Term 2's leading factor is shared by both halves, so build it once.
 	variance_term = ratio * a_sum / (2 * D)
 
 	def _compute_grad(g_tilde_):
@@ -812,9 +807,6 @@ def _softmax(module, grad_input, grad_output):
 
 	# Multiplier for x_j -> a_j, with derivative fallback.
 	# m_{x_j -> a_j} = Δa_j / Δx_j
-	#
-	# This is also Δlog(a_j), since log(a_j) is x_j - c and the same c is
-	# subtracted from both sides, so the one difference serves both.
 	delta_x = x - x_ref
 	mult_x_to_a = torch.where(delta_x.abs() > 1e-6, (a - a_ref) / delta_x,
 		a_ref)
@@ -823,6 +815,9 @@ def _softmax(module, grad_input, grad_output):
 	delta_y = y - y_ref
 	delta_v = v - v_ref
 	delta_log_v = torch.log(v) - torch.log(v_ref)
+
+	# Δlog(a_j) is Δx_j, since log(a_j) = x_j - c with the same c on both
+	# sides, so Δlog(y_j) = Δlog(a_j) + Δlog(v) reuses delta_x.
 	delta_log_y = delta_x + delta_log_v
 
 	delta_y_over_delta_log_y = torch.where(
@@ -852,7 +847,8 @@ def _softmax(module, grad_input, grad_output):
 	# The numerator path carries no factor of m_{x_j -> a_j}, because
 	# m_{x_j -> a_j} * (Δlog(a_j) / Δa_j) is Δlog(a_j) / Δx_j, which is one:
 	# log(a_j) is x_j - c, and the same c is subtracted from both sides.
-	#
+	# Guarding the two ratios separately instead fails on a peaked softmax,
+	# where Δa trips its threshold while Δx does not.
 	reciprocal_mult = -v * v_ref # reuse the clamped reciprocals
 	grad_in = (
 		grad_out * delta_y_over_delta_log_y
@@ -901,12 +897,9 @@ def _gauss_legendre(n_points):
 	return alphas, weights
 
 
-# Which cached activations each rule reads. `_f_hook` clones only these, so a
-# rule that recomputes what it needs from the input -- every coupling rule does
-# -- costs one clone per call rather than two, and a bilinear op, which reads
-# the operands it staged itself, costs none. A rule that does not declare this
-# is assumed to read both, which is what an unknown rule from
-# `additional_nonlinear_ops` gets.
+# The cached activations each rule reads; `_f_hook` clones only these. The
+# bilinear rule reads the operands `BilinearOp` staged and needs neither. A
+# rule without `_reads`, such as one from `additional_nonlinear_ops`, gets both.
 _READS_BOTH = ("input", "output")
 
 _nonlinear._reads = _READS_BOTH
@@ -921,19 +914,11 @@ _bilinear._reads = ()
 def _build_nonlinear_ops(additional_nonlinear_ops=None):
 	"""Build the table mapping a module type onto the rule that corrects it.
 
-	`deep_lift_shap` and `pisa` share the hooks that read this table, so they
-	have to agree on it: a rule registered in one and missing from the other
-	would be correct through one entry point and silently treated as linear
-	through the other. It is built here, once, rather than written out in
-	each of them.
-
-	A fresh dictionary is returned on every call, because both callers attach
-	it to every module in the model and then overwrite entries from
-	`additional_nonlinear_ops`; sharing one instance would let one call's
-	overrides leak into the next.
-
-	`BilinearOp` is imported inside the function rather than at module scope
-	because it lives in `deep_lift_shap`, which imports this module.
+	`deep_lift_shap` and `pisa` both call this, so a rule cannot be registered
+	in one and silently missing (treated as linear) in the other. A fresh
+	dictionary is returned on every call so that one call's
+	`additional_nonlinear_ops` cannot leak into the next. `BilinearOp` is
+	imported locally because `deep_lift_shap` imports this module.
 
 
 	Parameters

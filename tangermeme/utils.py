@@ -128,8 +128,7 @@ def _validate_input(
 	
 	if ohe:
 		values = torch.unique(X)
-		# No trailing period, since the two clauses below continue the
-		# sentence rather than starting a new one.
+		# No trailing period; the clauses below extend the sentence.
 		msg = "{} must be one-hot encoded".format(name)
 
 		# Values must be a subset of {0, 1}. Previously this enforced

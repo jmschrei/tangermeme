@@ -94,11 +94,10 @@ def pisa(
 		should serve to transform a sequence into some form of signal-null
 		background, such as by shuffling it. If a torch.Tensor is passed in,
 		that tensor must have shape `(len(X), n_shuffles, *X.shape[1:])`, in
-		that for each sequence a number of shuffles are provided, and must be
-		one-hot encoded, though an all-zero column is allowed so that an
-		all-zeros baseline can be passed as a tensor. A baseline that is not
-		one-hot at all, such as 0.25 everywhere, has to go through a callable,
-		which is not validated. Default is the function
+		that for each sequence a number of shuffles are provided. It must be
+		one-hot encoded, except that all-zero columns are allowed. A baseline
+		that is not one-hot, such as 0.25 everywhere, must come from a
+		callable, whose output is not validated. Default is the function
 		`dinucleotide_shuffle`. 
 
 	n_shuffles: int, optional
@@ -149,11 +148,10 @@ def pisa(
 		is None.
 
 	random_state: int or None, optional
-		The random seed to use to ensure determinism. Must be an int (or
-		None); the value is handed to the `references` callable, which adds
-		an integer offset to it, so `numpy.random.RandomState` instances are
-		not supported here. If None, the process is not deterministic.
-		Default is None. 
+		The random seed to use to ensure determinism. It is passed to the
+		`references` callable, and the default one adds an integer offset to
+		it, so a `numpy.random.RandomState` is not supported. If None, the
+		process is not deterministic. Default is None. 
 
 	verbose: bool, optional
 		Whether to display a progress bar. Default is False.
@@ -191,8 +189,6 @@ def pisa(
 		raise ValueError("pisa requires at least one example; got X with "
 			"shape[0] == 0.")
 
-	# `deep_lift_shap` and `pisa` share the hooks that read this table, so it
-	# is built in one place rather than written out in each of them.
 	_NON_LINEAR_OPS = _build_nonlinear_ops(additional_nonlinear_ops)
 
 	device = _resolve_device(device)
