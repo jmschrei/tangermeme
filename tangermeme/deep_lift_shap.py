@@ -399,9 +399,11 @@ def integrated_gradients_op(
 	Only vector-Jacobian products are computed, never a full Jacobian. All
 	quadrature nodes are packed into one batch, so the module is evaluated
 	once over a batch ``K`` times the size of the input rather than once per
-	node. The two halves of the upstream gradient are integrated along the
-	same path, so they share that forward pass and take one backward pass
-	each.
+	node. The quantity integrated along the path is the Jacobian, and it is
+	the same multiplier for both halves of the batch; the upstream gradient
+	is constant along the path and only sets the vector each half contracts
+	that multiplier with. So the forward runs once and each half costs one
+	backward pass.
 
 	The module's forward and backward hooks are disabled during that pass, so
 	that re-entering the module neither overwrites the cached activations the
@@ -467,11 +469,12 @@ def integrated_gradients_op(
 		with torch.enable_grad(), _disable_hooks():
 			y_path = module(z_path)
 
-			# The two halves are integrated along the same path and differ
-			# only in the upstream gradient, so the forward is shared and
-			# only the backward is run twice. Evaluating the module on the
-			# path twice instead, as this used to, doubles both the forward
-			# and the graph it has to keep.
+			# Both halves contract the same integrated Jacobian; the
+			# upstream gradient is constant along the path and only sets
+			# the vector. So the forward is shared and only the backward is
+			# run twice. Evaluating the module on the path twice instead,
+			# as this used to, doubles both the forward and the graph it
+			# has to keep.
 			grads = [torch.autograd.grad(
 				y_path,
 				z_path,
