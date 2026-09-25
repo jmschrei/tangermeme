@@ -625,7 +625,7 @@ def dinucleotide_shuffle(
 	start: int = 0,
 	end: int = -1,
 	n: int = 20,
-	random_state: int | numpy.random.RandomState | None = None,
+	random_state: int | None = None,
 	verbose: bool = False,
 ) -> torch.Tensor:
 	"""Given a one-hot encoded sequence, dinucleotide shuffle it.

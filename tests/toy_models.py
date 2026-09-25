@@ -197,6 +197,11 @@ class ConvRuleSeq(torch.nn.Module):
 		elif rule == "bilinear":
 			self.op = BilinearOp("...,...->...")
 			self.gate = torch.nn.Conv1d(4, channels, (3,), padding='same')
+		elif rule == "glu":
+			# A GLU halves the axis it gates over, so the output convolution
+			# sees half the channels the others do.
+			self.op = torch.nn.GLU(dim=1)
+			self.out = torch.nn.Conv1d(channels // 2, 1, (3,))
 		else:
 			raise ValueError("Unknown rule: {}".format(rule))
 
@@ -654,6 +659,34 @@ class ConvRMSNorm(torch.nn.Module):
 		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
 
 
+class ConvGLU(torch.nn.Module):
+	"""conv -> GLU over a chosen axis -> dense.
+
+	A gated linear unit splits its input in half along `dim` and returns
+	`a * sigmoid(b)`, so unlike the elementwise activations it halves the
+	axis it gates over and couples two input positions into every output.
+	The rescale rule fits neither property; `_glu` carries the midpoint
+	product rule instead. `dim=1` gates over channels, which is how a
+	sequence model uses the layer, and `dim=-1` gates over length.
+	"""
+
+	def __init__(self, seq_len=100, n_outputs=1, channels=8, dim=1):
+		super(ConvGLU, self).__init__()
+		self.conv = torch.nn.Conv1d(4, channels, (3,), padding='same')
+		self.glu = torch.nn.GLU(dim=dim)
+
+		if dim == 1:
+			n_features = (channels // 2) * seq_len
+		else:
+			n_features = channels * (seq_len // 2)
+
+		self.dense = torch.nn.Linear(n_features, n_outputs)
+
+	def forward(self, X, alpha=0, beta=1):
+		h = self.glu(self.conv(X))
+		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
+
+
 class ConvSoftmax(torch.nn.Module):
 	"""conv -> softmax over a chosen axis -> dense.
 
@@ -971,8 +1004,12 @@ class SharedRuleSeq(torch.nn.Module):
 		super(SharedRuleSeq, self).__init__()
 		self.rule = rule
 		self.conv = torch.nn.Conv1d(4, channels, (3,), padding='same')
-		self.mid = torch.nn.Conv1d(channels, channels, (3,), padding='same')
-		self.out = torch.nn.Conv1d(channels, 1, (3,))
+
+		# A GLU halves the axis it gates over, so the two convolutions around
+		# the second call see half the channels the other rules leave behind.
+		gated = channels // 2 if rule == "glu" else channels
+		self.mid = torch.nn.Conv1d(gated, channels, (3,), padding='same')
+		self.out = torch.nn.Conv1d(gated, 1, (3,))
 
 		def op():
 			if rule == "layernorm":
@@ -981,6 +1018,8 @@ class SharedRuleSeq(torch.nn.Module):
 				return torch.nn.RMSNorm([channels, seq_len])
 			elif rule == "softmax":
 				return torch.nn.Softmax(dim=-1)
+			elif rule == "glu":
+				return torch.nn.GLU(dim=1)
 			elif rule == "bilinear":
 				return BilinearOp("...,...->...")
 			raise ValueError("Unknown rule: {}".format(rule))

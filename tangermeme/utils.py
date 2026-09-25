@@ -128,13 +128,14 @@ def _validate_input(
 	
 	if ohe:
 		values = torch.unique(X)
-		msg = "{} must be one-hot encoded.".format(name)
+		# No trailing period; the clauses below extend the sentence.
+		msg = "{} must be one-hot encoded".format(name)
 
 		# Values must be a subset of {0, 1}. Previously this enforced
 		# `len(unique) == 2`, which incorrectly rejected all-zero
 		# (all-N) inputs that contain only the value 0.
 		if not torch.all((values == 0) | (values == 1)):
-			_warn_or_raise(ValueError, msg, only_warn)
+			_warn_or_raise(ValueError, msg + ".", only_warn)
 
 		if allow_N:
 			if not torch.all(torch.sum(X, axis=ohe_dim) <= 1):

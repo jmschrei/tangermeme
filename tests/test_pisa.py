@@ -18,6 +18,7 @@ from tangermeme.ersatz import dinucleotide_shuffle
 
 from tangermeme.deep_lift_shap import deep_lift_shap
 from tangermeme.deep_lift_shap import hypothetical_attributions
+from tangermeme.deep_lift_shap import integrated_gradients_op
 
 from tangermeme.pisa import pisa
 
@@ -1085,7 +1086,7 @@ def test_pisa_verbose(X, device):
 ###
 
 
-PISA_RULES = ["layernorm", "rmsnorm", "softmax", "bilinear"]
+PISA_RULES = ["layernorm", "rmsnorm", "softmax", "glu", "bilinear"]
 
 # First example, first two output positions, first four input positions.
 PISA_REGRESSION = {
@@ -1119,6 +1120,17 @@ PISA_REGRESSION = {
 		 [ 0.0000, -0.0000, -0.0027,  0.0000],
 		 [ 0.0000, -0.0000, -0.0000,  0.0000],
 		 [-0.0000,  0.0000,  0.0000, -0.0000]]],
+	"glu": [
+		[[ 0.0000, -0.0000,  0.0000, -0.0194],
+		 [ 0.0000, -0.0000, -0.0073, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000],
+		 [ 0.0000,  0.0000,  0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0039],
+		 [ 0.0000,  0.0000, -0.0152, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0000]]],
+
 	"bilinear": [
 		[[ 0.0000,  0.0000,  0.0000,  0.0139],
 		 [ 0.0000,  0.0000, -0.0080, -0.0000],
@@ -1222,6 +1234,37 @@ def test_pisa_transformer_block(X, device, pre_norm):
 		 [ 0.0000,  0.0000, -0.0165, -0.0000],
 		 [-0.0000, -0.0000, -0.0000,  0.0000],
 		 [ 0.0000,  0.0000,  0.0000, -0.0000]]], 4)
+
+
+@pytest.mark.parametrize("batch_size", [1, 4, 100000])
+def test_pisa_integrated_gradients_op(X, device, batch_size):
+	"""`integrated_gradients_op` re-runs its module from inside a backward pass.
+
+	`pisa` takes one backward pass per block of output positions over a
+	single forward graph, so that inner pass happens repeatedly against
+	activations an earlier block has already read. It must neither disturb
+	them nor make the answer depend on how the output positions are grouped.
+	"""
+
+	torch.manual_seed(0)
+	model = ConvRuleSeq(rule="rmsnorm", seq_len=12)
+	X = X[:, :, :12]
+	ops = {torch.nn.RMSNorm: integrated_gradients_op(K=8, name="rmsnorm")}
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		X_attr = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+			batch_size=batch_size, additional_nonlinear_ops=ops,
+			warning_threshold=1e-4 if device == "cpu" else 1e-2)
+
+	assert X_attr.shape == (2, 10, 4, 12)
+	assert X_attr.dtype == torch.float32
+
+	# Every grouping of the output positions has to give the same answer.
+	X_attr_ = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=2, additional_nonlinear_ops=ops)
+	assert_array_almost_equal(X_attr, X_attr_, 4)
 
 
 def test_pisa_clears_hook_caches(X, device):

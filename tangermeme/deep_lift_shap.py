@@ -8,7 +8,6 @@ import warnings
 from collections.abc import Callable
 from typing import Any
 
-import numpy
 import torch
 
 from tqdm import trange
@@ -17,15 +16,21 @@ from ._compat import _autocast_supported, _resolve_device
 from .ersatz import dinucleotide_shuffle
 from .results import AttributionReferencesResult
 from .utils import _validate_input
-from ._deep_lift_utils import _nonlinear
-from ._deep_lift_utils import _maxpool
-from ._deep_lift_utils import _softmax
-from ._deep_lift_utils import _layernorm
-from ._deep_lift_utils import _rmsnorm
-from ._deep_lift_utils import _bilinear
+from ._deep_lift_utils import _build_nonlinear_ops
+from ._deep_lift_utils import _READS_BOTH
 from ._deep_lift_utils import _hooks_disabled
 from ._deep_lift_utils import _disable_hooks
 from ._deep_lift_utils import _gauss_legendre
+
+# Re-exported so `from tangermeme.deep_lift_shap import _nonlinear` keeps
+# working; the redundant `as` marks each as deliberate rather than unused.
+from ._deep_lift_utils import _nonlinear as _nonlinear
+from ._deep_lift_utils import _maxpool as _maxpool
+from ._deep_lift_utils import _softmax as _softmax
+from ._deep_lift_utils import _layernorm as _layernorm
+from ._deep_lift_utils import _rmsnorm as _rmsnorm
+from ._deep_lift_utils import _bilinear as _bilinear
+from ._deep_lift_utils import _glu as _glu
 
 
 def hypothetical_attributions(
@@ -178,8 +183,17 @@ def _f_hook(module, inputs, outputs):
 	idx = module._fwd_counter
 	module._fwd_counter += 1
 
-	cache["input"] = inputs[0].clone().detach()
-	cache["output"] = outputs.clone().detach()
+	# Clone only the activations the rule declares in `_reads`; a rule that
+	# declares nothing gets both. Detaching first keeps the clone off the
+	# autograd graph.
+	ops = getattr(module, "_NON_LINEAR_OPS", None) or {}
+	reads = getattr(ops.get(type(module)), "_reads", _READS_BOTH)
+
+	if "input" in reads:
+		cache["input"] = inputs[0].detach().clone()
+	if "output" in reads:
+		cache["output"] = outputs.detach().clone()
+
 	module._caches[idx] = cache
 
 	def _tag_backward(grad):
@@ -222,6 +236,61 @@ def _b_hook(module, grad_input, grad_output):
 		else m.to(g.dtype) for m, g in zip(multipliers, grad_input))
 
 
+@contextlib.contextmanager
+def _attributing(model, device, nonlinear_ops):
+	"""Hold a model in the state an attribution pass needs, then put it back.
+
+	Attaches the rule table to every module, registers the hooks, and moves
+	the model to `device` in eval mode. All four are undone on exit, including
+	on a raise, so a failed call leaves no hooks, rule table, or activation
+	cache behind.
+
+
+	Parameters
+	----------
+	model: torch.nn.Module
+		The model being attributed. It is left on the device it came from and
+		in the training mode it came in.
+
+	device: str or torch.device
+		The device to run the pass on, already resolved.
+
+	nonlinear_ops: dict
+		The rule table, as built by `_build_nonlinear_ops`.
+
+
+	Returns
+	-------
+	context: contextlib.contextmanager
+		A context manager wrapping the attribution pass.
+	"""
+
+	try:
+		_orig_device = next(model.parameters()).device
+	except StopIteration:
+		_orig_device = None
+	_was_training = model.training
+
+	model.to(device).eval()
+
+	try:
+		for module in model.modules():
+			module._NON_LINEAR_OPS = nonlinear_ops
+
+		model.apply(_register_hooks)
+		yield
+	finally:
+		model.apply(_clear_hooks)
+		for module in model.modules():
+			if hasattr(module, "_NON_LINEAR_OPS"):
+				del module._NON_LINEAR_OPS
+
+		if _was_training:
+			model.train()
+		if _orig_device is not None and _orig_device != device:
+			model.to(_orig_device)
+
+
 class BilinearOp(torch.nn.Module):
 	"""A bilinear contraction of two tensors, written as a hookable module.
 
@@ -240,8 +309,10 @@ class BilinearOp(torch.nn.Module):
 	The two operands are cached on the module during an attribution call,
 	because the backward rule needs both of them and torch hands a backward
 	hook only the gradients. One pair is kept per call, so the op may be used
-	more than once in a forward pass. They are cleared once the backward pass
-	has read them, and are not cached at all outside an attribution call.
+	more than once in a forward pass. A pair lives until the next forward
+	pass rather than being dropped once read, because `pisa` runs several
+	backward passes over one forward graph. Nothing is cached outside an
+	attribution call.
 
 
 	Parameters
@@ -314,11 +385,12 @@ def integrated_gradients_op(
 	than to a whole model. The integral is approximated by Gauss-Legendre
 	quadrature over ``K`` nodes.
 
-	Only vector-Jacobian products are computed, never a full Jacobian. All
-	quadrature nodes and both halves of the upstream gradient are packed into
-	a single autograd call, so the cost is one backward pass over a batch
-	``2 * K`` times the size of the input rather than ``2 * K`` separate
-	passes.
+	Only vector-Jacobian products are computed, never a full Jacobian. The
+	``K`` path points for each example-reference pair are packed into one
+	batch, so the module runs one forward pass over ``K`` times as many rows
+	as there are pairs. Both halves of the batch contract the same integrated
+	Jacobian with their own upstream gradient, which is constant along the
+	path, so they share that forward pass and take one backward pass each.
 
 	The module's forward and backward hooks are disabled during that pass, so
 	that re-entering the module neither overwrites the cached activations the
@@ -330,7 +402,7 @@ def integrated_gradients_op(
 	K: int, optional
 		The number of Gauss-Legendre quadrature points used to approximate the
 		path integral. Higher values give a more accurate multiplier at a
-		proportionally larger batch in the single autograd call. Default is 8.
+		proportionally larger batch in the forward pass. Default is 8.
 
 	name: str or None, optional
 		A suffix for the returned hook's ``__name__``, which is otherwise
@@ -347,42 +419,59 @@ def integrated_gradients_op(
 	"""
 
 	_nodes_list, _weights_list = _gauss_legendre(K)
+	_quadrature = {}
+
+	def _grid(dtype, device, ndim):
+		"""The nodes and weights, shaped to broadcast over a batch of `ndim`.
+
+		Cached per dtype, device and rank, since a backward hook is called
+		once per batch and the grid is the same every time.
+		"""
+
+		key = (dtype, device, ndim)
+		if key not in _quadrature:
+			shape = (-1,) + (1,) * ndim
+			_quadrature[key] = (
+				torch.tensor(_nodes_list, dtype=dtype, device=device).view(shape),
+				torch.tensor(_weights_list, dtype=dtype, device=device).view(shape),
+			)
+		return _quadrature[key]
 
 	def _hook(module, grad_input, grad_output):
-		dtype, device = grad_output[0].dtype, grad_output[0].device
-		GL_NODES = torch.tensor(_nodes_list, dtype=dtype, device=device)
-		GL_WEIGHTS = torch.tensor(_weights_list, dtype=dtype, device=device)
-
 		z, z0 = module.input.chunk(2)
 		q, q0 = grad_output[0].chunk(2)
-		delta_z = z - z0
-		batch_size = z.shape[0]
 
-		z_path = torch.cat([z0 + t_k * delta_z for t_k in GL_NODES], dim=0)
-		z_eval = torch.cat([z_path, z_path], dim=0).detach().requires_grad_()
+		# The module may change the shape of what it is handed, so the nodes
+		# and the weights are shaped against the input and the output
+		# separately.
+		z_tail, q_tail = z.shape[1:], q.shape[1:]
+		nodes, _ = _grid(z.dtype, z.device, z.ndim)
+		_, weights = _grid(q.dtype, q.device, q.ndim)
 
-		q_path = torch.cat([w_k * q.detach() for w_k in GL_WEIGHTS], dim=0)
-		q0_path = torch.cat([w_k * q0.detach() for w_k in GL_WEIGHTS], dim=0)
-		q_eval = torch.cat([q_path, q0_path], dim=0)
+		# One row per (quadrature node, pair), so one forward pass covers
+		# every node.
+		z_path = (z0 + nodes * (z - z0)).reshape(-1, *z_tail)
+		z_path = z_path.detach().requires_grad_()
 
 		with torch.enable_grad(), _disable_hooks():
-			y_eval = module(z_eval)
-			grad_eval = torch.autograd.grad(
-				y_eval,
-				z_eval,
-				grad_outputs=q_eval,
-				retain_graph=False,
+			y_path = module(z_path)
+
+			# The halves differ only in the upstream gradient, so they
+			# share the forward and each takes its own backward.
+			grads = [torch.autograd.grad(
+				y_path,
+				z_path,
+				grad_outputs=(weights * g.detach()).reshape(-1, *q_tail),
+				retain_graph=g is q,
 				create_graph=False,
 				allow_unused=False,
-			)[0]
+			)[0].reshape(K, -1, *z_tail).sum(dim=0) for g in (q, q0)]
 
-		grad, grad0 = grad_eval.chunk(2)
-		grad = grad.reshape(K, batch_size, *z.shape[1:])
-		grad0 = grad0.reshape(K, batch_size, *z0.shape[1:])
-		return (torch.cat([grad.sum(dim=0), grad0.sum(dim=0)]),)
+		return (torch.cat(grads),)
 
 	suffix = name if name is not None else "fn"
 	_hook.__name__ = f"_integrated_gradients_op_{suffix}_K{K}"
+	_hook._reads = ("input",)
 	return _hook
 
 
@@ -403,7 +492,7 @@ def deep_lift_shap(
 	only_warn: bool = False,
 	dtype: str | torch.dtype | None = None,
 	device: str | torch.device | None = None,
-	random_state: int | numpy.random.RandomState | None = None,
+	random_state: int | None = None,
 	verbose: bool = False,
 ) -> torch.Tensor | AttributionReferencesResult:
 	"""Calculate attributions for a set of sequences using DeepLIFT/SHAP.
@@ -476,8 +565,11 @@ def deep_lift_shap(
 		The function should transform a sequence into some form of signal-null
 		background, such as by shuffling it. If a torch.Tensor is passed in,
 		that tensor must have shape `(len(X), n_shuffles, *X.shape[1:])`, in
-		that for each sequence a number of shuffles are provided. Default is
-		the function `dinucleotide_shuffle`.
+		that for each sequence a number of shuffles are provided. It must be
+		one-hot encoded, except that all-zero columns are allowed. A baseline
+		that is not one-hot, such as 0.25 everywhere, must come from a
+		callable, whose output is not validated. Default is the function
+		`dinucleotide_shuffle`.
 
 	n_shuffles: int, optional
 		The number of shuffles to use if a function is given for `references`.
@@ -567,31 +659,7 @@ def deep_lift_shap(
 		raise ValueError("deep_lift_shap requires at least one example; got "
 			"X with shape[0] == 0.")
 
-	_NON_LINEAR_OPS = {
-		torch.nn.ReLU: _nonlinear,
-		torch.nn.ReLU6: _nonlinear,
-		torch.nn.RReLU: _nonlinear,
-		torch.nn.SELU: _nonlinear,
-		torch.nn.CELU: _nonlinear,
-		torch.nn.GELU: _nonlinear,
-		torch.nn.SiLU: _nonlinear,
-		torch.nn.Mish: _nonlinear,
-		torch.nn.GLU: _nonlinear,
-		torch.nn.ELU: _nonlinear,
-		torch.nn.LeakyReLU: _nonlinear,
-		torch.nn.Sigmoid: _nonlinear,
-		torch.nn.Tanh: _nonlinear,
-		torch.nn.Softplus: _nonlinear,
-		torch.nn.Softshrink: _nonlinear,
-		torch.nn.LogSigmoid: _nonlinear,
-		torch.nn.PReLU: _nonlinear,
-		torch.nn.MaxPool1d: _maxpool,
-		torch.nn.MaxPool2d: _maxpool,
-		torch.nn.Softmax: _softmax,
-		torch.nn.LayerNorm: _layernorm,
-		torch.nn.RMSNorm: _rmsnorm,
-		BilinearOp: _bilinear,
-	}
+	_NON_LINEAR_OPS = _build_nonlinear_ops(additional_nonlinear_ops)
 
 	device = _resolve_device(device)
 
@@ -603,39 +671,16 @@ def deep_lift_shap(
 	elif isinstance(dtype, str):
 		dtype = getattr(torch, dtype)
 
-	# Misc. set up for overriding operations
-
-	if additional_nonlinear_ops is not None:
-		for key, value in additional_nonlinear_ops.items():
-			_NON_LINEAR_OPS[key] = value
-
 	use_autocast = _autocast_supported(device, dtype)
 
-	try:
-		_orig_device = next(model.parameters()).device
-	except StopIteration:
-		_orig_device = None
-	_was_training = model.training
-
-	model.to(device).eval()
-
-	try:
-		for module in model.modules():
-			module._NON_LINEAR_OPS = _NON_LINEAR_OPS
-
-		try:
-			model.apply(_register_hooks)
-		except Exception as e:
-			model.apply(_clear_hooks)
-			raise(e)
-	
+	with _attributing(model, device, _NON_LINEAR_OPS):
 		# Begin DeepLIFT procedure
 	
 		attributions, references_, Xi, rj, attr_ = [], [], [], [], []
 
 		if isinstance(references, torch.Tensor):
 			_validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
-				X.shape[2]), ohe=True, allow_N=False, ohe_dim=-2, only_warn=only_warn)
+				X.shape[2]), ohe=True, allow_N=True, ohe_dim=-2, only_warn=only_warn)
 			n_shuffles = references.shape[1]
 
 		n, z = X.shape[0] * n_shuffles, 0
@@ -665,49 +710,43 @@ def deep_lift_shap(
 				_X = _X.to(device).type(dtype).requires_grad_()
 				_references = _references.to(device).type(dtype).requires_grad_()
 
-				# This next block is actually running DeepLIFT by concatenating the
-				# batch of examples and the batch of references and running the
-				# forward and backward passes that have been modified by the above
-				# hooks. In a try-except block to make sure we remove hooks if an
-				# error is raised. 
-				try:
-					X_ = torch.cat([_X, _references])
+				# This next block is actually running DeepLIFT by concatenating
+				# the batch of examples and the batch of references and running
+				# the forward and backward passes that have been modified by
+				# the above hooks.
+				X_ = torch.cat([_X, _references])
 
-					if use_autocast:
-						autocast_ctx = torch.autocast(device_type=device.type, dtype=dtype)
-					else:
-						autocast_ctx = contextlib.nullcontext()
+				if use_autocast:
+					autocast_ctx = torch.autocast(device_type=device.type, dtype=dtype)
+				else:
+					autocast_ctx = contextlib.nullcontext()
 
-					model.apply(_reset_caches)
+				model.apply(_reset_caches)
 
-					# Calculate the gradients using the rescale rule
-					with torch.autograd.set_grad_enabled(True):
-						with autocast_ctx:
-							if _args is not None:
-								_args = (torch.cat([arg, arg]) for arg in _args)
-								y = model(X_, *_args)[:, target]
-							else:
-								y = model(X_)[:, target]
+				# Calculate the gradients using the rescale rule
+				with torch.autograd.set_grad_enabled(True):
+					with autocast_ctx:
+						if _args is not None:
+							_args = (torch.cat([arg, arg]) for arg in _args)
+							y = model(X_, *_args)[:, target]
+						else:
+							y = model(X_)[:, target]
 
-							multipliers = torch.autograd.grad(y.sum(), _X)[0]
+						multipliers = torch.autograd.grad(y.sum(), _X)[0]
 
-					# Check that the prediction-difference-from-reference is equal to
-					# the sum of the attributions
-					output_diff = torch.sub(*torch.chunk(y, 2))
-					input_diff = torch.sum((_X - _references) * multipliers, 
-						dim=(1, 2))
-					convergence_deltas = abs(output_diff - input_diff)
+				# Check that the prediction-difference-from-reference is equal to
+				# the sum of the attributions
+				output_diff = torch.sub(*torch.chunk(y, 2))
+				input_diff = torch.sum((_X - _references) * multipliers, 
+					dim=(1, 2))
+				convergence_deltas = abs(output_diff - input_diff)
 
-					if torch.any(convergence_deltas > warning_threshold):
-						warnings.warn("Convergence deltas too high: " +   
-							str(convergence_deltas), RuntimeWarning)
-						
-					if print_convergence_deltas:
-						print(convergence_deltas)
-
-				except Exception as e:
-					model.apply(_clear_hooks)
-					raise(e)
+				if torch.any(convergence_deltas > warning_threshold):
+					warnings.warn("Convergence deltas too high: " +   
+						str(convergence_deltas), RuntimeWarning)
+					
+				if print_convergence_deltas:
+					print(convergence_deltas)
 
 				# If not returning the raw multipliers then apply the correction for
 				# character encodings
@@ -749,16 +788,6 @@ def deep_lift_shap(
 			return AttributionReferencesResult(
 				attributions=attributions, references=references_)
 		return attributions
-	finally:
-		model.apply(_clear_hooks)
-		for module in model.modules():
-			if hasattr(module, "_NON_LINEAR_OPS"):
-				del module._NON_LINEAR_OPS
-
-		if _was_training:
-			model.train()
-		if _orig_device is not None and _orig_device != device:
-			model.to(_orig_device)
 
 
 def _captum_deep_lift_shap(
@@ -772,7 +801,7 @@ def _captum_deep_lift_shap(
 	return_references: bool = False,
 	hypothetical: bool = False,
 	device: str | torch.device | None = None,
-	random_state: int | numpy.random.RandomState | None = None,
+	random_state: int | None = None,
 	verbose: bool = False,
 ) -> torch.Tensor | AttributionReferencesResult:
 	"""Calculate attributions using captum's DeepLiftShap and a given model.

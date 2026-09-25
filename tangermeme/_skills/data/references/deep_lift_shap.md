@@ -58,7 +58,15 @@ those positions.
 straight in. It shuffles within consecutive bins rather than across the whole
 sequence, so the background keeps the GC and repeat structure varying along the
 window instead of averaging it flat — closer to the original in every respect
-except the motif content you are trying to isolate.
+except the motif content you are trying to isolate. Its `bin_size` defaults to
+1024 and must be shorter than the sequence, so a window under ~1kb (a 1000bp
+BPNet or DeepSEA input, say) needs the argument bound first:
+
+```python
+from functools import partial
+refs_fn = partial(local_dinucleotide_shuffle, bin_size=128, min_bin_size=64)
+X_attr = deep_lift_shap(model, X, references=refs_fn, random_state=0)
+```
 
 ## Footgun #3 — `only_warn=True` still raises inside shuffling
 
@@ -107,7 +115,7 @@ A rule is registered per module *type*. These are the types `deep_lift_shap` and
 `pisa` both cover:
 
 - **Elementwise activations** (rescale rule) — `ReLU`, `ReLU6`, `LeakyReLU`,
-  `RReLU`, `PReLU`, `ELU`, `CELU`, `SELU`, `GELU`, `SiLU`, `Mish`, `GLU`,
+  `RReLU`, `PReLU`, `ELU`, `CELU`, `SELU`, `GELU`, `SiLU`, `Mish`,
   `Sigmoid`, `LogSigmoid`, `Tanh`, `Softplus`, `Softshrink`.
 - **Pooling** — `MaxPool1d`, `MaxPool2d`. Two separate bugs here were fixed in
   tangermeme 1.5.0, and neither one goes away on the CPU or at fp64, so a model
@@ -122,8 +130,13 @@ A rule is registered per module *type*. These are the types `deep_lift_shap` and
   fp32/fp64, where it needs a particular example-reference pair, but systematic
   in bf16/fp16, where coarse rounding makes unchanged inputs common — it cost
   `SharedPool` a factor of 60 in fp16.
-- **Coupling ops with closed forms** — `Softmax`, `LayerNorm`, `RMSNorm`, and
-  `tangermeme.deep_lift_shap.BilinearOp`.
+- **Coupling ops with closed forms** — `Softmax`, `LayerNorm`, `RMSNorm`,
+  `GLU`, and `tangermeme.deep_lift_shap.BilinearOp`. `GLU` is here rather
+  than above because it gates rather than acting elementwise: it halves the
+  axis it gates over and each output depends on two input positions, so the
+  rescale rule does not fit it. Before tangermeme 1.5.0 it was mapped to the
+  rescale rule anyway, and any model containing one raised a size mismatch
+  from inside the rule.
 
 Anything not in that list and not linear is a hole. `Conv*`, `Linear`,
 `BatchNorm*`, `Embedding`, `AvgPool*`, adds, concatenations and
@@ -134,12 +147,8 @@ from tangermeme.deep_lift_shap import _nonlinear
 X_attr = deep_lift_shap(model, X, additional_nonlinear_ops={MyActivation: _nonlinear})
 ```
 
-The catch: `_nonlinear` divides `delta_out / delta_in`, so it **must be registered
-on a layer with equal input and output shape**. If your op also reduces (e.g. a
-profile head that does `logits * softmax(logits)` then `.sum()`), split it: put the
-elementwise, shape-preserving part in its own `nn.Module`, register *that*, and do
-the reduction in the parent wrapper. Registering the reducing layer raises a
-size-mismatch error.
+`_nonlinear` only fits a layer whose input and output have the same shape; see
+"Route 1b" below for what to do when yours does not.
 
 ### Precision: CPU vs CUDA, and the fp64 escape hatch
 
@@ -239,7 +248,7 @@ Each finding is `(owning module type, operation)`. Measured on five models:
 | `TransformerEncoderLayer` | the above, plus `('TransformerEncoderLayer', 'relu')` | functional activation, rewritable |
 | the `Gated` model below, `torch.softmax(a(X), -1) * b(X)` | `('Gated', 'mul')`, `('Gated', 'softmax')` | functional ops, rewritable |
 | attention built from `BilinearOp` + `nn.Softmax` | only the constant `'div'` and `'mul'` | false positives — see below |
-| conv + `enformer_pytorch`-style `AttentionPool` | `('AttentionPool', 'mul')`, `('AttentionPool', 'softmax')` | two functional ops in one pooling layer, both rewritable |
+| conv + `enformer_pytorch`-style `AttentionPool` | `('AttentionPool', 'mul')`, `('AttentionPool', 'softmax')`, plus the model's own constant `'mul'` | two functional ops in one pooling layer, both rewritable; the third is a false positive |
 
 **`mul`, `div`, `matmul`, `bmm` and `einsum` are reported deliberately.** A product
 is linear when one operand is a constant (`scores / head_dim ** 0.5`, a `* beta`
@@ -351,7 +360,7 @@ A module of your own that is elementwise and shape-preserving does not need a ne
 rule, only registration of the existing one:
 
 ```python
-from tangermeme._deep_lift_utils import _nonlinear
+from tangermeme.deep_lift_shap import _nonlinear
 
 X_attr = deep_lift_shap(model, X, references=refs, random_state=0,
     additional_nonlinear_ops={MyActivation: _nonlinear})

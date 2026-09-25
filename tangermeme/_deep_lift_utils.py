@@ -113,14 +113,17 @@ def _nonlinear(module, grad_input, grad_output):
 		module instead of through its ordinary local gradient.
 	"""
 
-	delta_in_ = torch.sub(*module.input.chunk(2))
-	delta_out_ = torch.sub(*module.output.chunk(2))
+	delta_in = torch.sub(*module.input.chunk(2))
+	delta_out = torch.sub(*module.output.chunk(2))
 
-	delta_in = torch.cat([delta_in_, delta_in_])
-	delta_out = torch.cat([delta_out_, delta_out_])
-
+	# The secant depends only on the activations, so it is computed at half
+	# width and tiled over both halves of the batch.
 	delta = delta_out / delta_in
 	idxs = torch.abs(delta_in) < 1e-6
+
+	repeat = [2] + [1] * (delta.ndim - 1)
+	delta = delta.repeat(repeat)
+	idxs = idxs.repeat(repeat)
 
 	return (torch.where(idxs, grad_input[0], grad_output[0] * delta),)
 
@@ -159,6 +162,32 @@ def _windows_overlap(module):
 	n = max(len(kernel), len(stride), len(dilation))
 	return any(_axis(dilation, i) * (_axis(kernel, i) - 1) + 1 > _axis(stride, i)
 		for i in range(n))
+
+
+def _is_dilated(module):
+	"""Whether a pooling module spaces the entries of its windows apart.
+
+	`max_unpool1d` and `max_unpool2d` take no dilation argument and check
+	the output size against an undilated window span, so they can reject the
+	true input length of a dilated pool whether or not its windows overlap.
+
+	Parameters
+	----------
+	module: torch.nn.Module
+		A MaxPool1d or MaxPool2d, or anything else carrying `dilation`.
+
+
+	Returns
+	-------
+	dilated: bool
+		Whether any axis has a dilation greater than one.
+	"""
+
+	dilation = module.dilation
+	if not isinstance(dilation, (tuple, list)):
+		dilation = (dilation,)
+
+	return any(d > 1 for d in dilation)
 
 
 def _unpool(values, indices, shape):
@@ -275,8 +304,9 @@ def _maxpool(module, grad_input, grad_output):
 		# second launch is worth about 15% of a whole attribution on a
 		# pool-heavy model. The two give identical answers when no two
 		# windows can share a winner, so the scatter-add is used only where
-		# it is the one that is right.
-		if _windows_overlap(module):
+		# it is the one that is right. A dilated pool always takes the
+		# scatter-add; see `_is_dilated`.
+		if _windows_overlap(module) or _is_dilated(module):
 			unpool_ = _unpool(grad_output[0] * delta_out, indices,
 				module.input.shape)
 		else:
@@ -303,6 +333,98 @@ def _maxpool(module, grad_input, grad_output):
 
 	new_grad_inp = torch.cat([half, half])
 	return (new_grad_inp,)
+
+
+def _glu(module, grad_input, grad_output):
+	"""An internal function implementing the correction for GLU.
+
+	A gated linear unit splits its input in half along `module.dim` and
+	returns `y = a * sigmoid(b)`, so it is neither elementwise nor
+	shape-preserving: the output is half the width of the input and each
+	output depends on two input positions. The rescale rule therefore does
+	not apply, and applying it anyway raises a size mismatch.
+
+	The product of two varying quantities takes the same midpoint rule the
+	bilinear op uses. Writing s = sigmoid(b), the multipliers are
+
+		m_{a -> y} = (s + s_ref) / 2
+		m_{b -> y} = (a + a_ref) / 2 * Δs / Δb
+
+	which sum to delta exactly, because the cross terms cancel:
+
+		Δa * (s + s_ref)/2 + (a + a_ref)/2 * Δs = a * s - a_ref * s_ref
+
+	Only the secant Δs/Δb needs a guard; it falls back to the sigmoid's
+	derivative at the reference when the two logits are too close.
+
+
+	Parameters
+	----------
+	module: torch.nn.GLU
+		The module being corrected. The backward hook has put `module.input`
+		and `module.output` on it for the forward call being unwound, each
+		holding the observed batch concatenated with the reference batch along
+		the first axis. `module.dim` is the axis the input is halved along.
+
+	grad_input: tuple of torch.tensor
+		What torch would pass to a full backward hook as the gradient with
+		respect to the module's inputs: the upstream gradient propagated through
+		this module's ordinary local gradient. Unused; the closed form is
+		evaluated everywhere and the one ratio in it has its own fallback.
+
+	grad_output: tuple of torch.tensor
+		The upstream gradient handed to a full backward hook: the gradient of
+		the model output with respect to this module's output.
+
+
+	Returns
+	-------
+	grad_input: tuple of one torch.tensor
+		The replacement gradient with respect to the module's input, i.e. the
+		upstream gradient propagated through the DeepLIFT multiplier for this
+		module instead of through its ordinary local gradient.
+
+
+	Raises
+	------
+	ValueError
+		If the module gates along the batch axis.
+	"""
+
+	dim = module.dim
+	if dim < 0:
+		dim = module.input.ndim + dim
+
+	if dim == 0:
+		raise ValueError("GLU over the batch axis is not supported. "
+			"DeepLIFT stacks each example with its reference along that axis, "
+			"so gating over it would mix the two.")
+
+	x, x_ref = module.input.chunk(2, dim=0)
+	a, b = x.chunk(2, dim=dim)
+	a_ref, b_ref = x_ref.chunk(2, dim=dim)
+
+	s = torch.sigmoid(b)
+	s_ref = torch.sigmoid(b_ref)
+
+	# m_{a -> y}, the sigmoid averaged over the two ends of the path.
+	mult_a = (s + s_ref) / 2
+
+	# m_{b -> y}, the same average of the other operand times the sigmoid's
+	# secant. Below the threshold the two logits are equal to within
+	# floating-point noise and the tangent at the reference is the limit.
+	delta_b = b - b_ref
+	ds_db = torch.where(delta_b.abs() > 1e-6, (s - s_ref) / delta_b,
+		s_ref * (1 - s_ref))
+	mult_b = (a + a_ref) / 2 * ds_db
+
+	grad_out, grad_out_ref = grad_output[0].chunk(2, dim=0)
+
+	grad_in = torch.cat([grad_out * mult_a, grad_out * mult_b], dim=dim)
+	grad_in_ref = torch.cat([grad_out_ref * mult_a, grad_out_ref * mult_b],
+		dim=dim)
+
+	return (torch.cat([grad_in, grad_in_ref], dim=0),)
 
 
 def _layer_normalization_helper(module, grad_input, grad_output,
@@ -418,14 +540,16 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 	#       = -v^2 * v_ref^2 / (2 * v_avg)
 	ratio = (-(v ** 2) * (v_ref ** 2)) / (2 * v_avg)
 
+	# Term 2's leading factor is shared by both halves, so build it once.
+	variance_term = ratio * a_sum / (2 * D)
+
 	def _compute_grad(g_tilde_):
 		if norm_type == "rmsnorm":
 			term1 = v_avg * g_tilde_
 		else:
 			term1 = v_avg * (g_tilde_ - g_tilde_.mean(dim=norm_dims, keepdim=True))
 		dot = (g_tilde_ * a_sum).sum(dim=norm_dims, keepdim=True)
-		term2 = ratio * a_sum / (2 * D) * dot
-		return term1 + term2
+		return term1 + variance_term * dot
 
 	grad_in = _compute_grad(g_tilde)
 	grad_in_ref = _compute_grad(g_tilde_ref)
@@ -520,7 +644,9 @@ def _bilinear(module, grad_input, grad_output):
 	"""An internal function implementing the correction for bilinear tensor
 	products using the DeepLIFT midpoint product rule.
 
-	For a scalar product y = ab the rule gives the multipliers
+	A product admits more than one DeepLIFT rule. The one implemented here is
+	the midpoint product rule, which for a scalar product (y = ab) yields the
+	multipliers
 
 		m_{a -> y} = (b + b_ref) / 2
 		m_{b -> y} = (a + a_ref) / 2
@@ -688,9 +814,11 @@ def _softmax(module, grad_input, grad_output):
 	# Define a few intermediate quantities for the log-ratio multipliers.
 	delta_y = y - y_ref
 	delta_v = v - v_ref
-	delta_log_a = x - x_ref
 	delta_log_v = torch.log(v) - torch.log(v_ref)
-	delta_log_y = delta_log_a + delta_log_v
+
+	# Δlog(a_j) is Δx_j, since log(a_j) = x_j - c with the same c on both
+	# sides, so Δlog(y_j) = Δlog(a_j) + Δlog(v) reuses delta_x.
+	delta_log_y = delta_x + delta_log_v
 
 	delta_y_over_delta_log_y = torch.where(
 		delta_log_y.abs() > 1e-6,
@@ -719,11 +847,8 @@ def _softmax(module, grad_input, grad_output):
 	# The numerator path carries no factor of m_{x_j -> a_j}, because
 	# m_{x_j -> a_j} * (Δlog(a_j) / Δa_j) is Δlog(a_j) / Δx_j, which is one:
 	# log(a_j) is x_j - c, and the same c is subtracted from both sides.
-	# Guarding the two ratios separately is what breaks on a peaked softmax,
-	# where Δa trips its threshold while Δx does not and the Δlog(a)/Δa
-	# fallback returns 1/a_ref. Folding them out also removes the 0 * inf a
-	# fully masked logit used to produce, since no reciprocal of a_ref is
-	# taken at all.
+	# Guarding the two ratios separately instead fails on a peaked softmax,
+	# where Δa trips its threshold while Δx does not.
 	reciprocal_mult = -v * v_ref # reuse the clamped reciprocals
 	grad_in = (
 		grad_out * delta_y_over_delta_log_y
@@ -744,8 +869,8 @@ def _softmax(module, grad_input, grad_output):
 def _gauss_legendre(n_points):
 	"""Return Gauss-Legendre nodes and weights mapped from [-1, 1] to [0, 1].
 
-	Gauss-Legendre quadrature is defined on [-1, 1], but the path integral it
-	approximates here runs from the reference activation to the observed one,
+	Gauss-Legendre quadrature is defined on [-1, 1], but we use it for a path
+	integral that runs from the reference activation to the observed one,
 	parameterized over [0, 1]. Both the nodes and the weights are rescaled
 	once, when the hook is built, rather than on every backward pass.
 
@@ -770,3 +895,76 @@ def _gauss_legendre(n_points):
 	alphas = (nodes + 1.0) / 2.0
 	weights = weights / 2.0
 	return alphas, weights
+
+
+# The cached activations each rule reads; `_f_hook` clones only these. The
+# bilinear rule reads the operands `BilinearOp` staged and needs neither. A
+# rule without `_reads`, such as one from `additional_nonlinear_ops`, gets both.
+_READS_BOTH = ("input", "output")
+
+_nonlinear._reads = _READS_BOTH
+_maxpool._reads = _READS_BOTH
+_glu._reads = ("input",)
+_layernorm._reads = ("input",)
+_rmsnorm._reads = ("input",)
+_softmax._reads = ("input",)
+_bilinear._reads = ()
+
+
+def _build_nonlinear_ops(additional_nonlinear_ops=None):
+	"""Build the table mapping a module type onto the rule that corrects it.
+
+	`deep_lift_shap` and `pisa` both call this, so a rule cannot be registered
+	in one and silently missing (treated as linear) in the other. A fresh
+	dictionary is returned on every call so that one call's
+	`additional_nonlinear_ops` cannot leak into the next. `BilinearOp` is
+	imported locally because `deep_lift_shap` imports this module.
+
+
+	Parameters
+	----------
+	additional_nonlinear_ops: dict or None, optional
+		Rules to add to the table, keyed by module type. A key that collides
+		with a built-in replaces it. If None, return the built-in table
+		alone. Default is None.
+
+
+	Returns
+	-------
+	ops: dict
+		A mapping from module type onto a function with the signature
+		`rule(module, grad_input, grad_output)`.
+	"""
+
+	from .deep_lift_shap import BilinearOp
+
+	ops = {
+		torch.nn.ReLU: _nonlinear,
+		torch.nn.ReLU6: _nonlinear,
+		torch.nn.RReLU: _nonlinear,
+		torch.nn.SELU: _nonlinear,
+		torch.nn.CELU: _nonlinear,
+		torch.nn.GELU: _nonlinear,
+		torch.nn.SiLU: _nonlinear,
+		torch.nn.Mish: _nonlinear,
+		torch.nn.GLU: _glu,
+		torch.nn.ELU: _nonlinear,
+		torch.nn.LeakyReLU: _nonlinear,
+		torch.nn.Sigmoid: _nonlinear,
+		torch.nn.Tanh: _nonlinear,
+		torch.nn.Softplus: _nonlinear,
+		torch.nn.Softshrink: _nonlinear,
+		torch.nn.LogSigmoid: _nonlinear,
+		torch.nn.PReLU: _nonlinear,
+		torch.nn.MaxPool1d: _maxpool,
+		torch.nn.MaxPool2d: _maxpool,
+		torch.nn.Softmax: _softmax,
+		torch.nn.LayerNorm: _layernorm,
+		torch.nn.RMSNorm: _rmsnorm,
+		BilinearOp: _bilinear,
+	}
+
+	if additional_nonlinear_ops is not None:
+		ops.update(additional_nonlinear_ops)
+
+	return ops

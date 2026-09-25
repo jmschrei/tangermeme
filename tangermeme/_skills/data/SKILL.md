@@ -63,8 +63,10 @@ no dedicated reference file, but here is where to look:
   so int8 sequences go straight in; multi-output models return a list. Satisfies the
   `func=` contract.
 - `tangermeme.ersatz` — atomic sequence ops: `insert`, `substitute`,
-  `multisubstitute`, `delete`, `shuffle`, `dinucleotide_shuffle` (most motif-add
-  ops *substitute*, preserving length; `start`/`end` confine shuffles to a region).
+  `multisubstitute`, `delete`, `randomize`, `shuffle`, `dinucleotide_shuffle`,
+  `local_dinucleotide_shuffle` (most motif-add ops *substitute*, preserving
+  length; `start`/`end` confine shuffles to a region). All but the two
+  dinucleotide shuffles accept unknown characters in `X` as all-zero columns.
 - `tangermeme.utils` — `one_hot_encode` (returns int8), `characters`,
   `random_one_hot`, `reverse_complement` (single sequence), `pwm_consensus`,
   `set_seed`, `gc_content`, etc.
