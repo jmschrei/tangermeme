@@ -6,8 +6,8 @@ Release History
 ===============
 
 
-Version 1.5.0 (unreleased)
-==========================
+Version 1.5.0
+=============
 
 Claude Code skill
 -----------------
@@ -84,14 +84,14 @@ ersatz
 io
 --
 
-	- ``extract_loci`` now coerces the chromosome column of a BED file or DataFrame to a string. pandas reads a chromosome column of "1", "2", ... as ``int64``, but pyfaidx and pybigtools name their records with strings, so genomes using Ensembl-style chromosome names were broken at every ingestion point: an ``exclusion_lists`` lookup raised ``KeyError: 1``, and filtering with ``chroms`` matched nothing and silently dropped every locus, leaving ``extract_loci`` to fail in ``numpy.stack``. The ``chroms`` argument is coerced as well, so ``chroms=[1, 2]`` and ``chroms=['1', '2']`` are equivalent. ``read_vcf`` already forced ``dtype=str`` and is unchanged.
+	- ``extract_loci`` now coerces the chromosome column of a BED file or DataFrame to a string. pandas reads a chromosome column of "1", "2", ... as ``int64``, but pyfaidx and pybigtools name their records with strings, so genomes using Ensembl-style chromosome names were broken at every ingestion point: an ``exclusion_lists`` lookup raised ``KeyError: 1``, and filtering with ``chroms`` matched nothing and silently dropped every locus, leaving ``extract_loci`` to fail in ``numpy.stack``. The ``chroms`` argument is coerced as well, so ``chroms=[1, 2]`` and ``chroms=['1', '2']`` are equivalent. ``read_vcf`` already forced ``dtype=str`` and is unchanged. Thanks @adamyhe!
 	- ``exclusion_lists`` now accepts a pandas DataFrame, and a bare filename or DataFrame rather than only a list of filenames.
 	- The three columns of a bed-format DataFrame are now taken positionally and renamed to chrom/start/end, so DataFrames whose columns carry other names work in the ``chroms`` and ``summits`` paths as the docstring already promised.
 
 match
 -----
 
-	- ``extract_matching_loci`` coerces the chromosome column and the ``chroms`` argument to strings for the same reason as ``io.extract_loci``; previously an integer chromosome name was passed to ``pyfaidx.Fasta.__getitem__``, raising a ``TypeError``, and filtering by ``chroms`` returned an empty set of loci. It also accepts a bed-format DataFrame whose columns carry other names, taking the first three positionally. Note that the columns were previously selected by name, so a DataFrame whose chrom/start/end columns are not in bed order is now read positionally rather than by label.
+	- ``extract_matching_loci`` coerces the chromosome column and the ``chroms`` argument to strings for the same reason as ``io.extract_loci``; previously an integer chromosome name was passed to ``pyfaidx.Fasta.__getitem__``, raising a ``TypeError``, and filtering by ``chroms`` returned an empty set of loci. It also accepts a bed-format DataFrame whose columns carry other names, taking the first three positionally. Note that the columns were previously selected by name, so a DataFrame whose chrom/start/end columns are not in bed order is now read positionally rather than by label. Thanks @adamyhe!
 
 pisa
 ----
