@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import collections
 import contextlib
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
@@ -12,6 +13,54 @@ import torch
 from tqdm import trange
 
 from ._compat import _autocast_supported, _preserve_model_state, _resolve_device
+
+
+# On CUDA, the host does not wait for each batch to finish before preparing
+# the next one. It waits for a batch's outputs only once this many later
+# batches have been queued behind it.
+_QUEUE_DEPTH = 2
+
+# Outputs of up to this many bytes per batch are copied to the CPU through
+# pinned memory without waiting for the device. Larger ones are copied with
+# `.cpu()`, which waits, so that the pinned memory PyTorch caches stays small.
+_PINNED_BYTES = 2 ** 24
+
+
+def _start_cpu_copy(y, device, stream):
+	"""Queue the copy of one model output to the CPU on `stream`.
+
+	A tensor on `device` that fits in `_PINNED_BYTES` is copied into pinned
+	host memory behind the work that produced it, and the host does not wait
+	for it. The returned tensor must not be read until `stream` has passed
+	the copy. Anything else is moved with `.cpu()`, which waits, and an
+	object that is not a tensor raises as `.cpu()` does.
+	"""
+
+	if not (isinstance(y, torch.Tensor) and y.device == device
+			and y.layout == torch.strided and y.nbytes <= _PINNED_BYTES):
+		return y.cpu()
+
+	y_cpu = torch.empty_like(y, device='cpu', pin_memory=True)
+	y_cpu.copy_(y, non_blocking=True)
+
+	# The device memory may be reused once `y` is freed; this keeps a block
+	# allocated on another stream from being reused before the copy runs.
+	y.record_stream(stream)
+	return y_cpu
+
+
+def _finish_cpu_copy(y, event):
+	"""Wait for a batch's queued copies and move them out of pinned memory.
+
+	The pinned buffers go back to PyTorch's cache as soon as they are copied
+	into ordinary memory, so pinned memory stays bounded by a few batches no
+	matter how many outputs are kept.
+	"""
+
+	event.synchronize()
+	if isinstance(y, torch.Tensor):
+		return y.clone() if y.is_pinned() else y
+	return tuple(yi.clone() if yi.is_pinned() else yi for yi in y)
 
 
 def predict(
@@ -109,15 +158,20 @@ def predict(
 
 	###
 
+	# On CUDA the copies to the device do not make the host wait, so that
+	# `_predict_batches` can queue batches without a sync on each one.
+	non_blocking = device.type == 'cuda'
+
 	def batches():
 		n = min(batch_size, X.shape[0])
 
 		for start in trange(0, X.shape[0], n, disable=not verbose):
 			end = start + n
-			X_ = X[start:end].type(dtype).to(device)
+			X_ = X[start:end].type(dtype).to(device, non_blocking=non_blocking)
 
 			if args is not None:
-				args_ = [a[start:end].type(dtype).to(device) for a in args]
+				args_ = [a[start:end].type(dtype).to(device,
+					non_blocking=non_blocking) for a in args]
 			else:
 				args_ = None
 
@@ -165,6 +219,20 @@ def _predict_batches(
 
 	use_autocast = _autocast_supported(device, dtype)
 
+	# On CUDA, outputs are copied back to the CPU without the host waiting for
+	# the device, so the host prepares and launches the next batch while the
+	# device runs the current one. Only a batch's outputs are waited for,
+	# `_QUEUE_DEPTH` batches later.
+	queue = None
+	if device.type == 'cuda':
+		index = device.index
+		if index is None:
+			index = torch.cuda.current_device()
+
+		out_device = torch.device('cuda', index)
+		stream = torch.cuda.current_stream(out_device)
+		queue = collections.deque()
+
 	y = []
 	with _preserve_model_state(model, device), torch.no_grad():
 		for X_, args_ in batches:
@@ -188,14 +256,34 @@ def _predict_batches(
 				y_ = func(y_)
 
 			# Move to the CPU
+			if queue is None:
+				if isinstance(y_, torch.Tensor):
+					y_ = y_.cpu()
+				elif isinstance(y_, (list, tuple)):
+					y_ = tuple(yi.cpu() for yi in y_)
+				else:
+					raise ValueError("Cannot interpret output from model.")
+
+				y.append(y_)
+				continue
+
 			if isinstance(y_, torch.Tensor):
-				y_ = y_.cpu()
+				y_ = _start_cpu_copy(y_, out_device, stream)
 			elif isinstance(y_, (list, tuple)):
-				y_ = tuple(yi.cpu() for yi in y_)
+				y_ = tuple(_start_cpu_copy(yi, out_device, stream) for yi in y_)
 			else:
 				raise ValueError("Cannot interpret output from model.")
 
 			y.append(y_)
+			queue.append((len(y) - 1, stream.record_event()))
+
+			if len(queue) > _QUEUE_DEPTH:
+				i, event = queue.popleft()
+				y[i] = _finish_cpu_copy(y[i], event)
+
+		while queue:
+			i, event = queue.popleft()
+			y[i] = _finish_cpu_copy(y[i], event)
 
 	# Concatenate the outputs
 	if isinstance(y[0], torch.Tensor):
