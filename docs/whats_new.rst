@@ -6,6 +6,20 @@ Release History
 ===============
 
 
+Version 1.5.1 (unreleased)
+==========================
+
+saturation_mutagenesis
+----------------------
+
+	- ``saturation_mutagenesis`` is faster on the GPU and holds far less host memory when it returns attributions. Each batch of edit predictions is now reduced on the device to one score per edit, and the attribution is built from those scores, so the grid of predictions for every edit of every sequence, ``(n, len(alphabet), length, n_targets)``, is no longer assembled on the CPU. For a model with many outputs that grid dominated the time spent outside the forward passes: for DeepSEA Beluga's 2,002 outputs over eight 2 kb sequences it is 512 MB, and the call now takes 3.15 s instead of 3.77 s on an H200. The edited sequences are also built on the device, at most ``batch_size`` at a time, instead of all at once on the CPU and then copied over. Across the models tested, the host memory a call adds fell from 80-1,320 MB to under 12 MB. Convolutional models with a single output, such as ChromBPNet, ProCapNet and Cherimoya, gain 1-4% at fp32 and more at fp16. The attributions match the previous version to within its own run-to-run variation, and ``raw_outputs=True`` returns the same values.
+
+predict
+-------
+
+	- On CUDA, ``predict`` no longer makes the host wait for each batch to finish before preparing the next. Inputs are copied to the device without blocking. Each batch's outputs of up to 16 MB are copied back through pinned memory and waited for two batches later, so the host's work on one batch overlaps the device's work on the one before. Larger outputs, and everything on the CPU, are copied as before, and the returned values are unchanged.
+
+
 Version 1.5.0
 =============
 
