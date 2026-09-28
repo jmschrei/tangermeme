@@ -14,6 +14,7 @@ from tqdm import trange
 
 from .predict import predict
 from .utils import TangermemeWarning
+from ._compat import _resolve_device
 
 
 class SaturationMutagenesisRawResult(NamedTuple):
@@ -60,6 +61,38 @@ def _attribution_score(y0, y_hat, target):
 	if len(attr.shape) > 3:
 		attr = torch.mean(attr, dim=tuple(range(3, len(attr.shape))))
 	return attr
+
+
+def _edit_scores(y, y0, target):
+	"""An internal function for reducing a batch of ISM predictions.
+
+	This function takes the predictions for a batch of edits of one sequence
+	and returns, for each edit, the change in prediction from the original
+	sequence averaged across tasks (or across `target`). Averaging across
+	tasks and averaging across the alphabet are both linear, so centering
+	these scores over the alphabet gives the same attributions as
+	`_attribution_score`, up to rounding, without holding the predictions for
+	every edit at once.
+
+
+	Parameters
+	----------
+	y: torch.Tensor, shape=(-1, n_targets)
+		Model predictions for a batch of edited sequences.
+
+	y0: torch.Tensor, shape=(n_targets,)
+		Model predictions for the original sequence that was edited.
+
+	target: int or slice or None
+		If the user wants to subset to only some targets when calculating the
+		average attribution across targets. If None, use all.
+	"""
+
+	scores = y[:, target] - y0[target]
+
+	if len(scores.shape) > 1:
+		scores = torch.mean(scores, dim=tuple(range(1, len(scores.shape))))
+	return scores
 
 
 
@@ -209,7 +242,9 @@ def saturation_mutagenesis(
 			"0 <= start < end <= length; got start={}, end={} for length "
 			"{}.".format(start, end, length))
 
-	y_hat = []
+	device_ = _resolve_device(device)
+
+	y_hat, attr = [], []
 	for i in trange(X.shape[0], disable=not verbose):
 		# Build only the true single-base edits. One substitution per position
 		# would re-apply the base already there (an identity edit whose
@@ -237,6 +272,29 @@ def saturation_mutagenesis(
 		else:
 			args_ = None
 
+		if not raw_outputs:
+			# Only the attributions are returned, so each batch of edit
+			# predictions is reduced to one score per edit on the device, inside
+			# `predict`, and the full grid of predictions is never built.
+			y0_i = y0[i].to(device_)
+
+			def score(y):
+				if func is not None:
+					y = func(y)
+				return _edit_scores(y, y0_i.to(y.device), target)
+
+			scores = predict(model, X_, args=args_, func=score,
+				batch_size=batch_size, dtype=dtype, device=device)
+
+			# An identity slot does not change the prediction, so its score is
+			# zero. Centering each position over the alphabet then gives the
+			# attributions.
+			attr_ = torch.zeros(edits.shape[0], dtype=scores.dtype)
+			attr_[edits] = scores
+			attr_ = attr_.reshape(X.shape[1], end-start)
+			attr.append(attr_ - torch.mean(attr_, dim=0, keepdims=True))
+			continue
+
 		y_edits = predict(model, X_, args=args_, func=func,
 			batch_size=batch_size, dtype=dtype, device=device)
 
@@ -254,6 +312,10 @@ def saturation_mutagenesis(
 
 		y_hat.append(y_hat_)
 
+	if not raw_outputs:
+		attr = torch.stack(attr)
+		return X[:, :, start:end] * attr if not hypothetical else attr
+
 	if isinstance(y_hat[0], torch.Tensor):
 		y_hat = torch.stack(y_hat).reshape(X.shape[0], X.shape[1], end-start, 
 			*y_hat_.shape[1:])
@@ -262,8 +324,5 @@ def saturation_mutagenesis(
 			torch.stack(y_).reshape(X.shape[0], X.shape[1], end-start,
 				*y_[0].shape[1:]) for y_ in zip(*y_hat)
 		]
-	
-	if not raw_outputs:
-		attr = _attribution_score(y0, y_hat, target)
-		return X[:, :, start:end] * attr if not hypothetical else attr
+
 	return SaturationMutagenesisRawResult(y0=y0, y_hat=y_hat)
