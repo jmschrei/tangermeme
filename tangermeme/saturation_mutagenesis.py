@@ -12,9 +12,11 @@ import torch
 
 from tqdm import trange
 
-from .predict import predict
-from .utils import TangermemeWarning
 from ._compat import _resolve_device
+from .predict import predict
+from .predict import _predict_batches
+from .predict import _resolve_dtype
+from .utils import TangermemeWarning
 
 
 class SaturationMutagenesisRawResult(NamedTuple):
@@ -94,6 +96,67 @@ def _edit_scores(y, y0, target):
 		scores = torch.mean(scores, dim=tuple(range(1, len(scores.shape))))
 	return scores
 
+
+def _edited_batches(x, args, chars, positions, batch_size, dtype, device):
+	"""An internal generator of the edited copies of one sequence.
+
+	The sequence is moved to `device` and cast to `dtype` once, and each batch
+	of at most `batch_size` edited rows is built there from it: row k is `x`
+	with position `positions[k]` replaced by the one-hot encoding of
+	`chars[k]`. The rows come out in the order given, so batches are composed
+	exactly as `predict` would slice a prebuilt stack of the edits, and no
+	edited sequence crosses from the host to the device. The values match
+	editing the int8 sequence and casting afterwards, because the cast of an
+	int8 value is exact.
+
+
+	Parameters
+	----------
+	x: torch.Tensor, shape=(len(alphabet), length)
+		The int8 sequence to edit.
+
+	args: list of torch.Tensor or None
+		This sequence's slice (a batch of one) of each additional argument, or
+		None. Each is cast to `dtype`, moved to `device` and repeated for
+		every row, as `predict` would cast the repeated arguments.
+
+	chars: torch.Tensor, shape=(n_edits,)
+		The character written by each edit.
+
+	positions: torch.Tensor, shape=(n_edits,)
+		The position of each edit.
+
+	batch_size: int
+		The largest number of rows in one batch.
+
+	dtype: torch.dtype
+		The dtype the model is run in.
+
+	device: torch.device
+		The device the model is run on.
+	"""
+
+	x = x.to(device).type(dtype)
+	positions = positions.to(device)
+	columns = torch.eye(x.shape[0], dtype=dtype, device=device)[chars.to(device)]
+
+	if args is not None:
+		args = [a.type(dtype).to(device) for a in args]
+
+	for start in range(0, positions.shape[0], batch_size):
+		p = positions[start:start+batch_size]
+		n = p.shape[0]
+
+		X_ = x.repeat(n, 1, 1)
+		X_.scatter_(2, p.view(n, 1, 1).expand(n, x.shape[0], 1),
+			columns[start:start+batch_size].unsqueeze(-1))
+
+		if args is not None:
+			args_ = [a.repeat(n, *(1 for _ in a.shape[1:])) for a in args]
+		else:
+			args_ = None
+
+		yield X_, args_
 
 
 def saturation_mutagenesis(
@@ -242,7 +305,8 @@ def saturation_mutagenesis(
 			"0 <= start < end <= length; got start={}, end={} for length "
 			"{}.".format(start, end, length))
 
-	device_ = _resolve_device(device)
+	device = _resolve_device(device)
+	dtype = _resolve_dtype(model, dtype)
 
 	y_hat, attr = [], []
 	for i in trange(X.shape[0], disable=not verbose):
@@ -259,32 +323,34 @@ def saturation_mutagenesis(
 
 		edit_chars, edit_positions = torch.where(~identity)
 		edit_positions = edit_positions + start
-		n_edits = edit_chars.shape[0]
 
-		X_ = X[i].repeat(n_edits, 1, 1)
-		rows = torch.arange(n_edits)
-		X_[rows, :, edit_positions] = 0
-		X_[rows, edit_chars, edit_positions] = 1
+		# Only possible for a one-character alphabet; this is the error that
+		# `predict` raises on an empty set of edits.
+		if edit_chars.shape[0] == 0:
+			raise ValueError("predict requires at least one example; got X "
+				"with shape[0] == 0.")
 
 		if args is not None:
-			args_ = tuple(a[i].repeat(n_edits, *(1 for _ in a[i].shape))
-				for a in args)
+			args_ = [a[i:i+1] for a in args]
 		else:
 			args_ = None
+
+		batches = _edited_batches(X[i], args_, edit_chars, edit_positions,
+			batch_size, dtype, device)
 
 		if not raw_outputs:
 			# Only the attributions are returned, so each batch of edit
 			# predictions is reduced to one score per edit on the device, inside
-			# `predict`, and the full grid of predictions is never built.
-			y0_i = y0[i].to(device_)
+			# `_predict_batches`, and the full grid of predictions is never built.
+			y0_i = y0[i].to(device)
 
 			def score(y):
 				if func is not None:
 					y = func(y)
 				return _edit_scores(y, y0_i.to(y.device), target)
 
-			scores = predict(model, X_, args=args_, func=score,
-				batch_size=batch_size, dtype=dtype, device=device)
+			scores = _predict_batches(model, batches, func=score, dtype=dtype,
+				device=device)
 
 			# An identity slot does not change the prediction, so its score is
 			# zero. Centering each position over the alphabet then gives the
@@ -295,8 +361,8 @@ def saturation_mutagenesis(
 			attr.append(attr_ - torch.mean(attr_, dim=0, keepdims=True))
 			continue
 
-		y_edits = predict(model, X_, args=args_, func=func,
-			batch_size=batch_size, dtype=dtype, device=device)
+		y_edits = _predict_batches(model, batches, func=func, dtype=dtype,
+			device=device)
 
 		# Scatter the edit predictions back into the full [character, position]
 		# grid, filling the identity slots with the reference prediction y0.

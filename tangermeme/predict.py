@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 import torch
@@ -99,14 +99,7 @@ def predict(
 			"with shape[0] == 0.")
 
 	device = _resolve_device(device)
-
-	if dtype is None:
-		try:
-			dtype = next(model.parameters()).dtype
-		except (StopIteration, AttributeError):
-			dtype = torch.float32
-	elif isinstance(dtype, str):
-		dtype = getattr(torch, dtype)
+	dtype = _resolve_dtype(model, dtype)
 
 	if args is not None:
 		for arg in args:
@@ -116,16 +109,65 @@ def predict(
 
 	###
 
+	def batches():
+		n = min(batch_size, X.shape[0])
+
+		for start in trange(0, X.shape[0], n, disable=not verbose):
+			end = start + n
+			X_ = X[start:end].type(dtype).to(device)
+
+			if args is not None:
+				args_ = [a[start:end].type(dtype).to(device) for a in args]
+			else:
+				args_ = None
+
+			yield X_, args_
+
+	return _predict_batches(model, batches(), func=func, dtype=dtype,
+		device=device)
+
+
+def _resolve_dtype(
+	model: torch.nn.Module,
+	dtype: str | torch.dtype | None,
+) -> torch.dtype:
+	"""Resolve `predict`'s dtype argument: None means the dtype of the model's
+	first parameter (float32 for a model without parameters), and a string
+	names a torch dtype."""
+
+	if dtype is None:
+		try:
+			return next(model.parameters()).dtype
+		except (StopIteration, AttributeError):
+			return torch.float32
+	elif isinstance(dtype, str):
+		return getattr(torch, dtype)
+	return dtype
+
+
+def _predict_batches(
+	model: torch.nn.Module,
+	batches: Iterable[tuple[torch.Tensor, list[torch.Tensor] | None]],
+	func: Callable[..., Any] | None,
+	dtype: torch.dtype,
+	device: torch.device,
+) -> torch.Tensor | list[torch.Tensor]:
+	"""The loop inside `predict`, over batches its caller has built.
+
+	`batches` yields `(X_, args_)` pairs that are already cast to `dtype` and
+	on `device`, with `args_` a list of tensors or None. It is consumed inside
+	`_preserve_model_state` and `torch.no_grad()`, so a generator may build
+	each batch on the device only when it is needed, as
+	`saturation_mutagenesis` does for its edited sequences. Each output has
+	`func` applied and is moved to the CPU, and the outputs are concatenated
+	exactly as `predict` returns them.
+	"""
+
 	use_autocast = _autocast_supported(device, dtype)
 
 	y = []
 	with _preserve_model_state(model, device), torch.no_grad():
-		batch_size = min(batch_size, X.shape[0])
-
-		for start in trange(0, X.shape[0], batch_size, disable=not verbose):
-			end = start + batch_size
-			X_ = X[start:end].type(dtype).to(device)
-
+		for X_, args_ in batches:
 			if X_.shape[0] == 0:
 				continue
 
@@ -135,8 +177,7 @@ def predict(
 				autocast_ctx = contextlib.nullcontext()
 
 			with autocast_ctx:
-				if args is not None:
-					args_ = [a[start:end].type(dtype).to(device) for a in args]
+				if args_ is not None:
 					y_ = model(X_, *args_)
 				else:
 					y_ = model(X_)
