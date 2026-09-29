@@ -932,17 +932,131 @@ def test_dinucleotide_shuffle_raises_ohe():
 
 
 def test_dinucleotide_shuffle_raises_N():
-	# Deliberately stricter than the rest of this module: the transition
-	# matrix comes from argmax, which would shuffle an unknown character
-	# as an 'A'. See the note in the `X` docstring.
+	# Deliberately stricter than the rest of this module: unknown characters
+	# are rejected unless `allow_N=True` is passed.
 	seq = 'ATATATTAAAATNNNATTTAAANNNTTTTTAATA'
 	motif = one_hot_encode(seq).unsqueeze(0)
 	assert_raises(ValueError, dinucleotide_shuffle, motif)
+	assert_raises(ValueError, dinucleotide_shuffle, motif, allow_N=False)
 
 
 def test_dinucleotide_shuffle_homopolymer():
 	seq_ohe = one_hot_encode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA').unsqueeze(0)
 	assert_raises(ValueError, dinucleotide_shuffle, seq_ohe)
+
+
+def test_dinucleotide_shuffle_allow_N():
+	seq = 'CATNCACGCNNATACGTTAGCNCGATTACANNNNNGCATGCAN'
+	X = one_hot_encode(seq).unsqueeze(0)
+	X_shuf = dinucleotide_shuffle(X, n=20, random_state=0, allow_N=True)
+	assert X_shuf.shape == (1, 20, 4, len(seq))
+	assert X_shuf.dtype == torch.int8
+	assert (X_shuf != X.unsqueeze(1)).any()
+
+	dinucs = _dinuc_counts(seq)
+	for j in range(20):
+		seq_shuf = characters(X_shuf[0, j], allow_N=True)
+		assert seq_shuf.count('N') == seq.count('N')
+		assert _dinuc_counts(seq_shuf) == dinucs
+
+
+def test_dinucleotide_shuffle_allow_N_matches_N_channel():
+	# An all-zero column is shuffled as though N had a channel of its own.
+	seq = 'CATNCACGCNNATACGTTAGCNCGATTACANNNNNGCATGCAN'
+	X = one_hot_encode(seq).unsqueeze(0)
+	X5 = one_hot_encode(seq, alphabet=['A', 'C', 'G', 'T', 'N'],
+		ignore=[]).unsqueeze(0)
+
+	X_shuf = dinucleotide_shuffle(X, n=20, random_state=0, allow_N=True)
+	X5_shuf = dinucleotide_shuffle(X5, n=20, random_state=0)
+	assert (X_shuf == X5_shuf[:, :, :4]).all()
+
+
+def test_dinucleotide_shuffle_allow_N_run():
+	seq = 'CATCACGCATACGTTAGCACGATTNNNNNNNNNNACAGCATGCACGTTAGCATCGAT'
+	X = one_hot_encode(seq).unsqueeze(0)
+	X_shuf = dinucleotide_shuffle(X, n=20, random_state=0, allow_N=True)
+
+	run_starts = set()
+	for j in range(20):
+		seq_shuf = characters(X_shuf[0, j], allow_N=True)
+		run_start = seq_shuf.index('N')
+		assert seq_shuf.count('N') == 10
+		assert seq_shuf[run_start:run_start+10] == 'N' * 10
+		run_starts.add(run_start)
+
+	assert len(run_starts) > 1
+
+
+def test_dinucleotide_shuffle_allow_N_batch():
+	X = random_one_hot((8, 4, 60), random_state=0)
+	for i in range(8):
+		X[i, :, 5*i:5*i+4] = 0
+		X[i, :, 59-i] = 0
+
+	X_shuf = dinucleotide_shuffle(X, n=10, random_state=0, allow_N=True)
+	assert X_shuf.shape == (8, 10, 4, 60)
+
+	for i in range(8):
+		seq = characters(X[i], allow_N=True)
+		dinucs = _dinuc_counts(seq)
+
+		for j in range(10):
+			seq_shuf = characters(X_shuf[i, j], allow_N=True)
+			assert seq_shuf.count('N') == 5
+			assert _dinuc_counts(seq_shuf) == dinucs
+
+
+def test_dinucleotide_shuffle_allow_N_start_end():
+	seq = 'NNNNNCATCACGCANNACGTTAGCACGATNCAGCATGCACNNNNN'
+	X = one_hot_encode(seq).unsqueeze(0)
+	X_shuf = dinucleotide_shuffle(X, start=10, end=35, n=20, random_state=0,
+		allow_N=True)
+
+	assert (X[:, :, :10].unsqueeze(1) == X_shuf[:, :, :, :10]).all()
+	assert (X[:, :, 35:].unsqueeze(1) == X_shuf[:, :, :, 35:]).all()
+
+	dinucs = _dinuc_counts(seq[10:35])
+	for j in range(20):
+		seq_shuf = characters(X_shuf[0, j, :, 10:35], allow_N=True)
+		assert _dinuc_counts(seq_shuf) == dinucs
+
+
+def test_dinucleotide_shuffle_allow_N_without_N():
+	X = random_one_hot((4, 4, 50), random_state=0)
+	X_shuf = dinucleotide_shuffle(X, n=10, random_state=0)
+	X_shuf_N = dinucleotide_shuffle(X, n=10, random_state=0, allow_N=True)
+	assert (X_shuf == X_shuf_N).all()
+
+
+def test_dinucleotide_shuffle_allow_N_dtypes():
+	seq = 'CATNCACGCNNATACGTTAGCNCGATTACANNNNNGCATGCAN'
+	X = one_hot_encode(seq).unsqueeze(0)
+	X_shuf = dinucleotide_shuffle(X, n=5, random_state=0, allow_N=True)
+
+	for dtype in torch.uint8, torch.int64, torch.float16, torch.float32, \
+		torch.float64:
+		X_shuf_dtype = dinucleotide_shuffle(X.to(dtype), n=5, random_state=0,
+			allow_N=True)
+		assert X_shuf_dtype.dtype == dtype
+		assert (X_shuf_dtype == X_shuf.to(dtype)).all()
+
+
+def test_dinucleotide_shuffle_allow_N_device(device):
+	seq = 'CATNCACGCNNATACGTTAGCNCGATTACANNNNNGCATGCAN'
+	X = one_hot_encode(seq).unsqueeze(0)
+	X_shuf = dinucleotide_shuffle(X, n=5, random_state=0, allow_N=True)
+	X_shuf_device = dinucleotide_shuffle(X.to(device), n=5, random_state=0,
+		allow_N=True)
+
+	assert X_shuf_device.device.type == device
+	assert (X_shuf_device.cpu() == X_shuf).all()
+
+
+def test_dinucleotide_shuffle_allow_N_raises_all_N():
+	# An all-N sequence has only itself as a shuffle, like a homopolymer.
+	X = torch.zeros(1, 4, 30, dtype=torch.int8)
+	assert_raises(ValueError, dinucleotide_shuffle, X, allow_N=True)
 
 
 ###

@@ -14,6 +14,13 @@ Claude Code skill
 
 	- The variant-effect reference no longer says that ``insertion_effect`` applies insertions one at a time in a loop, which stopped being true when the function was rewritten below. It says instead what happens to several insertions at one position: all are made, with the last one given ending up first.
 
+	- The ersatz notes in ``SKILL.md`` and ``references/motif-effects.md`` no longer say that ``dinucleotide_shuffle`` rejects unknown characters outright; they give ``allow_N=True`` as the way to shuffle them. The third footgun in ``references/deep_lift_shap.md`` gains the route for attributing a sequence that contains them, ``only_warn=True`` with ``references=partial(dinucleotide_shuffle, allow_N=True)``.
+
+ersatz
+------
+
+	- ``dinucleotide_shuffle`` accepts unknown characters, encoded as all-zero columns, when given ``allow_N=True``. Each is shuffled as a fifth character, so every shuffle keeps the number of unknown characters and the count of every dinucleotide, including those that contain one, and a contiguous run of them such as an assembly gap stays one run but moves with the shuffle. Passing the flag on to validation alone would not have been enough: the transition matrix is built from ``X.argmax(axis=0)``, which reads an all-zero column as the first character of the alphabet, so every unknown character would have been shuffled as an ``A`` and come out as one. A 30bp gap in a 300bp sequence then raised the ``AA`` count from 23 to 53. The default, ``allow_N=False``, keeps rejecting unknown characters, and the shuffles of a sequence without any are unchanged. Thanks @Al-Murphy!
+
 variant_effect
 --------------
 
