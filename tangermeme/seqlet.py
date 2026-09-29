@@ -459,6 +459,11 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 					for end in range(start, start+seqlet_len):
 						p_value[:, end] = 1
 
+					# Report the span's own p-value, not the maximum over its
+					# prefixes that p_value holds.
+					x_ = X_bin_csum[i, start+seqlet_len] - X_bin_csum[i, start]
+					p = rcdfs[seqlet_len, x_]
+
 					end = min(start + seqlet_len + additional_flanks, l)
 					start = max(start - additional_flanks, 0)
 					attr = X_csum[i, end] - X_csum[i, start]

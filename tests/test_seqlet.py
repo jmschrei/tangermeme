@@ -226,26 +226,26 @@ def test_recursive_seqlets(X_contrib):
 		assert name1 == name2
 
 	assert_array_almost_equal(seqlets.values[:20], [
-		[4.0, 1060.0, 1071.0, 0.1999, 0.0018],
-		[2.0, 1028.0, 1037.0, 0.0955, 0.0039],
-		[0.0, 1051.0, 1063.0, 0.306, 0.0045],
-		[2.0, 968.0, 978.0, 0.1317, 0.0046],
-		[2.0, 1247.0, 1253.0, 0.0481, 0.0046],
+		[0.0, 1051.0, 1063.0, 0.306, 1.864e-12],
+		[1.0, 1051.0, 1063.0, 0.2828, 1.269e-11],
+		[4.0, 1042.0, 1055.0, 0.2294, 2.97e-09],
+		[4.0, 1060.0, 1071.0, 0.1999, 1.778e-08],
+		[5.0, 1069.0, 1080.0, 0.1817, 8.533e-08],
+		[1.0, 913.0, 923.0, 0.1585, 9.749e-07],
+		[2.0, 968.0, 978.0, 0.1317, 7.38e-06],
+		[2.0, 1028.0, 1037.0, 0.0955, 7.669e-05],
+		[0.0, 1520.0, 1531.0, 0.0903, 0.0003],
+		[5.0, 1034.0, 1042.0, 0.0568, 0.0026],
+		[1.0, 1537.0, 1544.0, 0.0529, 0.0028],
+		[2.0, 1247.0, 1253.0, 0.0481, 0.0035],
+		[2.0, 929.0, 935.0, 0.0478, 0.0037],
 		[3.0, 1268.0, 1274.0, 0.0452, 0.0047],
-		[1.0, 913.0, 923.0, 0.1585, 0.0047],
-		[5.0, 1034.0, 1042.0, 0.0568, 0.0051],
-		[2.0, 929.0, 935.0, 0.0478, 0.0053],
-		[5.0, 1069.0, 1080.0, 0.1817, 0.0056],
+		[0.0, 578.0, 585.0, 0.0441, 0.0057],
+		[0.0, 1247.0, 1254.0, 0.041, 0.0066],
 		[1.0, 1607.0, 1613.0, 0.0369, 0.0067],
-		[0.0, 578.0, 585.0, 0.0441, 0.0069],
-		[4.0, 635.0, 641.0, 0.0359, 0.0071],
-		[4.0, 1042.0, 1055.0, 0.2294, 0.0075],
-		[0.0, 1520.0, 1531.0, 0.0903, 0.0082],
-		[1.0, 1051.0, 1063.0, 0.2828, 0.0084],
-		[2.0, 1059.0, 1065.0, 0.0331, 0.0087],
-		[4.0, 551.0, 555.0, 0.0236, 0.0094],
-		[0.0, 1247.0, 1254.0, 0.041, 0.0096],
-		[1.0, 1537.0, 1544.0, 0.0529, 0.0097]],
+		[4.0, 635.0, 641.0, 0.0359, 0.007],
+		[4.0, 1222.0, 1228.0, 0.0343, 0.0076],
+		[5.0, 885.0, 891.0, 0.0332, 0.0079]],
 	4)
 
 
@@ -455,18 +455,25 @@ def test_recursive_seqlets_min_seqlet_len_one_right_edge():
 	_assert_no_overlap(seqlets)
 
 
-def _span_p_value(X, example_idx, start, end, n_bins=1000):
-	"""P(S >= s) for S a sum of end - start draws from the binned values of X."""
+def _span_p_values(X, seqlets, n_bins=1000):
+	"""P(S >= s) for each seqlet, where s is the sum of its binned values.
+
+	S is a sum of end - start independent draws from the binned values of X.
+	"""
 
 	bin_width = (X.max() - X.min()) / (n_bins - 1)
 	bins = numpy.floor((X - X.min()) / bin_width).astype(int)
 	f = numpy.bincount(bins.ravel(), minlength=n_bins) / bins.size
 
-	pmf = numpy.ones(1)
-	for _ in range(end - start):
-		pmf = numpy.convolve(pmf, f)
+	pmfs = [numpy.ones(1)]
+	for _ in range(int((seqlets['end'] - seqlets['start']).max())):
+		pmfs.append(numpy.convolve(pmfs[-1], f))
 
-	return pmf[bins[example_idx, start:end].sum():].sum()
+	p_values = []
+	for idx, start, end in seqlets.values[:, :3].astype(int):
+		p_values.append(pmfs[end - start][bins[idx, start:end].sum():].sum())
+
+	return numpy.array(p_values)
 
 
 @pytest.fixture
@@ -489,9 +496,25 @@ def test_recursive_seqlets_p_value_oracle(X_laplace):
 	seqlets = recursive_seqlets(X_laplace, min_seqlet_len=6, max_seqlet_len=6)
 	assert seqlets.shape[0] > 0
 
-	p_values = [_span_p_value(X_laplace, int(idx), int(start), int(end))
-		for idx, start, end in seqlets.values[:, :3]]
-	assert_allclose(seqlets['p-value'], p_values, rtol=1e-6)
+	assert_allclose(seqlets['p-value'], _span_p_values(X_laplace, seqlets),
+		rtol=1e-6)
+
+
+def test_recursive_seqlets_p_value_own_span(X_contrib):
+	"""The reported p-value is that of the called span alone.
+
+	It used to be the maximum over every prefix of the span from
+	min_seqlet_len upward, so the ranking followed the weakest prefix: the
+	seqlet with the largest attribution here was reported at 4.5e-3 rather
+	than 1.9e-12.
+	"""
+
+	X = X_contrib.numpy().astype(numpy.float64)
+	seqlets = recursive_seqlets(X)
+	assert seqlets.shape[0] > 0
+
+	assert_allclose(seqlets['p-value'], _span_p_values(X, seqlets), rtol=1e-6)
+	assert seqlets['p-value'].is_monotonic_increasing
 
 
 def test_recursive_seqlets_minimum_runs():
