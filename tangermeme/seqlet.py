@@ -540,10 +540,12 @@ def recursive_seqlets(
 ) -> pandas.DataFrame:
 	"""A seqlet caller implementing the recursive seqlet algorithm.
 
-	NOTE: Currently only *positive* seqlets will be identified. The easiest way
-	to get negative seqlets is to run this on the absolute value of the
-	attribution values and then re-extract the attribution sums given the
-	boundaries.
+	NOTE: Currently only *positive* seqlets will be identified. To get negative
+	seqlets, run this on the negated attributions (and the negated `X_null`, if
+	one is used), negate the returned attribution sums, and drop any negative
+	seqlet that overlaps a positive one. Running on the absolute value instead
+	builds the null from both tails together, so negative seqlets that are
+	weaker than the positive ones are never significant.
 
 	This algorithm identifies spans of high attribution characters, called
 	seqlets, using a simple approach derived from the Tomtom/FIMO algorithms.
