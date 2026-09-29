@@ -572,8 +572,15 @@ def recursive_seqlets(
 			"X with shape {}.".format(tuple(X.shape)))
 
 	columns = ['example_idx', 'start', 'end', 'attribution', 'p-value']
-	seqlets = _recursive_seqlets(X, threshold, min_seqlet_len, max_seqlet_len,
-		additional_flanks, n_bins)
+
+	# Every span of a constant input has the same sum, so none is significant,
+	# and the bin width would be zero.
+	if X.max() == X.min():
+		seqlets = []
+	else:
+		seqlets = _recursive_seqlets(X, threshold, min_seqlet_len,
+			max_seqlet_len, additional_flanks, n_bins)
+
 	seqlets = pandas.DataFrame(seqlets, columns=columns)
 	return seqlets.sort_values("p-value").reset_index(drop=True)
     

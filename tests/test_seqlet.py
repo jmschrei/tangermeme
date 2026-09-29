@@ -359,5 +359,19 @@ def test_recursive_seqlets_empty():
 	assert_raises(ValueError, recursive_seqlets, torch.zeros(0, 100))
 
 
+@pytest.mark.parametrize("value", [0.0, 0.5])
+def test_recursive_seqlets_constant(value):
+	"""A constant input used to raise ZeroDivisionError from a zero bin width.
+
+	Every span of a given length has the same sum, so none can be significant.
+	"""
+
+	seqlets = recursive_seqlets(torch.full((2, 100), value))
+
+	assert seqlets.shape == (0, 5)
+	assert list(seqlets.columns) == ['example_idx', 'start', 'end',
+		'attribution', 'p-value']
+
+
 def test_tfmodisco_seqlets_empty():
 	assert_raises(ValueError, tfmodisco_seqlets, torch.zeros(0, 100))
