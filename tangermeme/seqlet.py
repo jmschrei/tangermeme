@@ -357,38 +357,31 @@ def tfmodisco_seqlets(
 
 
 @numba.njit
-def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25, 
-	additional_flanks=0, n_bins=1000):
-	"""An internal function implementing the recursive seqlet algorithm.
-	
-	This algorithm has four steps. 
-	
+def _recursive_seqlet_null(values, xmin, bin_width, max_seqlet_len=25,
+	n_bins=1000):
+	"""An internal function building the null distributions of span sums.
+
+	This covers the first two steps of the recursive seqlet algorithm:
+
 	(1) Convert attribution scores into integer bins and calculate a histogram
 	(2) Convert these histograms into null distributions across lengths
-	(3) Use the null distributions to calculate p-values for each possible length 
-	(4) Decode this matrix of p-values to find the longest seqlets
-	"""
 
-	n, l = X.shape
-	m = n*l
+	The histogram is built from `values`, which is either the input itself or
+	a set of control attributions. Returns `rcdfs`, where `rcdfs[k, i]` is
+	P(S >= i) for S a sum of k binned values.
+	"""
 
 	###
 	# Step 1: Calculate a histogram of binned scores
 	###
 
-	xmax, xmin = X.max(), X.min()
-	bin_width = (xmax - xmin) / (n_bins - 1)
-
 	f = numpy.zeros(n_bins, dtype=numpy.float64)
-	X_bin_csum = numpy.zeros((n, l+1), dtype=numpy.int64)
 
-	for i in range(n):
-		for j in range(l):
-			x_bin = math.floor((X[i, j] - xmin) / bin_width)
-			X_bin_csum[i, j+1] = X_bin_csum[i, j] + x_bin
-			f[x_bin] += 1
+	for i in range(values.shape[0]):
+		x_bin = math.floor((values[i] - xmin) / bin_width)
+		f[min(max(x_bin, 0), n_bins - 1)] += 1
 
-	f = f / m
+	f = f / values.shape[0]
 
 	###
 	# Step 2: Calculate null distributions across lengths
@@ -412,13 +405,36 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 		for i in range(n_bins * seqlet_len - 1, -1, -1):
 			rcdfs[seqlet_len, i] = rcdfs[seqlet_len, i+1] + scores[seqlet_len, i]
 
+	return rcdfs
+
+
+@numba.njit
+def _recursive_seqlet_decode(X, rcdfs, xmin, bin_width, threshold=0.01,
+	min_seqlet_len=4, max_seqlet_len=25, additional_flanks=0, n_bins=1000):
+	"""An internal function calling seqlets given the null distributions.
+
+	This covers the last two steps of the recursive seqlet algorithm:
+
+	(3) Use the null distributions to calculate p-values for each possible length
+	(4) Decode this matrix of p-values to find the longest seqlets
+
+	Values of `X` outside the range the bins were built over are placed in the
+	end bins.
+	"""
+
+	n, l = X.shape
+
 	###
 	# Step 3: Calculate p-values given these 1-CDFs
 	###
 
+	X_bin_csum = numpy.zeros((n, l+1), dtype=numpy.int64)
 	X_csum = numpy.zeros((n, l+1))
+
 	for i in range(n):
 		for j in range(l):
+			x_bin = math.floor((X[i, j] - xmin) / bin_width)
+			X_bin_csum[i, j+1] = X_bin_csum[i, j] + min(max(x_bin, 0), n_bins - 1)
 			X_csum[i, j+1] = X_csum[i, j] + X[i, j]
 
 
@@ -472,6 +488,47 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	return seqlets
 
 
+def _as_attributions(X, name, dtype=None):
+	"""Convert a tensor or array of attributions to a non-empty numpy array."""
+
+	if isinstance(X, torch.Tensor):
+		X = X.numpy()
+	elif not isinstance(X, numpy.ndarray):
+		raise ValueError("`{}` must be either a torch.Tensor or "
+			"numpy.ndarray.".format(name))
+
+	if X.size == 0:
+		raise ValueError("recursive_seqlets requires {} to be non-empty; got "
+			"{} with shape {}.".format(name, name, tuple(X.shape)))
+
+	if dtype is not None:
+		X = X.astype(dtype, copy=False)
+
+	return X
+
+
+def _recursive_seqlet_tables(X, X_null, max_seqlet_len, n_bins):
+	"""Build the null distributions and the bins they are defined over.
+
+	The histogram comes from `X_null` when it is given and from `X` otherwise.
+	The bins span every value in both, so each value of `X` has its own bin.
+	Returns None when all of those values are equal.
+	"""
+
+	xmin, xmax = X.min(), X.max()
+	if X_null is not None:
+		xmin, xmax = min(xmin, X_null.min()), max(xmax, X_null.max())
+
+	if xmax == xmin:
+		return None
+
+	bin_width = float(xmax - xmin) / (n_bins - 1)
+	values = X if X_null is None else X_null
+	rcdfs = _recursive_seqlet_null(values.ravel(), xmin, bin_width,
+		max_seqlet_len, n_bins)
+	return xmin, bin_width, rcdfs
+
+
 def recursive_seqlets(
 	X: torch.Tensor,
 	threshold: float = 0.01,
@@ -479,6 +536,7 @@ def recursive_seqlets(
 	max_seqlet_len: int = 25,
 	additional_flanks: int = 0,
 	n_bins: int = 1000,
+	X_null: torch.Tensor | None = None,
 ) -> pandas.DataFrame:
 	"""A seqlet caller implementing the recursive seqlet algorithm.
 
@@ -492,9 +550,10 @@ def recursive_seqlets(
 	First, each attribution is discretized into one of `n_bins` integer bins,
 	and the distribution of summed bins is created for all potential seqlet
 	lengths by treating positions as independent draws from the histogram of
-	all bins. Then, 1-CDFs are calculated for each distribution, giving the
-	probability that a span of that length has a summed bin at least as large.
-	Finally, p-values are calculated for all potential spans by looking up
+	all bins, or of the bins of `X_null` when it is given. Then, 1-CDFs are
+	calculated for each distribution, giving the probability that a span of
+	that length has a summed bin at least as large. Finally, p-values are
+	calculated for all potential spans by looking up
 	their summed bins in these 1-CDFs, yielding a (n_positions, n_lengths)
 	matrix of p-values.
 
@@ -562,6 +621,20 @@ def recursive_seqlets(
 		The number of bins to use when estimating the PDFs and CDFs. Default is
 		1000.
 
+	X_null: torch.Tensor, numpy.ndarray, or None, optional
+		Projected attributions, computed the same way as `X`, for sequences
+		without real signal, such as dinucleotide-shuffled copies of the
+		sequences. If given, the histogram that the null distributions are
+		built from comes from these values instead of from `X`, so p-values
+		measure how unusual a span is relative to this background rather than
+		relative to the pooled input, and a span's p-value does not depend on
+		the other examples in `X` except through the range of the bins, which
+		covers the values of both. Only the values are used, so the shape may
+		differ from `X`. A span whose summed bins exceed anything the control
+		can produce receives a p-value of 0. The p-values still treat
+		positions as independent; use `recursive_seqlets_fdr` to choose a
+		threshold. If None, the histogram is built from `X`. Default is None.
+
 
 	Returns
 	-------
@@ -572,25 +645,135 @@ def recursive_seqlets(
 		values within the triangle. 
 	"""
 
-	if isinstance(X, torch.Tensor):
-		X = X.numpy()
-	elif not isinstance(X, numpy.ndarray):
-		raise ValueError("`X` must be either a torch.Tensor or numpy.ndarray.")
-
-	if X.size == 0:
-		raise ValueError("recursive_seqlets requires X to be non-empty; got "
-			"X with shape {}.".format(tuple(X.shape)))
+	X = _as_attributions(X, "X")
+	if X_null is not None:
+		X_null = _as_attributions(X_null, "X_null", X.dtype)
 
 	columns = ['example_idx', 'start', 'end', 'attribution', 'p-value']
 
 	# Every span of a constant input has the same sum, so none is significant,
 	# and the bin width would be zero.
-	if X.max() == X.min():
+	tables = _recursive_seqlet_tables(X, X_null, max_seqlet_len, n_bins)
+	if tables is None:
 		seqlets = []
 	else:
-		seqlets = _recursive_seqlets(X, threshold, min_seqlet_len,
-			max_seqlet_len, additional_flanks, n_bins)
+		xmin, bin_width, rcdfs = tables
+		seqlets = _recursive_seqlet_decode(X, rcdfs, xmin, bin_width, threshold,
+			min_seqlet_len, max_seqlet_len, additional_flanks, n_bins)
 
 	seqlets = pandas.DataFrame(seqlets, columns=columns)
 	return seqlets.sort_values("p-value").reset_index(drop=True)
+
+
+def recursive_seqlets_fdr(
+	X: torch.Tensor,
+	X_control: torch.Tensor,
+	X_null: torch.Tensor | None = None,
+	thresholds: numpy.ndarray | None = None,
+	min_seqlet_len: int = 4,
+	max_seqlet_len: int = 25,
+	n_bins: int = 1000,
+) -> pandas.DataFrame:
+	"""Estimate the false discovery rate of recursive seqlet calls.
+
+	The p-values from `recursive_seqlets` treat positions as independent draws
+	from a histogram, but attributions are correlated along the sequence and
+	contain the signal being tested, so the fraction of false calls at a given
+	threshold is not the threshold. This function estimates it empirically by
+	calling seqlets on control attributions that contain no real signal, such
+	as attributions on dinucleotide-shuffled copies of the sequences, using
+	the same null distributions and bins as for `X`. Every seqlet called on
+	the control is false, so the estimated false discovery rate at each
+	threshold is the number of control seqlets, scaled to the number of
+	positions in `X`, divided by the number of seqlets called on `X`.
+
+	The control used for counting should not be the one passed as `X_null`,
+	because a control scored against a null built from itself produces fewer
+	seqlets than a new control would. Attributing two independent shuffles of
+	each sequence and passing one as `X_null` and the other as `X_control`
+	avoids this.
+
+	To call seqlets at a target false discovery rate, take the largest
+	threshold whose estimate is at or below it and pass that threshold, and
+	the same `X_null`, to `recursive_seqlets`:
+
+	::
+
+	    fdr = recursive_seqlets_fdr(X, X_control, X_null=X_null)
+	    threshold = fdr.loc[fdr['fdr'] <= 0.1, 'threshold'].max()
+	    seqlets = recursive_seqlets(X, threshold=threshold, X_null=X_null)
+
+
+	Parameters
+	----------
+	X: torch.Tensor or numpy.ndarray, shape=(-1, length)
+		Projected attributions for each position in each example, as passed to
+		`recursive_seqlets`.
+
+	X_control: torch.Tensor or numpy.ndarray, shape=(-1, length)
+		Projected attributions, computed the same way as `X`, for sequences
+		without real signal. It may contain a different number of examples, or
+		examples of a different length, than `X`; the counts are scaled by the
+		number of positions. Values outside the range of the bins are placed in
+		the end bins.
+
+	X_null: torch.Tensor, numpy.ndarray, or None, optional
+		Control attributions to build the null distributions from, as in
+		`recursive_seqlets`. If None, the null distributions are built from `X`
+		itself. Default is None.
+
+	thresholds: numpy.ndarray or None, optional
+		The p-value thresholds to evaluate. If None, use 37 thresholds evenly
+		spaced in log space from 0.1 to 1e-10. Default is None.
+
+	min_seqlet_len: int, optional
+		The minimum length that a seqlet must be, as in `recursive_seqlets`.
+		Default is 4.
+
+	max_seqlet_len: int, optional
+		The maximum length that a seqlet can be, as in `recursive_seqlets`.
+		Default is 25.
+
+	n_bins: int, optional
+		The number of bins to use when estimating the PDFs and CDFs. Default is
+		1000.
+
+
+	Returns
+	-------
+	fdr: pandas.DataFrame, shape=(len(thresholds), 4)
+		One row per threshold, from largest to smallest, with the number of
+		seqlets called on `X`, the number called on `X_control`, and the
+		estimated false discovery rate. The estimate is NaN at thresholds where
+		no seqlets are called on `X`.
+	"""
+
+	X = _as_attributions(X, "X")
+	X_control = _as_attributions(X_control, "X_control", X.dtype)
+	if X_null is not None:
+		X_null = _as_attributions(X_null, "X_null", X.dtype)
+
+	if thresholds is None:
+		thresholds = numpy.logspace(-1, -10, 37)
+	thresholds = numpy.sort(numpy.asarray(thresholds, dtype=numpy.float64))[::-1]
+
+	tables = _recursive_seqlet_tables(X, X_null, max_seqlet_len, n_bins)
+	scale = X.size / X_control.size
+
+	rows = []
+	for threshold in thresholds:
+		if tables is None:
+			n_seqlets, n_control = 0, 0
+		else:
+			xmin, bin_width, rcdfs = tables
+			n_seqlets = len(_recursive_seqlet_decode(X, rcdfs, xmin, bin_width,
+				threshold, min_seqlet_len, max_seqlet_len, 0, n_bins))
+			n_control = len(_recursive_seqlet_decode(X_control, rcdfs, xmin,
+				bin_width, threshold, min_seqlet_len, max_seqlet_len, 0, n_bins))
+
+		fdr = n_control * scale / n_seqlets if n_seqlets > 0 else numpy.nan
+		rows.append((threshold, n_seqlets, n_control, fdr))
+
+	return pandas.DataFrame(rows, columns=['threshold', 'n_seqlets',
+		'n_control_seqlets', 'fdr'])
     

@@ -17,6 +17,7 @@ from tangermeme.seqlet import _isotonic_thresholds
 
 from tangermeme.seqlet import tfmodisco_seqlets
 from tangermeme.seqlet import recursive_seqlets
+from tangermeme.seqlet import recursive_seqlets_fdr
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -455,15 +456,21 @@ def test_recursive_seqlets_min_seqlet_len_one_right_edge():
 	_assert_no_overlap(seqlets)
 
 
-def _span_p_values(X, seqlets, n_bins=1000):
+def _span_p_values(X, seqlets, n_bins=1000, X_null=None):
 	"""P(S >= s) for each seqlet, where s is the sum of its binned values.
 
-	S is a sum of end - start independent draws from the binned values of X.
+	S is a sum of end - start independent draws from the binned values of X,
+	or of X_null when it is given, with bins spanning the values of both.
 	"""
 
-	bin_width = (X.max() - X.min()) / (n_bins - 1)
-	bins = numpy.floor((X - X.min()) / bin_width).astype(int)
-	f = numpy.bincount(bins.ravel(), minlength=n_bins) / bins.size
+	values = X if X_null is None else X_null
+	lo = X.min() if X_null is None else min(X.min(), X_null.min())
+	hi = X.max() if X_null is None else max(X.max(), X_null.max())
+	bin_width = (hi - lo) / (n_bins - 1)
+
+	bins = numpy.floor((X - lo) / bin_width).astype(int)
+	null_bins = numpy.floor((values - lo) / bin_width).astype(int)
+	f = numpy.bincount(null_bins.ravel(), minlength=n_bins) / null_bins.size
 
 	pmfs = [numpy.ones(1)]
 	for _ in range(int((seqlets['end'] - seqlets['start']).max())):
@@ -568,3 +575,190 @@ def test_recursive_seqlets_shorter_than_min_seqlet_len():
 
 def test_tfmodisco_seqlets_empty():
 	assert_raises(ValueError, tfmodisco_seqlets, torch.zeros(0, 100))
+
+
+###
+
+
+@pytest.fixture
+def X_background():
+	return numpy.random.RandomState(1).laplace(size=(4, 500)) * 0.01
+
+
+def test_recursive_seqlets_X_null_self(X_contrib):
+	seqlets = recursive_seqlets(X_contrib)
+	seqlets_null = recursive_seqlets(X_contrib, X_null=X_contrib)
+
+	assert seqlets.shape == seqlets_null.shape
+	assert_array_almost_equal(seqlets.values, seqlets_null.values, 4)
+
+
+def test_recursive_seqlets_X_null_oracle(X_laplace, X_background):
+	seqlets = recursive_seqlets(X_laplace, X_null=X_background)
+	assert seqlets.shape[0] > 0
+
+	p_values = _span_p_values(X_laplace, seqlets, X_null=X_background)
+	assert_allclose(seqlets['p-value'], p_values, rtol=1e-6)
+
+
+def test_recursive_seqlets_X_null_wider_range(X_laplace, X_background):
+	X_null = numpy.concatenate([X_background.ravel(), [X_laplace.min() - 1, 
+		X_laplace.max() + 1]])
+
+	seqlets = recursive_seqlets(X_laplace, X_null=X_null)
+	assert seqlets.shape[0] > 0
+
+	p_values = _span_p_values(X_laplace, seqlets, X_null=X_null)
+	assert_allclose(seqlets['p-value'], p_values, rtol=1e-6)
+
+
+def test_recursive_seqlets_X_null_shape_and_type(X_laplace, X_background):
+	seqlets = recursive_seqlets(X_laplace, X_null=X_background)
+	seqlets_flat = recursive_seqlets(X_laplace, X_null=X_background.ravel())
+	seqlets_torch = recursive_seqlets(torch.from_numpy(X_laplace), 
+		X_null=torch.from_numpy(X_background))
+
+	assert_array_almost_equal(seqlets.values, seqlets_flat.values, 4)
+	assert_array_almost_equal(seqlets.values, seqlets_torch.values, 4)
+
+
+def test_recursive_seqlets_X_null_dtype(X_laplace, X_background):
+	X = X_laplace.astype(numpy.float32)
+	seqlets = recursive_seqlets(X, X_null=X_background.astype(numpy.float32))
+	seqlets_64 = recursive_seqlets(X, X_null=X_background)
+
+	assert_array_almost_equal(seqlets.values, seqlets_64.values, 4)
+
+
+def test_recursive_seqlets_X_null_constant_X(X_background):
+	columns = ['example_idx', 'start', 'end', 'attribution', 'p-value']
+
+	seqlets = recursive_seqlets(numpy.zeros((2, 100)), X_null=X_background)
+	assert list(seqlets.columns) == columns
+	assert seqlets.shape == (0, 5)
+
+	seqlets = recursive_seqlets(numpy.ones((2, 100)), X_null=X_background)
+	assert list(seqlets.columns) == columns
+	assert seqlets.shape[0] > 0
+
+	seqlets = recursive_seqlets(numpy.ones((2, 100)), X_null=numpy.ones(10))
+	assert seqlets.shape == (0, 5)
+
+
+def test_recursive_seqlets_X_null_empty(X_laplace):
+	assert_raises(ValueError, recursive_seqlets, X_laplace, 
+		X_null=numpy.zeros((0, 10)))
+	assert_raises(ValueError, recursive_seqlets, X_laplace, X_null=[0.1, 0.2])
+
+
+###
+
+
+def test_recursive_seqlets_fdr(X_laplace, X_background):
+	X_control = numpy.random.RandomState(2).laplace(size=(4, 500)) * 0.01
+	thresholds = [1e-2, 1e-4, 1e-6]
+
+	fdr = recursive_seqlets_fdr(X_laplace, X_control, X_null=X_background,
+		thresholds=thresholds)
+
+	assert list(fdr.columns) == ['threshold', 'n_seqlets', 'n_control_seqlets',
+		'fdr']
+	assert_array_almost_equal(fdr['threshold'], thresholds)
+
+	for _, (threshold, n_seqlets, n_control, value) in fdr.iterrows():
+		seqlets = recursive_seqlets(X_laplace, threshold=threshold, 
+			X_null=X_background)
+		assert n_seqlets == seqlets.shape[0]
+		assert_array_almost_equal(value, n_control / n_seqlets)
+
+
+def test_recursive_seqlets_fdr_pooled(X_laplace, X_background):
+	thresholds = [1e-2, 1e-4]
+	fdr = recursive_seqlets_fdr(X_laplace, X_background, thresholds=thresholds)
+
+	for _, (threshold, n_seqlets, _, _) in fdr.iterrows():
+		assert n_seqlets == recursive_seqlets(X_laplace, 
+			threshold=threshold).shape[0]
+
+
+def test_recursive_seqlets_fdr_default_thresholds(X_laplace, X_background):
+	fdr = recursive_seqlets_fdr(X_laplace, X_background)
+
+	assert fdr.shape == (37, 4)
+	assert_array_almost_equal(fdr['threshold'].values[[0, -1]], [1e-1, 1e-10])
+	assert (numpy.diff(fdr['threshold']) < 0).all()
+
+
+def test_recursive_seqlets_fdr_unsorted_thresholds(X_laplace, X_background):
+	fdr = recursive_seqlets_fdr(X_laplace, X_background, 
+		thresholds=[1e-4, 1e-2, 1e-3])
+	assert_array_almost_equal(fdr['threshold'], [1e-2, 1e-3, 1e-4])
+
+
+def test_recursive_seqlets_fdr_no_signal():
+	"""Input and control from the same process give an estimate near 1."""
+
+	rng = numpy.random.RandomState(0)
+	X = rng.laplace(size=(40, 1000))
+	X_null = rng.laplace(size=(40, 1000))
+	X_control = rng.laplace(size=(40, 1000))
+
+	fdr = recursive_seqlets_fdr(X, X_control, X_null=X_null, 
+		thresholds=[1e-2, 3e-3])
+
+	assert (fdr['n_seqlets'] > 50).all()
+	assert ((fdr['fdr'] > 0.7) & (fdr['fdr'] < 1.4)).all()
+
+
+def test_recursive_seqlets_fdr_signal():
+	"""Strong planted spans are called with a low estimate at strict thresholds."""
+
+	rng = numpy.random.RandomState(0)
+	X = rng.laplace(size=(40, 1000)) * 0.01
+	X[:, 500:510] += 0.2
+	X_null = rng.laplace(size=(40, 1000)) * 0.01
+	X_control = rng.laplace(size=(40, 1000)) * 0.01
+
+	fdr = recursive_seqlets_fdr(X, X_control, X_null=X_null, thresholds=[1e-8])
+
+	assert fdr['n_seqlets'].iloc[0] >= 40
+	assert fdr['fdr'].iloc[0] < 0.1
+
+
+def test_recursive_seqlets_fdr_control_size(X_laplace, X_background):
+	"""The control count is scaled by the number of positions in the control."""
+
+	thresholds = [1e-2, 1e-3]
+	X_control = numpy.random.RandomState(2).laplace(size=(4, 500)) * 0.01
+
+	fdr = recursive_seqlets_fdr(X_laplace, X_control, X_null=X_background,
+		thresholds=thresholds)
+	fdr2 = recursive_seqlets_fdr(X_laplace, numpy.concatenate([X_control, 
+		X_control]), X_null=X_background, thresholds=thresholds)
+
+	assert_array_almost_equal(fdr2['n_control_seqlets'], 
+		2 * fdr['n_control_seqlets'])
+	assert_array_almost_equal(fdr2['fdr'], fdr['fdr'])
+
+
+def test_recursive_seqlets_fdr_control_range(X_laplace, X_background):
+	X_control = numpy.random.RandomState(2).laplace(size=(4, 500)) * 10
+	fdr = recursive_seqlets_fdr(X_laplace, X_control, X_null=X_background,
+		thresholds=[1e-2])
+
+	assert fdr['n_control_seqlets'].iloc[0] > 0
+
+
+def test_recursive_seqlets_fdr_nan(X_background):
+	fdr = recursive_seqlets_fdr(numpy.zeros((2, 100)), X_background,
+		thresholds=[1e-2])
+
+	assert fdr['n_seqlets'].iloc[0] == 0
+	assert numpy.isnan(fdr['fdr'].iloc[0])
+
+
+def test_recursive_seqlets_fdr_empty(X_laplace):
+	assert_raises(ValueError, recursive_seqlets_fdr, X_laplace, 
+		numpy.zeros((0, 10)))
+	assert_raises(ValueError, recursive_seqlets_fdr, numpy.zeros((0, 10)),
+		X_laplace)
