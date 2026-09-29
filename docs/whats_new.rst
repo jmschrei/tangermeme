@@ -6,6 +6,15 @@ Release History
 ===============
 
 
+Version 1.5.1 (unreleased)
+==========================
+
+variant_effect
+--------------
+
+	- ``deletion_effect`` no longer keeps a deleted position that sits next to the positions trimmed off to bring every example to the same length. The trimmed flank was found by counting from the trimmed end until enough undeleted positions had been passed, and a deleted position inside that count was marked as both deleted and trimmed, two marks that summed to a value read as kept. When that left the examples with different lengths the call raised ``RuntimeError: shape '[n, 4, -1]' is invalid for input of size ...``; when every example was affected alike the deletion was silently not applied, as with a single deletion at the last position under ``left=False`` or at the first under ``left=True``. Only positions that are not themselves deleted are now counted as flank.
+
+
 Version 1.5.0
 =============
 

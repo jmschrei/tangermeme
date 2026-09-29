@@ -16,6 +16,8 @@ from .toy_models import SumModel
 from .toy_models import SmallDeepSEA
 
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import one_hot_encode
+from tangermeme.utils import characters
 
 from tangermeme.variant_effect import substitution_effect
 from tangermeme.variant_effect import deletion_effect
@@ -145,6 +147,41 @@ def test_deletion_effect_rejects_empty_X():
 	deletions = torch.zeros(0, 2, dtype=torch.int64)
 	with pytest.raises(ValueError, match="at least one example"):
 		deletion_effect(model, X, deletions)
+
+
+def _return_X(model, X, args=None, **kwargs):
+	return X
+
+
+@pytest.mark.parametrize("left", [False, True])
+def test_deletion_effect_deletion_next_to_trimmed_flank(left):
+	# Example 0 has one deletion and example 1 has two, so example 0 is
+	# trimmed by one more position. Its deletion sits right next to that
+	# trimmed position and must still be removed.
+	x0 = "GCAAAAAAAAAA" if left else "AAAAAAAAAACG"
+	X = torch.stack([one_hot_encode(x0), one_hot_encode("ACGTACGTACGT")])
+	deletions = torch.tensor([[0, 1 if left else 10], [1, 2], [1, 3]])
+
+	_, X_var = deletion_effect(None, X, deletions, left=left, func=_return_X)
+
+	assert characters(X_var[0]) == "AAAAAAAAAA"
+	assert characters(X_var[1]) == "ACACGTACGT"
+
+
+def test_deletion_effect_deletion_at_trimmed_end():
+	# The only deletion is at the last position, so nothing is trimmed and
+	# that position must be removed rather than kept.
+	X = one_hot_encode("AAAAAAAAAACG").unsqueeze(0)
+
+	X_before, X_var = deletion_effect(None, X, torch.tensor([[0, 11]]),
+		func=_return_X)
+	assert characters(X_before[0]) == "AAAAAAAAAAC"
+	assert characters(X_var[0]) == "AAAAAAAAAAC"
+
+	X_before, X_var = deletion_effect(None, X, torch.tensor([[0, 0]]),
+		left=True, func=_return_X)
+	assert characters(X_before[0]) == "AAAAAAAAACG"
+	assert characters(X_var[0]) == "AAAAAAAAACG"
 
 
 def test_substitution_effect_rejects_empty_X():

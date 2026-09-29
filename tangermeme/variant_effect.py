@@ -271,7 +271,7 @@ def deletion_effect(
 	counts = abs(counts - counts.max())
 
 	m = mask if left == True else torch.flip(mask, dims=(-1,))
-	flank = torch.cumsum(1 - m, dim=-1) <= counts[:, None]
+	flank = (torch.cumsum(1 - m, dim=-1) <= counts[:, None]) & (m == 0)
 	mask += (flank if left == True else torch.flip(flank, dims=(-1,)))
 	mask = (1 - mask).type(torch.bool)
 	mask = mask[:, None].repeat(1, X.shape[1], 1) 
