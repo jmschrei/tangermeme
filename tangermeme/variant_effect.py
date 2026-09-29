@@ -6,15 +6,68 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+import numba
 import numpy
 import torch
 
 from .utils import _cast_as_tensor
 
-from .ersatz import insert
-
 from .predict import predict
 from .results import PerturbationResult
+
+
+@numba.njit(cache=True)
+def _deletion_idxs(kept, left, idxs):
+	"""Fill each row of `idxs` with the positions kept in that row of `kept`,
+	taking the first `idxs.shape[1]` of them, or the last when `left`."""
+
+	n, length = kept.shape
+	length_out = idxs.shape[1]
+
+	for i in range(n):
+		n_kept = 0
+		for j in range(length):
+			n_kept += kept[i, j]
+
+		k = length_out - n_kept if left else 0
+		for j in range(length):
+			if kept[i, j]:
+				if 0 <= k < length_out:
+					idxs[i, k] = j
+				k += 1
+
+
+@numba.njit(cache=True)
+def _insertion_idxs(starts, positions, left, idxs, insertion_idxs):
+	"""Fill `idxs` with the position in the original sequence that each
+	output position comes from, and `insertion_idxs` with the output position
+	of each insertion. `idxs` is left untouched where an insertion goes, and
+	`insertion_idxs` where trimming drops an insertion.
+
+	The insertions of example i are `positions[starts[i]:starts[i+1]]`, sorted
+	by position, and each goes in front of the character at its position.
+	"""
+
+	n, length = idxs.shape
+
+	for i in range(n):
+		start, end = starts[i], starts[i+1]
+
+		# Output index of the next character; trimming from the left drops as
+		# many characters as there are insertions.
+		k = start - end if left else 0
+		r = start
+
+		for j in range(length):
+			while r < end and positions[r] == j:
+				if 0 <= k < length:
+					insertion_idxs[r] = k
+				k += 1
+				r += 1
+
+			if 0 <= k < length:
+				idxs[i, k] = j
+			k += 1
 
 
 def substitution_effect(
@@ -247,7 +300,7 @@ def deletion_effect(
 		The output from `func` after the variants are included.
 	"""
 
-	deletions = _cast_as_tensor(deletions)
+	deletions = _cast_as_tensor(deletions).cpu()
 
 	if X.shape[0] == 0:
 		raise ValueError("deletion_effect requires at least one example; "
@@ -255,10 +308,10 @@ def deletion_effect(
 
 	additional_func_kwargs = dict(additional_func_kwargs or {})
 
-	mask = torch.zeros_like(X[:, 0]).type(torch.int32)
-	mask[deletions[:, 0], deletions[:, 1]] = 1
+	kept = torch.ones(X.shape[0], X.shape[-1], dtype=torch.bool)
+	kept[deletions[:, 0], deletions[:, 1]] = False
 
-	max_deletions = int(mask.sum(dim=-1).max())
+	max_deletions = X.shape[-1] - int(kept.sum(dim=-1).min())
 	if max_deletions >= X.shape[-1]:
 		raise ValueError(
 			f"deletion_effect requires X.shape[-1] > max deletions per example "
@@ -267,16 +320,12 @@ def deletion_effect(
 			f"={max_deletions}. Each sequence must be of length "
 			f"`model_length + max_deletions_per_sequence`.")
 
-	counts = mask.sum(dim=-1)
-	counts = abs(counts - counts.max())
+	idxs = numpy.empty((X.shape[0], X.shape[-1] - max_deletions),
+		dtype=numpy.int64)
+	_deletion_idxs(kept.numpy(), left == True, idxs)
 
-	m = mask if left == True else torch.flip(mask, dims=(-1,))
-	flank = (torch.cumsum(1 - m, dim=-1) <= counts[:, None]) & (m == 0)
-	mask += (flank if left == True else torch.flip(flank, dims=(-1,)))
-	mask = (1 - mask).type(torch.bool)
-	mask = mask[:, None].repeat(1, X.shape[1], 1) 
-
-	X_var = X[mask].reshape(X.shape[0], X.shape[1], -1)
+	idxs = torch.from_numpy(idxs).to(X.device)
+	X_var = torch.gather(X, 2, idxs[:, None].expand(-1, X.shape[1], -1))
 
 	if left == True:
 		X = X[:, :, -X_var.shape[-1]:]
@@ -388,30 +437,56 @@ def insertion_effect(
 		The output from `func` after the variants are included.
 	"""
 
-	insertions = _cast_as_tensor(insertions)
+	insertions = _cast_as_tensor(insertions).cpu()
+
+	if X.shape[0] == 0:
+		raise ValueError("insertion_effect requires at least one example; "
+			"got X with shape[0] == 0.")
 
 	additional_func_kwargs = dict(additional_func_kwargs or {})
-	X_var = []
+	n, length = X.shape[0], X.shape[-1]
 
-	for i in range(X.shape[0]):
-		insertions_ = insertions[insertions[:, 0] == i]
-		insertions_ = insertions_[torch.argsort(insertions_[:, 1], 
-			descending=True)]
+	# Rows naming an example outside of X are ignored.
+	insertions = insertions[(insertions[:, 0] >= 0) & (insertions[:, 0] < n)]
+	idx, pos, char = insertions[:, 0], insertions[:, 1], insertions[:, 2]
 
-		x = X[i:i+1]
-		for _, j, char in insertions_:
-			v = torch.zeros(1, X.shape[1], 1)
-			v[:, char] = 1
-			x = insert(x, v, start=j)
+	if ((pos < 0) | (pos >= length)).any():
+		raise ValueError("insertion_effect requires every insertion position "
+			f"to be in [0, X.shape[-1]); got X.shape[-1]={length}.")
 
-		if left == True:
-			x = x[:, :, -X.shape[-1]:]
-		else:
-			x = x[:, :, :X.shape[-1]]
-		
-		X_var.append(x)
+	# Sort by example and then position. Insertions sharing a position are
+	# sorted in reverse of the order given, so the last one given comes first
+	# in the output.
+	rev = torch.arange(len(idx) - 1, -1, -1)
+	key = idx.long() * length + pos.long()
+	order = rev[torch.argsort(key[rev], stable=True)]
+	idx, pos, char = idx[order], pos[order], char[order]
 
-	X_var = torch.cat(X_var)
+	starts = numpy.zeros(n + 1, dtype=numpy.int64)
+	starts[1:] = torch.cumsum(torch.bincount(idx, minlength=n), dim=0).numpy()
+
+	# Inserted characters gather position 0 and are overwritten below.
+	src_idxs = numpy.zeros((n, length), dtype=numpy.int64)
+	insertion_idxs = numpy.full(len(idx), -1, dtype=numpy.int64)
+	_insertion_idxs(starts, pos.long().numpy(), left == True, src_idxs,
+		insertion_idxs)
+
+	src_idxs = torch.from_numpy(src_idxs).to(X.device)
+	insertion_idxs = torch.from_numpy(insertion_idxs)
+	inside = insertion_idxs >= 0
+	idx, char, insertion_idxs = idx[inside], char[inside], insertion_idxs[inside]
+
+	# Kept for backwards compatibility: any insertion promotes X_var to at
+	# least float32.
+	dtype = X.dtype
+	if len(pos) > 0:
+		dtype = torch.promote_types(X.dtype, torch.float32)
+
+	X_var = torch.gather(X, 2, src_idxs[:, None].expand(-1, X.shape[1], -1))
+	X_var = X_var.to(dtype)
+	X_var[idx, :, insertion_idxs] = 0
+	X_var[idx, char, insertion_idxs] = 1
+
 	y_before = func(model, X, args=args, **additional_func_kwargs, **kwargs)
 	y_after = func(model, X_var, args=args, **additional_func_kwargs, **kwargs)
 	return PerturbationResult(y_before=y_before, y_after=y_after)

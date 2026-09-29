@@ -194,13 +194,24 @@ def test_substitution_effect_rejects_empty_X():
 
 
 def test_insertion_effect_rejects_empty_X():
-	# Empty X crashes inside torch.cat with a slightly cryptic message;
-	# any ValueError is acceptable here.
+	# Empty X is rejected before any sequence is built; any ValueError is
+	# acceptable here.
 	model = FlattenDense()
 	X = torch.zeros(0, 4, 100, dtype=torch.float32)
 	insertions = torch.zeros(0, 3, dtype=torch.int64)
 	with pytest.raises(ValueError):
 		insertion_effect(model, X, insertions)
+
+
+def test_insertion_effect_rejects_positions_outside_X():
+	# An insertion goes in front of the character at its position, so the
+	# positions available are 0 through length - 1.
+	X = one_hot_encode("AAAAACCCCC").unsqueeze(0)
+
+	for position in -1, 10:
+		with pytest.raises(ValueError, match="insertion position"):
+			insertion_effect(None, X, torch.tensor([[0, position, 1]]),
+				func=_return_X)
 
 
 ###
@@ -307,6 +318,45 @@ def test_insertion_effect_left(X, substitutions, device):
 
 	# Both runs return the same y_before (predict on the unmodified X).
 	assert_array_almost_equal(y_right, y_left)
+
+
+@pytest.mark.parametrize("left", [False, True])
+def test_insertion_effect_sequences(left):
+	# Each insertion goes in front of the character at its position in the
+	# original sequence, and the result is trimmed back to the original
+	# length from the right, or from the left when left=True.
+	X = torch.stack([one_hot_encode("AAAAACCCCC"),
+		one_hot_encode("GGGGGTTTTT"), one_hot_encode("ACGTACGTAC")])
+	insertions = torch.tensor([[0, 7, 3], [0, 3, 2], [1, 0, 1]])
+
+	_, X_var = insertion_effect(None, X, insertions, left=left,
+		func=_return_X)
+
+	if left:
+		assert characters(X_var[0]) == "AGAACCTCCC"
+		assert characters(X_var[1]) == "GGGGGTTTTT"
+	else:
+		assert characters(X_var[0]) == "AAAGAACCTC"
+		assert characters(X_var[1]) == "CGGGGGTTTT"
+	assert characters(X_var[2]) == "ACGTACGTAC"
+
+
+def test_insertion_effect_X_on_device(X, substitutions, device):
+	_, X_var = insertion_effect(None, X, substitutions, func=_return_X)
+	_, X_var_device = insertion_effect(None, X.to(device), substitutions,
+		func=_return_X)
+
+	assert X_var_device.device.type == device
+	assert torch.equal(X_var_device.cpu(), X_var)
+
+
+def test_deletion_effect_X_on_device(X_del, deletions, device):
+	_, X_var = deletion_effect(None, X_del, deletions, func=_return_X)
+	_, X_var_device = deletion_effect(None, X_del.to(device), deletions,
+		func=_return_X)
+
+	assert X_var_device.device.type == device
+	assert torch.equal(X_var_device.cpu(), X_var)
 
 
 def test_substitution_effect_no_variant_for_example(X, device):
