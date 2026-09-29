@@ -426,7 +426,6 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	for i in range(n):
 		p_value = numpy.ones((max_seqlet_len+1, l), dtype=numpy.float64)
 		p_value[:min_seqlet_len] = 0
-		p_value[:, -min_seqlet_len] = 1
 
 		for seqlet_len in range(min_seqlet_len, max_seqlet_len+1):
 			for k in range(l-seqlet_len+1):
@@ -457,7 +456,7 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 					for end in range(start, min(start+seqlet_len, l-1)):
 						p_value[:, end] = 1
 
-					end = min(start + seqlet_len + additional_flanks, l-1)
+					end = min(start + seqlet_len + additional_flanks, l)
 					start = max(start - additional_flanks, 0)
 					attr = X_csum[i, end] - X_csum[i, start]
 					seqlets.append((i, start, end, attr, p))

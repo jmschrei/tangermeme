@@ -373,5 +373,60 @@ def test_recursive_seqlets_constant(value):
 		'attribution', 'p-value']
 
 
+@pytest.mark.parametrize("min_seqlet_len", [4, 6, 8])
+def test_recursive_seqlets_right_edge(min_seqlet_len):
+	"""The last min_seqlet_len positions used to be excluded from every seqlet.
+
+	A block at [990, 1000) was called as [988, 996) at min_seqlet_len=4 and
+	not called at all at min_seqlet_len=8, while identical blocks at the left
+	edge and in the middle were called in full.
+	"""
+
+	X = numpy.random.RandomState(0).normal(0, 0.01, size=(1, 1000))
+	for start in (0, 495, 990):
+		X[0, start:start+10] += 1
+
+	seqlets = recursive_seqlets(X, min_seqlet_len=min_seqlet_len)
+	seqlets = seqlets.sort_values("start").reset_index(drop=True)
+
+	assert seqlets.shape[0] == 3
+	assert seqlets.loc[0, 'start'] == 0 and seqlets.loc[0, 'end'] >= 10
+	assert seqlets.loc[1, 'start'] <= 495 and seqlets.loc[1, 'end'] >= 505
+	assert seqlets.loc[2, 'start'] <= 990 and seqlets.loc[2, 'end'] == 1000
+
+	for _, (idx, start, end, attr, _) in seqlets.iterrows():
+		assert_array_almost_equal(attr, X[int(idx), int(start):int(end)].sum())
+
+
+def test_recursive_seqlets_additional_flanks_edges():
+	"""Flanks past the right edge used to be clipped to length - 1."""
+
+	X = numpy.random.RandomState(0).normal(0, 0.01, size=(1, 1000))
+	X[0, 5:15] += 1
+	X[0, 980:990] += 1
+
+	seqlets = recursive_seqlets(X, additional_flanks=15)
+	seqlets = seqlets.sort_values("start").reset_index(drop=True)
+
+	assert seqlets.shape[0] == 2
+	assert seqlets.loc[0, 'start'] == 0
+	assert seqlets.loc[1, 'end'] == 1000
+
+	for _, (idx, start, end, attr, _) in seqlets.iterrows():
+		assert_array_almost_equal(attr, X[int(idx), int(start):int(end)].sum())
+
+
+def test_recursive_seqlets_shorter_than_min_seqlet_len():
+	"""A sequence shorter than min_seqlet_len used to be indexed out of bounds.
+
+	The out-of-bounds write sometimes segfaulted and sometimes returned an
+	empty frame.
+	"""
+
+	X = numpy.random.RandomState(0).normal(size=(2, 3))
+	seqlets = recursive_seqlets(X, min_seqlet_len=4)
+	assert seqlets.shape == (0, 5)
+
+
 def test_tfmodisco_seqlets_empty():
 	assert_raises(ValueError, tfmodisco_seqlets, torch.zeros(0, 100))
