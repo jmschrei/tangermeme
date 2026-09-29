@@ -399,7 +399,7 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	rcdfs = numpy.zeros_like(scores)
 	rcdfs[:, 0] = 1.0
 	
-	for seqlet_len in range(2, max_seqlet_len+1):
+	for seqlet_len in range(1, max_seqlet_len+1):
 		for i in range(n_bins * (seqlet_len-1)):
 			for j in range(n_bins):
 				scores[seqlet_len, i+j] += scores[seqlet_len-1, i] * f[j]
@@ -453,7 +453,7 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 						break
 
 				else:
-					for end in range(start, min(start+seqlet_len, l-1)):
+					for end in range(start, start+seqlet_len):
 						p_value[:, end] = 1
 
 					end = min(start + seqlet_len + additional_flanks, l)

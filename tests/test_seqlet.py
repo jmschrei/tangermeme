@@ -416,6 +416,44 @@ def test_recursive_seqlets_additional_flanks_edges():
 		assert_array_almost_equal(attr, X[int(idx), int(start):int(end)].sum())
 
 
+def _assert_no_overlap(seqlets):
+	seqlets = seqlets.sort_values(['example_idx', 'start'])
+	for _, group in seqlets.groupby('example_idx'):
+		assert (group['start'].values[1:] >= group['end'].values[:-1]).all()
+
+
+def test_recursive_seqlets_min_seqlet_len_one(X_contrib):
+	"""With min_seqlet_len=1 every length-1 span used to get a p-value of 0.
+
+	The length-1 null was never filled in, so more than 12,500 of the 12,684
+	positions were called as length-1 seqlets. A single position is
+	significant only if fewer than 1% of positions score at least as high.
+	"""
+
+	seqlets = recursive_seqlets(X_contrib, min_seqlet_len=1)
+	lengths = seqlets['end'] - seqlets['start']
+
+	assert (lengths == 1).sum() <= 0.01 * X_contrib.numel()
+	assert (seqlets['p-value'] > 0).all()
+	_assert_no_overlap(seqlets)
+
+
+def test_recursive_seqlets_min_seqlet_len_one_right_edge():
+	"""The last position used to be left unmasked after a seqlet ending there.
+
+	With min_seqlet_len=1 it was then called a second time as a length-1
+	seqlet overlapping the first.
+	"""
+
+	X = numpy.random.RandomState(0).normal(0, 0.01, size=(1, 1000))
+	X[0, 995:1000] += numpy.linspace(1, 2, 5)
+
+	seqlets = recursive_seqlets(X, min_seqlet_len=1)
+
+	assert ((seqlets['start'] == 995) & (seqlets['end'] == 1000)).sum() == 1
+	_assert_no_overlap(seqlets)
+
+
 def test_recursive_seqlets_shorter_than_min_seqlet_len():
 	"""A sequence shorter than min_seqlet_len used to be indexed out of bounds.
 
