@@ -16,6 +16,8 @@ from .toy_models import SumModel
 from .toy_models import SmallDeepSEA
 
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import one_hot_encode
+from tangermeme.utils import characters
 
 from tangermeme.variant_effect import substitution_effect
 from tangermeme.variant_effect import deletion_effect
@@ -147,6 +149,41 @@ def test_deletion_effect_rejects_empty_X():
 		deletion_effect(model, X, deletions)
 
 
+def _return_X(model, X, args=None, **kwargs):
+	return X
+
+
+@pytest.mark.parametrize("left", [False, True])
+def test_deletion_effect_deletion_next_to_trimmed_flank(left):
+	# Example 0 has one deletion and example 1 has two, so example 0 is
+	# trimmed by one more position. Its deletion sits right next to that
+	# trimmed position and must still be removed.
+	x0 = "GCAAAAAAAAAA" if left else "AAAAAAAAAACG"
+	X = torch.stack([one_hot_encode(x0), one_hot_encode("ACGTACGTACGT")])
+	deletions = torch.tensor([[0, 1 if left else 10], [1, 2], [1, 3]])
+
+	_, X_var = deletion_effect(None, X, deletions, left=left, func=_return_X)
+
+	assert characters(X_var[0]) == "AAAAAAAAAA"
+	assert characters(X_var[1]) == "ACACGTACGT"
+
+
+def test_deletion_effect_deletion_at_trimmed_end():
+	# The only deletion is at the last position, so nothing is trimmed and
+	# that position must be removed rather than kept.
+	X = one_hot_encode("AAAAAAAAAACG").unsqueeze(0)
+
+	X_before, X_var = deletion_effect(None, X, torch.tensor([[0, 11]]),
+		func=_return_X)
+	assert characters(X_before[0]) == "AAAAAAAAAAC"
+	assert characters(X_var[0]) == "AAAAAAAAAAC"
+
+	X_before, X_var = deletion_effect(None, X, torch.tensor([[0, 0]]),
+		left=True, func=_return_X)
+	assert characters(X_before[0]) == "AAAAAAAAACG"
+	assert characters(X_var[0]) == "AAAAAAAAACG"
+
+
 def test_substitution_effect_rejects_empty_X():
 	# Routes through predict's empty-input check.
 	model = FlattenDense()
@@ -157,13 +194,24 @@ def test_substitution_effect_rejects_empty_X():
 
 
 def test_insertion_effect_rejects_empty_X():
-	# Empty X crashes inside torch.cat with a slightly cryptic message;
-	# any ValueError is acceptable here.
+	# Empty X is rejected before any sequence is built; any ValueError is
+	# acceptable here.
 	model = FlattenDense()
 	X = torch.zeros(0, 4, 100, dtype=torch.float32)
 	insertions = torch.zeros(0, 3, dtype=torch.int64)
 	with pytest.raises(ValueError):
 		insertion_effect(model, X, insertions)
+
+
+def test_insertion_effect_rejects_positions_outside_X():
+	# An insertion goes in front of the character at its position, so the
+	# positions available are 0 through length - 1.
+	X = one_hot_encode("AAAAACCCCC").unsqueeze(0)
+
+	for position in -1, 10:
+		with pytest.raises(ValueError, match="insertion position"):
+			insertion_effect(None, X, torch.tensor([[0, position, 1]]),
+				func=_return_X)
 
 
 ###
@@ -270,6 +318,45 @@ def test_insertion_effect_left(X, substitutions, device):
 
 	# Both runs return the same y_before (predict on the unmodified X).
 	assert_array_almost_equal(y_right, y_left)
+
+
+@pytest.mark.parametrize("left", [False, True])
+def test_insertion_effect_sequences(left):
+	# Each insertion goes in front of the character at its position in the
+	# original sequence, and the result is trimmed back to the original
+	# length from the right, or from the left when left=True.
+	X = torch.stack([one_hot_encode("AAAAACCCCC"),
+		one_hot_encode("GGGGGTTTTT"), one_hot_encode("ACGTACGTAC")])
+	insertions = torch.tensor([[0, 7, 3], [0, 3, 2], [1, 0, 1]])
+
+	_, X_var = insertion_effect(None, X, insertions, left=left,
+		func=_return_X)
+
+	if left:
+		assert characters(X_var[0]) == "AGAACCTCCC"
+		assert characters(X_var[1]) == "GGGGGTTTTT"
+	else:
+		assert characters(X_var[0]) == "AAAGAACCTC"
+		assert characters(X_var[1]) == "CGGGGGTTTT"
+	assert characters(X_var[2]) == "ACGTACGTAC"
+
+
+def test_insertion_effect_X_on_device(X, substitutions, device):
+	_, X_var = insertion_effect(None, X, substitutions, func=_return_X)
+	_, X_var_device = insertion_effect(None, X.to(device), substitutions,
+		func=_return_X)
+
+	assert X_var_device.device.type == device
+	assert torch.equal(X_var_device.cpu(), X_var)
+
+
+def test_deletion_effect_X_on_device(X_del, deletions, device):
+	_, X_var = deletion_effect(None, X_del, deletions, func=_return_X)
+	_, X_var_device = deletion_effect(None, X_del.to(device), deletions,
+		func=_return_X)
+
+	assert X_var_device.device.type == device
+	assert torch.equal(X_var_device.cpu(), X_var)
 
 
 def test_substitution_effect_no_variant_for_example(X, device):

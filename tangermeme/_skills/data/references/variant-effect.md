@@ -45,8 +45,8 @@ one position, replicate the example so each allele gets its own row of `X` (as
 above). The same position in *different* examples is fine.
 
 `deletion_effect` and `insertion_effect` are unconstrained here: duplicate deletion
-rows collapse to a single deletion, and insertions are applied one at a time in a
-loop.
+rows collapse to a single deletion, and several insertions at one position are all
+made, the last one given ending up first.
 
 ## deletion_effect — remove characters (needs over-length input)
 

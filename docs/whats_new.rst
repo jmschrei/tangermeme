@@ -6,6 +6,22 @@ Release History
 ===============
 
 
+Version 1.5.1 (unreleased)
+==========================
+
+Claude Code skill
+-----------------
+
+	- The variant-effect reference no longer says that ``insertion_effect`` applies insertions one at a time in a loop, which stopped being true when the function was rewritten below. It says instead what happens to several insertions at one position: all are made, with the last one given ending up first.
+
+variant_effect
+--------------
+
+	- ``deletion_effect`` no longer keeps a deleted position that sits next to the positions trimmed off to bring every example to the same length. The trimmed flank was found by counting from the trimmed end until enough undeleted positions had been passed, and a deleted position inside that count was marked as both deleted and trimmed, two marks that summed to a value read as kept. When that left the examples with different lengths the call raised ``RuntimeError: shape '[n, 4, -1]' is invalid for input of size ...``; when every example was affected alike the deletion was silently not applied, as with a single deletion at the last position under ``left=False`` or at the first under ``left=True``. Only positions that are not themselves deleted are now counted as flank.
+
+	- ``insertion_effect`` and ``deletion_effect`` build their edited sequences with a numba kernel that works out which position of the original sequence each output position comes from, followed by a single ``torch.gather``. ``insertion_effect`` previously looped over the examples in Python and called ``ersatz.insert`` once per insertion, re-validating the whole sequence each time, and ``deletion_effect`` selected positions through a boolean mask repeated over every channel. With DeepSEA Beluga on a GPU and 1,000 examples of 2,000 bp, building the sequences took 0.15 s for one insertion per example, 1.2 s for ten, and 0.04 s for one deletion, against 0.07 s for one forward pass; it now takes 2-3 ms, so each function costs about its two forward passes. The edited sequences, their dtypes, and the predictions made from them are unchanged. ``insertion_effect`` now accepts ``X`` on a GPU, where it previously raised a device mismatch. It no longer checks that the examples receiving insertions are one-hot encoded, which it did only as a side effect of calling ``ersatz.insert``, and which ``substitution_effect`` and ``deletion_effect`` never did. Several insertions at one position are placed in reverse of the order given, as before; for an example with more than 16 insertions that order had depended on torch's unstable sort, and no longer does.
+
+
 Version 1.5.0
 =============
 
