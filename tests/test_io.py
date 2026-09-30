@@ -1325,6 +1325,31 @@ def test_extract_loci_pre_opened_fasta(loci2_seqs, kwargs):
 	assert_array_almost_equal(X, loci2_seqs)
 
 
+@pytest.mark.parametrize("layout", ["fasta", "C", "F"])
+def test_extract_loci_contiguous(dict_sequences, loci_seqs, loci_signal, layout):
+	# Every returned tensor is C-contiguous. X used to keep the layout of the
+	# transposed view one_hot_encode returns, strides (4 * L, 1, 4), and so did
+	# X from a dict of Fortran-ordered arrays.
+	if layout == "fasta":
+		sequences = "tests/data/test.fa"
+	elif layout == "C":
+		sequences = dict_sequences
+	else:
+		sequences = {chrom: numpy.asfortranarray(X)
+			for chrom, X in dict_sequences.items()}
+
+	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
+	X, y, controls, mask = extract_loci("tests/data/test.bed", sequences, bw,
+		bw, in_window=10, out_window=10, return_mask=True)
+
+	for tensor in (X, y, controls, mask):
+		assert tensor.is_contiguous()
+
+	assert X.stride() == (40, 10, 1)
+	assert_array_almost_equal(X, loci_seqs)
+	assert_array_almost_equal(y, loci_signal)
+
+
 def test_extract_loci_pre_opened_bigwigs(loci_signal):
 	bws = [pybigtools.open("tests/data/test.bw"),
 		pybigtools.open("tests/data/test2.bw")]

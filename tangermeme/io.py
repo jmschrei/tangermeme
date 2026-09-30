@@ -598,8 +598,10 @@ def extract_loci(
 			"run off the end of a chromosome, when they overlap an exclusion " +
 			"region, or when their counts fall outside min_counts/max_counts.")
 
-	# Figure out how to format the outputs depending on the provided parameters
-	seqs = torch.from_numpy(numpy.stack(seqs))
+	# Figure out how to format the outputs depending on the provided parameters.
+	# numpy.stack keeps the memory layout of its inputs, and one_hot_encode
+	# returns a transposed view, so the stack is not contiguous by default.
+	seqs = torch.from_numpy(numpy.ascontiguousarray(numpy.stack(seqs)))
 	y_return = [seqs]
 
 	if signals is not None:
