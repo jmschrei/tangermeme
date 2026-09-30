@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import random
 import warnings
+import contextlib
 from typing import Any
 
 import numpy
@@ -505,51 +506,44 @@ def one_hot_encode(
 	return torch.from_numpy(one_hot_encoding).type(dtype).T
 
 
-@numba.njit(numba.void(numba.int8[:, :, ::1],
-	numba.types.Array(numba.uint8, 1, 'C', readonly=True),
-	numba.int8[::1]), cache=True)
-def _fast_one_hot_encode_rows(X_ohe, seqs, mapping):
-	"""An internal function that one-hot encodes equal-length rows of bytes.
+@contextlib.contextmanager
+def _numba_threads(n_jobs):
+	"""Run numba's parallel kernels on at most `n_jobs` threads.
 
-	Row i of `X_ohe`, shape (n_characters, length), receives bytes
-	`seqs[i * length:(i + 1) * length]`. Every element of `X_ohe` is written,
-	so it does not need to be zeroed beforehand.
+	The count is capped by NUMBA_NUM_THREADS, above which numba raises, and
+	the caller's count is restored afterwards, including when the body
+	raises.
 	"""
 
-	n, m, length = X_ohe.shape
-	idxs = numpy.empty(length, dtype=numpy.int8)
+	previous = numba.get_num_threads()
+	numba.set_num_threads(max(1, min(int(n_jobs),
+		numba.config.NUMBA_NUM_THREADS)))
+	try:
+		yield
+	finally:
+		numba.set_num_threads(previous)
 
-	for i in range(n):
-		offset = i * length
-		invalid = False
-		for j in range(length):
-			idx = mapping[seqs[offset + j]]
-			invalid |= idx == -2
-			idxs[j] = idx
 
-		if invalid:
-			raise ValueError("Encountered character that is not in " +
-				"`alphabet` or in `ignore`.")
-
-		for k in range(m):
-			for j in range(length):
-				X_ohe[i, k, j] = idxs[j] == k
+# The rows each thread of the parallel one-hot kernel takes at a time. A call
+# on fewer rows, or with one thread, runs the serial kernel directly.
+_ROWS_PER_TASK = 64
 
 
 @numba.njit(numba.int64(numba.int8[:, :, ::1],
 	numba.types.Array(numba.uint8, 1, 'C', readonly=True),
 	numba.int64[::1], numba.int64[::1], numba.int64[::1], numba.int64[::1],
-	numba.int8[::1]), cache=True)
+	numba.int8[::1], numba.int64, numba.int64), cache=True)
 def _fast_one_hot_encode_fasta(X_ohe, fasta, starts, offsets, line_bases,
-	line_bytes, mapping):
+	line_bytes, mapping, begin, end):
 	"""An internal function that one-hot encodes windows of a fasta file.
 
 	`fasta` holds the bytes of an uncompressed fasta file. Row i of `X_ohe`,
 	shape (n_characters, length), receives bases `[starts[i], starts[i] +
 	length)` of a record whose first base is at byte `offsets[i]` and whose
 	lines each hold `line_bases[i]` bases followed by `line_bytes[i] -
-	line_bases[i]` line-end bytes, as in a .fai index. The line ends are
-	skipped and each base byte is looked up in `mapping`.
+	line_bases[i]` line-end bytes, as in a .fai index, for rows `begin <= i <
+	end`. The line ends are skipped and each base byte is looked up in
+	`mapping`.
 
 	A window's bases are what pyfaidx returns for it only when every line-end
 	byte that pyfaidx reads, including the one before a window that starts a
@@ -563,14 +557,17 @@ def _fast_one_hot_encode_fasta(X_ohe, fasta, starts, offsets, line_bases,
 	character in neither the alphabet nor the ignored characters, is
 	returned, or -1 when there is none. Every element of every other row is
 	written, so `X_ohe` does not need to be zeroed beforehand.
+
+	Equal-length strings joined into `fasta` are encoded as the windows of a
+	record on one line, with a `mapping` that has no -3.
 	"""
 
-	n, m, length = X_ohe.shape
+	m, length = X_ohe.shape[1], X_ohe.shape[2]
 	size = fasta.shape[0]
 	idxs = numpy.empty(length, dtype=numpy.int8)
 	first_invalid = -1
 
-	for i in range(n):
+	for i in range(begin, end):
 		start = starts[i]
 		lenc = line_bases[i]
 		lenb = line_bytes[i]
@@ -624,6 +621,60 @@ def _fast_one_hot_encode_fasta(X_ohe, fasta, starts, offsets, line_bases,
 				X_ohe[i, k, j] = idxs[j] == k
 
 	return first_invalid
+
+
+# Without a signature this compiles on its first call, which only
+# _one_hot_encode_fasta makes, always with the argument types of
+# _fast_one_hot_encode_fasta. With one, importing tangermeme loaded it and
+# started numba's thread pool, which slowed calls on one thread.
+@numba.njit(parallel=True, cache=True)
+def _fast_one_hot_encode_fasta_parallel(X_ohe, fasta, starts, offsets,
+	line_bases, line_bytes, mapping):
+	"""`_fast_one_hot_encode_fasta` over every row, on numba's threads.
+
+	Each thread encodes blocks of `_ROWS_PER_TASK` rows. The result is the
+	one a single call over every row returns: -2 when any window must be read
+	through pyfaidx, and otherwise the first row with a character that maps
+	to -2, or -1.
+	"""
+
+	n = X_ohe.shape[0]
+	n_tasks = (n + _ROWS_PER_TASK - 1) // _ROWS_PER_TASK
+	statuses = numpy.empty(n_tasks, dtype=numpy.int64)
+
+	for task in numba.prange(n_tasks):
+		statuses[task] = _fast_one_hot_encode_fasta(X_ohe, fasta, starts,
+			offsets, line_bases, line_bytes, mapping, task * _ROWS_PER_TASK,
+			min(n, (task + 1) * _ROWS_PER_TASK))
+
+	first_invalid = -1
+	for task in range(n_tasks):
+		if statuses[task] == -2:
+			return -2
+
+		if statuses[task] >= 0 and first_invalid == -1:
+			first_invalid = statuses[task]
+
+	return first_invalid
+
+
+def _one_hot_encode_fasta(X_ohe, fasta, starts, offsets, line_bases,
+	line_bytes, mapping, n_jobs=1):
+	"""`_fast_one_hot_encode_fasta` over every row, on up to `n_jobs` threads.
+
+	The result, and every row that is written, are the same for every
+	`n_jobs`.
+	"""
+
+	n = X_ohe.shape[0]
+	if n <= _ROWS_PER_TASK or min(int(n_jobs),
+			numba.config.NUMBA_NUM_THREADS) <= 1:
+		return _fast_one_hot_encode_fasta(X_ohe, fasta, starts, offsets,
+			line_bases, line_bytes, mapping, 0, n)
+
+	with _numba_threads(n_jobs):
+		return _fast_one_hot_encode_fasta_parallel(X_ohe, fasta, starts,
+			offsets, line_bases, line_bytes, mapping)
 
 
 def _one_hot_rows_mapping(
@@ -692,6 +743,7 @@ def _one_hot_encode_rows(
 	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
 	ignore: list[str] = ['N'],
 	chunk_size: int = 1024,
+	n_jobs: int = 1,
 ) -> numpy.ndarray:
 	"""One-hot encode upper-cased strings into one C-contiguous int8 array.
 
@@ -722,6 +774,11 @@ def _one_hot_encode_rows(
 		The number of strings joined into one buffer per kernel call, which
 		bounds the temporary memory. Default is 1024.
 
+	n_jobs: int, optional
+		The largest number of threads each buffer is encoded with, capped by
+		numba's NUMBA_NUM_THREADS. The result is the same for every value.
+		Default is 1.
+
 
 	Returns
 	-------
@@ -748,8 +805,22 @@ def _one_hot_encode_rows(
 				fast = False
 				break
 
+			if length == 0:
+				continue
+
+			# The strings are the windows of a record written on one line.
+			# The mapping has no -3, so the kernel returns -1 or the first
+			# row with an unknown character.
 			seqs = numpy.frombuffer(seqs, dtype=numpy.uint8)
-			_fast_one_hot_encode_rows(X_ohe[start:end], seqs, mapping)
+			n_rows = end - start
+			starts = numpy.arange(n_rows, dtype=numpy.int64) * length
+			offsets = numpy.zeros(n_rows, dtype=numpy.int64)
+			line = numpy.full(n_rows, len(seqs), dtype=numpy.int64)
+
+			if _one_hot_encode_fasta(X_ohe[start:end], seqs, starts, offsets,
+					line, line, mapping, n_jobs=n_jobs) >= 0:
+				raise ValueError("Encountered character that is not in " +
+					"`alphabet` or in `ignore`.")
 
 	if not fast:
 		X_ohe = numpy.ascontiguousarray(numpy.stack([one_hot_encode(

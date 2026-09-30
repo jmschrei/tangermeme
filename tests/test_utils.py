@@ -2,6 +2,7 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import numpy
+import numba
 import torch
 import pandas
 import pytest
@@ -17,6 +18,9 @@ from tangermeme.utils import information_content
 from tangermeme.utils import characters
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import _one_hot_encode_rows
+from tangermeme.utils import _one_hot_rows_mapping
+from tangermeme.utils import _one_hot_encode_fasta
+from tangermeme.utils import _numba_threads
 from tangermeme.utils import reverse_complement
 from tangermeme.utils import random_one_hot
 from tangermeme.utils import chunk
@@ -1003,3 +1007,171 @@ def test_one_hot_encode_rows_unequal_lengths():
 
 	with pytest.raises(ValueError):
 		_one_hot_encode_rows(['ACGT', 'ACGTAC', 'AC'])
+
+
+###
+
+
+def _rows_with_unknown(n, length, unknown_rows, seed=0):
+	# n random rows, with a Z, in neither the alphabet nor ignore, in some.
+	rng = numpy.random.RandomState(seed)
+	rows = [''.join(rng.choice(list('ACGTacgtN'), size=length))
+		for _ in range(n)]
+	for i in unknown_rows:
+		rows[i] = rows[i][:3] + 'Z' + rows[i][4:]
+
+	return rows
+
+
+@pytest.mark.parametrize("n_jobs", [1, 2, 3, 8, 1000])
+@pytest.mark.parametrize("chunk_size", [7, 100, 1024])
+def test_one_hot_encode_rows_n_jobs(n_jobs, chunk_size):
+	# Enough rows for many blocks per chunk. Every n_jobs gives what one
+	# thread gives, and one above NUMBA_NUM_THREADS is capped rather than
+	# raising.
+	sequences = _rows_with_unknown(1000, 37, [])
+	X = _one_hot_encode_rows(sequences, chunk_size=chunk_size, n_jobs=n_jobs)
+
+	assert X.dtype == numpy.int8
+	assert X.flags['C_CONTIGUOUS']
+	assert numpy.array_equal(X, _one_hot_encode_rows(sequences,
+		chunk_size=chunk_size, n_jobs=1))
+	assert numpy.array_equal(X, _stack_one_hot_encode(sequences))
+
+
+@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("unknown_rows", [[0], [999], [5, 300, 999]])
+def test_one_hot_encode_rows_n_jobs_raises_unknown_character(n_jobs,
+	unknown_rows):
+	sequences = _rows_with_unknown(1000, 37, unknown_rows)
+	with pytest.raises(ValueError, match="Encountered character"):
+		_one_hot_encode_rows(sequences, n_jobs=n_jobs)
+
+
+@pytest.mark.parametrize("n_jobs", [1, 2, 4])
+@pytest.mark.parametrize("unknown_rows", [[], [0], [700], [5, 300, 999],
+	[999, 64, 63], [130, 129]])
+def test_one_hot_encode_fasta_n_jobs_rows_first_unknown_row(n_jobs,
+	unknown_rows):
+	# Equal-length strings joined on one line, as _one_hot_encode_rows passes
+	# them. With unknown characters in several blocks, the first such row is
+	# returned for every n_jobs.
+	sequences = _rows_with_unknown(1000, 37, unknown_rows)
+	mapping, _ = _one_hot_rows_mapping(['A', 'C', 'G', 'T'], ['N'])
+	seqs = numpy.frombuffer(''.join(sequences).encode('ascii'),
+		dtype=numpy.uint8)
+	line = numpy.full(1000, len(seqs), dtype=numpy.int64)
+
+	X = numpy.empty((1000, 4, 37), dtype=numpy.int8)
+	status = _one_hot_encode_fasta(X, seqs, numpy.arange(1000,
+		dtype=numpy.int64) * 37, numpy.zeros(1000, dtype=numpy.int64), line,
+		line, mapping, n_jobs=n_jobs)
+
+	assert status == (min(unknown_rows) if unknown_rows else -1)
+	if not unknown_rows:
+		assert numpy.array_equal(X, _stack_one_hot_encode(sequences))
+
+
+def test_numba_threads():
+	# The count is capped by NUMBA_NUM_THREADS and restored afterwards,
+	# including when the body raises.
+	previous = numba.get_num_threads()
+	with pytest.raises(RuntimeError):
+		with _numba_threads(1):
+			assert numba.get_num_threads() == 1
+			raise RuntimeError()
+
+	assert numba.get_num_threads() == previous
+
+	with _numba_threads(10 ** 6):
+		assert numba.get_num_threads() == numba.config.NUMBA_NUM_THREADS
+
+	assert numba.get_num_threads() == previous
+
+
+def _fasta_record(sequence, width):
+	# The bytes of a fasta file of one record with `width` bases per line,
+	# and the offset of its first base.
+	header = b">chr1\n"
+	lines = [sequence[i:i+width] for i in range(0, len(sequence), width)]
+	data = header + "\n".join(lines).encode('ascii') + b"\n"
+	return numpy.frombuffer(data, dtype=numpy.uint8), len(header)
+
+
+def _encode_fasta(sequence, width, starts, length, n_jobs):
+	# The status and rows _one_hot_encode_fasta gives, with the lookup table
+	# that extract_loci uses.
+	data, offset = _fasta_record(sequence, width)
+	mapping, _ = _one_hot_rows_mapping(['A', 'C', 'G', 'T'], ['N'])
+	mapping = mapping.copy()
+	mapping[[ord('\n'), ord('\r')]] = -3
+	mapping[128:] = -3
+
+	n = len(starts)
+	X = numpy.empty((n, 4, length), dtype=numpy.int8)
+	status = _one_hot_encode_fasta(X, data, numpy.array(starts,
+		dtype=numpy.int64), numpy.full(n, offset, dtype=numpy.int64),
+		numpy.full(n, width, dtype=numpy.int64), numpy.full(n, width + 1,
+		dtype=numpy.int64), mapping, n_jobs=n_jobs)
+	return status, X
+
+
+@pytest.mark.parametrize("n_jobs", [2, 3, 4, 1000])
+def test_one_hot_encode_fasta_n_jobs(n_jobs):
+	# Windows in random order across lines fill many blocks; every n_jobs
+	# gives the rows one thread gives.
+	rng = numpy.random.RandomState(0)
+	sequence = ''.join(rng.choice(list('ACGTacgtN'), size=3000))
+	starts = rng.randint(0, 3000 - 25 + 1, size=1000)
+
+	status1, X1 = _encode_fasta(sequence, 60, starts, 25, 1)
+	status, X = _encode_fasta(sequence, 60, starts, 25, n_jobs)
+	assert status1 == status == -1
+	assert numpy.array_equal(X, X1)
+	assert numpy.array_equal(X, _stack_one_hot_encode([sequence[s:s+25]
+		for s in starts]))
+
+
+@pytest.mark.parametrize("n_jobs", [1, 2, 4])
+@pytest.mark.parametrize("positions", [[10], [2990], [2000],
+	[100, 1500, 2900]])
+def test_one_hot_encode_fasta_n_jobs_first_unknown_row(n_jobs, positions):
+	# With unknown characters in the windows of one or several blocks, the
+	# first row holding one is returned for every n_jobs. The first such rows
+	# are 900, 962, 146 of five and 16 of 26.
+	rng = numpy.random.RandomState(1)
+	sequence = list(rng.choice(list('ACGTacgtN'), size=3000))
+	for position in positions:
+		sequence[position] = 'Z'
+
+	sequence = ''.join(sequence)
+	starts = rng.permutation(3000 - 25 + 1)[:1000]
+	expected = next((i for i, s in enumerate(starts)
+		if 'Z' in sequence[s:s+25]), -1)
+	assert expected >= 0
+
+	status, _ = _encode_fasta(sequence, 60, starts, 25, n_jobs)
+	assert status == expected
+
+
+@pytest.mark.parametrize("n_jobs", [1, 2, 4])
+@pytest.mark.parametrize("row", [0, 500, 999])
+@pytest.mark.parametrize("fallback", ["past_end", "carriage_return"])
+def test_one_hot_encode_fasta_n_jobs_read_through_pyfaidx(n_jobs, row,
+	fallback):
+	# A window that must be read through pyfaidx returns -2 for every
+	# n_jobs, over unknown characters in rows of earlier and later blocks.
+	rng = numpy.random.RandomState(2)
+	sequence = list(rng.choice(list('ACGTacgtN'), size=3000))
+	sequence[1000] = 'Z'
+	sequence[2500] = 'Z'
+	starts = numpy.array([2400, 900, 990] * 334)[:1000]
+
+	if fallback == "past_end":
+		starts[row] = 2990
+	else:
+		sequence[1500] = '\r'
+		starts[row] = 1490
+
+	status, _ = _encode_fasta(''.join(sequence), 60, starts, 25, n_jobs)
+	assert status == -2

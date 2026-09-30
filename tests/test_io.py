@@ -4,6 +4,7 @@
 import re
 import zlib
 import numpy
+import numba
 import torch
 import struct
 import warnings
@@ -4127,3 +4128,174 @@ def test_extract_loci_bigwig_reader_summed_overlaps(reader_fasta, tmp_path,
 	assert (expected == 2.5).any() and (expected == 1.75).any()
 	numpy.testing.assert_array_equal(y.numpy().view(numpy.uint32),
 		expected.view(numpy.uint32))
+
+
+###
+# n_jobs: the sequences of a fasta file are one-hot encoded in blocks of
+# rows on numba's threads, which changes no output and no error.
+
+
+@pytest.mark.parametrize("n_jobs", [2, 3, 8, 1000])
+def test_extract_loci_n_jobs(tmp_path, n_jobs):
+	# The loci fill several blocks of rows. Every n_jobs gives the output of
+	# one thread, from a path and from a pyfaidx.Fasta object, and one above
+	# NUMBA_NUM_THREADS is capped rather than raising.
+	genome = _fasta_genome()
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+	loci = _every_window(genome, 7)
+	assert len(loci) > 500
+
+	X1 = extract_loci(loci, path, in_window=7, n_jobs=1)
+	X = extract_loci(loci, path, in_window=7, n_jobs=n_jobs)
+	assert X.dtype == torch.int8
+	assert X.is_contiguous()
+	assert torch.equal(X, X1)
+	assert torch.equal(X, _encode_windows(genome, loci, 7))
+
+	fasta = pyfaidx.Fasta(path)
+	X = extract_loci(loci, fasta, in_window=7, n_jobs=n_jobs)
+	fasta.close()
+	assert X.is_contiguous()
+	assert torch.equal(X, X1)
+
+
+def test_extract_loci_n_jobs_signals_and_mask():
+	# With signals, in_signals and a mask, only the sequences are threaded.
+	loci = pandas.concat([pandas.read_csv("tests/data/test.bed", sep="\t",
+		header=None)] * 40)
+
+	kwargs = dict(signals=["tests/data/test.bw"], in_signals=[
+		"tests/data/test.bw"], in_window=10, out_window=6, max_jitter=2,
+		return_mask=True)
+	outputs1 = extract_loci(loci, "tests/data/test.fa", n_jobs=1, **kwargs)
+	outputs = extract_loci(loci, "tests/data/test.fa", n_jobs=4, **kwargs)
+	assert len(outputs) == len(outputs1) == 4
+	assert outputs[0].shape[0] > 64
+	for x, x1 in zip(outputs, outputs1):
+		assert x.dtype == x1.dtype
+		assert x.is_contiguous()
+		assert torch.equal(x, x1)
+
+
+@pytest.mark.parametrize("n_jobs", [1, 4])
+def test_extract_loci_n_jobs_unknown_character(tmp_path, n_jobs):
+	# Unknown characters under loci of several blocks raise the error one
+	# thread raises, from a path and from a pyfaidx.Fasta object.
+	genome = _fasta_genome()
+	genome['chr2'] = genome['chr2'][:30] + 'Z' + genome['chr2'][31:]
+	genome['chrLast'] = genome['chrLast'][:400] + 'Z' + genome['chrLast'][401:]
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+	loci = _every_window(genome, 7)
+
+	with pytest.raises(ValueError) as info1:
+		extract_loci(loci, path, in_window=7, n_jobs=1)
+
+	with pytest.raises(ValueError) as info:
+		extract_loci(loci, path, in_window=7, n_jobs=n_jobs)
+
+	assert "Encountered character" in str(info.value)
+	assert str(info.value) == str(info1.value)
+	_same_as_pyfaidx_object(loci, path, in_window=7, n_jobs=n_jobs)
+
+
+@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("line", [180, 3])
+def test_extract_loci_n_jobs_read_through_pyfaidx(tmp_path, n_jobs, line):
+	# A byte that pyfaidx removes, in a late or an early block of rows, sends
+	# every window to pyfaidx, so the result is the one pyfaidx gives.
+	lines = [b"ACGTAC"] * 200
+	lines[line] = b"AC\rTAC"
+	path = str(tmp_path / "genome.fa")
+	with open(path, "wb") as handle:
+		handle.write(b">chr1\n" + b"\n".join(lines) + b"\n")
+
+	with open(path + ".fai", "w") as handle:
+		handle.write("chr1\t1200\t6\t6\t7\n")
+
+	loci = pandas.DataFrame([('chr1', mid, mid + 1) for mid in range(2, 1198)])
+	_same_as_pyfaidx_object(loci, path, in_window=5, n_jobs=n_jobs)
+
+
+@pytest.mark.parametrize("n_jobs", [0, -1, 1.5, "2", None])
+def test_extract_loci_n_jobs_raises_without_signals(n_jobs):
+	with pytest.raises(ValueError, match="n_jobs must be an integer"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
+			n_jobs=n_jobs)
+
+
+def test_extract_loci_n_jobs_restores_numba_threads(tmp_path):
+	# numba's thread count is the caller's after a call, and after a call
+	# that raises inside the threaded encoding.
+	genome = _fasta_genome()
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+	loci = _every_window(genome, 7)
+
+	genome['chr2'] = genome['chr2'][:30] + 'Z' + genome['chr2'][31:]
+	path_z = str(tmp_path / "genome_z.fa")
+	_write_fasta(path_z, genome, 11)
+
+	previous = numba.get_num_threads()
+	threads = min(3, numba.config.NUMBA_NUM_THREADS)
+	numba.set_num_threads(threads)
+	try:
+		extract_loci(loci, path, in_window=7, n_jobs=2)
+		assert numba.get_num_threads() == threads
+
+		fasta = pyfaidx.Fasta(path)
+		extract_loci(loci, fasta, in_window=7, n_jobs=2)
+		fasta.close()
+		assert numba.get_num_threads() == threads
+
+		with pytest.raises(ValueError, match="Encountered character"):
+			extract_loci(loci, path_z, in_window=7, n_jobs=2)
+		assert numba.get_num_threads() == threads
+	finally:
+		numba.set_num_threads(previous)
+
+
+@pytest.mark.parametrize("kwargs", [
+	dict(),
+	dict(signals=["tests/data/test.bw"], in_signals=["tests/data/test.bw"]),
+	dict(signals=["tests/data/test.bw"], min_counts=0),
+	dict(fasta_object=True),
+], ids=["no_signals", "signals", "count_filter", "fasta_object"])
+def test_extract_loci_n_jobs_reaches_encoder(monkeypatch, kwargs):
+	# n_jobs reaches the encoder whether the kept loci are found with or
+	# without the per-locus loop, and from a pyfaidx.Fasta object.
+	import tangermeme.io
+	import tangermeme.utils
+
+	encoder = tangermeme.utils._one_hot_encode_fasta
+	calls = []
+
+	def recording_encoder(*args, n_jobs=1):
+		calls.append(n_jobs)
+		return encoder(*args, n_jobs=n_jobs)
+
+	monkeypatch.setattr(tangermeme.io, "_one_hot_encode_fasta",
+		recording_encoder)
+	monkeypatch.setattr(tangermeme.utils, "_one_hot_encode_fasta",
+		recording_encoder)
+
+	kwargs = dict(kwargs)
+	sequences = "tests/data/test.fa"
+	if kwargs.pop("fasta_object", False):
+		sequences = pyfaidx.Fasta(sequences)
+
+	loci = pandas.concat([pandas.read_csv("tests/data/test.bed", sep="\t",
+		header=None)] * 40)
+	X1 = extract_loci(loci, sequences, in_window=10, out_window=6, n_jobs=1,
+		**kwargs)
+	X = extract_loci(loci, sequences, in_window=10, out_window=6, n_jobs=3,
+		**kwargs)
+
+	if isinstance(sequences, pyfaidx.Fasta):
+		sequences.close()
+
+	assert len(calls) == 2
+	assert calls == [1, 3]
+	for x, x1 in zip(X, X1):
+		assert torch.equal(x, x1)

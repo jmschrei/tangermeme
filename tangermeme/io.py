@@ -27,7 +27,7 @@ from tqdm import tqdm
 from .utils import one_hot_encode  # noqa: F401, importable from here
 from .utils import _one_hot_encode_rows
 from .utils import _one_hot_rows_mapping
-from .utils import _fast_one_hot_encode_fasta
+from .utils import _one_hot_encode_fasta
 from .utils import characters
 from .utils import TangermemeWarning
 
@@ -1188,11 +1188,12 @@ def _read_bigwig_files(signals, readers, codes, starts, width, out, names,
 
 
 def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
-	names=None):
+	names=None, n_jobs=1):
 	"""Encode fasta windows from a memory map of the file, or return None.
 
 	Each window's bytes are gathered through the .fai index that pyfaidx
-	read, skipping the line ends, and encoded straight into the output. None
+	read, skipping the line ends, and encoded straight into the output, on
+	at most `n_jobs` threads, which does not change the result. None
 	is returned, and the caller reads the windows through pyfaidx, when the
 	alphabet is not ASCII, the file is compressed or cannot be mapped, the
 	index describes lines that the file does not have, or a window holds a
@@ -1236,8 +1237,8 @@ def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
 	try:
 		data = numpy.frombuffer(fasta_map, dtype=numpy.uint8)
 		try:
-			status = _fast_one_hot_encode_fasta(X, data, starts, offsets,
-				line_bases, line_bytes, mapping)
+			status = _one_hot_encode_fasta(X, data, starts, offsets,
+				line_bases, line_bytes, mapping, n_jobs=n_jobs)
 		finally:
 			del data
 	finally:
@@ -1254,7 +1255,7 @@ def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
 
 
 def _read_fasta_windows(fasta, windows, length, alphabet, ignore,
-	names=None):
+	names=None, n_jobs=1):
 	"""One-hot encode windows of a pyfaidx.Fasta opened from a path.
 
 	`windows` holds a (chrom, start) pair for each window, each covering
@@ -1263,11 +1264,12 @@ def _read_fasta_windows(fasta, windows, length, alphabet, ignore,
 	and each window's start. The result is identical to fetching each window
 	with pyfaidx and encoding the strings with _one_hot_encode_rows,
 	including its errors, which is what is done when the windows cannot be
-	read from a memory map of the file.
+	read from a memory map of the file. The windows are encoded on at most
+	`n_jobs` threads.
 	"""
 
 	X = _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
-		names=names)
+		names=names, n_jobs=n_jobs)
 	if X is None:
 		if names is not None:
 			codes, starts = windows
@@ -1282,7 +1284,8 @@ def _read_fasta_windows(fasta, windows, length, alphabet, ignore,
 
 			seqs.append(seq)
 
-		X = _one_hot_encode_rows(seqs, alphabet=alphabet, ignore=ignore)
+		X = _one_hot_encode_rows(seqs, alphabet=alphabet, ignore=ignore,
+			n_jobs=n_jobs)
 
 	return X
 
@@ -1484,16 +1487,21 @@ def extract_loci(
 		Whether to display a progress bar while loading. Default is False.
 
 	n_jobs: int, optional
-		The largest number of threads to read the bigWigs in `signals` and
-		`in_signals` that are given as paths with. When at least 1,024 loci
-		can be kept, those bigWigs are read once the kept loci are known, by
-		a reader built on numpy, zlib and numba that gives the same values as
-		pybigtools and releases the GIL. A bigWig opened with pybigtools, the
-		signal that a count filter is measured on, and the windows the reader
-		cannot read, such as those on a chromosome the file lacks, are read
-		with pybigtools. The results are the same as with one thread. Must be
-		at least 1, and 1 reads every bigWig in the calling thread. Default
-		is 8.
+		The largest number of threads to use. The sequences of a fasta file
+		are one-hot encoded in blocks of loci, each block by one of numba's
+		threads, on at most `n_jobs` threads, which is also capped by numba's
+		NUMBA_NUM_THREADS, the number of CPUs unless it is set. Sequences
+		given as a dictionary are not encoded and are unaffected. The bigWigs
+		in `signals` and `in_signals` that are given as paths are read on at
+		most `n_jobs` threads. When at least 1,024 loci can be kept, those
+		bigWigs are read once the kept loci are known, by a reader built on
+		numpy, zlib and numba that gives the same values as pybigtools and
+		releases the GIL. A bigWig opened with pybigtools, the signal that a
+		count filter is measured on, and the windows the reader cannot read,
+		such as those on a chromosome the file lacks, are read with
+		pybigtools. The results are the same as with one thread. Must be at
+		least 1, and 1 encodes every locus and reads every bigWig in the
+		calling thread. Default is 8.
 
 
 	Returns
@@ -1832,10 +1840,11 @@ def extract_loci(
 				if len(window_mids) > 0:
 					seqs = _read_fasta_windows(sequences, (window_codes,
 						window_mids - in_width - max_jitter), in_window +
-						2 * max_jitter, alphabet, ignore, names=names)
+						2 * max_jitter, alphabet, ignore, names=names,
+						n_jobs=n_jobs)
 			elif len(seqs) > 0:
 				seqs = _read_fasta_windows(sequences, seqs, in_window +
-					2 * max_jitter, alphabet, ignore)
+					2 * max_jitter, alphabet, ignore, n_jobs=n_jobs)
 		finally:
 			sequences.close()
 
@@ -1857,7 +1866,8 @@ def extract_loci(
 	if isinstance(sequences, dict):
 		seqs = numpy.ascontiguousarray(numpy.stack(seqs))
 	elif not opened_fasta:
-		seqs = _one_hot_encode_rows(seqs, alphabet=alphabet, ignore=ignore)
+		seqs = _one_hot_encode_rows(seqs, alphabet=alphabet, ignore=ignore,
+			n_jobs=n_jobs)
 
 	seqs = torch.from_numpy(seqs)
 	y_return = [seqs]
