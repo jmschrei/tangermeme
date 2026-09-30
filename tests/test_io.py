@@ -2045,6 +2045,299 @@ def test_extract_loci_closes_fasta_it_opens(monkeypatch):
 ###
 
 
+# The comparison below runs extract_loci and a reference implementation on a
+# random genome over a grid of settings and requires identical outputs. The
+# reference is written for clarity rather than speed and shares no code with
+# tangermeme.io. It phrases each rule differently from the implementation: a
+# window is a start and a length, and the 100 bp chunks a region touches are
+# the chunks of the bases it covers.
+
+REFERENCE_CHROMS = {'chr1': 1500, 'chr2': 777, 'chrX': 2301, '3': 450}
+
+
+def _reference_values(track, chrom, start, end):
+	values = numpy.zeros(end - start, dtype=numpy.float32)
+	if chrom in track:
+		array = track[chrom][start:end]
+		values[:len(array)] = array
+
+	return numpy.nan_to_num(values)
+
+
+def _reference_chunks(start, end):
+	return {base // 100 for base in range(start, end)}
+
+
+def _reference_extract_loci(loci, genome, signals, in_signals, in_window,
+	out_window, max_jitter, chroms=None, min_counts=None, max_counts=None,
+	target_idx=0, n_loci=None, summits=False, exclusion_lists=None):
+	tables = []
+	for df in loci:
+		table = []
+		for row in df.itertuples(index=False):
+			chrom, start, end = str(row[0]), int(row[1]), int(row[2])
+
+			if summits:
+				center = start + int(row[9])
+			else:
+				center = start + (end - start) // 2
+
+			if chroms is None or chrom in chroms:
+				table.append((chrom, center))
+
+		tables.append(table)
+
+	interleaved = []
+	for i in range(max(len(table) for table in tables)):
+		for table in tables:
+			if i < len(table):
+				interleaved.append(table[i])
+
+	excluded = set()
+	if exclusion_lists is not None:
+		for chrom, start, end in exclusion_lists.itertuples(index=False):
+			for chunk in _reference_chunks(start, end):
+				excluded.add((chrom, chunk))
+
+	X, y, y_in, mask = [], [], [], []
+	for chrom, center in interleaved:
+		if n_loci is not None and len(X) == n_loci:
+			mask.append(False)
+			continue
+
+		in_start = center - in_window // 2 - max_jitter
+		in_end = in_start + in_window + 2 * max_jitter
+		out_start = center - out_window // 2 - max_jitter
+		out_end = out_start + out_window + 2 * max_jitter
+
+		lo, hi = in_start, in_end
+		if signals is not None:
+			lo, hi = min(lo, out_start), max(hi, out_end)
+
+		if lo < 0 or hi > len(genome[chrom]):
+			mask.append(False)
+			continue
+
+		if any((chrom, chunk) in excluded for chunk in _reference_chunks(lo, hi)):
+			mask.append(False)
+			continue
+
+		if signals is not None:
+			values = [_reference_values(track, chrom, out_start, out_end)
+				for track in signals]
+			counts = values[target_idx].sum()
+
+			if min_counts is not None and counts < min_counts:
+				mask.append(False)
+				continue
+
+			if max_counts is not None and counts > max_counts:
+				mask.append(False)
+				continue
+
+			y.append(values)
+
+		if in_signals is not None:
+			y_in.append([_reference_values(track, chrom, in_start, in_end)
+				for track in in_signals])
+
+		sequence = genome[chrom][in_start:in_end].upper()
+		X.append([[int(base == character) for base in sequence]
+			for character in "ACGT"])
+		mask.append(True)
+
+	return X, y, y_in, mask
+
+
+@pytest.fixture(scope="module")
+def reference_genome(tmp_path_factory):
+	# Random sequence with a soft-masked run and an assembly gap on every
+	# chromosome, three tracks of integer-valued signal so that sums are exact
+	# in any order of summation, with NaN at bases that have no value and the
+	# second track lacking chrX, and three tables of loci with summits.
+	rng = numpy.random.RandomState(0)
+	path = tmp_path_factory.mktemp("reference_genome")
+
+	genome = {}
+	for chrom, length in REFERENCE_CHROMS.items():
+		sequence = rng.choice(list("ACGT"), size=length)
+
+		start = rng.randint(0, length - 100)
+		sequence[start:start+60] = numpy.char.lower(sequence[start:start+60])
+
+		start = rng.randint(0, length - 100)
+		sequence[start:start+40] = 'N'
+
+		genome[chrom] = ''.join(sequence)
+
+	fasta = str(path / "genome.fa")
+	with open(fasta, "w") as outfile:
+		for chrom, sequence in genome.items():
+			outfile.write(">{}\n".format(chrom))
+			for i in range(0, len(sequence), 60):
+				outfile.write(sequence[i:i+60] + "\n")
+
+	one_hot = {chrom: numpy.array([[base == character for base in
+		sequence.upper()] for character in "ACGT"], dtype=numpy.int8)
+		for chrom, sequence in genome.items()}
+
+	tracks, bigwigs = [], []
+	for t in range(3):
+		track = {}
+		for chrom, length in REFERENCE_CHROMS.items():
+			if t == 1 and chrom == 'chrX':
+				continue
+
+			values = rng.choice([0, 1, 2, 3], size=length,
+				p=[0.4, 0.3, 0.2, 0.1]).astype(numpy.float32)
+			values[rng.uniform(0, 1, size=length) < 0.1] = numpy.nan
+			track[chrom] = values
+
+		filename = str(path / "track{}.bw".format(t))
+		entries = [(chrom, i, i + 1, float(value)) for chrom in sorted(track)
+			for i, value in enumerate(track[chrom]) if not numpy.isnan(value)]
+		pybigtools.open(filename, "w").write({chrom: REFERENCE_CHROMS[chrom]
+			for chrom in track}, entries)
+
+		tracks.append(track)
+		bigwigs.append(filename)
+
+	loci = []
+	for n in (60, 25, 40):
+		rows = []
+		for _ in range(n):
+			chrom = str(rng.choice(list(REFERENCE_CHROMS)))
+			length = rng.randint(1, 80)
+			start = rng.randint(0, REFERENCE_CHROMS[chrom])
+			rows.append([chrom, start, start + length, '.', 0, '.', 0.0, 0.0,
+				0.0, rng.randint(0, length + 1)])
+
+		loci.append(pandas.DataFrame(rows))
+
+	# One-base loci whose windows, for every window size in the grid, start
+	# or end exactly at the edges of chr2 and of the chunk 100-199 of chr1,
+	# which the first exclusion region covers.
+	centers = [('chr1', c) for c in list(range(78, 101)) + list(range(199, 223))]
+	centers += [('chr2', c) for c in list(range(0, 25)) + list(range(752, 777))]
+	loci.append(pandas.DataFrame([[chrom, c, c + 1, '.', 0, '.', 0.0, 0.0, 0.0,
+		0] for chrom, c in centers]))
+
+	exclusion = pandas.DataFrame([['chr1', 100, 200], ['chr1', 950, 1010],
+		['chr2', 350, 350], ['chrX', 1234, 1600], ['3', 0, 50],
+		['chrM', 0, 1000], ['chr2', 699, 701]])
+
+	return {'genome': genome, 'fasta': fasta, 'one_hot': one_hot,
+		'tracks': tracks, 'bigwigs': bigwigs, 'loci': loci,
+		'exclusion': exclusion}
+
+
+REFERENCE_FILTERS = {
+	'none': lambda width, exclusion: {},
+	'min_counts': lambda width, exclusion: {'min_counts': 0.9 * width},
+	'max_counts': lambda width, exclusion: {'max_counts': 0.9 * width},
+	'counts_target_idx': lambda width, exclusion: {'min_counts': 0.5 * width,
+		'max_counts': 1.2 * width, 'target_idx': 1},
+	'exclusion': lambda width, exclusion: {'exclusion_lists': exclusion},
+	'chroms': lambda width, exclusion: {'chroms': ['chr1', '3']},
+	'n_loci': lambda width, exclusion: {'n_loci': 50},
+	'summits': lambda width, exclusion: {'summits': True},
+	'combined': lambda width, exclusion: {'chroms': ['chr2', 'chrX', '3'],
+		'exclusion_lists': exclusion, 'n_loci': 30, 'min_counts': 0.5 * width,
+		'summits': True},
+}
+
+
+@pytest.mark.filterwarnings("ignore::tangermeme.utils.TangermemeWarning")
+@pytest.mark.parametrize("source", ["files", "dicts"])
+@pytest.mark.parametrize("mode", ["none", "signals", "in_signals", "both"])
+@pytest.mark.parametrize("in_window, out_window, max_jitter", [(10, 4, 0),
+	(7, 5, 3), (33, 40, 0), (1, 1, 2), (8, 13, 1)])
+@pytest.mark.parametrize("filters", list(REFERENCE_FILTERS))
+def test_extract_loci_matches_reference(reference_genome, source, mode,
+	in_window, out_window, max_jitter, filters):
+	data = reference_genome
+	if source == "files":
+		sequences, signal_source = data['fasta'], data['bigwigs']
+	else:
+		sequences, signal_source = data['one_hot'], data['tracks']
+
+	signals = signal_source[:2] if mode in ("signals", "both") else None
+	in_signals = signal_source[2:] if mode in ("in_signals", "both") else None
+	kwargs = REFERENCE_FILTERS[filters](out_window + 2 * max_jitter,
+		data['exclusion'])
+
+	if signals is None and ('min_counts' in kwargs or 'max_counts' in kwargs):
+		with pytest.raises(ValueError, match="signals must be provided"):
+			extract_loci(data['loci'], sequences, signals, in_signals,
+				in_window=in_window, out_window=out_window,
+				max_jitter=max_jitter, **kwargs)
+		return
+
+	reference_signals = data['tracks'][:2] if signals is not None else None
+	reference_in_signals = data['tracks'][2:] if in_signals is not None else None
+	X0, y0, y_in0, mask0 = _reference_extract_loci(data['loci'], data['genome'],
+		reference_signals, reference_in_signals, in_window, out_window,
+		max_jitter, **kwargs)
+
+	if len(X0) == 0:
+		with pytest.raises(ValueError, match="No loci remain"):
+			extract_loci(data['loci'], sequences, signals, in_signals,
+				in_window=in_window, out_window=out_window,
+				max_jitter=max_jitter, **kwargs)
+		return
+
+	result = extract_loci(data['loci'], sequences, signals, in_signals,
+		in_window=in_window, out_window=out_window, max_jitter=max_jitter,
+		return_mask=True, **kwargs)
+
+	expected = [numpy.array(X0, dtype=numpy.int8)]
+	if signals is not None:
+		expected.append(numpy.array(y0, dtype=numpy.float32))
+	if in_signals is not None:
+		expected.append(numpy.array(y_in0, dtype=numpy.float32))
+
+	assert len(result) == len(expected) + 1
+	assert result[-1].dtype == torch.bool
+	assert result[-1].tolist() == mask0
+
+	for tensor, array in zip(result, expected):
+		assert tensor.dtype == torch.from_numpy(array).dtype
+		assert tensor.is_contiguous()
+		assert torch.equal(tensor, torch.from_numpy(array))
+
+
+def test_extract_loci_reference_grid_is_informative(reference_genome):
+	# The comparison above only means something if, on the random genome,
+	# every filter keeps some loci and drops others. Checked for the windows
+	# (7, 5, 3), whose output window with jitter is 11 bases wide.
+	data = reference_genome
+	args = (data['loci'], data['genome'], data['tracks'][:2],
+		data['tracks'][2:], 7, 5, 3)
+	n_loci = sum(len(df) for df in data['loci'])
+
+	X, _, _, mask = _reference_extract_loci(*args)
+	baseline = sum(mask)
+
+	# Some loci run off a chromosome end.
+	assert 0 < baseline < n_loci
+
+	for name, filters in REFERENCE_FILTERS.items():
+		if name in ("none", "summits"):
+			continue
+
+		_, _, _, mask = _reference_extract_loci(*args,
+			**filters(11, data['exclusion']))
+		assert 0 < sum(mask) < baseline, name
+
+	# Centering on the summits moves the windows.
+	X_summits, _, _, _ = _reference_extract_loci(*args, summits=True)
+	assert len(X_summits) > 0
+	assert X_summits[:10] != X[:10]
+
+
+###
+
+
 def test_read_meme():
 	keys = ["MEOX1_homeodomain_1", "HIC2_MA0738.1", "GCR_HUMAN.H11MO.0.A",
 		"FOSL2+JUND_MA1145.1", "TEAD3_TEA_2", "ZN263_HUMAN.H11MO.0.A",
