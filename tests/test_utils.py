@@ -16,6 +16,7 @@ from tangermeme.utils import entropy
 from tangermeme.utils import information_content
 from tangermeme.utils import characters
 from tangermeme.utils import one_hot_encode
+from tangermeme.utils import _one_hot_encode_rows
 from tangermeme.utils import reverse_complement
 from tangermeme.utils import random_one_hot
 from tangermeme.utils import chunk
@@ -842,3 +843,163 @@ def test_information_content_all_N_is_zero():
 	X = torch.zeros(1, 4, 1)
 	IC = information_content(X)
 	assert float(IC[0, 0]) == 0.0
+
+
+###
+
+
+def _stack_one_hot_encode(sequences, alphabet=['A', 'C', 'G', 'T'],
+	ignore=['N']):
+	# The expression _one_hot_encode_rows replaces in extract_loci.
+	return numpy.ascontiguousarray(numpy.stack([one_hot_encode(s.upper(),
+		alphabet=alphabet, ignore=ignore).numpy() for s in sequences]))
+
+
+def test_one_hot_encode_rows():
+	X = _one_hot_encode_rows(['ACGTN', 'TTGCA'])
+
+	assert X.shape == (2, 4, 5)
+	assert X.dtype == numpy.int8
+	assert X.flags['C_CONTIGUOUS']
+	assert X[0].tolist() == [
+		[1, 0, 0, 0, 0],
+		[0, 1, 0, 0, 0],
+		[0, 0, 1, 0, 0],
+		[0, 0, 0, 1, 0]
+	]
+	assert X[1].tolist() == [
+		[0, 0, 0, 0, 1],
+		[0, 0, 0, 1, 0],
+		[0, 0, 1, 0, 0],
+		[1, 1, 0, 0, 0]
+	]
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 7, 1024])
+def test_one_hot_encode_rows_matches_one_hot_encode(chunk_size):
+	rng = numpy.random.default_rng(0)
+	characters = numpy.array(list('ACGTNacgtn'))
+	sequences = [''.join(rng.choice(characters, 23)) for _ in range(20)]
+
+	X = _one_hot_encode_rows(sequences, chunk_size=chunk_size)
+	X0 = _stack_one_hot_encode(sequences)
+
+	assert X.shape == (20, 4, 23)
+	assert X.dtype == numpy.int8
+	assert X.flags['C_CONTIGUOUS']
+	assert numpy.array_equal(X, X0)
+
+
+def test_one_hot_encode_rows_lower_case():
+	X = _one_hot_encode_rows(['acgtn', 'ACGTN', 'aCgTn'])
+
+	assert numpy.array_equal(X[0], X[1])
+	assert numpy.array_equal(X[0], X[2])
+	assert X[0, :, 4].tolist() == [0, 0, 0, 0]
+	assert X.sum() == 12
+
+
+def test_one_hot_encode_rows_ignore():
+	X = _one_hot_encode_rows(['ANZnz', 'AAAAA'], ignore=['N', 'Z'])
+
+	assert X[0].tolist() == [
+		[1, 0, 0, 0, 0],
+		[0, 0, 0, 0, 0],
+		[0, 0, 0, 0, 0],
+		[0, 0, 0, 0, 0]
+	]
+	assert X[1, 0].tolist() == [1, 1, 1, 1, 1]
+	assert numpy.array_equal(X, _stack_one_hot_encode(['ANZnz', 'AAAAA'],
+		ignore=['N', 'Z']))
+
+
+def test_one_hot_encode_rows_lower_case_alphabet():
+	# Sequences are upper-cased before encoding, so a lower-case character in
+	# the alphabet is never set and one only in the alphabet raises.
+	sequences = ['acgta', 'ACGTA']
+	alphabet = ['A', 'C', 'G', 'T', 'a']
+
+	X = _one_hot_encode_rows(sequences, alphabet=alphabet)
+	assert X.shape == (2, 5, 5)
+	assert X[:, 4].sum() == 0
+	assert numpy.array_equal(X, _stack_one_hot_encode(sequences, alphabet))
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		_one_hot_encode_rows(sequences, alphabet=['a', 'c', 'g', 't'])
+
+
+def test_one_hot_encode_rows_lower_case_ignore():
+	# An upper-cased 'n' is 'N', which is not ignored when only 'n' is.
+	with pytest.raises(ValueError, match="Encountered character"):
+		_one_hot_encode_rows(['ACGTn'], ignore=['n'])
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		_one_hot_encode_rows(['ACGTN'], ignore=['n'])
+
+	X = _one_hot_encode_rows(['ACGTA'], ignore=['n'])
+	assert numpy.array_equal(X, _stack_one_hot_encode(['ACGTA'],
+		ignore=['n']))
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 1024])
+def test_one_hot_encode_rows_raises_unknown_character(chunk_size):
+	with pytest.raises(ValueError, match="Encountered character"):
+		_one_hot_encode_rows(['ACGTZ'], chunk_size=chunk_size)
+
+	# In a later row, and so in a later chunk when chunk_size is small.
+	with pytest.raises(ValueError, match="Encountered character"):
+		_one_hot_encode_rows(['ACGTA', 'ACGTA', 'ACGTA', 'AC-TA'],
+			chunk_size=chunk_size)
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		_one_hot_encode_rows(['ACGTz'], chunk_size=chunk_size)
+
+
+def test_one_hot_encode_rows_raises_ignore_in_alphabet():
+	with pytest.raises(ValueError, match="in the alphabet and also"):
+		_one_hot_encode_rows(['ACGTA'], ignore=['A'])
+
+
+def test_one_hot_encode_rows_every_ascii_character():
+	# Each ASCII character raises exactly when one_hot_encode on the
+	# upper-cased character raises, and otherwise encodes the same way.
+	alphabet = ['A', 'C', 'G', 'T', 'a', 'x', '@']
+	ignore = ['N', 'n', '-', 'Q']
+
+	for code in range(128):
+		sequence = [chr(code) * 3]
+
+		try:
+			X0 = _stack_one_hot_encode(sequence, alphabet, ignore)
+		except ValueError:
+			with pytest.raises(ValueError, match="Encountered character"):
+				_one_hot_encode_rows(sequence, alphabet=alphabet, ignore=ignore)
+			continue
+
+		X = _one_hot_encode_rows(sequence, alphabet=alphabet, ignore=ignore)
+		assert numpy.array_equal(X, X0), code
+
+
+def test_one_hot_encode_rows_non_ascii():
+	# str.upper maps some non-ASCII characters to ASCII ones, e.g. the dotless
+	# i to I, so these rows are encoded by one_hot_encode.
+	sequences = ['ACGTı', 'ACGTA']
+	alphabet = ['A', 'C', 'G', 'T', 'I']
+
+	X = _one_hot_encode_rows(sequences, alphabet=alphabet, chunk_size=1)
+	assert X.dtype == numpy.int8
+	assert X.flags['C_CONTIGUOUS']
+	assert X[0, 4].tolist() == [0, 0, 0, 0, 1]
+	assert numpy.array_equal(X, _stack_one_hot_encode(sequences, alphabet))
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		_one_hot_encode_rows(['ACGTé'])
+
+
+def test_one_hot_encode_rows_unequal_lengths():
+	# Rows of different lengths cannot be stacked, as before.
+	with pytest.raises(ValueError):
+		_one_hot_encode_rows(['ACGT', 'ACG'])
+
+	with pytest.raises(ValueError):
+		_one_hot_encode_rows(['ACGT', 'ACGTAC', 'AC'])

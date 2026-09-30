@@ -16,7 +16,8 @@ import pybigtools
 
 from tqdm import tqdm
 
-from .utils import one_hot_encode
+from .utils import one_hot_encode  # noqa: F401, importable from here
+from .utils import _one_hot_encode_rows
 from .utils import characters
 from .utils import TangermemeWarning
 
@@ -626,8 +627,6 @@ def extract_loci(
 			if not isinstance(seq, str):
 				seq = seq.seq
 
-			seq = one_hot_encode(seq.upper(), alphabet=alphabet, ignore=ignore)
-
 		kept_mask.append(True)
 		seqs.append(seq)
 
@@ -644,9 +643,16 @@ def extract_loci(
 			"region, or when their counts fall outside min_counts/max_counts.")
 
 	# Figure out how to format the outputs depending on the provided parameters.
-	# numpy.stack keeps the memory layout of its inputs, and one_hot_encode
-	# returns a transposed view, so the stack is not contiguous by default.
-	seqs = torch.from_numpy(numpy.ascontiguousarray(numpy.stack(seqs)))
+	# numpy.stack keeps the memory layout of its inputs, so a stack of slices
+	# of Fortran-ordered arrays is not contiguous by default. Fasta windows
+	# were kept as strings and are encoded together, straight into one
+	# C-contiguous array.
+	if isinstance(sequences, dict):
+		seqs = numpy.ascontiguousarray(numpy.stack(seqs))
+	else:
+		seqs = _one_hot_encode_rows(seqs, alphabet=alphabet, ignore=ignore)
+
+	seqs = torch.from_numpy(seqs)
 	y_return = [seqs]
 
 	if signals is not None:

@@ -505,6 +505,133 @@ def one_hot_encode(
 	return torch.from_numpy(one_hot_encoding).type(dtype).T
 
 
+@numba.njit(numba.void(numba.int8[:, :, ::1],
+	numba.types.Array(numba.uint8, 1, 'C', readonly=True),
+	numba.int8[::1]), cache=True)
+def _fast_one_hot_encode_rows(X_ohe, seqs, mapping):
+	"""An internal function that one-hot encodes equal-length rows of bytes.
+
+	Row i of `X_ohe`, shape (n_characters, length), receives bytes
+	`seqs[i * length:(i + 1) * length]`. Every element of `X_ohe` is written,
+	so it does not need to be zeroed beforehand.
+	"""
+
+	n, m, length = X_ohe.shape
+	idxs = numpy.empty(length, dtype=numpy.int8)
+
+	for i in range(n):
+		offset = i * length
+		invalid = False
+		for j in range(length):
+			idx = mapping[seqs[offset + j]]
+			invalid |= idx == -2
+			idxs[j] = idx
+
+		if invalid:
+			raise ValueError("Encountered character that is not in " +
+				"`alphabet` or in `ignore`.")
+
+		for k in range(m):
+			for j in range(length):
+				X_ohe[i, k, j] = idxs[j] == k
+
+
+def _one_hot_encode_rows(
+	sequences: list[str],
+	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
+	ignore: list[str] = ['N'],
+	chunk_size: int = 1024,
+) -> numpy.ndarray:
+	"""One-hot encode upper-cased strings into one C-contiguous int8 array.
+
+	The result is identical to `numpy.ascontiguousarray(numpy.stack(
+	[one_hot_encode(s.upper(), alphabet, ignore=ignore) for s in sequences]))`,
+	including the ValueError for a character in neither `alphabet` nor
+	`ignore`, but each row is written straight into a preallocated array of
+	shape (len(sequences), len(alphabet), length). Upper-casing is folded into
+	the byte lookup table. When the strings differ in length, or the
+	sequences, `alphabet` or `ignore` contain a non-ASCII character, where
+	`str.upper` is not a byte-wise map, the expression above is evaluated
+	instead.
+
+
+	Parameters
+	----------
+	sequences: list of str
+		The strings to encode, which are expected to be of equal length.
+
+	alphabet : list, tuple, or str
+		The characters that map to each index of the second axis. Default is
+		['A', 'C', 'G', 'T'].
+
+	ignore: list, optional
+		The characters that set no bit. Default is ['N'].
+
+	chunk_size: int, optional
+		The number of strings joined into one buffer per kernel call, which
+		bounds the temporary memory. Default is 1024.
+
+
+	Returns
+	-------
+	ohe: numpy.ndarray, shape=(len(sequences), len(alphabet), length)
+		The one-hot encodings as a C-contiguous int8 array.
+	"""
+
+	for char in ignore:
+		if char in alphabet:
+			raise ValueError("Character {} in the alphabet ".format(char) +
+				"and also in the list of ignored characters.")
+
+	alphabet_ = ''.join(alphabet) if isinstance(alphabet, (list, tuple)) \
+		else alphabet
+	ignore_ = ''.join(ignore)
+
+	n = len(sequences)
+	length = len(sequences[0]) if n > 0 else 0
+
+	fast = isinstance(alphabet_, str) and alphabet_.isascii() and \
+		ignore_.isascii() and set(map(len, sequences)) <= {length}
+
+	if fast:
+		alpha_idxs = numpy.frombuffer(alphabet_.encode('ascii'),
+			dtype=numpy.uint8)
+		ignore_idxs = numpy.frombuffer(ignore_.encode('ascii'),
+			dtype=numpy.uint8)
+
+		mapping = numpy.zeros(256, dtype=numpy.int8) - 2
+		for i, idx in enumerate(alpha_idxs):
+			mapping[idx] = i
+
+		for i, idx in enumerate(ignore_idxs):
+			mapping[idx] = -1
+
+		# Fold str.upper into the table: a lower-case ASCII byte takes the
+		# entry of its upper-case form. Only ASCII rows are looked up.
+		lower = numpy.arange(ord('a'), ord('z') + 1)
+		mapping[lower] = mapping[lower - 32]
+
+		X_ohe = numpy.empty((n, len(alphabet_), length), dtype=numpy.int8)
+		for start in range(0, n, chunk_size):
+			end = min(start + chunk_size, n)
+
+			try:
+				seqs = ''.join(sequences[start:end]).encode('ascii')
+			except UnicodeEncodeError:
+				fast = False
+				break
+
+			seqs = numpy.frombuffer(seqs, dtype=numpy.uint8)
+			_fast_one_hot_encode_rows(X_ohe[start:end], seqs, mapping)
+
+	if not fast:
+		X_ohe = numpy.ascontiguousarray(numpy.stack([one_hot_encode(
+			sequence.upper(), alphabet=alphabet, ignore=ignore).numpy()
+				for sequence in sequences]))
+
+	return X_ohe
+
+
 def reverse_complement(
 	seq: str | torch.Tensor,
 	complement_map: dict[str, str] = {"A": "T", "C": "G", "G": "C", "T": "A"},
