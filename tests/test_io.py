@@ -692,6 +692,51 @@ def test_extract_loci_keeps_locus_ending_at_chrom_length():
 	assert X.shape == (1, 4, 10)
 
 
+def test_extract_loci_odd_in_window_at_chrom_end():
+	# An odd window is [mid - w//2, mid + w//2 + 1). The chromosome-end check
+	# used to leave out the extra base, so a window running one base past the
+	# end was kept and came back one base short, and stacking it with a full
+	# window raised "all input arrays must have the same shape". chr2 is 211
+	# bp long; with in_window=11 the windows are [100, 111), [200, 211) and
+	# [201, 212), and the last one overruns.
+	loci = pandas.DataFrame({
+		'chrom': ['chr2', 'chr2', 'chr2'],
+		'start': [100, 200, 201],
+		'end':   [110, 210, 211],
+	})
+	fasta = "tests/data/test.fa"
+
+	X, mask = extract_loci(loci, fasta, in_window=11, return_mask=True)
+
+	assert mask.tolist() == [True, True, False]
+	assert X.shape == (2, 4, 11)
+
+	chrom = str(pyfaidx.Fasta(fasta)['chr2'])
+	assert_array_almost_equal(X[0], one_hot_encode(chrom[100:111]))
+	assert_array_almost_equal(X[1], one_hot_encode(chrom[200:211]))
+
+
+def test_extract_loci_odd_out_window_at_chrom_end():
+	# The same check for an odd out_window: the signal windows are [100, 111),
+	# [200, 211) and [201, 212), and the last one runs off chr2.
+	loci = pandas.DataFrame({
+		'chrom': ['chr2', 'chr2', 'chr2'],
+		'start': [100, 200, 201],
+		'end':   [110, 210, 211],
+	})
+	fasta = "tests/data/test.fa"
+	bw = pybigtools.open("tests/data/test.bw")
+
+	X, y, mask = extract_loci(loci, fasta, ["tests/data/test.bw"],
+		in_window=4, out_window=11, return_mask=True)
+
+	assert mask.tolist() == [True, True, False]
+	assert X.shape == (2, 4, 4)
+	assert y.shape == (2, 1, 11)
+	assert_array_almost_equal(y[0, 0], bw.values('chr2', 100, 111))
+	assert_array_almost_equal(y[1, 0], bw.values('chr2', 200, 211))
+
+
 def test_extract_loci_seq_alphabet(loci_seqs):
 	loci = "tests/data/test.bed"
 	fasta = "tests/data/test.fa"

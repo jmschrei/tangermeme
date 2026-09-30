@@ -436,8 +436,9 @@ def extract_loci(
 	seqs, signals_, in_signals_ = [], [], []
 	kept_mask = []
 	in_width, out_width = in_window // 2, out_window // 2
+	out_extra = out_window % 2
 	if signals is None and in_signals is None:
-		out_width = 0
+		out_width, out_extra = 0, 0
 
 	# Extract the length of each chromosome. Track whether we opened the
 	# fasta ourselves so we know whether we are allowed to close it on
@@ -469,12 +470,17 @@ def extract_loci(
 	desc = "Loading Loci"
 	d = not verbose
 
-	max_width = max(in_width, out_width)
+	# Each window is [mid - w//2, mid + w//2 + w%2), so an odd window reaches
+	# one base further right than left. The locus is kept only if the union
+	# of the windows fits on the chromosome.
+	left = max(in_width, out_width) + max_jitter
+	right = max(in_width + in_window % 2, out_width + out_extra) + max_jitter
+
 	for chrom, start, end in tqdm(loci.values, disable=d, desc=desc):
 		mid = start + (end - start) // 2
 
-		start = mid - max(out_width, in_width) - max_jitter
-		end = mid + max(out_width, in_width) + max_jitter
+		start = mid - left
+		end = mid + right
 
 		# Does it fall off the end of a chromosome?
 		if start < 0 or end > chrom_lengths[str(chrom)]:
