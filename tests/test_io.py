@@ -11,6 +11,7 @@ import pybigtools
 
 from tangermeme.io import _interleave_loci
 from tangermeme.io import _load_signals
+from tangermeme.io import _load_exclusion_zones
 from tangermeme.io import _extract_locus_signal
 
 from tangermeme.io import read_meme
@@ -564,6 +565,50 @@ def test_load_signals_raises_dict_values():
 
 	with pytest.raises(ValueError, match="must be numpy.ndarrays"):
 		_load_signals([{'chr1': torch.zeros(6)}])
+
+
+##
+
+
+def test_load_exclusion_zones_none():
+	assert _load_exclusion_zones({'chr1': 250}, None) is None
+
+
+def test_load_exclusion_zones():
+	# One boolean per 100 bp chunk of each chromosome, True where a region
+	# covers any base of the chunk. Ends are exclusive, regions with end <=
+	# start cover nothing, and chromosomes without a length are skipped.
+	chrom_lengths = {'chr1': 350, 'chr2': 100, 'chr3': 99}
+	exclusion = pandas.DataFrame({
+		0: ['chr1', 'chr1', 'chr2', 'chrM', 'chr2', 'chr3'],
+		1: [0, 201, 99, 0, 50, 10],
+		2: [100, 250, 100, 10, 50, 5],
+	})
+
+	zones = _load_exclusion_zones(chrom_lengths, exclusion)
+
+	assert sorted(zones.keys()) == ['chr1', 'chr2', 'chr3']
+	assert zones['chr1'].dtype == bool
+	assert zones['chr1'].tolist() == [True, False, True, False]
+	assert zones['chr2'].tolist() == [True, False]
+	assert zones['chr3'].tolist() == [False]
+
+
+def test_load_exclusion_zones_inputs(tmp_path):
+	# A filename, a DataFrame, and a list mixing the two are equivalent.
+	chrom_lengths = {'chr1': 350}
+	a = pandas.DataFrame({0: ['chr1'], 1: [0], 2: [50]})
+	b = pandas.DataFrame({0: ['chr1'], 1: [300], 2: [350]})
+	filename = tmp_path / "a.bed"
+	a.to_csv(filename, sep='\t', header=False, index=False)
+
+	for exclusion in ([a, b], [str(filename), b], [filename, b]):
+		zones = _load_exclusion_zones(chrom_lengths, exclusion)
+		assert zones['chr1'].tolist() == [True, False, False, True]
+
+	for exclusion in (a, str(filename), filename):
+		zones = _load_exclusion_zones(chrom_lengths, exclusion)
+		assert zones['chr1'].tolist() == [True, False, False, False]
 
 
 ##
@@ -1262,6 +1307,21 @@ def test_extract_loci_raises_chrom_not_in_sequences():
 			in_window=10)
 
 
+def test_extract_loci_raises_chrom_not_in_sequences_objects(dict_sequences):
+	# The same error for sequences the caller opened, which are left open.
+	loci = pandas.DataFrame({0: ['chr1', 'chrM'], 1: [10, 0], 2: [30, 20]})
+	del dict_sequences['chr1']
+
+	with pytest.raises(ValueError, match="chr1, chrM"):
+		extract_loci(loci, dict_sequences, in_window=10)
+
+	fasta = pyfaidx.Fasta("tests/data/test.fa")
+	with pytest.raises(ValueError, match="chrM"):
+		extract_loci(loci, fasta, in_window=10)
+
+	assert str(fasta['chr1']) == str(pyfaidx.Fasta("tests/data/test.fa")['chr1'])
+
+
 def test_extract_loci_target_idx_negative():
 	# A negative target_idx indexes from the end, as for a list.
 	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
@@ -1576,6 +1636,410 @@ def test_extract_loci_dict_signals_missing_chrom_and_short(dict_signal):
 	assert_array_almost_equal(y[1, 0], numpy.arange(100, 111) + 10000)
 	assert_array_almost_equal(y[2, 0], [10200, 10201, 10202, 10203, 10204,
 		0, 0, 0, 0, 0, 0])
+
+
+###
+
+
+@pytest.mark.parametrize("in_window", [8, 9])
+@pytest.mark.parametrize("out_window", [6, 7, 12, 13])
+@pytest.mark.parametrize("max_jitter", [0, 3])
+def test_extract_loci_window_coordinates(dict_sequences, dict_signal,
+	in_window, out_window, max_jitter):
+	# Each value of dict_signal is its own coordinate plus a per-chromosome
+	# offset, so the extracted signals give the exact bases of every window:
+	# [mid - w//2 - j, mid + w//2 + w%2 + j) with mid = start + (end-start)//2,
+	# here for loci of odd and even length and a one-base locus.
+	loci = pandas.DataFrame({'chrom': ['chr7', 'chr7', 'chr1', 'chr7'],
+		'start': [100, 300, 50, 1001], 'end': [120, 331, 51, 1002]})
+	offsets = {'chr1': 0, 'chr7': 60000}
+
+	X, y, y_in = extract_loci(loci, dict_sequences, [dict_signal],
+		[dict_signal], in_window=in_window, out_window=out_window,
+		max_jitter=max_jitter)
+	X_fasta = extract_loci(loci, "tests/data/test.fa", in_window=in_window,
+		max_jitter=max_jitter)
+
+	assert X.shape == (4, 4, in_window + 2 * max_jitter)
+	assert y.shape == (4, 1, out_window + 2 * max_jitter)
+	assert y_in.shape == (4, 1, in_window + 2 * max_jitter)
+
+	for i, (chrom, start, end) in enumerate(loci.values):
+		mid = start + (end - start) // 2
+
+		s = mid - out_window // 2 - max_jitter
+		e = mid + out_window // 2 + out_window % 2 + max_jitter
+		assert_array_almost_equal(y[i, 0], numpy.arange(s, e) + offsets[chrom])
+
+		s = mid - in_window // 2 - max_jitter
+		e = mid + in_window // 2 + in_window % 2 + max_jitter
+		assert_array_almost_equal(y_in[i, 0], numpy.arange(s, e) +
+			offsets[chrom])
+		assert_array_almost_equal(X[i], dict_sequences[chrom][:, s:e])
+		assert_array_almost_equal(X_fasta[i], dict_sequences[chrom][:, s:e])
+
+
+def test_extract_loci_window_at_chrom_start():
+	# A window starting at base 0 fits and one starting at -1 does not. The
+	# window checked is the union of the input and output windows, jitter
+	# included.
+	# The third locus, [50, 60), fits in every case.
+	fasta = "tests/data/test.fa"
+	loci = pandas.DataFrame({'chrom': ['chr1', 'chr1', 'chr1'],
+		'start': [0, 0, 50], 'end': [10, 9, 60]})
+
+	# in_window=10: [0, 10) and [-1, 9)
+	X, mask = extract_loci(loci, fasta, in_window=10, return_mask=True)
+	assert mask.tolist() == [True, False, True]
+	assert_array_almost_equal(X[0], one_hot_encode(str(
+		pyfaidx.Fasta(fasta)['chr1'][0:10])))
+
+	# max_jitter=1 moves both windows one base left: [-1, 11) and [-2, 10)
+	_, mask = extract_loci(loci, fasta, in_window=10, max_jitter=1,
+		return_mask=True)
+	assert mask.tolist() == [False, False, True]
+
+	# An output window wider than the input window decides: with
+	# out_window=12, [-1, 11) and [-2, 10)
+	_, _, mask = extract_loci(loci, fasta, ["tests/data/test.bw"],
+		in_window=6, out_window=12, return_mask=True)
+	assert mask.tolist() == [False, False, True]
+
+	_, _, mask = extract_loci(loci, fasta, ["tests/data/test.bw"],
+		in_window=6, out_window=10, return_mask=True)
+	assert mask.tolist() == [True, False, True]
+
+
+def test_extract_loci_summits(dict_signal):
+	# With summits=True the windows are centered on start + summit, the tenth
+	# column, rather than on the middle of the locus.
+	loci = pandas.DataFrame([
+		['chr7', 100, 200, '.', 0, '.', 0, 0, 0, 30],
+		['chr7', 100, 201, '.', 0, '.', 0, 0, 0, 0],
+		['chr7', 500, 600, '.', 0, '.', 0, 0, 0, 100],
+	])
+
+	X, y = extract_loci(loci, "tests/data/test.fa", in_signals=[dict_signal],
+		in_window=10, summits=True)
+
+	assert y.shape == (3, 1, 10)
+	for i, center in enumerate([130, 100, 600]):
+		assert_array_almost_equal(y[i, 0], numpy.arange(center - 5,
+			center + 5) + 60000)
+
+	# Without summits the same loci are centered on their middles.
+	X, y = extract_loci(loci, "tests/data/test.fa", in_signals=[dict_signal],
+		in_window=10)
+
+	for i, center in enumerate([150, 150, 550]):
+		assert_array_almost_equal(y[i, 0], numpy.arange(center - 5,
+			center + 5) + 60000)
+
+
+def test_extract_loci_summits_file(loci2_seqs):
+	# The summits of test2.bed10, applied by hand, give the same sequences.
+	loci = pandas.read_csv("tests/data/test2.bed10", sep='\t', header=None)
+	centers = loci[1] + loci[9]
+	centered = pandas.DataFrame({0: loci[0], 1: centers - 10, 2: centers + 10})
+
+	X = extract_loci("tests/data/test2.bed10", "tests/data/test.fa",
+		in_window=10, summits=True)
+	X0 = extract_loci(centered, "tests/data/test.fa", in_window=10)
+
+	assert X.shape == (9, 4, 10)
+	assert_array_almost_equal(X, X0)
+
+
+def test_extract_loci_order(dict_signal):
+	# Rows come back in the order of the loci, including when the loci
+	# alternate between chromosomes or repeat, and a list of loci is
+	# interleaved round-robin with the remainder of the longest appended.
+	a = pandas.DataFrame({0: ['chr7', 'chr1', 'chr7', 'chr1', 'chr2'],
+		1: [500, 100, 200, 100, 50], 2: [510, 110, 210, 110, 60]})
+	b = pandas.DataFrame({0: ['chr2', 'chr7'], 1: [150, 900], 2: [160, 910]})
+
+	_, y = extract_loci([a, b], "tests/data/test.fa", [dict_signal],
+		in_window=4, out_window=2)
+
+	centers = [60505, 10155, 105, 60905, 60205, 105, 10055]
+	assert_array_almost_equal(y[:, 0, 0], [c - 1 for c in centers])
+	assert_array_almost_equal(y[:, 0, 1], centers)
+
+
+@pytest.mark.parametrize("min_counts, max_counts, kept", [
+	(None, None, [True, True, True]),
+	(198, None, [False, True, True]),
+	(199, None, [False, False, True]),
+	(None, 198, [True, True, False]),
+	(None, 197, [True, False, False]),
+	(198, 198, [False, True, False]),
+	(78, 318, [True, True, True]),
+])
+def test_extract_loci_counts_thresholds(dict_signal, min_counts, max_counts,
+	kept):
+	# With out_window=4 the window around mid m on chr1 sums to
+	# (m-2) + (m-1) + m + (m+1) = 4m - 2, so the mids 20, 50 and 80 sum to
+	# 78, 198 and 318. Both thresholds are inclusive.
+	loci = pandas.DataFrame({0: ['chr1'] * 3, 1: [15, 45, 75],
+		2: [25, 55, 85]})
+
+	X, y, y_in, mask = extract_loci(loci, "tests/data/test.fa", [dict_signal],
+		[dict_signal], in_window=6, out_window=4, min_counts=min_counts,
+		max_counts=max_counts, return_mask=True)
+
+	assert mask.tolist() == kept
+	assert X.shape == (sum(kept), 4, 6)
+	assert y_in.shape == (sum(kept), 1, 6)
+	assert_array_almost_equal(y.sum(axis=(1, 2)),
+		[s for s, k in zip([78, 198, 318], kept) if k])
+
+
+def test_extract_loci_counts_target_idx(dict_signal):
+	# Only signals[target_idx] is thresholded; the other signals are returned
+	# but do not decide.
+	zeros = {chrom: numpy.zeros_like(y) for chrom, y in dict_signal.items()}
+	loci = pandas.DataFrame({0: ['chr1'] * 3, 1: [15, 45, 75],
+		2: [25, 55, 85]})
+
+	_, y, mask = extract_loci(loci, "tests/data/test.fa", [dict_signal, zeros],
+		in_window=6, out_window=4, min_counts=199, target_idx=0,
+		return_mask=True)
+
+	assert mask.tolist() == [False, False, True]
+	assert y.shape == (1, 2, 4)
+	assert_array_almost_equal(y[0, 1], numpy.zeros(4))
+
+	_, y, mask = extract_loci(loci, "tests/data/test.fa", [dict_signal, zeros],
+		in_window=6, out_window=4, max_counts=0, target_idx=1,
+		return_mask=True)
+
+	assert mask.tolist() == [True, True, True]
+
+	with pytest.raises(ValueError, match="No loci remain"):
+		extract_loci(loci, "tests/data/test.fa", [dict_signal, zeros],
+			in_window=6, out_window=4, min_counts=1, target_idx=1)
+
+
+def test_extract_loci_exclusion_uses_union_window():
+	# The exclusion check covers the union of the windows, jitter included.
+	# [100, 200) covers the chunk 100-199; the locus's in-window [205, 215)
+	# does not reach it, but widened by a jitter of 10, or an out_window of
+	# 30, it does.
+	loci = pandas.DataFrame({0: ['chr7'], 1: [205], 2: [215]})
+	exclusion = pandas.DataFrame({0: ['chr7'], 1: [100], 2: [200]})
+	fasta = "tests/data/test.fa"
+
+	X = extract_loci(loci, fasta, in_window=10, exclusion_lists=exclusion)
+	assert X.shape == (1, 4, 10)
+
+	with pytest.raises(ValueError, match="No loci remain"):
+		extract_loci(loci, fasta, in_window=10, max_jitter=10,
+			exclusion_lists=exclusion)
+
+	with pytest.raises(ValueError, match="No loci remain"):
+		extract_loci(loci, fasta, ["tests/data/test.bw"], in_window=10,
+			out_window=30, exclusion_lists=exclusion)
+
+
+def test_extract_loci_bigwig_missing_chrom_warns():
+	# test3.bw only has chr1, so the two chr2 loci warn and are zero-filled.
+	with pytest.warns(TangermemeWarning, match="chr2") as record:
+		_, y = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+			["tests/data/test3.bw"], in_window=8, out_window=10)
+
+	assert sum(issubclass(w.category, TangermemeWarning) for w in record) == 2
+	assert_array_almost_equal(y[3:], numpy.zeros((2, 1, 10)))
+
+
+def test_extract_loci_nan_and_inf(dict_signal):
+	# NaN becomes 0 and an infinity the largest finite float32 of its sign,
+	# which is what numpy.nan_to_num does, in signals and in_signals alike.
+	dict_signal['chr1'][18:21] = [numpy.nan, numpy.inf, -numpy.inf]
+	loci = pandas.DataFrame({0: ['chr1'], 1: [10], 2: [30]})
+	big = numpy.finfo(numpy.float32).max
+
+	_, y, y_in = extract_loci(loci, "tests/data/test.fa", [dict_signal],
+		[dict_signal], in_window=10, out_window=10)
+
+	for values in (y[0, 0], y_in[0, 0]):
+		assert values.dtype == torch.float32
+		assert_array_almost_equal(values, [15, 16, 17, 0, big, -big, 21, 22,
+			23, 24])
+
+
+def test_extract_loci_does_not_modify_inputs(dict_sequences, dict_signal):
+	# The loci, sequences, signals and exclusion lists are left unchanged, and
+	# the returned tensors do not share memory with them.
+	dict_signal['chr1'][18] = numpy.nan
+	loci = pandas.DataFrame({0: ['chr1', 'chr2'], 1: [10, 25], 2: [30, 55],
+		3: ['a', 'b']})
+	exclusion = pandas.DataFrame({0: ['chr7', 'chrM'], 1: [0, 0], 2: [10, 10]})
+
+	loci0 = loci.copy()
+	exclusion0 = exclusion.copy()
+	sequences0 = {chrom: X.copy() for chrom, X in dict_sequences.items()}
+	signal0 = {chrom: y.copy() for chrom, y in dict_signal.items()}
+
+	X, y, y_in = extract_loci(loci, dict_sequences, [dict_signal],
+		[dict_signal], in_window=10, out_window=10, exclusion_lists=exclusion)
+
+	X.fill_(1)
+	y.fill_(1)
+	y_in.fill_(1)
+
+	assert loci.equals(loci0)
+	assert exclusion.equals(exclusion0)
+	for chrom in sequences0:
+		assert numpy.array_equal(dict_sequences[chrom], sequences0[chrom])
+		assert numpy.array_equal(dict_signal[chrom], signal0[chrom],
+			equal_nan=True)
+
+
+def test_extract_loci_return_structure():
+	# One output is returned bare; more come back as a list in the order X,
+	# signals, in_signals, mask. The shapes differ, so each element can be
+	# identified: 1 signal of out_window 6 and 2 in_signals of in_window 10.
+	loci = "tests/data/test.bed"
+	fasta = "tests/data/test.fa"
+	bw = ["tests/data/test.bw"]
+	controls = ["tests/data/test.bw", "tests/data/test2.bw"]
+
+	X = extract_loci(loci, fasta, in_window=10)
+	assert isinstance(X, torch.Tensor)
+	assert X.shape == (5, 4, 10)
+	assert X.dtype == torch.int8
+
+	cases = [
+		({'signals': bw}, [(5, 1, 6)]),
+		({'in_signals': controls}, [(5, 2, 10)]),
+		({'return_mask': True}, [(5,)]),
+		({'signals': bw, 'in_signals': controls}, [(5, 1, 6), (5, 2, 10)]),
+		({'signals': bw, 'return_mask': True}, [(5, 1, 6), (5,)]),
+		({'in_signals': controls, 'return_mask': True}, [(5, 2, 10), (5,)]),
+		({'signals': bw, 'in_signals': controls, 'return_mask': True},
+			[(5, 1, 6), (5, 2, 10), (5,)]),
+	]
+
+	for kwargs, shapes in cases:
+		result = extract_loci(loci, fasta, in_window=10, out_window=6,
+			**kwargs)
+
+		assert type(result) is list
+		assert len(result) == len(shapes) + 1
+		assert_array_almost_equal(result[0], X)
+
+		for tensor, shape in zip(result[1:], shapes):
+			assert isinstance(tensor, torch.Tensor)
+			assert tuple(tensor.shape) == shape
+			assert tensor.dtype == (torch.bool if len(shape) == 1 else
+				torch.float32)
+
+
+def test_extract_loci_verbose(loci_signal):
+	X0, y0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		["tests/data/test.bw", "tests/data/test2.bw"], in_window=10,
+		out_window=10)
+	X, y = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		["tests/data/test.bw", "tests/data/test2.bw"], in_window=10,
+		out_window=10, verbose=True)
+
+	assert_array_almost_equal(X, X0)
+	assert_array_almost_equal(y, loci_signal)
+
+
+def test_extract_loci_raises_character_not_in_alphabet():
+	# chr5 has a Z at base 25. A window over it raises unless Z is ignored,
+	# and a window elsewhere on chr5 is unaffected.
+	loci = pandas.DataFrame({0: ['chr5', 'chr5'], 1: [20, 50], 2: [30, 60]})
+	fasta = "tests/data/test.fa"
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, fasta, in_window=10)
+
+	X = extract_loci(loci.iloc[1:], fasta, in_window=10)
+	assert X.shape == (1, 4, 10)
+
+	X = extract_loci(loci, fasta, in_window=10, ignore=['N', 'Z'])
+	assert X.shape == (2, 4, 10)
+	assert X[0, :, 5].tolist() == [0, 0, 0, 0]
+	assert X[0].sum() == 9
+
+	X = extract_loci(loci, fasta, in_window=10, alphabet=['A', 'C', 'G', 'T',
+		'Z'])
+	assert X.shape == (2, 5, 10)
+	assert X[0, :, 5].tolist() == [0, 0, 0, 0, 1]
+
+
+def test_extract_loci_tuples(loci_seqs, loci2_seqs):
+	X = extract_loci(("tests/data/test.bed", "tests/data/test2.bed"),
+		"tests/data/test.fa", in_window=10, chroms=('chr1',))
+	X0 = extract_loci(["tests/data/test.bed", "tests/data/test2.bed"],
+		"tests/data/test.fa", in_window=10, chroms=['chr1'])
+
+	assert X.shape == (5, 4, 10)
+	assert_array_almost_equal(X, X0)
+	assert_array_almost_equal(X, [loci_seqs[0], loci2_seqs[0], loci_seqs[1],
+		loci2_seqs[1], loci_seqs[2]])
+
+
+def test_extract_loci_dict_sequences(dict_sequences, loci_seqs, tmp_path):
+	# A dict of one-hot arrays gives the sequences of the FASTA it was made
+	# from, in the dtype of its arrays: numpy arrays, memory maps and torch
+	# tensors alike.
+	X = extract_loci("tests/data/test.bed", dict_sequences, in_window=10)
+	assert X.dtype == torch.int8
+	assert_array_almost_equal(X, loci_seqs)
+
+	floats = {chrom: X.astype(numpy.float32) for chrom, X in
+		dict_sequences.items()}
+	X = extract_loci("tests/data/test.bed", floats, in_window=10)
+	assert X.dtype == torch.float32
+	assert_array_almost_equal(X, loci_seqs)
+
+	memmaps = {}
+	for chrom, X in dict_sequences.items():
+		numpy.save(tmp_path / f"{chrom}.npy", X)
+		memmaps[chrom] = numpy.load(tmp_path / f"{chrom}.npy", mmap_mode='r')
+
+	X = extract_loci("tests/data/test.bed", memmaps, in_window=10)
+	assert X.dtype == torch.int8
+	assert_array_almost_equal(X, loci_seqs)
+
+	tensors = {chrom: torch.from_numpy(X) for chrom, X in
+		dict_sequences.items()}
+	X = extract_loci("tests/data/test.bed", tensors, in_window=10)
+	assert X.dtype == torch.int8
+	assert_array_almost_equal(X, loci_seqs)
+
+
+def test_extract_loci_closes_fasta_it_opens(monkeypatch):
+	# A FASTA opened from a filename is closed before returning, including
+	# when the loci are rejected; a caller's Fasta is left open.
+	closed = []
+	close = pyfaidx.Fasta.close
+
+	def recording_close(self):
+		closed.append(id(self))
+		close(self)
+
+	monkeypatch.setattr(pyfaidx.Fasta, "close", recording_close)
+
+	extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10)
+	assert len(closed) == 1
+
+	loci = pandas.DataFrame({0: ['chrM'], 1: [0], 2: [10]})
+	with pytest.raises(ValueError, match="chrM"):
+		extract_loci(loci, "tests/data/test.fa", in_window=10)
+	assert len(closed) == 2
+
+	with pytest.raises(ValueError, match="No loci remain"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa",
+			in_window=1000)
+	assert len(closed) == 3
+
+	fasta = pyfaidx.Fasta("tests/data/test.fa")
+	extract_loci("tests/data/test.bed", fasta, in_window=10)
+	assert len(closed) == 3
 
 
 ###
