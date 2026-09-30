@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 import warnings
 
 import numpy
@@ -97,7 +98,7 @@ def _interleave_loci(loci, chroms=None, summits=False):
 
 		chroms = [str(chrom) for chrom in chroms]
 
-	if isinstance(loci, (str, pandas.DataFrame)):
+	if isinstance(loci, (str, os.PathLike, pandas.DataFrame)):
 		loci = [loci]
 	elif not isinstance(loci, (list, tuple)):
 		raise ValueError("Provided loci must be a string or pandas " +
@@ -111,7 +112,7 @@ def _interleave_loci(loci, chroms=None, summits=False):
 	loci_dfs = []
 	for i, df in enumerate(loci):
 		# Extract the relevant columns from the dataframes
-		if isinstance(df, str):
+		if isinstance(df, (str, os.PathLike)):
 			df = pandas.read_csv(df, sep='\t', usecols=cols,
 				header=None, index_col=False, names=names)
 		elif isinstance(df, pandas.DataFrame):
@@ -187,8 +188,8 @@ def _load_signals(signals):
 
 	_signals = []
 	for i, signal in enumerate(signals):
-		if isinstance(signal, str):
-			signal = pybigtools.open(signal)
+		if isinstance(signal, (str, os.PathLike)):
+			signal = pybigtools.open(os.fspath(signal))
 		elif isinstance(signal, pybigtools.BBIRead):
 			pass
 		elif not isinstance(signal, dict):
@@ -490,8 +491,8 @@ def extract_loci(
 	# exit; a caller-provided pyfaidx.Fasta is theirs to manage.
 	chrom_lengths = {}
 	opened_fasta = False
-	if isinstance(sequences, str):
-		sequences = pyfaidx.Fasta(sequences)
+	if isinstance(sequences, (str, os.PathLike)):
+		sequences = pyfaidx.Fasta(os.fspath(sequences))
 		opened_fasta = True
 		for key, value in sequences.items():
 			chrom_lengths[str(key)] = len(value)

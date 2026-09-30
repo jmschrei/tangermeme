@@ -5,6 +5,7 @@ import numpy
 import torch
 import pytest
 import pandas
+import pathlib
 import pyfaidx
 import pybigtools
 
@@ -1277,6 +1278,37 @@ def test_extract_loci_does_not_close_user_provided_fasta():
 	# raises ValueError("I/O operation on closed file") from the
 	# underlying mmap inside pyfaidx.
 	_ = str(fasta[list(fasta.keys())[0]])
+
+
+def test_extract_loci_pathlike(tmp_path):
+	# A pathlib.Path works wherever a filename does. It used to fail with
+	# AttributeError for sequences and ValueError for everything else.
+	exclusion = pandas.DataFrame({0: ['chr1'], 1: [10], 2: [30]})
+	exclusion_file = tmp_path / "exclusion.bed"
+	exclusion.to_csv(exclusion_file, sep='\t', header=False, index=False)
+
+	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
+	kwargs = {'in_window': 10, 'out_window': 10, 'return_mask': True}
+
+	y0 = extract_loci(["tests/data/test.bed", "tests/data/test2.bed"],
+		"tests/data/test.fa", bw, bw, exclusion_lists=str(exclusion_file),
+		**kwargs)
+	y = extract_loci([pathlib.Path("tests/data/test.bed"),
+		pathlib.Path("tests/data/test2.bed")], pathlib.Path("tests/data/test.fa"),
+		[pathlib.Path(b) for b in bw], (pathlib.Path(bw[0]), bw[1]),
+		exclusion_lists=exclusion_file, **kwargs)
+
+	assert len(y) == len(y0) == 4
+	for a, b in zip(y, y0):
+		assert_array_almost_equal(a, b)
+
+	# The exclusion list was read: it removes the three chr1 loci in 0-99.
+	assert y[-1].tolist().count(False) == 3
+
+	X = extract_loci(pathlib.Path("tests/data/test.bed"), "tests/data/test.fa",
+		in_window=10)
+	X0 = extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10)
+	assert_array_almost_equal(X, X0)
 
 
 def test_extract_loci_pre_opened_bigwigs(loci_signal):
