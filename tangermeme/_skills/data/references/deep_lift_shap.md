@@ -82,6 +82,11 @@ refs = dinucleotide_shuffle(X_valid, n=20, random_state=0)  # (batch, 20, 4, len
 X_attr = deep_lift_shap(model, X, references=refs, only_warn=True)
 ```
 
+Unknown characters (all-zero columns) have a direct route: with `only_warn=True`,
+`references=partial(dinucleotide_shuffle, allow_N=True)` shuffles each as a fifth
+character, and those positions get zero attribution. `pisa` has no `only_warn`
+and rejects them.
+
 ## `batch_size` counts example-reference pairs
 
 `batch_size` is the number of example×reference pairs run at once, not the number

@@ -562,7 +562,8 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 	Parameters
 	----------
 	X: torch.tensor, shape=(len(alphabet), length)
-		A single one-hot encoded sequence to be shuffled.
+		A single one-hot encoded sequence to be shuffled. An all-zero column,
+		an unknown character, is shuffled as a character of its own.
 
 	n_shuffles: int, optional
 		The number of shuffled sequences to produce. Default is 1.
@@ -585,6 +586,9 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 	if random_state is None:
 		random_state = numpy.random.randint(0, 9999999)
 
+	# argmax would read an unknown character, an all-zero column, as the
+	# first character. Shuffle it on a channel of its own, dropped below.
+	X = torch.cat([X, (X.sum(dim=0, keepdim=True) == 0).to(X.dtype)])
 	n_chars, seq_len = X.shape
 	idxs = X.argmax(axis=0).cpu().numpy().astype(numpy.int32)
 
@@ -617,7 +621,7 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 		raise ValueError("All dinucleotide shuffles yield identical " +
 			"sequences, potentially due to a lack of diversity in sequence.")
 
-	return shuffled_sequences
+	return shuffled_sequences[:, :-1]
 
 
 def dinucleotide_shuffle(
@@ -627,6 +631,7 @@ def dinucleotide_shuffle(
 	n: int = 20,
 	random_state: int | None = None,
 	verbose: bool = False,
+	allow_N: bool = False,
 ) -> torch.Tensor:
 	"""Given a one-hot encoded sequence, dinucleotide shuffle it.
 
@@ -648,12 +653,8 @@ def dinucleotide_shuffle(
 	----------
 	X: torch.tensor, shape=(-1, len(alphabet), length)
 		A one-hot encoded set of sequences to be shuffled. Unlike the other
-		functions in this module, unknown characters are *not* allowed:
-		the transition matrix is built from `X.argmax(axis=0)`, which maps
-		an all-zero column to the first character of the alphabet, so an
-		unknown character would silently be shuffled as an `A` and would
-		distort the dinucleotide composition the shuffle exists to preserve.
-		Remove or resolve them before calling this.
+		functions in this module, unknown characters, encoded as all-zero
+		columns, are rejected unless `allow_N=True`.
 
 	start: int, optional
 		The starting position of where to randomize the sequence, inclusive.
@@ -680,6 +681,14 @@ def dinucleotide_shuffle(
 		other batch that uses the same `random_state`.
 		Default is None.
 
+	allow_N: bool, optional
+		Whether to accept unknown characters, encoded as all-zero columns, in
+		`X`. Each is shuffled as a character of its own, so every shuffle
+		keeps the number of unknown characters and the count of every
+		dinucleotide, including those that contain one. A contiguous run of
+		unknown characters therefore stays one run but can move. If False,
+		an unknown character raises a ValueError. Default is False.
+
 
 	Returns
 	-------
@@ -689,7 +698,8 @@ def dinucleotide_shuffle(
 		`X`).
 	"""
 
-	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1)
+	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1,
+		allow_N=allow_N)
 
 	if end < 0:
 		end = X.shape[-1] + 1 + end

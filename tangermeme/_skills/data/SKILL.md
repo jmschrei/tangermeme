@@ -66,7 +66,9 @@ no dedicated reference file, but here is where to look:
   `multisubstitute`, `delete`, `randomize`, `shuffle`, `dinucleotide_shuffle`,
   `local_dinucleotide_shuffle` (most motif-add ops *substitute*, preserving
   length; `start`/`end` confine shuffles to a region). All but the two
-  dinucleotide shuffles accept unknown characters in `X` as all-zero columns.
+  dinucleotide shuffles accept unknown characters in `X` as all-zero columns;
+  `dinucleotide_shuffle` does with `allow_N=True`, shuffling each as a fifth
+  character.
 - `tangermeme.utils` — `one_hot_encode` (returns int8), `characters`,
   `random_one_hot`, `reverse_complement` (single sequence), `pwm_consensus`,
   `set_seed`, `gc_content`, etc.
