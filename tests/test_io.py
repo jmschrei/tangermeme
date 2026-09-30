@@ -523,6 +523,16 @@ def test_load_signals_dict():
 	assert isinstance(bw[0], dict)
 
 
+def test_load_signals_bbiread():
+	# A bigWig the caller already opened is used as is; it used to be
+	# rejected even though _extract_locus_signal reads it.
+	bw = pybigtools.open("tests/data/test.bw")
+	signals = _load_signals([bw])
+
+	assert len(signals) == 1
+	assert signals[0] is bw
+
+
 def test_load_signals_mixed():
 	signal = {'chr1': numpy.zeros(6)}
 	bw = _load_signals(("tests/data/test.bw", signal))
@@ -1267,6 +1277,20 @@ def test_extract_loci_does_not_close_user_provided_fasta():
 	# raises ValueError("I/O operation on closed file") from the
 	# underlying mmap inside pyfaidx.
 	_ = str(fasta[list(fasta.keys())[0]])
+
+
+def test_extract_loci_pre_opened_bigwigs(loci_signal):
+	bws = [pybigtools.open("tests/data/test.bw"),
+		pybigtools.open("tests/data/test2.bw")]
+
+	X, y, controls = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		bws, bws, in_window=10, out_window=10)
+
+	assert_array_almost_equal(y, loci_signal)
+	assert_array_almost_equal(controls, loci_signal)
+
+	# The caller's bigWigs are left open.
+	assert_array_almost_equal(bws[0].values('chr1', 15, 25), loci_signal[0][0])
 
 
 ###

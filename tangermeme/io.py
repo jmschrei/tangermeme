@@ -156,17 +156,19 @@ def _interleave_loci(loci, chroms=None, summits=False):
 def _load_signals(signals):
 	"""An internal function for loading signals.
 
-	The passed in signals must be a list but can either be a list of strings,
-	which are interpreted as strings for bigwig files that should be opened,
-	or dictionaries where the keys are chromosome names and the values are
-	numpy arrays of values across the chromosome. The keys of a dictionary are
-	coerced to strings so that they match the chromosome names of the loci.
+	The passed in signals must be a list but each element can be a string,
+	which is interpreted as the filename of a bigwig file to open, a bigwig
+	file already opened with `pybigtools.open`, which is used as is and left
+	open, or a dictionary where the keys are chromosome names and the values
+	are numpy arrays of values across the chromosome. The keys of a dictionary
+	are coerced to strings so that they match the chromosome names of the loci.
 
 
 	Parameters
 	----------
-	signals: list of strings or dicts or None
-		A list of strings for bigwig files or dictionaries of numpy arrays.
+	signals: list of strings, pybigtools.BBIRead objects, or dicts, or None
+		A list of filenames of bigwig files, opened bigwig files, or
+		dictionaries of numpy arrays.
 
 
 	Returns
@@ -187,9 +189,11 @@ def _load_signals(signals):
 	for i, signal in enumerate(signals):
 		if isinstance(signal, str):
 			signal = pybigtools.open(signal)
+		elif isinstance(signal, pybigtools.BBIRead):
+			pass
 		elif not isinstance(signal, dict):
-			raise ValueError("Signals must either be a list of strings " +
-				"or a list of dictionaries.")
+			raise ValueError("Signals must either be filenames, bigWigs " +
+				"opened with pybigtools, or dictionaries.")
 		elif not isinstance(list(signal.values())[0], numpy.ndarray):
 			raise ValueError("Values in dictionaries must be numpy.ndarrays.")
 		else:
