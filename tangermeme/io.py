@@ -5,10 +5,16 @@
 from __future__ import annotations
 
 import os
+import sys
 import mmap
+import zlib
+import struct
 import operator
 import warnings
 
+from concurrent.futures import ThreadPoolExecutor
+
+import numba
 import numpy
 import torch
 import pandas
@@ -335,8 +341,9 @@ def _write_locus_signal(signals, chrom, start, end, out, scratch):
 
 	Parameters
 	----------
-	signals: list of pybigtools' BBIRead objects
-		A list of BBIRead objects, as returned by pybigtools.open().
+	signals: list of pybigtools' BBIRead objects or None
+		A list of BBIRead objects, as returned by pybigtools.open(). The row
+		of an entry that is None is left as it is.
 
 	chrom: str
 		The name of the chromosome.
@@ -355,6 +362,9 @@ def _write_locus_signal(signals, chrom, start, end, out, scratch):
 	"""
 
 	for i, signal in enumerate(signals):
+		if signal is None:
+			continue
+
 		try:
 			signal.values(chrom, start, end, arr=scratch)
 		except (RuntimeError, ValueError, KeyError):
@@ -368,7 +378,7 @@ def _write_locus_signal(signals, chrom, start, end, out, scratch):
 
 
 def _read_signal_windows(signals, chroms, starts, width, out, kind=0,
-	max_gap=4096, max_span=65536, names=None):
+	max_gap=4096, max_span=65536, names=None, rows=None):
 	"""An internal function for reading the bigWig windows of many loci.
 
 	This gives the values `_write_locus_signal` gives when called on each
@@ -402,8 +412,9 @@ def _read_signal_windows(signals, chroms, starts, width, out, kind=0,
 		The length of every window.
 
 	out: numpy.ndarray, shape=(>=n, len(signals), width)
-		The float32 array whose first n rows are written, row k with window k.
-		NaN and infinities are left for the caller to replace.
+		The float32 array that window k is written into: its row k, or its row
+		rows[k] when `rows` is given. NaN and infinities are left for the
+		caller to replace.
 
 	kind: int, optional
 		A label copied into each failure. Default is 0.
@@ -419,12 +430,16 @@ def _read_signal_windows(signals, chroms, starts, width, out, kind=0,
 		The chromosome names that `chroms` indexes into, or None when `chroms`
 		holds the names. Default is None.
 
+	rows: numpy.ndarray, shape=(n,), dtype=int64, or None, optional
+		The row of `out` that each window is written to, or None when window k
+		is written to row k. Default is None.
+
 
 	Returns
 	-------
 	failures: list of tuples
-		(k, kind, i, chrom, start, end) for each window k whose read from
-		signal i raised.
+		(k, kind, i, chrom, start, end) for each window whose read from
+		signal i raised, where k is the row of `out` it was written to.
 	"""
 
 	n = len(starts)
@@ -461,7 +476,7 @@ def _read_signal_windows(signals, chroms, starts, width, out, kind=0,
 	offsets = (s_starts - numpy.repeat(g_starts, numpy.diff(bounds))).tolist()
 	g_chroms = [names[code] for code in s_codes[heads].tolist()]
 	g_starts, g_ends = g_starts.tolist(), g_ends.tolist()
-	rows = order.tolist()
+	rows = (order if rows is None else numpy.asarray(rows)[order]).tolist()
 
 	buffer = numpy.empty(max(max_span, width), dtype=numpy.float64)
 	scratch = buffer[:width]
@@ -527,6 +542,649 @@ def _nan_to_num_rows(values, block_size=2**20):
 			numpy.nan_to_num(block, copy=False)
 
 	return values
+
+
+###
+# A bigWig reader for extract_loci
+###
+
+# A call reads its bigWig paths with _BigWigFile when it may keep at least
+# this many loci. A smaller call reads them with pybigtools, because parsing
+# the data index costs about as much as a few hundred pybigtools reads.
+_BIGWIG_MIN_WINDOWS = 1024
+
+# The number of data blocks each task decompresses at once. A block holds at
+# most uncompressBufSize bytes, 32 KB in ENCODE's bigWigs, so n_jobs tasks
+# hold at most n_jobs * 256 * 32 KB of decompressed data.
+_BIGWIG_BATCH_BLOCKS = 256
+
+
+@numba.njit(nogil=True, cache=True)
+def _check_bigwig_block(words, begin, end, chrom, base_start, base_end):
+	"""Whether one decompressed data block can be read by _read_bigwig_windows.
+
+	The block is the 32-bit words `words[begin:end]`. Each section is a
+	24-byte header (chromosome id, start, end, step, span, then the type and
+	the item count) followed by its items. The block must hold whole
+	bedGraph, varStep or fixedStep sections on the chromosome `chrom` of its
+	index entry, whose items are sorted, do not overlap one another, and lie
+	inside the entry's range [base_start, base_end). pybigtools sums the
+	values of overlapping items, so a block that has them is left to it.
+	"""
+
+	offset = begin
+	previous_end = base_start
+	while offset < end:
+		if offset + 6 > end or words[offset] != chrom:
+			return False
+
+		section_start = numpy.int64(words[offset + 1])
+		step = numpy.int64(words[offset + 3])
+		span = numpy.int64(words[offset + 4])
+		kind = words[offset + 5] & 0xFF
+		count = numpy.int64(words[offset + 5] >> 16)
+
+		if kind == 1:
+			size = 3
+		elif kind == 2:
+			size = 2
+		elif kind == 3:
+			size = 1
+		else:
+			return False
+
+		item = offset + 6
+		next_offset = item + count * size
+		if next_offset > end:
+			return False
+
+		for i in range(count):
+			if kind == 1:
+				item_start = numpy.int64(words[item + 3 * i])
+				item_end = numpy.int64(words[item + 3 * i + 1])
+			elif kind == 2:
+				item_start = numpy.int64(words[item + 2 * i])
+				item_end = item_start + span
+			else:
+				item_start = section_start + i * step
+				item_end = item_start + span
+
+			if item_start < previous_end or item_end < item_start:
+				return False
+
+			previous_end = item_end
+
+		if previous_end > base_end:
+			return False
+
+		offset = next_offset
+
+	return True
+
+
+@numba.njit(nogil=True, cache=True)
+def _read_bigwig_windows(words, blocks, windows, out, signal, failed):
+	"""Write the per-base values of bigWig windows into rows of `out`.
+
+	This is the compiled half of _BigWigFile.read and runs without the GIL.
+	`words` holds decompressed data blocks, one after another, as 32-bit
+	words. Row b of `blocks` describes block b: its first and last word, the
+	chromosome, start and end of its index entry, and whether it was
+	decompressed. Row j of `windows` describes window j: the blocks [lo, hi)
+	that overlap it, its start, the length of its chromosome and the row of
+	`out` it is written to. The width of every window is out.shape[2].
+
+	Each base of a window is given the value of the item that covers it, 0
+	when no item does and NaN past the end of the chromosome, which is what
+	pybigtools' values() gives with its default `missing` and `oob`. Items
+	with a NaN value are skipped, as pybigtools skips them. A window with a
+	block that fails _check_bigwig_block is not written and is marked in
+	`failed`.
+	"""
+
+	values = words.view(numpy.float32)
+	width = out.shape[2]
+	nan = numpy.float32(numpy.nan)
+
+	good = numpy.zeros(blocks.shape[0], dtype=numpy.bool_)
+	for b in range(blocks.shape[0]):
+		if blocks[b, 5] != 0:
+			good[b] = _check_bigwig_block(words, blocks[b, 0], blocks[b, 1],
+				blocks[b, 2], blocks[b, 3], blocks[b, 4])
+
+	for j in range(windows.shape[0]):
+		lo, hi = windows[j, 0], windows[j, 1]
+		start, row = windows[j, 2], windows[j, 4]
+
+		usable = True
+		for b in range(lo, hi):
+			if not good[b]:
+				usable = False
+
+		if not usable:
+			failed[j] = True
+			continue
+
+		end = min(start + width, max(start, windows[j, 3]))
+		for p in range(end - start):
+			out[row, signal, p] = 0
+		for p in range(end - start, width):
+			out[row, signal, p] = nan
+
+		for b in range(lo, hi):
+			offset = blocks[b, 0]
+			while offset < blocks[b, 1]:
+				section_start = numpy.int64(words[offset + 1])
+				step = numpy.int64(words[offset + 3])
+				span = numpy.int64(words[offset + 4])
+				kind = words[offset + 5] & 0xFF
+				count = numpy.int64(words[offset + 5] >> 16)
+				item = offset + 6
+
+				if kind == 1:
+					size = 3
+				elif kind == 2:
+					size = 2
+				else:
+					size = 1
+
+				# The first item that ends after the window starts. Items are
+				# sorted and do not overlap, so their ends are sorted too.
+				if kind == 3:
+					i = 0
+					if step > 0 and start > section_start + span:
+						i = (start - section_start - span) // step + 1
+				else:
+					i, k = 0, count
+					while i < k:
+						m = (i + k) // 2
+						if kind == 1:
+							item_end = numpy.int64(words[item + 3 * m + 1])
+						else:
+							item_end = numpy.int64(words[item + 2 * m]) + span
+
+						if item_end <= start:
+							i = m + 1
+						else:
+							k = m
+
+				while i < count:
+					if kind == 1:
+						item_start = numpy.int64(words[item + 3 * i])
+						item_end = numpy.int64(words[item + 3 * i + 1])
+						value = values[item + 3 * i + 2]
+					elif kind == 2:
+						item_start = numpy.int64(words[item + 2 * i])
+						item_end = item_start + span
+						value = values[item + 2 * i + 1]
+					else:
+						item_start = section_start + i * step
+						item_end = item_start + span
+						value = values[item + i]
+
+					if item_start >= end:
+						break
+
+					if value == value:
+						for p in range(max(item_start, start) - start,
+								min(item_end, end) - start):
+							out[row, signal, p] = value
+
+					i += 1
+
+				offset = item + count * size
+
+
+class _BigWigFile():
+	"""A bigWig opened from a path, read with numpy, zlib and numba.
+
+	extract_loci reads the windows of the loci it keeps from bigWig paths
+	with this class, on `n_jobs` threads, and gives each base the value that
+	`pybigtools.BBIRead.values(chrom, start, end)` gives it, cast to float32.
+	pybigtools holds the GIL while it reads, whereas zlib.decompress and the
+	compiled decoder here release it.
+
+	The header and chromosome tree are read when the file is opened, and the
+	data index (the R-tree) on the first read. A read sorts its windows by
+	position, finds the data blocks that overlap each one in the index, and
+	works through the blocks in batches of _BIGWIG_BATCH_BLOCKS. Each batch is
+	read with one os.pread per run of adjacent blocks, decompressed, and
+	decoded straight into the output rows by _read_bigwig_windows, so a block
+	that several sorted, repeated or overlapping windows share is decompressed
+	once, and at most n_jobs batches are held at a time. The index costs 56
+	bytes per data block, about 2.3 MB for a 240 MB bigWig.
+
+	`pybigtools_file`, the file opened with pybigtools, reads what this class
+	does not:
+
+		- a file that is not a little-endian bigWig, such as a bigBed, or
+		  whose chromosome tree does not match pybigtools', or whose index
+		  entries are not sorted, span two chromosomes, or overlap;
+		- a window that starts before 0 or ends past 2**32 - 1, or whose
+		  chromosome is not in the file;
+		- a window with a data block that cannot be decompressed, holds a
+		  section other than bedGraph, varStep or fixedStep, or holds items
+		  that are unsorted, overlap, or lie outside the block's index entry.
+
+	Blocks stored without compression, when uncompressBufSize is 0, are
+	read as they are.
+	"""
+
+	def __init__(self, path, pybigtools_file):
+		self.path = path
+		self.pybigtools_file = pybigtools_file
+		self._index, self._index_read = None, False
+
+		with open(path, 'rb') as handle:
+			header = handle.read(64)
+			(magic, _, _, chrom_tree, _, data_index, _, _, _, _,
+				self.buffer_size, _) = struct.unpack('<IHHQQQHHQQIQ', header)
+
+			if magic != 0x888FFC26 or sys.byteorder != 'little':
+				raise ValueError("not a little-endian bigWig")
+
+			self._data_index = data_index
+			self.chroms = self._read_chrom_tree(handle, chrom_tree)
+
+		expected = {str(name): size for name, size in
+			pybigtools_file.chroms().items()}
+		if {name: size for name, (_, size) in self.chroms.items()} != expected:
+			raise ValueError("the chromosome tree differs from pybigtools'")
+
+	@classmethod
+	def open(cls, path, pybigtools_file):
+		"""A _BigWigFile for `path`, or None when it cannot read the file."""
+
+		try:
+			return cls(path, pybigtools_file)
+		except (OSError, ValueError, struct.error, UnicodeDecodeError):
+			return None
+
+	@staticmethod
+	def _read_chrom_tree(handle, offset):
+		"""The chromosome B+ tree, as {name: (chromosome id, length)}."""
+
+		handle.seek(offset)
+		magic, _, key_size, value_size, _, _ = struct.unpack('<IIIIQQ',
+			handle.read(32))
+		if magic != 0x78CA8C91 or value_size != 8:
+			raise ValueError("unexpected chromosome tree")
+
+		chroms, nodes, seen = {}, [offset + 32], set()
+		while nodes:
+			node = nodes.pop()
+			if node in seen:
+				raise ValueError("the chromosome tree has a cycle")
+
+			seen.add(node)
+			handle.seek(node)
+			is_leaf, _, count = struct.unpack('<BBH', handle.read(4))
+			data = handle.read(count * (key_size + 8))
+			for k in range(count):
+				item = data[k * (key_size + 8): (k + 1) * (key_size + 8)]
+				if is_leaf:
+					name = item[:key_size].rstrip(b'\0').decode()
+					chroms[name] = struct.unpack('<II', item[key_size:])
+				else:
+					nodes.append(struct.unpack('<Q', item[key_size:])[0])
+
+		return chroms
+
+	def _read_index(self):
+		"""The data blocks in file order, from the R-tree, or None.
+
+		Each entry of the R-tree's leaves gives a block's range, from
+		(chromosome, start) to (chromosome, end), and its offset and size in
+		the file. None is returned when the entries cannot be read or are not
+		sorted, non-overlapping and each on one chromosome, so that the
+		blocks overlapping a window can be found by binary search.
+		"""
+
+		leaf_type = numpy.dtype([('start_chrom', '<u4'), ('start', '<u4'),
+			('end_chrom', '<u4'), ('end', '<u4'), ('offset', '<u8'),
+			('size', '<u8')])
+
+		try:
+			with open(self.path, 'rb') as handle:
+				fd = handle.fileno()
+				magic = struct.unpack('<I', os.pread(fd, 4,
+					self._data_index))[0]
+				if magic != 0x2468ACE0:
+					return None
+
+				leaves, nodes, seen = [], [self._data_index + 48], set()
+				while nodes:
+					offset = nodes.pop()
+					if offset in seen:
+						return None
+
+					seen.add(offset)
+					is_leaf, _, count = struct.unpack('<BBH', os.pread(fd, 4,
+						offset))
+					size = 32 if is_leaf else 24
+					data = os.pread(fd, count * size, offset + 4)
+					if len(data) != count * size:
+						return None
+
+					if is_leaf:
+						leaves.append(numpy.frombuffer(data, dtype=leaf_type))
+					else:
+						children = numpy.frombuffer(data, dtype='<u8').reshape(
+							count, 3)[:, 2]
+						nodes.extend(children[::-1].tolist())
+		except (OSError, struct.error, OverflowError):
+			return None
+
+		leaves = numpy.concatenate(leaves) if leaves else numpy.empty(0,
+			dtype=leaf_type)
+		chroms = leaves['start_chrom'].astype(numpy.int64)
+		starts = (chroms << 32) | leaves['start'].astype(numpy.int64)
+		ends = (leaves['end_chrom'].astype(numpy.int64) << 32) | \
+			leaves['end'].astype(numpy.int64)
+
+		if (leaves['end_chrom'] != leaves['start_chrom']).any() or \
+				(ends < starts).any() or (starts[1:] < ends[:-1]).any():
+			return None
+
+		return {'starts': starts, 'ends': ends, 'chroms': chroms,
+			'bases': numpy.stack([leaves['start'], leaves['end']], axis=1).astype(
+				numpy.int64),
+			'offsets': leaves['offset'].astype(numpy.int64),
+			'sizes': leaves['size'].astype(numpy.int64)}
+
+	def read(self, rows, chroms, starts, out, signal, n_jobs=1, names=None):
+		"""Write windows into out[rows[j], signal] and return the ones it did not.
+
+		Window j covers [starts[j], starts[j] + out.shape[2]) on chroms[j]. NaN
+		is written past the end of a chromosome, as pybigtools writes it. The
+		positions j of the windows that must be read with pybigtools are
+		returned, in increasing order.
+
+
+		Parameters
+		----------
+		rows: numpy.ndarray, shape=(n,), dtype=int64
+			The row of `out` that each window is written to. No two windows
+			may share a row.
+
+		chroms: list of str, length n, or numpy.ndarray of int when `names`
+			is given
+			The chromosome of each window, or its index into `names`.
+
+		starts: numpy.ndarray, shape=(n,), dtype=int64
+			The start of each window, inclusive and base-0.
+
+		out: numpy.ndarray, shape=(m, n_signals, width), dtype=float32
+			A C-contiguous array to write into.
+
+		signal: int
+			The index into the second axis of `out` that is written.
+
+		n_jobs: int, optional
+			The number of threads to decompress and decode blocks on.
+			Default is 1.
+
+		names: list of str or None, optional
+			The chromosome names that `chroms` indexes into, or None when
+			`chroms` holds the names. Default is None.
+
+
+		Returns
+		-------
+		fallback: numpy.ndarray, dtype=int64
+			The positions of the windows that were not written.
+		"""
+
+		n, width = len(rows), out.shape[2]
+		if not self._index_read:
+			self._index, self._index_read = self._read_index(), True
+
+		index = self._index
+		if index is None or n == 0:
+			return numpy.arange(n, dtype=numpy.int64)
+
+		if names is None:
+			codes, names = pandas.factorize(numpy.asarray(chroms, dtype=object))
+		else:
+			codes = numpy.asarray(chroms)
+
+		info = [self.chroms.get(str(name), (-1, 0)) for name in names]
+		ids = numpy.array([i for i, _ in info], dtype=numpy.int64)[codes]
+		sizes = numpy.array([s for _, s in info], dtype=numpy.int64)[codes]
+
+		usable = (ids >= 0) & (starts >= 0) & (starts + width < 2**32)
+		order = numpy.flatnonzero(usable)
+		order = order[numpy.lexsort((starts[order], ids[order]))]
+
+		# The blocks [lo, hi) overlap a window. The index entries are sorted
+		# and do not overlap, so both their starts and their ends are sorted.
+		keys = (ids[order] << 32) | starts[order]
+		lo = numpy.searchsorted(index['ends'], keys, side='right')
+		hi = numpy.searchsorted(index['starts'], keys + width, side='left')
+		hi = numpy.maximum(lo, hi)
+
+		# The blocks any window needs, and each window's blocks as positions
+		# in that list. Windows are split into batches by their first block.
+		n_blocks = len(index['starts'])
+		cover = numpy.cumsum(numpy.bincount(lo, minlength=n_blocks + 1) -
+			numpy.bincount(hi, minlength=n_blocks + 1))
+		needed = numpy.flatnonzero(cover[:n_blocks] > 0)
+		lo, hi = numpy.searchsorted(needed, lo), numpy.searchsorted(needed, hi)
+
+		windows = numpy.stack([lo, hi, starts[order], sizes[order], rows[order]],
+			axis=1)
+		failed = numpy.zeros(len(order), dtype=numpy.bool_)
+
+		batch = lo // _BIGWIG_BATCH_BLOCKS
+		bounds = numpy.append(numpy.flatnonzero(numpy.diff(batch,
+			prepend=-1)), len(order)).tolist()
+
+		def read_batch(k):
+			w0, w1 = bounds[k], bounds[k + 1]
+			b0, b1 = int(windows[w0, 0]), int(windows[w0:w1, 1].max())
+			words, blocks = self._read_blocks(fd, needed[b0:b1], index)
+			local = windows[w0:w1].copy()
+			local[:, :2] -= b0
+			_read_bigwig_windows(words, blocks, local, out, signal,
+				failed[w0:w1])
+
+		# The first batch is read on this thread when the decoder has not been
+		# compiled yet, so that it is compiled once and before any thread
+		# starts. pread takes no file position, so the threads share one fd.
+		n_batches = len(bounds) - 1
+		first = int(n_batches > 0 and not _read_bigwig_windows.signatures)
+		fd = os.open(self.path, os.O_RDONLY)
+		try:
+			if first:
+				read_batch(0)
+
+			if n_jobs == 1 or n_batches - first <= 1:
+				for k in range(first, n_batches):
+					read_batch(k)
+			else:
+				with ThreadPoolExecutor(min(n_jobs, n_batches - first)) as pool:
+					list(pool.map(read_batch, range(first, n_batches)))
+		finally:
+			os.close(fd)
+
+		fallback = numpy.concatenate([numpy.flatnonzero(~usable), order[failed]])
+		return numpy.sort(fallback)
+
+	def _read_blocks(self, fd, leaves, index):
+		"""Read and decompress data blocks into one array of 32-bit words.
+
+		Returns the words and a (len(leaves), 6) array of each block's first
+		and last word, its index entry's chromosome, start and end, and 1 if
+		it was read or 0 if it could not be.
+		"""
+
+		offsets, sizes = index['offsets'][leaves], index['sizes'][leaves]
+		breaks = numpy.flatnonzero(offsets[1:] != offsets[:-1] + sizes[:-1]) + 1
+		breaks = [0] + breaks.tolist() + [len(leaves)] if len(leaves) > 0 else []
+
+		parts, read = [], numpy.ones(len(leaves), dtype=numpy.int64)
+		for r0, r1 in zip(breaks[:-1], breaks[1:]):
+			begin = int(offsets[r0])
+			length = int(offsets[r1 - 1] + sizes[r1 - 1]) - begin
+			data = memoryview(os.pread(fd, length, begin))
+
+			for k in range(r0, r1):
+				a = int(offsets[k]) - begin
+				raw = data[a:a + int(sizes[k])]
+				try:
+					block = zlib.decompress(raw) if self.buffer_size > 0 else \
+						bytes(raw)
+				except zlib.error:
+					block = b''
+
+				if len(raw) != sizes[k] or len(block) % 4 != 0 or \
+						len(block) == 0:
+					block, read[k] = b'', 0
+
+				parts.append(block)
+
+		lengths = numpy.array([len(part) // 4 for part in parts],
+			dtype=numpy.int64)
+		ends = numpy.cumsum(lengths)
+		blocks = numpy.stack([ends - lengths, ends, index['chroms'][leaves],
+			index['bases'][leaves, 0], index['bases'][leaves, 1], read], axis=1)
+		words = numpy.frombuffer(b''.join(parts), dtype=numpy.uint32)
+		return words, blocks
+
+
+def _open_bigwig_files(paths, signals, values, n_max):
+	"""Open with _BigWigFile each signal that was given as a bigWig path.
+
+	Returns a list with a _BigWigFile for each such signal that it can read
+	and None for every other signal, or None when no signal is read with
+	_BigWigFile: when `values` was not preallocated (a dictionary is among
+	the signals, or the window is negative), or when fewer than
+	_BIGWIG_MIN_WINDOWS loci can be kept.
+	"""
+
+	if values is None or n_max < _BIGWIG_MIN_WINDOWS:
+		return None
+
+	readers = []
+	for path, signal in zip(paths, signals):
+		reader = None
+		if isinstance(path, (str, os.PathLike)) and isinstance(signal,
+				pybigtools.BBIRead):
+			reader = _BigWigFile.open(os.fspath(path), signal)
+
+		readers.append(reader)
+
+	return readers if any(reader is not None for reader in readers) else None
+
+
+def _signals_read_in_loop(signals, readers):
+	"""The signals with None in place of each one that a _BigWigFile reads."""
+
+	if readers is None:
+		return signals
+
+	return [signal if reader is None else None for signal, reader in
+		zip(signals, readers)]
+
+
+def _signals_read_after_loop(signals, readers):
+	"""The signals with None in place of each one that no _BigWigFile reads.
+
+	None is returned when no signal has a _BigWigFile.
+	"""
+
+	if readers is None:
+		return None
+
+	return [None if reader is None else signal for signal, reader in
+		zip(signals, readers)]
+
+
+def _read_bigwig_files(signals, readers, codes, starts, width, out, names,
+	rows=None, kind=0, n_jobs=1):
+	"""Read the windows of bigWig signals into `out` after the loop over loci.
+
+	Window k of signal i is written into out[k, i], or into out[rows[k], i]
+	when `rows` is given. A signal with a _BigWigFile is read by it on n_jobs
+	threads, and the windows it leaves are read with pybigtools by
+	_read_signal_windows, sorted and grouped, which is also how a signal
+	without a _BigWigFile is read. A signal that is None is not read. A window
+	whose read raises is zero-filled and returned as a failure, so that the
+	caller can warn in the order of the loci.
+
+
+	Parameters
+	----------
+	signals: list of pybigtools' BBIRead objects or None
+		The signals, with None for each one that is not read.
+
+	readers: list of _BigWigFile or None, or None
+		The _BigWigFile of each signal, or None for a signal without one.
+		None when no signal has one.
+
+	codes: numpy.ndarray, shape=(n,), dtype=int64
+		The chromosome of each window, as an index into `names`.
+
+	starts: numpy.ndarray, shape=(n,), dtype=int64
+		The start of each window, inclusive and base-0.
+
+	width: int
+		The length of every window, out.shape[2].
+
+	out: numpy.ndarray, shape=(m, len(signals), width), dtype=float32
+		The preallocated values. NaN and infinities are left for the caller
+		to replace.
+
+	names: list of str
+		The chromosome names that `codes` indexes into.
+
+	rows: numpy.ndarray, shape=(n,), dtype=int64, or None, optional
+		The row of `out` that each window is written to, or None when window k
+		is written to row k. Default is None.
+
+	kind: int, optional
+		A label copied into each failure. Default is 0.
+
+	n_jobs: int, optional
+		The number of threads each _BigWigFile reads on. Default is 1.
+
+
+	Returns
+	-------
+	failures: list of tuples
+		(row, kind, i, chrom, start, end) for each window whose read from
+		signal i raised.
+	"""
+
+	if readers is None and all(signal is not None for signal in signals):
+		return _read_signal_windows(signals, codes, starts, width, out,
+			kind=kind, names=names, rows=rows)
+
+	if readers is None:
+		readers = [None] * len(signals)
+
+	if rows is None:
+		rows = numpy.arange(len(starts), dtype=numpy.int64)
+
+	failures = []
+	for i, (signal, reader) in enumerate(zip(signals, readers)):
+		if signal is None:
+			continue
+
+		codes_, starts_, rows_ = codes, starts, rows
+		if reader is not None:
+			left = reader.read(rows, codes, starts, out, i, n_jobs, names=names)
+			if len(left) == 0:
+				continue
+
+			codes_, starts_, rows_ = codes[left], starts[left], rows[left]
+
+		for row, _, _, chrom, start, end in _read_signal_windows([signal],
+				codes_, starts_, width, out[:, i:i+1], kind=kind, names=names,
+				rows=rows_):
+			failures.append((row, kind, i, chrom, start, end))
+
+	return failures
 
 
 def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
@@ -648,6 +1306,7 @@ def extract_loci(
 	exclusion_lists: str | os.PathLike | pandas.DataFrame | list | None = None,
 	return_mask: bool = False,
 	verbose: bool = False,
+	n_jobs: int = 8,
 ) -> torch.Tensor | list[torch.Tensor]:
 	"""Extract sequence and signal information for each provided locus.
 
@@ -824,6 +1483,18 @@ def extract_loci(
 	verbose: bool, optional
 		Whether to display a progress bar while loading. Default is False.
 
+	n_jobs: int, optional
+		The largest number of threads to read the bigWigs in `signals` and
+		`in_signals` that are given as paths with. When at least 1,024 loci
+		can be kept, those bigWigs are read once the kept loci are known, by
+		a reader built on numpy, zlib and numba that gives the same values as
+		pybigtools and releases the GIL. A bigWig opened with pybigtools, the
+		signal that a count filter is measured on, and the windows the reader
+		cannot read, such as those on a chromosome the file lacks, are read
+		with pybigtools. The results are the same as with one thread. Must be
+		at least 1, and 1 reads every bigWig in the calling thread. Default
+		is 8.
+
 
 	Returns
 	-------
@@ -857,13 +1528,18 @@ def extract_loci(
 	ValueError
 		If a locus is on a chromosome that is not in `sequences`, if no loci
 		remain after filtering, if `min_counts` or `max_counts` is given
-		without `signals`, if `target_idx` is out of range, or if `n_loci` is
-		less than 1.
+		without `signals`, if `target_idx` is out of range, if `n_loci` is
+		less than 1, or if `n_jobs` is not an integer of at least 1.
 	"""
 
 	if n_loci is not None and n_loci < 1:
 		raise ValueError("n_loci must be at least 1 or None.")
 
+	if isinstance(n_jobs, bool) or not isinstance(n_jobs, (int,
+			numpy.integer)) or n_jobs < 1:
+		raise ValueError("n_jobs must be an integer of at least 1.")
+
+	signal_paths, in_signal_paths = signals, in_signals
 	signals = _load_signals(signals)
 	in_signals = _load_signals(in_signals)
 
@@ -1004,6 +1680,35 @@ def extract_loci(
 		and (in_signals is None or in_values is not None)
 		and mids.dtype == numpy.int64)
 
+	# The bigWigs given as paths are read by _BigWigFile, on n_jobs threads,
+	# when at least _BIGWIG_MIN_WINDOWS loci can be kept. The target of a
+	# count filter is read in the loop with pybigtools, since it decides which
+	# loci are kept.
+	integer_loci = (pandas.api.types.is_integer_dtype(loci['start']) and
+		pandas.api.types.is_integer_dtype(loci['end']))
+	out_readers = _open_bigwig_files(signal_paths, signals, out_values,
+		n_max if integer_loci else 0)
+	in_readers = _open_bigwig_files(in_signal_paths, in_signals, in_values,
+		n_max if integer_loci else 0)
+	if count_filter and out_readers is not None:
+		out_readers[target_idx] = None
+
+	readers = [reader for reader in (out_readers or []) + (in_readers or [])
+		if reader is not None]
+
+	# When the loop reads the signals, those with a _BigWigFile are skipped
+	# for a locus on a chromosome that every _BigWigFile's file has and are
+	# read after the loop, for the kept loci only. A locus on another
+	# chromosome is read in the loop, so that its warnings keep their order.
+	loop_readers = len(readers) > 0 and not defer and not vectorized
+	if loop_readers:
+		out_loop = _signals_read_in_loop(signals, out_readers)
+		in_loop = _signals_read_in_loop(in_signals, in_readers)
+		readable = numpy.array([all(name in reader.chroms for reader in
+			readers) for name in names], dtype=bool)
+	else:
+		readable = numpy.zeros(len(names), dtype=bool)
+
 	if vectorized:
 		n_remaining = len(idxs)
 		idxs = idxs[:n_loci]
@@ -1015,10 +1720,11 @@ def extract_loci(
 			progress.update(len(idxs))
 	else:
 		loci_iter = zip(idxs.tolist(), numpy.array(names, dtype=object)[
-			codes[idxs]].tolist(), mids[idxs].tolist())
+			codes[idxs]].tolist(), mids[idxs].tolist(), readable[
+			codes[idxs]].tolist())
 
-		for idx, chrom, mid in tqdm(loci_iter, total=len(idxs), disable=d,
-			desc=desc):
+		for idx, chrom, mid, deferred in tqdm(loci_iter, total=len(idxs),
+			disable=d, desc=desc):
 			# Extract a window of signal using the output size
 			start = mid - out_width - max_jitter
 			end = mid + out_width + max_jitter + (out_window % 2)
@@ -1029,8 +1735,8 @@ def extract_loci(
 						end)
 				elif not defer:
 					signal = out_values[len(seqs)]
-					_write_locus_signal(signals, str(chrom), start, end, signal,
-						out_scratch)
+					_write_locus_signal(out_loop if deferred else signals,
+						str(chrom), start, end, signal, out_scratch)
 
 					# The counts are summed after NaN and infinities are
 					# replaced.
@@ -1058,8 +1764,8 @@ def extract_loci(
 						start, end)
 					in_signals_.append(in_signal)
 				elif not defer:
-					_write_locus_signal(in_signals, str(chrom), start, end,
-						in_values[len(seqs)], in_scratch)
+					_write_locus_signal(in_loop if deferred else in_signals,
+						str(chrom), start, end, in_values[len(seqs)], in_scratch)
 
 			# Extract a window of sequence using the input size. The windows
 			# of a fasta opened from a path are read together after the loop.
@@ -1084,25 +1790,37 @@ def extract_loci(
 
 	# The chromosome, as an index into names, and the midpoint of each kept
 	# locus, in order, for the reads made after the loop.
-	if defer or vectorized:
+	if defer or vectorized or loop_readers:
 		kept = idxs if vectorized else numpy.flatnonzero(kept_mask)
 		window_codes, window_mids = codes[kept], mids[kept].astype(numpy.int64)
 		del kept
 
+	# After the loop, every signal is read when the loop read none, and
+	# otherwise the signals with a _BigWigFile are read for the kept loci on
+	# chromosomes that every _BigWigFile's file has.
+	rows, out_after, in_after = None, signals, in_signals
+	if loop_readers:
+		rows = numpy.flatnonzero(readable[window_codes])
+		window_codes, window_mids = window_codes[rows], window_mids[rows]
+		out_after = _signals_read_after_loop(signals, out_readers)
+		in_after = _signals_read_after_loop(in_signals, in_readers)
+
 	# The failed reads are warned about in the order the loop would have
 	# made them: by locus, then signals before in_signals, then by signal.
-	if defer and len(window_mids) > 0:
+	if (defer or loop_readers) and len(window_mids) > 0:
 		failures = []
 
-		if signals is not None:
-			failures += _read_signal_windows(signals, window_codes,
+		if out_after is not None:
+			failures += _read_bigwig_files(out_after, out_readers, window_codes,
 				window_mids - out_width - max_jitter,
-				out_window + 2 * max_jitter, out_values, kind=0, names=names)
+				out_window + 2 * max_jitter, out_values, names, rows=rows,
+				kind=0, n_jobs=n_jobs)
 
-		if in_signals is not None:
-			failures += _read_signal_windows(in_signals, window_codes,
+		if in_after is not None:
+			failures += _read_bigwig_files(in_after, in_readers, window_codes,
 				window_mids - in_width - max_jitter,
-				in_window + 2 * max_jitter, in_values, kind=1, names=names)
+				in_window + 2 * max_jitter, in_values, names, rows=rows,
+				kind=1, n_jobs=n_jobs)
 
 		for _, _, _, chrom, start, end in sorted(failures):
 			warnings.warn(f"{chrom} {start} {end} not valid bigwig indexes. "
@@ -1121,8 +1839,8 @@ def extract_loci(
 		finally:
 			sequences.close()
 
-	del codes, mids, idxs
-	if defer or vectorized:
+	del codes, mids, idxs, rows, readers
+	if defer or vectorized or loop_readers:
 		del window_codes, window_mids
 
 	if len(seqs) == 0:
