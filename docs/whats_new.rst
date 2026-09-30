@@ -12,6 +12,8 @@ Version 1.5.1 (unreleased)
 Claude Code skill
 -----------------
 
+	- ``references/io-loci.md`` follows the ``extract_loci`` changes below: a locus on a chromosome missing from the FASTA, and an empty result, raise ``ValueError``; the mask has one entry per locus under ``n_loci``; the count thresholds are inclusive and require ``signals``; exclusion regions are matched by 100bp chunk and ignored on chromosomes the FASTA lacks; and it gives the bounds of an odd window and says that ``out_window`` is unused without ``signals``.
+
 	- The variant-effect reference no longer says that ``insertion_effect`` applies insertions one at a time in a loop, which stopped being true when the function was rewritten below. It says instead what happens to several insertions at one position: all are made, with the last one given ending up first.
 
 	- The ersatz notes in ``SKILL.md`` and ``references/motif-effects.md`` no longer say that ``dinucleotide_shuffle`` rejects unknown characters outright; they give ``allow_N=True`` as the way to shuffle them. The third footgun in ``references/deep_lift_shap.md`` gains the route for attributing a sequence that contains them, ``only_warn=True`` with ``references=partial(dinucleotide_shuffle, allow_N=True)``.
@@ -20,6 +22,36 @@ ersatz
 ------
 
 	- ``dinucleotide_shuffle`` accepts unknown characters, encoded as all-zero columns, when given ``allow_N=True``. Each is shuffled as a fifth character, so every shuffle keeps the number of unknown characters and the count of every dinucleotide, including those that contain one, and a contiguous run of them such as an assembly gap stays one run but moves with the shuffle. Passing the flag on to validation alone would not have been enough: the transition matrix is built from ``X.argmax(axis=0)``, which reads an all-zero column as the first character of the alphabet, so every unknown character would have been shuffled as an ``A`` and come out as one. A 30bp gap in a 300bp sequence then raised the ``AA`` count from 23 to 53. The default, ``allow_N=False``, keeps rejecting unknown characters, and the shuffles of a sequence without any are unchanged. Thanks @Al-Murphy!
+
+io
+--
+
+	- ``extract_loci`` no longer keeps a locus whose odd window runs one base off the end of its chromosome. A window of size ``w`` is ``[mid - w // 2, mid + w // 2 + w % 2)``, but the chromosome-end check left out the ``w % 2``, so such a window passed the check and came back one base short. With other loci alongside it, stacking raised ``ValueError: all input arrays must have the same shape``; alone, it was returned short. This affected an odd ``in_window``, and an odd ``out_window`` with bigWig or dict signals. A bigWig signal did not crash, since pybigtools pads past the end of a chromosome with NaN, but it kept the locus with a zero at the missing base.
+
+	- The mask returned by ``extract_loci(return_mask=True)`` now has one entry per locus when ``n_loci`` is set. Loci after the cap was reached are ``False``. The mask used to stop at the last locus examined, so indexing the loci with it, as the docstring describes, raised an ``IndexError``.
+
+	- ``exclusion_lists`` treats the ends of regions and windows as exclusive. A region or window ending at a multiple of 100 used to reach into the next 100bp chunk, so the region ``chr7 100 200`` also removed loci whose windows lay entirely in ``chr7 200 299``. A region with ``end <= start`` covers no base, where it used to mark the chunk containing its start. Regions on chromosomes that are not in ``sequences`` are skipped rather than raising ``KeyError``, so a genome-wide exclusion list, such as one naming ``chrM`` or unplaced contigs, can be used with a FASTA of part of the genome. Some loci that were removed before are now kept.
+
+	- With ``in_signals`` but no ``signals``, ``out_window`` no longer decides which loci fit on their chromosomes. No output window is extracted in that case, but whenever ``out_window`` exceeded ``in_window`` it still dropped loci within ``out_window // 2`` of a chromosome end; with the default ``out_window=1000``, that was every locus on a chromosome shorter than 1kbp.
+
+	- ``extract_loci`` raises a ``ValueError`` that names the chromosomes when a locus is on a chromosome that is not in ``sequences``, which used to be a bare ``KeyError``. The usual cause is a naming mismatch such as ``chr1`` against ``1``; when the chromosome is absent from the FASTA, ``chroms`` keeps only the loci on chromosomes it has. It also raises a ``ValueError`` saying why loci are removed when none remain after filtering, which used to fail inside ``numpy.stack`` with ``need at least one array to stack``.
+
+	- ``extract_loci`` validates its thresholds. ``min_counts`` or ``max_counts`` without ``signals`` raises a ``ValueError``; they used to be silently ignored. A ``target_idx`` outside the range of ``signals`` raises a ``ValueError`` rather than an ``IndexError``. ``n_loci`` below 1 raises a ``ValueError``; ``n_loci=0`` used to return every locus. Both thresholds are inclusive, as before, and the docstrings of ``min_counts`` and ``max_counts`` now say that the counts are those of ``signals[target_idx]`` rather than of every signal.
+
+	- Dictionary signals are zero-filled the way bigWigs are. A chromosome missing from the dictionary gives zeros and a ``TangermemeWarning``, where it raised ``KeyError``, and an array shorter than its chromosome in ``sequences`` is padded with zeros rather than coming back short.
+
+	- ``extract_loci`` accepts a ``pathlib.Path`` or other ``os.PathLike`` wherever it accepts a filename, in ``loci``, ``sequences``, ``signals``, ``in_signals`` and ``exclusion_lists``. It accepts bigWigs already opened with ``pybigtools.open`` in ``signals`` and ``in_signals``, and leaves them open. It reads a ``pyfaidx.Fasta`` opened with ``as_raw=True``, which returns strings and used to raise ``AttributeError: 'str' object has no attribute 'seq'``. The keys of dictionary ``sequences`` and signals are coerced to strings, like the chromosome names of the loci, so integer keys work.
+
+	- A bare filename or dictionary passed as ``signals`` or ``in_signals`` raises a ``ValueError`` asking for a list. It used to be iterated over, opening each character or chromosome name as a bigWig, and fail with ``Invalid file type``.
+
+	- The sequences returned by ``extract_loci`` are C-contiguous. They used to keep the layout of the transposed view that ``one_hot_encode`` returns, with strides ``(4 * L, 1, 4)``, so ``.view`` raised a ``RuntimeError`` on them. The values are unchanged.
+
+	- ``extract_loci``'s return annotation is ``torch.Tensor | list[torch.Tensor]``, which is what it returns: the sequences alone, or a list of the sequences followed by the signals, the input signals and the mask that were asked for. It was annotated as ``tuple``.
+
+utils
+-----
+
+	- ``one_hot_encode`` accepts a tuple ``alphabet``, which its signature already allowed and which raised ``TypeError: encoding without a string argument``. Its docstring no longer lists a set, whose characters have no order, and says that a character in neither ``alphabet`` nor ``ignore`` raises a ``ValueError`` rather than being ignored.
 
 variant_effect
 --------------
@@ -30,6 +62,8 @@ variant_effect
 
 Documentation
 -------------
+
+	- The ``alphabet`` parameters of ``insert``, ``substitute``, ``multisubstitute``, ``marginalize``, ``space``, ``greedy_substitution``, ``beam_substitution`` and ``greedy_marginalize`` no longer say that characters outside the alphabet are ignored. A character of a string motif that is not in the alphabet raises a ``ValueError`` in each of them. The exceptions are the characters in ``ignore`` for ``substitute`` and ``multisubstitute``, and ``N`` for ``marginalize``, ``space`` and the three design functions; ``insert`` has none and rejects an ``N`` too. These parameters, and those of ``characters`` and ``one_hot_to_fasta``, no longer list a set, whose characters have no order and which ``characters`` cannot index. The design functions no longer say that ``alphabet`` goes unused for a one-hot encoded motif, since they take motifs only as strings, and ``marginalize`` and ``space`` say that the length of ``alphabet`` is checked against ``X`` either way.
 
 	- The first ``dinucleotide_shuffle`` example in the README printed two shuffles that ``dinucleotide_shuffle(seq, random_state=0)`` does not return. It now shows the two it does.
 

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 import warnings
 
 import numpy
@@ -33,10 +34,17 @@ def _load_exclusion_zones(chrom_lengths, exclusion_lists):
 		exclusion_list = _interleave_loci(exclusion_lists)
 
 		for _, (chrom, start, end) in exclusion_list.iterrows():
-			start = start // 100
-			end = end // 100 + 1
+			# A region on a chromosome absent from the sequences cannot
+			# overlap a locus that can be extracted.
+			if chrom not in exclusion_zones:
+				continue
 
-			exclusion_zones[chrom][start:end] = True
+			# Ends are exclusive, so the last base covered is end - 1 and a
+			# region with end <= start covers no base.
+			if end <= start:
+				continue
+
+			exclusion_zones[chrom][start // 100:(end - 1) // 100 + 1] = True
 		
 		return exclusion_zones
 
@@ -90,7 +98,7 @@ def _interleave_loci(loci, chroms=None, summits=False):
 
 		chroms = [str(chrom) for chrom in chroms]
 
-	if isinstance(loci, (str, pandas.DataFrame)):
+	if isinstance(loci, (str, os.PathLike, pandas.DataFrame)):
 		loci = [loci]
 	elif not isinstance(loci, (list, tuple)):
 		raise ValueError("Provided loci must be a string or pandas " +
@@ -104,7 +112,7 @@ def _interleave_loci(loci, chroms=None, summits=False):
 	loci_dfs = []
 	for i, df in enumerate(loci):
 		# Extract the relevant columns from the dataframes
-		if isinstance(df, str):
+		if isinstance(df, (str, os.PathLike)):
 			df = pandas.read_csv(df, sep='\t', usecols=cols,
 				header=None, index_col=False, names=names)
 		elif isinstance(df, pandas.DataFrame):
@@ -149,16 +157,19 @@ def _interleave_loci(loci, chroms=None, summits=False):
 def _load_signals(signals):
 	"""An internal function for loading signals.
 
-	The passed in signals must be a list but can either be a list of strings,
-	which are interpreted as strings for bigwig files that should be opened,
-	or dictionaries where the keys are chromosome names and the values are
-	numpy arrays of values across the chromosome, which are kept as is.
+	The passed in signals must be a list but each element can be a string,
+	which is interpreted as the filename of a bigwig file to open, a bigwig
+	file already opened with `pybigtools.open`, which is used as is and left
+	open, or a dictionary where the keys are chromosome names and the values
+	are numpy arrays of values across the chromosome. The keys of a dictionary
+	are coerced to strings so that they match the chromosome names of the loci.
 
 
 	Parameters
 	----------
-	signals: list of strings or dicts or None
-		A list of strings for bigwig files or dictionaries of numpy arrays.
+	signals: list of strings, pybigtools.BBIRead objects, or dicts, or None
+		A list of filenames of bigwig files, opened bigwig files, or
+		dictionaries of numpy arrays.
 
 
 	Returns
@@ -171,15 +182,23 @@ def _load_signals(signals):
 	if signals is None:
 		return None
 
+	if not isinstance(signals, (list, tuple)):
+		raise ValueError("Signals must be a list or tuple, even when there " +
+			"is only one.")
+
 	_signals = []
 	for i, signal in enumerate(signals):
-		if isinstance(signal, str):
-			signal = pybigtools.open(signal)
+		if isinstance(signal, (str, os.PathLike)):
+			signal = pybigtools.open(os.fspath(signal))
+		elif isinstance(signal, pybigtools.BBIRead):
+			pass
 		elif not isinstance(signal, dict):
-			raise ValueError("Signals must either be a list of strings " +
-				"or a list of dictionaries.")
+			raise ValueError("Signals must either be filenames, bigWigs " +
+				"opened with pybigtools, or dictionaries.")
 		elif not isinstance(list(signal.values())[0], numpy.ndarray):
 			raise ValueError("Values in dictionaries must be numpy.ndarrays.")
+		else:
+			signal = {str(key): value for key, value in signal.items()}
 
 		_signals.append(signal)
 
@@ -229,8 +248,20 @@ def _extract_locus_signal(signals, chrom, start, end):
 
 	values = []
 	for i, signal in enumerate(signals):
+		# A dict is zero-filled where it has no values, as pybigtools is:
+		# a missing chromosome gives zeros and a warning, and positions past
+		# the end of the array are NaN in pybigtools and so become zero.
 		if isinstance(signal, dict):
-			values_ = numpy.array(signal[chrom][start:end], dtype=numpy.float32)
+			if chrom not in signal:
+				warnings.warn(f"{chrom} is not in the signal dictionary. "
+					"Using zeros instead.", TangermemeWarning, stacklevel=2)
+				values_ = numpy.zeros(end-start, dtype=numpy.float32)
+			else:
+				values_ = numpy.array(signal[chrom][start:end],
+					dtype=numpy.float32)
+
+				if len(values_) < end - start:
+					values_ = numpy.pad(values_, (0, end - start - len(values_)))
 		else:
 			try:
 				values_ = numpy.array(signal.values(chrom, start, end), dtype=numpy.float32)
@@ -247,8 +278,8 @@ def _extract_locus_signal(signals, chrom, start, end):
 
 
 def extract_loci(
-	loci: str | list[str] | pandas.DataFrame | list[pandas.DataFrame],
-	sequences: str | pyfaidx.Fasta | dict,
+	loci: str | os.PathLike | pandas.DataFrame | list,
+	sequences: str | os.PathLike | pyfaidx.Fasta | dict,
 	signals: list | None = None,
 	in_signals: list | None = None,
 	chroms: list[str] | None = None,
@@ -260,12 +291,12 @@ def extract_loci(
 	target_idx: int = 0,
 	n_loci: int | None = None,
 	summits: bool = False,
-	alphabet: list[str] = ['A', 'C', 'G', 'T'],
+	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
 	ignore: list[str] = ['N'],
-	exclusion_lists: str | pandas.DataFrame | list | None = None,
+	exclusion_lists: str | os.PathLike | pandas.DataFrame | list | None = None,
 	return_mask: bool = False,
 	verbose: bool = False,
-) -> tuple:
+) -> torch.Tensor | list[torch.Tensor]:
 	"""Extract sequence and signal information for each provided locus.
 
 	This function will take in a set of loci, sequences, and optionally signals,
@@ -280,6 +311,9 @@ def extract_loci(
 	a window of size `out_window` will be extracted from each of the `signals`
 	files if provided. These windows are centered at the middle of the provided
 	regions but will all be of the same size, regardless of the size of the peak.
+	The middle of a locus is `mid = start + (end - start) // 2`, and a window
+	of size `w` covers `[mid - w // 2, mid + w // 2 + w % 2)`, so an odd window
+	reaches one base further to the right than to the left.
 
 	If `max_jitter` is provided, it will expand the windows for both the input
 	and output. The results are not actually jittered, but this expanded window
@@ -289,8 +323,9 @@ def extract_loci(
 	There are a few reasons that the returned elements may not match one-to-one
 	with the provided loci:
 
-		- (1) If any of the coordinates fall off the end of chromosomes after
-		  accounting for jitter, the locus will be removed.
+		- (1) If the input window, or the output window when `signals` is
+		  given, falls off either end of its chromosome after accounting for
+		  jitter, the locus will be removed.
 
 		- (2) If any of the loci fall on chromosomes not in a provided list,
 		  they will be removed.
@@ -298,44 +333,66 @@ def extract_loci(
 		- (3) If min_counts or max_counts are specified and the locus has a
 		  number of counts not in those boundaries, the locus will be removed.
 
+		- (4) If the windows overlap an exclusion region, as described below,
+		  the locus will be removed.
+
 	If exclusion lists are provided, they will be used to filter out loci that
 	fall in 100bp chunks that also include any of the regions in any of the
-	exclusion lists. For example, if one of the exclusion lists has an element
-	that is
+	exclusion lists. Ends are exclusive for both the regions and the windows.
+	For example, if one of the exclusion lists has an element that is
 
 		chr7    108    234
 
-	loci will be removed if any of their bp fall within chr7 100 300.
- 
+	loci will be removed if any of their bp fall within chr7 100 300, and an
+	element `chr7 100 200` removes loci with any bp in chr7 100 200 but not
+	those starting at 200. Regions with `end <= start` cover no bp, and regions
+	on chromosomes that are not in `sequences` are ignored.
+
+	A ValueError is raised when a locus is on a chromosome that is not in
+	`sequences`, since this usually means that the chromosome names of the
+	loci and the sequences do not match, and when no loci remain after
+	filtering. Use `chroms` to restrict the loci to the chromosomes in
+	`sequences`.
+
 
 	Parameters
 	----------
-	loci: str or pandas.DataFrame or list/tuple of such
+	loci: str, os.PathLike, pandas.DataFrame, or list/tuple of such
 		Either the path to a bed file or a pandas DataFrame object containing
 		three columns: the chromosome, the start, and the end, of each locus
 		to train on. The three columns are taken positionally regardless of
 		what they are named, and the chromosome column is coerced to a string
 		so that it matches the record names used by the sequences.
-		Alternatively, a list or tuple of strings/DataFrames where the
+		Alternatively, a list or tuple of paths/DataFrames where the
 		intention is to train on the interleaved concatenation, i.e., when you
 		want to train on peaks and negatives.
 
-	sequences: str or dictionary
-		Either the path to a fasta file to read from or a dictionary where the
-		keys are the unique set of chromosomes and the values are one-hot
-		encoded sequences as numpy arrays or memory maps.
+	sequences: str, os.PathLike, pyfaidx.Fasta, or dictionary
+		Either the path to a fasta file to read from, a pyfaidx.Fasta object,
+		or a dictionary where the keys are the unique set of chromosomes and
+		the values are one-hot encoded sequences of shape (len(alphabet),
+		chromosome length) as numpy arrays, memory maps, or torch tensors. A
+		fasta file opened from a path is closed before returning; a
+		pyfaidx.Fasta object is left open. The keys of a dictionary are
+		coerced to strings, and the returned sequences have the dtype of its
+		values.
 
-	signals: list of strs or list of dictionaries or None, optional
-		A list of filepaths to bigwig files, where each filepath will be read
-		using pybigtools, or a list of dictionaries where the keys are the same
-		set of unique chromosomes and the values are numpy arrays or memory
-		maps. If None, no signal tensor is returned. Default is None.
+	signals: list or None, optional
+		A list whose elements are each a path to a bigwig file, which will be
+		read using pybigtools, a bigwig file already opened with
+		`pybigtools.open`, which is left open, or a dictionary where the keys
+		are chromosomes and the values are numpy arrays or memory maps of the
+		signal across each chromosome. The keys of a dictionary are coerced to
+		strings. A chromosome missing from a bigwig or a dictionary gives zeros
+		and a TangermemeWarning, positions past the end of the chromosome or
+		array give zeros, NaN values become zero, and infinities become the
+		largest finite float32 of the same sign. If None, no signal tensor is
+		returned. Default is None.
 
-	in_signals: list of strs or list of dictionaries or None, optional
-		A list of filepaths to bigwig files, where each filepath will be read
-		using pybigtools, or a list of dictionaries where the keys are the same
-		set of unique chromosomes and the values are numpy arrays or memory
-		maps. If None, no tensor is returned. Default is None.
+	in_signals: list or None, optional
+		The same as `signals`, but extracted using the input window rather
+		than the output window. If None, no tensor is returned. Default is
+		None.
 
 	chroms: list or None, optional
 		A set of chromosomes to extract loci from. Loci in other chromosomes
@@ -347,32 +404,38 @@ def extract_loci(
 		The input window size. Default is 2114.
 
 	out_window: int, optional
-		The output window size. Default is 1000.
+		The output window size, used only for `signals`. When `signals` is
+		None it has no effect, including on which loci fit on their
+		chromosomes. Default is 1000.
 
 	max_jitter: int, optional
 		The maximum amount of jitter to add, in either direction, to the
 		midpoints that are passed in. Default is 0.
 
 	min_counts: float or None, optional
-		The minimum number of counts, summed across the length of each example
-		and across all tasks, needed to be kept. If None, no minimum. Default 
+		The minimum number of counts, summed across the output window of
+		`signals[target_idx]`, needed to be kept. A locus with exactly this
+		many counts is kept. Requires `signals`. If None, no minimum. Default
 		is None.
 
 	max_counts: float or None, optional
-		The maximum number of counts, summed across the length of each example
-		and across all tasks, needed to be kept. If None, no maximum. Default 
-		is None.  
+		The maximum number of counts, summed across the output window of
+		`signals[target_idx]`, needed to be kept. A locus with exactly this
+		many counts is kept. Requires `signals`. If None, no maximum. Default
+		is None.
 
 	target_idx: int, optional
-		When specifying `min_counts` or `max_counts`, the single `signal`
-		file to use when determining if a region has a number of counts in
-		that range. Default is 0.
+		When specifying `min_counts` or `max_counts`, the index into `signals`
+		of the single signal to use when determining if a region has a number
+		of counts in that range. Negative values index from the end, and a
+		value out of range raises a ValueError. Default is 0.
 
 	n_loci: int or None, optional
-		A cap on the number of loci to return. Note that this is not the
-		number of loci that are considered. The difference is that some
-		loci may be filtered out for various reasons, and those are not
-		counted towards the total. If None, no cap. Default is None.
+		A cap on the number of loci to return, which must be at least 1. Note
+		that this is not the number of loci that are considered. The
+		difference is that some loci may be filtered out for various reasons,
+		and those are not counted towards the total. If None, no cap. Default
+		is None.
 
 	summits: bool, optional
 		Whether to return a region centered around the summit instead of the center
@@ -380,12 +443,13 @@ def extract_loci(
 		to the start to get the center of the window, and so the data must be in 
 		narrowPeak format.
 
-	alphabet : set or tuple or list
+	alphabet : list, tuple, or str
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
 		the returned tensor will have a 1 at index 0 if the character was 'A'.
-		Characters outside the alphabet are ignored and none of the indexes are
-		set to 1. Default is ['A', 'C', 'G', 'T'].
+		The fasta sequence is upper-cased before encoding. A character that is
+		in neither `alphabet` nor `ignore` raises a ValueError. Only used when
+		`sequences` is a fasta file. Default is ['A', 'C', 'G', 'T'].
 
 	ignore: list, optional
 		A list of characters to ignore in the sequence, meaning that no bits
@@ -393,16 +457,17 @@ def extract_loci(
 		sum across characters is equal to 1 for all positions except those
 		where the original sequence is in this list. Default is ['N'].
 
-	exclusion_lists: str, pandas.DataFrame, list, or None, optional
+	exclusion_lists: str, os.PathLike, pandas.DataFrame, list, or None, optional
 		Regions where overlapping loci should be filtered out, given either as a
 		filename to a BED-formatted file, a pandas DataFrame in bed-format, or a
 		list of either. If None, no filtering is performed based on exclusion
 		zones. Default is None.
 
 	return_mask: bool, optional
-		Whether to return a tensor containing whether each element in the provided
-		loci have been filtered out because of falling off the edge of chromosomes
-		or the signal not falling in the specified boundaries. Default is False.
+		Whether to return a tensor with one entry for each locus remaining after
+		filtering by `chroms`, in the interleaved order, which is False when the
+		locus was removed for any other reason or was not reached before the
+		`n_loci` cap. Default is False.
 
 	verbose: bool, optional
 		Whether to display a progress bar while loading. Default is False.
@@ -410,9 +475,11 @@ def extract_loci(
 
 	Returns
 	-------
-	seqs: torch.tensor, shape=(n, 4, in_window+2*max_jitter)
+	seqs: torch.tensor, shape=(n, len(alphabet), in_window+2*max_jitter)
 		The extracted sequences in the same order as the loci in the locus
-		file after optional filtering by chromosome.
+		file after optional filtering by chromosome, as a contiguous tensor of
+		dtype int8, or of the dtype of the values of `sequences` when it is a
+		dictionary.
 
 	signals: torch.tensor, shape=(n, len(signals), out_window+2*max_jitter)
 		The extracted signals where the first dimension is in the same order
@@ -427,25 +494,50 @@ def extract_loci(
 		If no in signal files are given, this is not returned.
 
 	kept_mask: torch.tensor, shape=(n0,), dtype=bool
-		A boolean vector of length equal to the number of pre-filtered peaks, with
-		entries being True if they were kept and False if they were filtered out.
-		Applying this mask to the complete set of interleaved peaks will yield
-		the returned values. Only returned if `return_mask=True`.
+		A boolean vector of length equal to the number of peaks remaining after
+		filtering by `chroms`, with entries being True if they were kept and
+		False if they were filtered out. Applying this mask to the complete set
+		of interleaved peaks will yield the returned values. Only returned if
+		`return_mask=True`.
+
+	Raises
+	------
+	ValueError
+		If a locus is on a chromosome that is not in `sequences`, if no loci
+		remain after filtering, if `min_counts` or `max_counts` is given
+		without `signals`, if `target_idx` is out of range, or if `n_loci` is
+		less than 1.
 	"""
+
+	if n_loci is not None and n_loci < 1:
+		raise ValueError("n_loci must be at least 1 or None.")
+
+	signals = _load_signals(signals)
+	in_signals = _load_signals(in_signals)
+
+	if min_counts is not None or max_counts is not None:
+		if signals is None:
+			raise ValueError("min_counts and max_counts are measured on " +
+				"signals, so signals must be provided.")
+
+		if not -len(signals) <= target_idx < len(signals):
+			raise ValueError("target_idx {} is out of range for {} signals."
+				.format(target_idx, len(signals)))
 
 	seqs, signals_, in_signals_ = [], [], []
 	kept_mask = []
 	in_width, out_width = in_window // 2, out_window // 2
-	if signals is None and in_signals is None:
-		out_width = 0
+	out_extra = out_window % 2
+	if signals is None:
+		out_width, out_extra = 0, 0
 
 	# Extract the length of each chromosome. Track whether we opened the
 	# fasta ourselves so we know whether we are allowed to close it on
 	# exit; a caller-provided pyfaidx.Fasta is theirs to manage.
 	chrom_lengths = {}
 	opened_fasta = False
-	if isinstance(sequences, str):
-		sequences = pyfaidx.Fasta(sequences)
+	if isinstance(sequences, (str, os.PathLike)):
+		sequences = pyfaidx.Fasta(os.fspath(sequences))
 		opened_fasta = True
 		for key, value in sequences.items():
 			chrom_lengths[str(key)] = len(value)
@@ -453,8 +545,9 @@ def extract_loci(
 		for key, value in sequences.items():
 			chrom_lengths[str(key)] = len(value)
 	else:
+		sequences = {str(key): value for key, value in sequences.items()}
 		for key, value in sequences.items():
-			chrom_lengths[str(key)] = sequences[key].shape[-1]
+			chrom_lengths[key] = value.shape[-1]
 
 
 	# Create the exclusion zones from the exclusion lists, if provided
@@ -462,19 +555,30 @@ def extract_loci(
 
 	# Load the loci
 	loci = _interleave_loci(loci, chroms, summits=summits)
-	
-	signals = _load_signals(signals)
-	in_signals = _load_signals(in_signals)
-	
+
+	missing = sorted(set(loci['chrom']) - set(chrom_lengths))
+	if len(missing) > 0:
+		if opened_fasta:
+			sequences.close()
+
+		raise ValueError("Loci are on chromosomes that are not in the " +
+			"sequences: {}. Pass `chroms` to select the chromosomes to use."
+			.format(", ".join(missing)))
+
 	desc = "Loading Loci"
 	d = not verbose
 
-	max_width = max(in_width, out_width)
+	# Each window is [mid - w//2, mid + w//2 + w%2), so an odd window reaches
+	# one base further right than left. The locus is kept only if the union
+	# of the windows fits on the chromosome.
+	left = max(in_width, out_width) + max_jitter
+	right = max(in_width + in_window % 2, out_width + out_extra) + max_jitter
+
 	for chrom, start, end in tqdm(loci.values, disable=d, desc=desc):
 		mid = start + (end - start) // 2
 
-		start = mid - max(out_width, in_width) - max_jitter
-		end = mid + max(out_width, in_width) + max_jitter
+		start = mid - left
+		end = mid + right
 
 		# Does it fall off the end of a chromosome?
 		if start < 0 or end > chrom_lengths[str(chrom)]:
@@ -482,7 +586,7 @@ def extract_loci(
 			continue
 
 		if exclusion_zones is not None:
-			s, e = start // 100, end // 100 + 1
+			s, e = start // 100, (end - 1) // 100 + 1
 			if exclusion_zones[str(chrom)][s:e].any():
 				kept_mask.append(False)
 				continue
@@ -516,8 +620,13 @@ def extract_loci(
 		if isinstance(sequences, dict):
 			seq = sequences[str(chrom)][:, start:end]
 		else:
-			seq = one_hot_encode(sequences[str(chrom)][start:end].seq.upper(),
-				alphabet=alphabet, ignore=ignore)
+			# A Fasta opened with as_raw=True returns strings rather than
+			# pyfaidx.Sequence objects.
+			seq = sequences[str(chrom)][start:end]
+			if not isinstance(seq, str):
+				seq = seq.seq
+
+			seq = one_hot_encode(seq.upper(), alphabet=alphabet, ignore=ignore)
 
 		kept_mask.append(True)
 		seqs.append(seq)
@@ -527,9 +636,17 @@ def extract_loci(
 
 	if opened_fasta:
 		sequences.close()
-		
-	# Figure out how to format the outputs depending on the provided parameters
-	seqs = torch.from_numpy(numpy.stack(seqs))
+
+	if len(seqs) == 0:
+		raise ValueError("No loci remain after filtering. Loci are removed " +
+			"when they are not on a chromosome in `chroms`, when their windows " +
+			"run off the end of a chromosome, when they overlap an exclusion " +
+			"region, or when their counts fall outside min_counts/max_counts.")
+
+	# Figure out how to format the outputs depending on the provided parameters.
+	# numpy.stack keeps the memory layout of its inputs, and one_hot_encode
+	# returns a transposed view, so the stack is not contiguous by default.
+	seqs = torch.from_numpy(numpy.ascontiguousarray(numpy.stack(seqs)))
 	y_return = [seqs]
 
 	if signals is not None:
@@ -539,6 +656,9 @@ def extract_loci(
 		y_return.append(torch.from_numpy(numpy.stack(in_signals_)))
 		
 	if return_mask:
+		# Loci after the n_loci cap was reached were never examined and are
+		# not returned, so they are False.
+		kept_mask += [False] * (len(loci) - len(kept_mask))
 		kept_mask = torch.tensor(kept_mask)
 		y_return.append(kept_mask)
 
@@ -575,7 +695,7 @@ def one_hot_to_fasta(
 		A list of one header per sequence in `X`. If None, the numeric index of
 		each sequence is used as its header. Default is None.
 
-	alphabet: set or tuple or list, optional
+	alphabet: list or tuple, optional
 		A pre-defined alphabet where the ordering of the symbols is the same as
 		the index into the one-hot encoding. Default is ['A', 'C', 'G', 'T'].
 	"""

@@ -62,13 +62,14 @@ def insert(
 		middle of the motif occurs at the middle of the sequence. Default is
 		None.
 
-	alphabet: set or tuple or list, optional
+	alphabet: list or tuple, optional
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
 		the returned tensor will have a 1 at index 0 if the character was 'A'.
-		Characters outside the alphabet are ignored and none of the indexes are
-		set to 1. This is not necessary or used if a one-hot encoded tensor is
-		provided for the motif. Default is ['A', 'C', 'G', 'T'].
+		Every character of a string motif must be in the alphabet, and any
+		other character, including N, raises a ValueError. This is not
+		necessary or used if a one-hot encoded tensor is provided for the
+		motif. Default is ['A', 'C', 'G', 'T'].
 
 
 	Returns
@@ -149,13 +150,14 @@ def substitute(
 		middle of the motif occurs at the middle of the sequence. Default is 
 		None.
 
-	alphabet: set or tuple or list, optional
+	alphabet: list or tuple, optional
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
 		the returned tensor will have a 1 at index 0 if the character was 'A'.
-		Characters outside the alphabet are ignored and none of the indexes are
-		set to 1. This is not necessary or used if a one-hot encoded tensor is
-		provided for the motif. Default is ['A', 'C', 'G', 'T'].
+		A character of a string motif that is in neither `alphabet` nor
+		`ignore` raises a ValueError. This is not necessary or used if a
+		one-hot encoded tensor is provided for the motif. Default is
+		['A', 'C', 'G', 'T'].
 
 	ignore: set or tuple or list, optional
 		A set of characters indicating that the original value of the sequence
@@ -246,13 +248,14 @@ def multisubstitute(
 		full motif arrangement is centered such that its midpoint coincides
 		with the middle of the sequence. Default is None.
 
-	alphabet : set or tuple or list, optional
+	alphabet : list or tuple, optional
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
 		the returned tensor will have a 1 at index 0 if the character was 'A'.
-		Characters outside the alphabet are ignored and none of the indexes are
-		set to 1. This is not necessary or used if a one-hot encoded tensor is
-		provided for the motif. Default is ['A', 'C', 'G', 'T'].
+		A character of a string motif that is in neither `alphabet` nor
+		`ignore` raises a ValueError. This is not necessary or used if a
+		one-hot encoded tensor is provided for the motif. Default is
+		['A', 'C', 'G', 'T'].
 
 	ignore: set or tuple or list, optional
 		A set of characters indicating that the original value of the sequence

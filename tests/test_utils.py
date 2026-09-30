@@ -391,7 +391,9 @@ def test_one_hot_encode_ignore():
 	assert torch.all(seq_ohe == ohe)
 
 
-def test_one_hot_encode_alphabet():
+def test_one_hot_encode_alphabet_tuple():
+	# The signature allows a tuple, which used to raise TypeError: encoding
+	# without a string argument.
 	seq = 'ACGTA'
 	ohe = torch.tensor([
 		[1, 0, 0, 0, 1],
@@ -400,10 +402,13 @@ def test_one_hot_encode_alphabet():
 		[0, 0, 0, 1, 0],
 		[0, 0, 0, 0, 0]
 	])
-	seq_ohe = one_hot_encode(seq, alphabet=['A', 'C', 'G', 'T', 'Z'])
-	
+	seq_ohe = one_hot_encode(seq, alphabet=('A', 'C', 'G', 'T', 'Z'))
+
 	assert seq_ohe.dtype == torch.int8
 	assert seq_ohe.shape == (5, 5)
+	assert torch.all(seq_ohe == ohe)
+
+	seq_ohe = one_hot_encode(seq, alphabet='ACGTZ', ignore=('N',))
 	assert torch.all(seq_ohe == ohe)
 
 
