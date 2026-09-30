@@ -440,6 +440,21 @@ def extract_loci(
 		the returned values. Only returned if `return_mask=True`.
 	"""
 
+	if n_loci is not None and n_loci < 1:
+		raise ValueError("n_loci must be at least 1 or None.")
+
+	signals = _load_signals(signals)
+	in_signals = _load_signals(in_signals)
+
+	if min_counts is not None or max_counts is not None:
+		if signals is None:
+			raise ValueError("min_counts and max_counts are measured on " +
+				"signals, so signals must be provided.")
+
+		if not -len(signals) <= target_idx < len(signals):
+			raise ValueError("target_idx {} is out of range for {} signals."
+				.format(target_idx, len(signals)))
+
 	seqs, signals_, in_signals_ = [], [], []
 	kept_mask = []
 	in_width, out_width = in_window // 2, out_window // 2
@@ -470,10 +485,7 @@ def extract_loci(
 
 	# Load the loci
 	loci = _interleave_loci(loci, chroms, summits=summits)
-	
-	signals = _load_signals(signals)
-	in_signals = _load_signals(in_signals)
-	
+
 	desc = "Loading Loci"
 	d = not verbose
 

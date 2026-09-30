@@ -1032,6 +1032,52 @@ def test_extract_loci_seq_raises_sequences():
 		"tests/data/test.bed", "ACGTG")
 
 
+@pytest.mark.parametrize("n_loci", [0, -1])
+def test_extract_loci_raises_n_loci(n_loci):
+	# n_loci=0 used to return every locus, since the cap was only checked
+	# after a locus had been kept, and a negative cap was never reached.
+	with pytest.raises(ValueError, match="n_loci must be at least 1"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
+			n_loci=n_loci)
+
+
+@pytest.mark.parametrize("kwargs", [{'min_counts': 1}, {'max_counts': 1},
+	{'min_counts': 0, 'max_counts': 1}])
+def test_extract_loci_raises_counts_without_signals(kwargs):
+	# The counts are measured on signals, so without them the thresholds used
+	# to be ignored.
+	with pytest.raises(ValueError, match="signals must be provided"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
+			**kwargs)
+
+	# in_signals are not what the thresholds measure.
+	with pytest.raises(ValueError, match="signals must be provided"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
+			in_signals=["tests/data/test.bw"], **kwargs)
+
+
+@pytest.mark.parametrize("target_idx", [2, 5, -3])
+def test_extract_loci_raises_target_idx(target_idx):
+	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
+
+	with pytest.raises(ValueError, match="target_idx"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa", bw,
+			in_window=10, out_window=10, min_counts=1, target_idx=target_idx)
+
+
+def test_extract_loci_target_idx_negative():
+	# A negative target_idx indexes from the end, as for a list.
+	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
+
+	X0, y0 = extract_loci("tests/data/test.bed", "tests/data/test.fa", bw,
+		in_window=8, out_window=10, min_counts=7, target_idx=1)
+	X, y = extract_loci("tests/data/test.bed", "tests/data/test.fa", bw,
+		in_window=8, out_window=10, min_counts=7, target_idx=-1)
+
+	assert_array_almost_equal(X, X0)
+	assert_array_almost_equal(y, y0)
+
+
 def test_extract_loci_does_not_close_user_provided_fasta():
 	# When the caller passes a pre-opened pyfaidx.Fasta, extract_loci
 	# must not close it; the caller still owns the object and needs to
