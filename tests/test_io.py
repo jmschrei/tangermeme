@@ -4508,11 +4508,13 @@ def test_bigwig_file_inflate_unsupported_blocks(tmp_path, monkeypatch, mode):
 
 @pytest.mark.parametrize("mode", ['kernel', 'python'])
 def test_bigwig_file_short_read(pybigtools_bigwig, monkeypatch, mode):
-	# A read that stops halfway leaves unread the blocks it does not reach
-	# in full, and their windows go to pybigtools, on either path.
+	# A read that reports that it stopped halfway leaves unread the blocks
+	# it does not reach in full, and their windows go to pybigtools, on
+	# either path. The whole run is read, so a block past the reported end
+	# would decode if it were not left unread.
 	pread = tangermeme.io._pread_into
 	monkeypatch.setattr(tangermeme.io, '_pread_into', lambda fd, buffer,
-		offset: pread(fd, buffer[:len(buffer) // 2], offset))
+		offset: pread(fd, buffer, offset) // 2)
 	_inflate_mode(monkeypatch, mode, 0)
 
 	bw = pybigtools.open(str(pybigtools_bigwig))
