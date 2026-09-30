@@ -523,6 +523,38 @@ def test_load_signals_dict():
 	assert isinstance(bw[0], dict)
 
 
+def test_load_signals_mixed():
+	signal = {'chr1': numpy.zeros(6)}
+	bw = _load_signals(("tests/data/test.bw", signal))
+
+	assert isinstance(bw, list)
+	assert isinstance(bw[0], pybigtools.BBIRead)
+	assert isinstance(bw[1], dict)
+
+
+def test_load_signals_raises_not_list():
+	# A single filename or dict used to be iterated over, so each character
+	# or chromosome name was opened as a bigWig, which failed with "Invalid
+	# file type".
+	for signals in ("tests/data/test.bw", {'chr1': numpy.zeros(6)}):
+		with pytest.raises(ValueError, match="must be a list or tuple"):
+			_load_signals(signals)
+
+
+def test_load_signals_raises_type():
+	for signal in (numpy.zeros(6), torch.zeros(6), 5):
+		with pytest.raises(ValueError, match="Signals must either be"):
+			_load_signals([signal])
+
+
+def test_load_signals_raises_dict_values():
+	with pytest.raises(ValueError, match="must be numpy.ndarrays"):
+		_load_signals([{'chr1': [0.0, 1.0]}])
+
+	with pytest.raises(ValueError, match="must be numpy.ndarrays"):
+		_load_signals([{'chr1': torch.zeros(6)}])
+
+
 ##
 
 

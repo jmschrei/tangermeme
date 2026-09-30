@@ -179,6 +179,10 @@ def _load_signals(signals):
 	if signals is None:
 		return None
 
+	if not isinstance(signals, (list, tuple)):
+		raise ValueError("Signals must be a list or tuple, even when there " +
+			"is only one.")
+
 	_signals = []
 	for i, signal in enumerate(signals):
 		if isinstance(signal, str):
