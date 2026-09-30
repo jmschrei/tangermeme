@@ -486,6 +486,15 @@ def extract_loci(
 	# Load the loci
 	loci = _interleave_loci(loci, chroms, summits=summits)
 
+	missing = sorted(set(loci['chrom']) - set(chrom_lengths))
+	if len(missing) > 0:
+		if opened_fasta:
+			sequences.close()
+
+		raise ValueError("Loci are on chromosomes that are not in the " +
+			"sequences: {}. Pass `chroms` to select the chromosomes to use."
+			.format(", ".join(missing)))
+
 	desc = "Loading Loci"
 	d = not verbose
 
@@ -552,7 +561,13 @@ def extract_loci(
 
 	if opened_fasta:
 		sequences.close()
-		
+
+	if len(seqs) == 0:
+		raise ValueError("No loci remain after filtering. Loci are removed " +
+			"when they are not on a chromosome in `chroms`, when their windows " +
+			"run off the end of a chromosome, when they overlap an exclusion " +
+			"region, or when their counts fall outside min_counts/max_counts.")
+
 	# Figure out how to format the outputs depending on the provided parameters
 	seqs = torch.from_numpy(numpy.stack(seqs))
 	y_return = [seqs]

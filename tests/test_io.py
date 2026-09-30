@@ -1065,6 +1065,61 @@ def test_extract_loci_raises_target_idx(target_idx):
 			in_window=10, out_window=10, min_counts=1, target_idx=target_idx)
 
 
+@pytest.mark.parametrize("kwargs", [
+	{'chroms': ['chr7']},
+	{'in_window': 1000},
+	{'signals': ["tests/data/test.bw"], 'out_window': 10, 'min_counts': 1e6},
+	{'exclusion_lists': pandas.DataFrame({0: ['chr1', 'chr2'], 1: [0, 0],
+		2: [300, 300]})},
+])
+def test_extract_loci_raises_no_loci_remain(kwargs):
+	# Filtering away every locus used to fail inside numpy.stack with "need
+	# at least one array to stack".
+	kwargs = {'in_window': 10, **kwargs}
+
+	with pytest.raises(ValueError, match="No loci remain"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa", **kwargs)
+
+
+def test_extract_loci_raises_no_loci_remain_odd_window():
+	# A lone odd window running one base off the chromosome used to come back
+	# one base short, since there was nothing to stack it against.
+	loci = pandas.DataFrame({'chrom': ['chr2'], 'start': [201], 'end': [211]})
+
+	with pytest.raises(ValueError, match="No loci remain"):
+		extract_loci(loci, "tests/data/test.fa", in_window=11)
+
+
+def test_extract_loci_raises_no_loci_given():
+	loci = pandas.DataFrame({'chrom': [], 'start': [], 'end': []})
+
+	with pytest.raises(ValueError, match="No loci remain"):
+		extract_loci(loci, "tests/data/test.fa", in_window=10)
+
+
+def test_extract_loci_raises_chrom_not_in_sequences():
+	# A locus on a chromosome the sequences lack used to raise a bare
+	# KeyError. The error names every missing chromosome.
+	loci = pandas.DataFrame({
+		'chrom': ['chr1', 'chrM', 'chr2', 'chrUn_KI270302v1', 'chrM'],
+		'start': [10, 0, 25, 5, 30],
+		'end':   [30, 20, 55, 25, 50],
+	})
+
+	with pytest.raises(ValueError, match="chrM, chrUn_KI270302v1"):
+		extract_loci(loci, "tests/data/test.fa", in_window=10)
+
+	# Filtering them out with chroms is the remedy the message gives.
+	X = extract_loci(loci, "tests/data/test.fa", in_window=10,
+		chroms=['chr1', 'chr2'])
+	assert X.shape == (2, 4, 10)
+
+	# A naming mismatch between the loci and the FASTA is caught the same way.
+	with pytest.raises(ValueError, match="1, 2"):
+		extract_loci("tests/data/test_int.bed", "tests/data/test.fa",
+			in_window=10)
+
+
 def test_extract_loci_target_idx_negative():
 	# A negative target_idx indexes from the end, as for a list.
 	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
