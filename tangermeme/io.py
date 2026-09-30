@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import sys
 import mmap
+import ctypes
 import zlib
 import struct
 import operator
@@ -511,12 +512,21 @@ def _read_signal_windows(signals, chroms, starts, width, out, kind=0,
 	return failures
 
 
-def _nan_to_num_rows(values, block_size=2**20):
+# _nan_to_num_rows checks its blocks on up to n_jobs threads when there are
+# at least this many of them. Below that, starting the threads costs about as
+# much as checking the blocks.
+_NAN_TO_NUM_MIN_BLOCKS = 16
+
+
+def _nan_to_num_rows(values, block_size=2**20, n_jobs=1):
 	"""An internal function for applying numpy.nan_to_num in place.
 
 	The rows are processed in blocks of about `block_size` elements, so the
 	masks that numpy.nan_to_num makes stay small, and a block whose values are
 	all finite is skipped because numpy.nan_to_num would leave it unchanged.
+	The blocks do not overlap and numpy releases the GIL while it checks and
+	replaces them, so they are processed on up to `n_jobs` threads when there
+	are at least _NAN_TO_NUM_MIN_BLOCKS, with the same result.
 
 
 	Parameters
@@ -527,6 +537,9 @@ def _nan_to_num_rows(values, block_size=2**20):
 	block_size: int, optional
 		The approximate number of elements in each block. Default is 2**20.
 
+	n_jobs: int, optional
+		The largest number of threads to use. Default is 1.
+
 
 	Returns
 	-------
@@ -536,10 +549,19 @@ def _nan_to_num_rows(values, block_size=2**20):
 	"""
 
 	step = max(1, block_size // max(1, values[0].size))
-	for i in range(0, len(values), step):
+	blocks = range(0, len(values), step)
+
+	def nan_to_num_block(i):
 		block = values[i:i+step]
 		if not numpy.isfinite(block).all():
 			numpy.nan_to_num(block, copy=False)
+
+	if n_jobs > 1 and len(blocks) >= _NAN_TO_NUM_MIN_BLOCKS:
+		with ThreadPoolExecutor(min(n_jobs, len(blocks))) as pool:
+			list(pool.map(nan_to_num_block, blocks))
+	else:
+		for i in blocks:
+			nan_to_num_block(i)
 
 	return values
 
@@ -586,7 +608,6 @@ def _load_zlib_uncompress():
 	"""(uncompress, the dtype of a C unsigned long), or None."""
 
 	try:
-		import ctypes
 		import ctypes.util
 	except ImportError:
 		return None
@@ -1319,6 +1340,96 @@ def _read_bigwig_files(signals, readers, codes, starts, width, out, names,
 	return failures
 
 
+# A memory map read by at least this many windows has its page table entries
+# dropped on up to n_jobs threads before it is closed. Closing drops them on
+# the calling thread alone, which took 34-45 ms for the 1.8 GB of hg38 pages
+# that the 167,750 windows of the main benchmark map.
+_UNMAP_MIN_WINDOWS = 2048
+
+# The map is split into this many chunks per thread, since the pages that
+# were read are not spread evenly over the file.
+_UNMAP_CHUNKS_PER_JOB = 8
+
+_MADVISE = None
+
+
+def _madvise():
+	"""libc's madvise, called through ctypes, or None when it is not used.
+
+	ctypes releases the GIL during the call, whereas mmap.mmap.madvise holds
+	it, so calls from several threads would run one at a time. It is only used
+	on Linux, where MADV_DONTNEED on a shared file mapping drops the page table
+	entries of the range and leaves the file and the pages it holds as they
+	are.
+	"""
+
+	global _MADVISE
+	if _MADVISE is None:
+		_MADVISE = False
+		if sys.platform.startswith('linux') and hasattr(mmap, 'MADV_DONTNEED'):
+			try:
+				madvise = ctypes.CDLL(None, use_errno=True).madvise
+				madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t,
+					ctypes.c_int]
+				madvise.restype = ctypes.c_int
+				_MADVISE = madvise
+			except (OSError, AttributeError):
+				pass
+
+	return _MADVISE or None
+
+
+def _close_map(fasta_map, address, n_windows, n_jobs=1):
+	"""Close a read-only memory map of a file.
+
+	Closing unmaps the map, and the kernel drops the page table entry of
+	every page that was read, on the calling thread. When the map was read by
+	at least _UNMAP_MIN_WINDOWS windows and n_jobs is above 1, those entries
+	are first dropped with madvise(MADV_DONTNEED) on chunks of the map, on up
+	to n_jobs threads, so that the close has almost nothing left to do. The
+	file is not changed. The map is closed in every case, including when
+	madvise fails or raises.
+
+
+	Parameters
+	----------
+	fasta_map: mmap.mmap
+		The map, opened with access=mmap.ACCESS_READ. Nothing may still hold
+		a buffer of it.
+
+	address: int or None
+		The address of the first byte of the map, or None to close it
+		directly.
+
+	n_windows: int
+		The number of windows read from the map.
+
+	n_jobs: int, optional
+		The largest number of threads to use. Default is 1.
+	"""
+
+	try:
+		madvise = _madvise()
+		if (madvise is not None and address is not None and n_jobs > 1 and
+				n_windows >= _UNMAP_MIN_WINDOWS):
+			size, page = len(fasta_map), mmap.PAGESIZE
+			n_chunks = n_jobs * _UNMAP_CHUNKS_PER_JOB
+			step = -(-size // (n_chunks * page)) * page
+			chunks = [(address + s, min(step, size - s)) for s in range(0,
+				size, step)]
+
+			def drop(chunk):
+				madvise(chunk[0], chunk[1], mmap.MADV_DONTNEED)
+
+			try:
+				with ThreadPoolExecutor(min(n_jobs, len(chunks))) as pool:
+					list(pool.map(drop, chunks))
+			except (OSError, RuntimeError):
+				pass
+	finally:
+		fasta_map.close()
+
+
 def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
 	names=None, n_jobs=1):
 	"""Encode fasta windows from a memory map of the file, or return None.
@@ -1366,15 +1477,17 @@ def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
 		return None
 
 	X = numpy.empty((len(starts), n_characters, length), dtype=numpy.int8)
+	address = None
 	try:
 		data = numpy.frombuffer(fasta_map, dtype=numpy.uint8)
 		try:
+			address = data.ctypes.data
 			status = _one_hot_encode_fasta(X, data, starts, offsets,
 				line_bases, line_bytes, mapping, n_jobs=n_jobs)
 		finally:
 			del data
 	finally:
-		fasta_map.close()
+		_close_map(fasta_map, address, len(starts), n_jobs=n_jobs)
 
 	if status == -2:
 		return None
@@ -2010,14 +2123,16 @@ def extract_loci(
 		if out_values is None:
 			y_return.append(torch.from_numpy(numpy.stack(signals_)))
 		else:
-			out_values = _nan_to_num_rows(out_values[:len(seqs)])
+			out_values = _nan_to_num_rows(out_values[:len(seqs)],
+				n_jobs=n_jobs)
 			y_return.append(torch.from_numpy(out_values))
 
 	if in_signals is not None:
 		if in_values is None:
 			y_return.append(torch.from_numpy(numpy.stack(in_signals_)))
 		else:
-			in_values = _nan_to_num_rows(in_values[:len(seqs)])
+			in_values = _nan_to_num_rows(in_values[:len(seqs)],
+				n_jobs=n_jobs)
 			y_return.append(torch.from_numpy(in_values))
 		
 	if return_mask:

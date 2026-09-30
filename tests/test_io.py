@@ -4596,3 +4596,275 @@ def test_extract_loci_bigwig_reader_inflate_paths(reader_fasta,
 		assert counting.calls == []
 	else:
 		assert len(counting.calls) > 0
+
+
+###
+# The threaded nan_to_num (_nan_to_num_rows) and the threaded unmap
+# (_close_map)
+###
+
+
+class _RecordingPool(tangermeme.io.ThreadPoolExecutor):
+	"""A ThreadPoolExecutor that records how many workers each pool has."""
+
+	sizes = []
+
+	def __init__(self, max_workers=None, *args, **kwargs):
+		_RecordingPool.sizes.append(max_workers)
+		super().__init__(max_workers, *args, **kwargs)
+
+
+def _non_finite_rows(n, width):
+	# Rows of finite values with NaN of both signs and several payloads,
+	# both infinities and -0.0 scattered through them.
+	rng = numpy.random.default_rng(0)
+	values = rng.normal(size=(n, 2, width)).astype(numpy.float32)
+	bits = values.view(numpy.uint32)
+	flat, flat_bits = values.reshape(-1), bits.reshape(-1)
+	idxs = rng.choice(flat.size, size=flat.size // 5, replace=False)
+	for k, idx in enumerate(idxs):
+		kind = k % 6
+		if kind == 0:
+			flat[idx] = numpy.nan
+		elif kind == 1:
+			flat_bits[idx] = 0xFFC00000
+		elif kind == 2:
+			flat_bits[idx] = 0x7F800001 + k
+		elif kind == 3:
+			flat[idx] = numpy.inf
+		elif kind == 4:
+			flat[idx] = -numpy.inf
+		else:
+			flat[idx] = -0.0
+
+	# The first rows are all finite, so that some blocks are skipped.
+	values[:3] = 1.5
+	return values
+
+
+@pytest.mark.parametrize("n_jobs", [1, 2, 3, 8])
+@pytest.mark.parametrize("block_size", [1, 7, 40, 2**20])
+def test_nan_to_num_rows_threads_match_numpy(monkeypatch, n_jobs, block_size):
+	# Every block is replaced as numpy.nan_to_num replaces it, bit for bit,
+	# on any number of threads: NaN of any sign or payload becomes +0.0, an
+	# infinity the largest finite float32 of its sign, and -0.0 is kept.
+	monkeypatch.setattr(tangermeme.io, "_NAN_TO_NUM_MIN_BLOCKS", 1)
+	monkeypatch.setattr(tangermeme.io, "ThreadPoolExecutor", _RecordingPool)
+	monkeypatch.setattr(_RecordingPool, "sizes", [])
+
+	values = _non_finite_rows(23, 5)
+	expected = numpy.nan_to_num(values.copy())
+	out = tangermeme.io._nan_to_num_rows(values, block_size=block_size,
+		n_jobs=n_jobs)
+
+	assert out is values
+	assert values.tobytes() == expected.tobytes()
+	assert numpy.isfinite(values).all()
+
+	n_blocks = len(range(0, 23, max(1, block_size // 10)))
+	if n_jobs == 1:
+		assert _RecordingPool.sizes == []
+	else:
+		assert _RecordingPool.sizes == [min(n_jobs, n_blocks)]
+
+
+def test_nan_to_num_rows_few_blocks_are_serial(monkeypatch):
+	# Fewer blocks than _NAN_TO_NUM_MIN_BLOCKS are checked without threads.
+	monkeypatch.setattr(tangermeme.io, "ThreadPoolExecutor", _RecordingPool)
+	monkeypatch.setattr(_RecordingPool, "sizes", [])
+
+	n_min = tangermeme.io._NAN_TO_NUM_MIN_BLOCKS
+	for n_blocks, sizes in [(n_min - 1, []), (n_min, [8])]:
+		_RecordingPool.sizes = []
+		values = _non_finite_rows(n_blocks, 5)
+		expected = numpy.nan_to_num(values.copy())
+		tangermeme.io._nan_to_num_rows(values, block_size=10, n_jobs=8)
+		assert values.tobytes() == expected.tobytes()
+		assert _RecordingPool.sizes == sizes
+
+
+@pytest.mark.parametrize("n_jobs", [2, 8])
+def test_extract_loci_bigwig_nan_and_inf_threads(inf_bigwig, monkeypatch,
+	n_jobs):
+	# extract_loci passes n_jobs to _nan_to_num_rows for signals and
+	# in_signals, and the threaded replacement gives the bytes that one
+	# thread gives, blocks of one row each.
+	nan_to_num_rows = tangermeme.io._nan_to_num_rows
+	calls = []
+
+	def one_row_blocks(values, n_jobs=1):
+		calls.append(n_jobs)
+		return nan_to_num_rows(values, block_size=1, n_jobs=n_jobs)
+
+	monkeypatch.setattr(tangermeme.io, "_NAN_TO_NUM_MIN_BLOCKS", 1)
+	monkeypatch.setattr(tangermeme.io, "_nan_to_num_rows", one_row_blocks)
+
+	loci = pandas.DataFrame({0: ['chr1'] * 4, 1: [7, 43, 20, 45],
+		2: [17, 53, 30, 55]})
+	X1, y1, y_in1 = extract_loci(loci, "tests/data/test.fa", [inf_bigwig],
+		[inf_bigwig], in_window=6, out_window=10, n_jobs=1)
+	X, y, y_in = extract_loci(loci, "tests/data/test.fa", [inf_bigwig],
+		[inf_bigwig], in_window=6, out_window=10, n_jobs=n_jobs)
+
+	assert calls == [1, 1, n_jobs, n_jobs]
+	assert torch.equal(X, X1)
+	assert y.numpy().tobytes() == y1.numpy().tobytes()
+	assert y_in.numpy().tobytes() == y_in1.numpy().tobytes()
+
+	big = numpy.finfo(numpy.float32).max
+	assert_array_almost_equal(y[:2, 0], [[1, 1, 1, big, big, -big, -big, 2, 2,
+		2], [2, 2, 2, 2, 2, 2, 2, 0, 0, 0]])
+	assert numpy.isfinite(y.numpy()).all()
+	assert numpy.isfinite(y_in.numpy()).all()
+
+
+_linux_only = pytest.mark.skipif(not pathlib.Path("/proc/self/maps").exists()
+	or tangermeme.io._madvise() is None, reason="needs Linux madvise and "
+	"/proc/self/maps")
+
+
+def _recording_madvise(monkeypatch, fail=None):
+	# Record every madvise call, made through the real function unless
+	# `fail` is an exception to raise instead.
+	madvise = tangermeme.io._madvise()
+	calls = []
+
+	def recording(address, length, advice):
+		calls.append((address, length, advice))
+		if fail is not None:
+			raise fail
+
+		return madvise(address, length, advice)
+
+	monkeypatch.setattr(tangermeme.io, "_madvise", lambda: recording)
+	return calls
+
+
+def _unmap_genome(tmp_path, name, bad=False):
+	# About 31 KB, so that the map spans several pages and is split into
+	# several chunks, and one window in five, which still covers every base.
+	genome = {'chr1': 'ACGTNacgtnACGT' * 1500, 'chr2': 'TTGCA' * 1500}
+	if bad:
+		genome['chr2'] = genome['chr2'][:300] + 'Z' + genome['chr2'][301:]
+
+	path = str(tmp_path / name)
+	_write_fasta(path, genome, 11)
+	return genome, path, _every_window(genome, 9).iloc[::5]
+
+
+@_linux_only
+@pytest.mark.parametrize("n_jobs", [2, 3, 8])
+def test_extract_loci_unmap_threads(tmp_path, monkeypatch, n_jobs):
+	# A map read by at least _UNMAP_MIN_WINDOWS windows has its pages dropped
+	# with madvise(MADV_DONTNEED) in page-aligned chunks that cover the whole
+	# file, on up to n_jobs threads, before it is closed. The output is the
+	# one n_jobs=1 gives, and the file is unmapped on return.
+	import mmap
+	import threading
+
+	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise.fa")
+	X1 = extract_loci(loci, path, in_window=9, n_jobs=1)
+
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", 1)
+	monkeypatch.setattr(tangermeme.io, "ThreadPoolExecutor", _RecordingPool)
+	monkeypatch.setattr(_RecordingPool, "sizes", [])
+	calls = _recording_madvise(monkeypatch)
+	n_threads = threading.active_count()
+
+	X = extract_loci(loci, path, in_window=9, n_jobs=n_jobs)
+	assert torch.equal(X, X1)
+	assert torch.equal(X, _encode_windows(genome, loci, 9))
+	assert "genome_madvise.fa" not in _mapped_paths()
+	assert threading.active_count() == n_threads
+
+	size = pathlib.Path(path).stat().st_size
+	calls = sorted(calls)
+	assert len(calls) > 0
+	assert all(advice == mmap.MADV_DONTNEED for _, _, advice in calls)
+	assert all((a - calls[0][0]) % mmap.PAGESIZE == 0 for a, _, _ in calls)
+	assert all(a + n == b for (a, n, _), (b, _, _) in zip(calls, calls[1:]))
+	assert calls[-1][0] + calls[-1][1] - calls[0][0] == size
+	assert _RecordingPool.sizes == [min(n_jobs, len(calls))]
+
+
+@_linux_only
+def test_extract_loci_unmap_threads_on_error(tmp_path, monkeypatch):
+	# The pages are dropped and the map closed when the encoder finds a
+	# character that is in neither the alphabet nor `ignore`, and the error
+	# is the one n_jobs=1 raises.
+	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise_bad.fa",
+		bad=True)
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, path, in_window=9, n_jobs=1)
+
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", 1)
+	calls = _recording_madvise(monkeypatch)
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, path, in_window=9, n_jobs=4)
+
+	assert len(calls) > 0
+	assert "genome_madvise_bad.fa" not in _mapped_paths()
+
+
+@_linux_only
+@pytest.mark.parametrize("fail", [OSError(12, "no memory"),
+	RuntimeError("can't start new thread")])
+def test_extract_loci_unmap_madvise_raises(tmp_path, monkeypatch, fail):
+	# madvise only speeds up the close, so when it raises the map is still
+	# closed and the output is unchanged.
+	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise_raises.fa")
+	X1 = extract_loci(loci, path, in_window=9, n_jobs=1)
+
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", 1)
+	calls = _recording_madvise(monkeypatch, fail=fail)
+
+	X = extract_loci(loci, path, in_window=9, n_jobs=4)
+	assert len(calls) > 0
+	assert torch.equal(X, X1)
+	assert "genome_madvise_raises.fa" not in _mapped_paths()
+
+
+@_linux_only
+@pytest.mark.parametrize("n_jobs, n_min", [(1, 1), (8, 10**9)])
+def test_extract_loci_unmap_without_threads(tmp_path, monkeypatch, n_jobs,
+	n_min):
+	# With one thread, or fewer windows than _UNMAP_MIN_WINDOWS, the map is
+	# closed directly.
+	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise_direct.fa")
+
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", n_min)
+	calls = _recording_madvise(monkeypatch)
+
+	X = extract_loci(loci, path, in_window=9, n_jobs=n_jobs)
+	assert calls == []
+	assert torch.equal(X, _encode_windows(genome, loci, 9))
+	assert "genome_madvise_direct.fa" not in _mapped_paths()
+
+
+@_linux_only
+def test_madvise_dontneed_keeps_file_contents(tmp_path):
+	# MADV_DONTNEED on a read-only shared map of a file drops its pages, and
+	# reading the map again reads the file's bytes, which are unchanged.
+	import mmap
+
+	path = tmp_path / "pages.bin"
+	data = numpy.random.default_rng(0).integers(0, 256, size=5 * mmap.PAGESIZE
+		+ 17, dtype=numpy.uint8).tobytes()
+	path.write_bytes(data)
+
+	madvise = tangermeme.io._madvise()
+	with open(path, 'rb') as handle:
+		fasta_map = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
+		view = numpy.frombuffer(fasta_map, dtype=numpy.uint8)
+		assert view.tobytes() == data
+
+		assert madvise(view.ctypes.data, len(fasta_map),
+			mmap.MADV_DONTNEED) == 0
+		assert view.tobytes() == data
+
+		del view
+		fasta_map.close()
+
+	assert path.read_bytes() == data
