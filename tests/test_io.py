@@ -1311,6 +1311,20 @@ def test_extract_loci_pathlike(tmp_path):
 	assert_array_almost_equal(X, X0)
 
 
+@pytest.mark.parametrize("kwargs", [{}, {'as_raw': True},
+	{'sequence_always_upper': True}])
+def test_extract_loci_pre_opened_fasta(loci2_seqs, kwargs):
+	# A pre-opened Fasta gives the same sequences as its filename. With
+	# as_raw=True pyfaidx returns strings rather than Sequence objects, which
+	# used to raise AttributeError: 'str' object has no attribute 'seq'.
+	fasta = pyfaidx.Fasta("tests/data/test.fa", **kwargs)
+
+	X = extract_loci("tests/data/test2.bed", fasta, in_window=10)
+
+	assert X.dtype == torch.int8
+	assert_array_almost_equal(X, loci2_seqs)
+
+
 def test_extract_loci_pre_opened_bigwigs(loci_signal):
 	bws = [pybigtools.open("tests/data/test.bw"),
 		pybigtools.open("tests/data/test2.bw")]

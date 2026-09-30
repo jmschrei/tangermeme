@@ -575,8 +575,13 @@ def extract_loci(
 		if isinstance(sequences, dict):
 			seq = sequences[str(chrom)][:, start:end]
 		else:
-			seq = one_hot_encode(sequences[str(chrom)][start:end].seq.upper(),
-				alphabet=alphabet, ignore=ignore)
+			# A Fasta opened with as_raw=True returns strings rather than
+			# pyfaidx.Sequence objects.
+			seq = sequences[str(chrom)][start:end]
+			if not isinstance(seq, str):
+				seq = seq.seq
+
+			seq = one_hot_encode(seq.upper(), alphabet=alphabet, ignore=ignore)
 
 		kept_mask.append(True)
 		seqs.append(seq)
