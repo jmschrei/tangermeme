@@ -450,12 +450,12 @@ def one_hot_encode(
 	sequence : str or list
 		The sequence to convert to a one-hot encoding.
 
-	alphabet : set or tuple or list
+	alphabet : list, tuple, or str
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
 		the returned tensor will have a 1 at index 0 if the character was 'A'.
-		Characters outside the alphabet are ignored and none of the indexes are
-		set to 1. Default is ['A', 'C', 'G', 'T'].
+		A character that is in neither `alphabet` nor `ignore` raises a
+		ValueError. Default is ['A', 'C', 'G', 'T'].
 
 	dtype : str or torch.dtype, optional
 		The data type of the returned encoding. Default is int8.

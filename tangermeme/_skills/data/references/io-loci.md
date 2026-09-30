@@ -61,9 +61,17 @@ Get the count wrong and you will silently bind a tensor to the wrong variable.
 
 Loci are dropped when they fall off chromosome ends (after jitter), sit on
 chromosomes not in `chroms`, fail `min_counts`/`max_counts` (measured on
-`signals[target_idx]`), or hit an `exclusion_lists` region. **Use
-`return_mask=True` whenever you need to align results back to the input rows** —
-the mask tells you which loci survived.
+`signals[target_idx]`, both inclusive, and requiring `signals`), or share a
+100bp chunk with an `exclusion_lists` region. **Use `return_mask=True` whenever
+you need to align results back to the input rows** — the mask has one entry per
+locus left after `chroms` filtering, and loci past an `n_loci` cap are `False`.
+
+Two situations raise `ValueError` rather than dropping loci: a locus on a
+chromosome that is not in `sequences` (usually a `chr1` vs `1` naming
+mismatch; otherwise pass `chroms=` to keep only the chromosomes the FASTA has),
+and no loci remaining after filtering. Exclusion regions on chromosomes absent
+from the FASTA are ignored, so a genome-wide blacklist works with a partial
+FASTA.
 
 ### Multiple loci files are interleaved, not concatenated
 
@@ -83,10 +91,12 @@ names instead of being read in as integers by pandas. `chroms=[1, 2]` and
 ### Window semantics
 
 `in_window` (sequence + `in_signals`) and `out_window` (`signals`) are centered on
-each locus, independent of the locus's own width. `summits=True` centers on the
-narrowPeak summit instead of the region midpoint. `max_jitter` *expands* both
-windows so a downstream data generator can jitter cheaply — it does not jitter the
-returned data itself.
+each locus, independent of the locus's own width: a window of size `w` is
+`[mid - w//2, mid + w//2 + w%2)` with `mid = start + (end - start)//2`, so an odd
+window has its extra base on the right. `out_window` has no effect when
+`signals` is None. `summits=True` centers on the narrowPeak summit instead of
+the region midpoint. `max_jitter` *expands* both windows so a downstream data
+generator can jitter cheaply — it does not jitter the returned data itself.
 
 ## read_meme — motif PWMs
 
