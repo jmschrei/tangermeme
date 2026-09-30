@@ -366,6 +366,127 @@ def _write_locus_signal(signals, chrom, start, end, out, scratch):
 		out[i] = scratch
 
 
+def _read_signal_windows(signals, chroms, starts, width, out, kind=0,
+	max_gap=4096, max_span=65536):
+	"""An internal function for reading the bigWig windows of many loci.
+
+	This gives the values `_write_locus_signal` gives when called on each
+	window in turn, but makes fewer and more local reads. The windows are
+	sorted by chromosome and start, and consecutive windows that overlap or
+	are separated by at most `max_gap` bases are read with one call over
+	their span. A span is at most `max_span` bases long, or `width` when a
+	single window is longer, so the float64 array it is read into stays
+	small. pybigtools gives each base the same value however long the read
+	is, including `missing` for a base without data and NaN for a base past
+	the end of the chromosome, so each window is cut out of the span and
+	cast into its row of `out`.
+
+	When a read over a span raises, each window in it is read alone, and a
+	window whose read raises is zero-filled and returned as a failure, so the
+	caller can warn in the order the loci were given.
+
+
+	Parameters
+	----------
+	signals: list of pybigtools' BBIRead objects
+		A list of BBIRead objects, as returned by pybigtools.open().
+
+	chroms: list of str
+		The chromosome of each window.
+
+	starts: numpy.ndarray, shape=(n,), dtype=int64
+		The start of each window, inclusive and base-0.
+
+	width: int
+		The length of every window.
+
+	out: numpy.ndarray, shape=(>=n, len(signals), width)
+		The float32 array whose first n rows are written, row k with window k.
+		NaN and infinities are left for the caller to replace.
+
+	kind: int, optional
+		A label copied into each failure. Default is 0.
+
+	max_gap: int, optional
+		The largest number of bases between two windows read together.
+		Default is 4096.
+
+	max_span: int, optional
+		The largest number of bases read in one call. Default is 65536.
+
+
+	Returns
+	-------
+	failures: list of tuples
+		(k, kind, i, chrom, start, end) for each window k whose read from
+		signal i raised.
+	"""
+
+	n = len(starts)
+	if n == 0:
+		return []
+
+	codes, names = pandas.factorize(numpy.array(chroms, dtype=object))
+	order = numpy.lexsort((starts, codes))
+	s_starts, s_codes = starts[order], codes[order]
+
+	# A group starts at a new chromosome or after a gap of more than max_gap
+	# bases. A group is then split so that the windows of each part start
+	# within max_span - width bases of each other, which bounds its span.
+	head = numpy.ones(n, dtype=bool)
+	head[1:] = (s_codes[1:] != s_codes[:-1]) | (s_starts[1:] - s_starts[:-1] -
+		width > max_gap)
+
+	step = max_span - width
+	if step > 0:
+		group_start = s_starts[head][numpy.cumsum(head) - 1]
+		part = (s_starts - group_start) // step
+		head[1:] |= part[1:] != part[:-1]
+	else:
+		head[:] = True
+
+	heads = numpy.flatnonzero(head)
+	bounds = numpy.append(heads, n).tolist()
+	g_starts = s_starts[heads]
+	g_ends = s_starts[numpy.array(bounds[1:]) - 1] + width
+	offsets = (s_starts - numpy.repeat(g_starts, numpy.diff(bounds))).tolist()
+	g_chroms = [names[code] for code in s_codes[heads].tolist()]
+	g_starts, g_ends = g_starts.tolist(), g_ends.tolist()
+	rows = order.tolist()
+
+	buffer = numpy.empty(max(max_span, width), dtype=numpy.float64)
+	scratch = buffer[:width]
+
+	failures = []
+	for i, signal in enumerate(signals):
+		out_i = out[:, i]
+
+		for g, (chrom, start, end) in enumerate(zip(g_chroms, g_starts,
+			g_ends)):
+			try:
+				signal.values(chrom, start, end, arr=buffer[:end - start])
+			except (RuntimeError, ValueError, KeyError):
+				for j in range(bounds[g], bounds[g+1]):
+					k, s = rows[j], start + offsets[j]
+
+					try:
+						signal.values(chrom, s, s + width, arr=scratch)
+					except (RuntimeError, ValueError, KeyError):
+						failures.append((k, kind, i, chrom, s, s + width))
+						out_i[k] = 0
+						continue
+
+					out_i[k] = scratch
+
+				continue
+
+			for j in range(bounds[g], bounds[g+1]):
+				offset = offsets[j]
+				out_i[rows[j]] = buffer[offset:offset + width]
+
+	return failures
+
+
 def _nan_to_num_rows(values, block_size=2**20):
 	"""An internal function for applying numpy.nan_to_num in place.
 
@@ -791,6 +912,18 @@ def extract_loci(
 		in_window + 2 * max_jitter)
 	count_filter = min_counts is not None or max_counts is not None
 
+	# Without a count filter every locus that reaches the signals is kept, so
+	# when every signal is a bigWig the loop records only the chromosome and
+	# midpoint of each kept locus, and the windows are read after the loop,
+	# sorted by position and grouped (_read_signal_windows).
+	defer = (not count_filter
+		and (out_values is not None or in_values is not None)
+		and (signals is None or out_values is not None)
+		and (in_signals is None or in_values is not None)
+		and pandas.api.types.is_integer_dtype(loci['start'])
+		and pandas.api.types.is_integer_dtype(loci['end']))
+	window_chroms, window_mids = [], []
+
 	for chrom, start, end in tqdm(loci.values, disable=d, desc=desc):
 		mid = start + (end - start) // 2
 
@@ -815,7 +948,7 @@ def extract_loci(
 		if signals is not None:
 			if out_values is None:
 				signal = _extract_locus_signal(signals, str(chrom), start, end)
-			else:
+			elif not defer:
 				signal = out_values[len(seqs)]
 				_write_locus_signal(signals, str(chrom), start, end, signal,
 					out_scratch)
@@ -844,7 +977,7 @@ def extract_loci(
 				in_signal = _extract_locus_signal(in_signals, str(chrom), start,
 					end)
 				in_signals_.append(in_signal)
-			else:
+			elif not defer:
 				_write_locus_signal(in_signals, str(chrom), start, end,
 					in_values[len(seqs)], in_scratch)
 
@@ -864,8 +997,32 @@ def extract_loci(
 		kept_mask.append(True)
 		seqs.append(seq)
 
+		if defer:
+			window_chroms.append(str(chrom))
+			window_mids.append(mid)
+
 		if n_loci is not None and len(seqs) == n_loci:
 			break 
+
+	# The failed reads are warned about in the order the loop would have
+	# made them: by locus, then signals before in_signals, then by signal.
+	if defer and len(window_mids) > 0:
+		mids = numpy.array(window_mids, dtype=numpy.int64)
+		failures = []
+
+		if signals is not None:
+			failures += _read_signal_windows(signals, window_chroms,
+				mids - out_width - max_jitter, out_window + 2 * max_jitter,
+				out_values, kind=0)
+
+		if in_signals is not None:
+			failures += _read_signal_windows(in_signals, window_chroms,
+				mids - in_width - max_jitter, in_window + 2 * max_jitter,
+				in_values, kind=1)
+
+		for _, _, _, chrom, start, end in sorted(failures):
+			warnings.warn(f"{chrom} {start} {end} not valid bigwig indexes. "
+				"Using zeros instead.", TangermemeWarning)
 
 	if opened_fasta:
 		try:

@@ -3,6 +3,7 @@
 
 import numpy
 import torch
+import warnings
 import pytest
 import pandas
 import pathlib
@@ -14,6 +15,8 @@ from tangermeme.io import _load_signals
 from tangermeme.io import _load_exclusion_zones
 from tangermeme.io import _extract_locus_signal
 from tangermeme.io import _read_fasta_windows_mmap
+from tangermeme.io import _read_signal_windows
+from tangermeme.io import _write_locus_signal
 
 from tangermeme.io import read_meme
 from tangermeme.io import extract_loci
@@ -2896,3 +2899,258 @@ def test_extract_loci_fasta_unmapped(tmp_path):
 	with pytest.raises(ValueError, match="No loci remain"):
 		extract_loci(loci, path, in_window=1000)
 	assert "genome_unmapped.fa" not in _mapped_paths()
+
+
+###
+# bigWig windows read together, sorted by position (_read_signal_windows)
+###
+
+
+class _PositionSignal():
+	"""A stand-in for a bigWig whose value at a base is its position.
+
+	It records the length of every read, so a test can see how the windows
+	were grouped.
+	"""
+
+	def __init__(self, length=10**7):
+		self.length = length
+		self.reads = []
+
+	def values(self, chrom, start, end, arr=None):
+		self.reads.append((chrom, start, end))
+		arr[:] = numpy.arange(start, end, dtype=numpy.float64)
+		arr[max(0, self.length - start):] = numpy.nan
+		return arr
+
+
+def _per_window(signals, chroms, starts, width):
+	out = numpy.full((len(starts), len(signals), width), -1, dtype=numpy.float32)
+	scratch = numpy.empty(width, dtype=numpy.float64)
+	for k, (chrom, start) in enumerate(zip(chroms, starts)):
+		_write_locus_signal(signals, chrom, int(start), int(start) + width,
+			out[k], scratch)
+
+	return out
+
+
+def _per_locus_call(*args, **kwargs):
+	# max_counts=inf keeps every locus but reads each window in the loop with
+	# one values() call, which is the path the grouped reads must reproduce.
+	return extract_loci(*args, max_counts=float("inf"), **kwargs)
+
+
+def _assert_same(a, b):
+	a = a if isinstance(a, (list, tuple)) else [a]
+	b = b if isinstance(b, (list, tuple)) else [b]
+	assert len(a) == len(b)
+	for x, y in zip(a, b):
+		assert x.dtype == y.dtype
+		assert x.shape == y.shape
+		assert x.is_contiguous() == y.is_contiguous()
+		assert torch.equal(x, y)
+
+
+def test_extract_loci_bigwig_overlapping_and_repeated_windows():
+	# Repeats of one locus, windows that overlap in both directions, and
+	# chromosomes interleaved, so the sorted order differs from locus order.
+	loci = pandas.DataFrame({
+		'chrom': ['chr1', 'chr2', 'chr1', 'chr1', 'chr2', 'chr1', 'chr1',
+			'chr1', 'chr3', 'chr1'],
+		'start': [10, 25, 10, 12, 35, 8, 80, 10, 5, 140],
+		'end': [30, 55, 30, 32, 65, 28, 100, 30, 25, 160]
+	})
+
+	X, y, y_in = extract_loci(loci, "tests/data/test.fa",
+		["tests/data/test.bw", "tests/data/test2.bw"], ["tests/data/test.bw"],
+		in_window=10, out_window=20)
+
+	_assert_same([X, y, y_in], _per_locus_call(loci, "tests/data/test.fa",
+		["tests/data/test.bw", "tests/data/test2.bw"], ["tests/data/test.bw"],
+		in_window=10, out_window=20))
+
+	signals = _load_signals(["tests/data/test.bw", "tests/data/test2.bw"])
+	for k, (chrom, start, end) in enumerate(loci.values):
+		mid = start + (end - start) // 2
+		expected = _extract_locus_signal(signals, chrom, mid - 10, mid + 10)
+		assert torch.equal(y[k], torch.from_numpy(numpy.stack(expected)))
+
+	assert torch.equal(y[0], y[2]) and torch.equal(y[0], y[7])
+	assert torch.equal(y[0, :, 2:], y[3, :, :-2])
+
+
+def test_extract_loci_bigwig_window_at_chrom_end():
+	# test3.bw has a 40 bp chr1 and test.fa a 284 bp one: the first window is
+	# inside it, the second runs past its end and the third starts past it,
+	# and all three are close enough to be read together.
+	loci = pandas.DataFrame({
+		'chrom': ['chr1', 'chr1', 'chr1', 'chr1'],
+		'start': [15, 30, 50, 15],
+		'end': [25, 40, 70, 25]
+	})
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error")
+		X, y = extract_loci(loci, "tests/data/test.fa", ["tests/data/test3.bw"],
+			in_window=10, out_window=20)
+
+	_assert_same([X, y], _per_locus_call(loci, "tests/data/test.fa",
+		["tests/data/test3.bw"], in_window=10, out_window=20))
+
+	signal = pybigtools.open("tests/data/test3.bw")
+	inside = numpy.nan_to_num(signal.values("chr1", 10, 30)).astype('float32')
+	assert_array_almost_equal(y[0, 0], inside)
+	assert torch.equal(y[0], y[3])
+
+	# chr1 of test3.bw ends at 40, so the window [25, 45) ends in five zeros.
+	straddle = numpy.nan_to_num(signal.values("chr1", 25, 45))
+	assert numpy.isnan(signal.values("chr1", 25, 45)[15:]).all()
+	assert_array_almost_equal(y[1, 0], straddle)
+	assert (y[1, 0, 15:] == 0).all()
+	assert (y[2] == 0).all()
+
+
+def test_extract_loci_bigwig_group_spans_gap(tmp_path):
+	# A bigWig with data at [0, 100) and [3000, 3100) only. The windows
+	# [0, 120) and [2990, 3110) are 2,870 bp apart, so one read spans the
+	# empty stretch, which reads as missing, 0.0, and the window [1440, 1560)
+	# lies inside it.
+	path = str(tmp_path / "gap.bw")
+	pybigtools.open(path, "w").write({'chr1': 10000},
+		[('chr1', 0, 100, 1.5), ('chr1', 3000, 3100, 2.5)])
+
+	sequences = {'chr1': numpy.zeros((4, 10000), dtype=numpy.int8)}
+	loci = pandas.DataFrame({
+		'chrom': ['chr1', 'chr1', 'chr1'],
+		'start': [3040, 50, 1490],
+		'end': [3060, 70, 1510]
+	})
+
+	X, y = extract_loci(loci, sequences, [path], in_window=10, out_window=120)
+	_assert_same([X, y], _per_locus_call(loci, sequences, [path],
+		in_window=10, out_window=120))
+
+	expected = numpy.zeros((3, 1, 120), dtype=numpy.float32)
+	expected[0, 0, 10:110] = 2.5
+	expected[1, 0, :100] = 1.5
+	assert torch.equal(y, torch.from_numpy(expected))
+
+	# The same windows read with no grouping, and with one read over all.
+	signals = _load_signals([path])
+	starts = numpy.array([2990, 0, 1440])
+	for max_gap, max_span in [(0, 120), (-1, 10**6), (4096, 65536),
+		(10**6, 10**6)]:
+		out = numpy.full((3, 1, 120), -1, dtype=numpy.float32)
+		failures = _read_signal_windows(signals, ['chr1'] * 3, starts, 120,
+			out, max_gap=max_gap, max_span=max_span)
+		assert failures == []
+		numpy.testing.assert_array_equal(out, _per_window(signals,
+			['chr1'] * 3, starts, 120))
+		numpy.testing.assert_array_equal(out, expected)
+
+
+@pytest.mark.parametrize("max_gap", [-10**6, -1, 0, 1, 7, 50, 10**6])
+@pytest.mark.parametrize("max_span", [1, 12, 13, 14, 40, 10**6])
+def test_read_signal_windows_groups(max_gap, max_span):
+	# Every row is the positions of its window, whatever the grouping, and no
+	# read is longer than max(max_span, width).
+	rng = numpy.random.default_rng(0)
+	width = 13
+	chroms = list(rng.choice(['a', 'b', 'c'], 300))
+	starts = rng.integers(0, 400, 300)
+	starts[:20] = starts[20:40]
+
+	signal = _PositionSignal(length=380)
+	out = numpy.full((310, 1, width), -1, dtype=numpy.float32)
+	failures = _read_signal_windows([signal], chroms, starts, width, out,
+		max_gap=max_gap, max_span=max_span)
+
+	assert failures == []
+	expected = (starts[:, None] + numpy.arange(width)).astype(numpy.float32)
+	expected[starts[:, None] + numpy.arange(width) >= 380] = numpy.nan
+	numpy.testing.assert_array_equal(out[:300, 0], expected)
+	assert (out[300:] == -1).all()
+
+	lengths = [end - start for _, start, end in signal.reads]
+	assert max(lengths) <= max(max_span, width)
+	assert sorted(set(chroms)) == sorted(set(c for c, _, _ in signal.reads))
+	# Every window alone when a span cannot hold two starts or no gap is
+	# small enough, only repeats together when it holds exactly one start,
+	# and one read per chromosome when nothing splits them.
+	if max_span <= width or max_gap < -width:
+		assert len(signal.reads) == 300
+	elif max_span == width + 1:
+		assert len(signal.reads) == len(set(zip(chroms, starts.tolist())))
+	elif max_gap == 10**6 and max_span == 10**6:
+		assert len(signal.reads) == 3
+
+
+def test_read_signal_windows_matches_per_window():
+	# Random windows on test.bw, including repeats, windows past the end of
+	# a chromosome and a chromosome it does not have, which fails whether it
+	# is read alone or in a group, and is zero-filled.
+	rng = numpy.random.default_rng(1)
+	signals = _load_signals(["tests/data/test.bw", "tests/data/test2.bw"])
+	width = 17
+	chroms = list(rng.choice(['chr1', 'chr2', 'chr3', 'chr6', 'chr7'], 200))
+	starts = rng.integers(0, 300, 200)
+
+	for max_gap, max_span in [(0, 17), (4096, 65536), (5, 40), (10**6, 10**6)]:
+		out = numpy.full((200, 2, width), -1, dtype=numpy.float32)
+		failures = _read_signal_windows(signals, chroms, starts, width, out,
+			kind=1, max_gap=max_gap, max_span=max_span)
+
+		expected = _per_window(signals, chroms, starts, width)
+		numpy.testing.assert_array_equal(out, expected)
+
+		missing = [k for k, chrom in enumerate(chroms) if chrom == 'chr7']
+		assert len(missing) > 0
+		assert sorted(failures) == [(k, 1, i, 'chr7', int(starts[k]),
+			int(starts[k]) + width) for k in missing for i in range(2)]
+		assert (out[missing] == 0).all()
+
+
+def test_extract_loci_bigwig_missing_chrom_warns_in_locus_order():
+	# The warnings for a chromosome missing from a bigWig come in the order
+	# the per-locus path gives them: by locus, signals before in_signals, and
+	# by signal, even though the windows are read sorted by position.
+	peaks = pandas.read_csv("tests/data/test.bed", sep="\t", header=None)
+	others = pandas.DataFrame({0: ['chr2', 'chr1', 'chr2', 'chr1'],
+		1: [120, 150, 30, 12], 2: [140, 170, 50, 32]})
+	kwargs = dict(in_window=8, out_window=10, return_mask=True)
+	signals = ["tests/data/test3.bw", "tests/data/test.bw", "tests/data/test3.bw"]
+	in_signals = ["tests/data/test.bw", "tests/data/test3.bw"]
+
+	with pytest.warns(TangermemeWarning) as record:
+		result = extract_loci([peaks, others], "tests/data/test.fa", signals,
+			in_signals, **kwargs)
+
+	with pytest.warns(TangermemeWarning) as expected_record:
+		expected = _per_locus_call([peaks, others], "tests/data/test.fa",
+			signals, in_signals, **kwargs)
+
+	_assert_same(result, expected)
+	messages = [str(w.message) for w in record]
+	assert messages == [str(w.message) for w in expected_record]
+	assert len(messages) == 4 * 3
+	# The first chr2 locus is the second of `others`; sorted by position,
+	# its window [125, 135) would come after [35, 45).
+	assert messages[0].startswith("chr2 125 135 ")
+
+
+@pytest.mark.parametrize("n_loci", [1, 2, 5, 7])
+def test_extract_loci_bigwig_grouped_n_loci(n_loci):
+	# Only the windows of the loci kept before the cap are read.
+	loci = pandas.DataFrame({
+		'chrom': ['chr2', 'chr1', 'chr1', 'chr2', 'chr1', 'chr1', 'chr3',
+			'chr1'],
+		'start': [25, 10, 10, 35, 270, 80, 5, 140],
+		'end': [55, 30, 30, 65, 280, 100, 25, 160]
+	})
+
+	kwargs = dict(in_window=10, out_window=20, n_loci=n_loci, return_mask=True)
+	result = extract_loci(loci, "tests/data/test.fa", ["tests/data/test.bw"],
+		["tests/data/test2.bw"], **kwargs)
+	_assert_same(result, _per_locus_call(loci, "tests/data/test.fa",
+		["tests/data/test.bw"], ["tests/data/test2.bw"], **kwargs))
+	assert len(result[0]) == n_loci
