@@ -18,6 +18,7 @@ from tangermeme.io import read_vcf
 from tangermeme.io import one_hot_to_fasta
 
 from tangermeme.utils import one_hot_encode
+from tangermeme.utils import TangermemeWarning
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -170,6 +171,18 @@ def loci_signal():
 		  0.702046811580658, 0.17438605427742004, 0.6000516414642334,
 		  1.1334248781204224]]
 	]
+
+
+@pytest.fixture
+def dict_signal():
+	# One value per base of each chromosome in tests/data/test.fa: the
+	# coordinate plus 10000 times the chromosome's index, so any extracted
+	# window can be checked by arithmetic. Every value is exact in float32.
+	lengths = {'chr1': 284, 'chr2': 211, 'chr3': 126, 'chr4': 240,
+		'chr5': 160, 'chr6': 80, 'chr7': 2000}
+
+	return {chrom: numpy.arange(length, dtype=numpy.float32) + 10000 * i
+		for i, (chrom, length) in enumerate(lengths.items())}
 
 
 
@@ -572,6 +585,56 @@ def test_extract_locus_signal_nan():
 def test_extract_locus_signal_raises_single():
 	bw = pybigtools.open("tests/data/test.bw")
 	assert_raises(ValueError, _extract_locus_signal, bw, 'chr1', 3, 14)
+
+
+def test_extract_locus_signal_bigwig_past_chrom_end():
+	# pybigtools returns NaN past the end of a chromosome, which becomes 0.
+	bw = pybigtools.open("tests/data/test.bw")
+	signal = _extract_locus_signal([bw], 'chr1', 281, 286)[0]
+
+	assert signal.shape == (5,)
+	assert_array_almost_equal(signal, [1.492186, 0.317799, 0.928506, 0, 0])
+
+
+def test_extract_locus_signal_bigwig_missing_chrom():
+	bw = pybigtools.open("tests/data/test.bw")
+
+	with pytest.warns(TangermemeWarning, match="chr7"):
+		signal = _extract_locus_signal([bw], 'chr7', 3, 14)
+
+	assert signal[0].dtype == numpy.float32
+	assert_array_almost_equal(signal[0], numpy.zeros(11))
+
+
+def test_extract_locus_signal_dict(dict_signal):
+	signal = _extract_locus_signal([dict_signal], 'chr2', 16, 30)
+
+	assert isinstance(signal, list)
+	assert len(signal) == 1
+	assert signal[0].dtype == numpy.float32
+	assert_array_almost_equal(signal[0], numpy.arange(16, 30) + 10000)
+
+
+def test_extract_locus_signal_dict_missing_chrom(dict_signal):
+	# A chromosome missing from a dict gives zeros and a warning, as it does
+	# for a bigWig; it used to raise KeyError.
+	del dict_signal['chr2']
+
+	with pytest.warns(TangermemeWarning, match="chr2"):
+		signal = _extract_locus_signal([dict_signal], 'chr2', 16, 30)
+
+	assert signal[0].dtype == numpy.float32
+	assert_array_almost_equal(signal[0], numpy.zeros(14))
+
+
+def test_extract_locus_signal_dict_past_array_end(dict_signal):
+	# A dict array shorter than the window is padded with zeros, as a bigWig
+	# is past the end of a chromosome; it used to come back short.
+	signal = _extract_locus_signal([dict_signal], 'chr2', 205, 215)[0]
+
+	assert signal.shape == (10,)
+	assert_array_almost_equal(signal, [10205, 10206, 10207, 10208, 10209,
+		10210, 0, 0, 0, 0])
 
 
 ##
@@ -1329,6 +1392,27 @@ def test_extract_loci_in_signals_only(loci_signal):
 
 	X0 = extract_loci(loci, fasta, in_window=10)
 	assert_array_almost_equal(X, X0)
+
+
+def test_extract_loci_dict_signals_missing_chrom_and_short(dict_signal):
+	# A dict signal missing a chromosome, or with an array shorter than the
+	# FASTA's chromosome, used to raise KeyError or a shape mismatch in
+	# numpy.stack. Both are now zero-filled, as for a bigWig.
+	del dict_signal['chr1']
+	dict_signal['chr2'] = dict_signal['chr2'][:205]
+
+	loci = pandas.DataFrame({'chrom': ['chr1', 'chr2', 'chr2'],
+		'start': [100, 100, 200], 'end': [110, 110, 210]})
+
+	with pytest.warns(TangermemeWarning, match="chr1"):
+		X, y = extract_loci(loci, "tests/data/test.fa", [dict_signal],
+			in_window=4, out_window=11)
+
+	assert y.shape == (3, 1, 11)
+	assert_array_almost_equal(y[0, 0], numpy.zeros(11))
+	assert_array_almost_equal(y[1, 0], numpy.arange(100, 111) + 10000)
+	assert_array_almost_equal(y[2, 0], [10200, 10201, 10202, 10203, 10204,
+		0, 0, 0, 0, 0, 0])
 
 
 ###

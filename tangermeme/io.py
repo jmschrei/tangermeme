@@ -236,8 +236,20 @@ def _extract_locus_signal(signals, chrom, start, end):
 
 	values = []
 	for i, signal in enumerate(signals):
+		# A dict is zero-filled where it has no values, as pybigtools is:
+		# a missing chromosome gives zeros and a warning, and positions past
+		# the end of the array are NaN in pybigtools and so become zero.
 		if isinstance(signal, dict):
-			values_ = numpy.array(signal[chrom][start:end], dtype=numpy.float32)
+			if chrom not in signal:
+				warnings.warn(f"{chrom} is not in the signal dictionary. "
+					"Using zeros instead.", TangermemeWarning, stacklevel=2)
+				values_ = numpy.zeros(end-start, dtype=numpy.float32)
+			else:
+				values_ = numpy.array(signal[chrom][start:end],
+					dtype=numpy.float32)
+
+				if len(values_) < end - start:
+					values_ = numpy.pad(values_, (0, end - start - len(values_)))
 		else:
 			try:
 				values_ = numpy.array(signal.values(chrom, start, end), dtype=numpy.float32)
