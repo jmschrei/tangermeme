@@ -122,9 +122,9 @@ seq = one_hot_encode('CATCGACAGACTACGCTAC').unsqueeze(0)
 shuf = dinucleotide_shuffle(seq, random_state=0)
 
 print(characters(shuf[0, 0]))
-# CAGACACGATACGCTCTAC
+# CAGATACACGACGCTCTAC
 print(characters(shuf[0, 1]))
-# CGACATACGAGCTCACTAC
+# CGATAGACACGCTCACTAC
 ```
 
 Both shuffling and dinucleotide shuffling can be applied to entire sequence, but they can also be applied to *portions* of the sequence by supplying `start` and `end` parameters if you want to, for instance, eliminate a motif by shuffling the nucleotides.
