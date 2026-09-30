@@ -911,6 +911,15 @@ def test_extract_loci_seq_alphabet(loci_seqs):
 	assert_array_almost_equal(X, expanded_loci_seqs)
 
 
+def test_extract_loci_seq_alphabet_tuple(loci_seqs):
+	# A tuple alphabet used to raise TypeError inside one_hot_encode.
+	X = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		alphabet=('A', 'G', 'C', 'T'), ignore=('N',), in_window=10)
+
+	assert X.shape == (5, 4, 10)
+	assert_array_almost_equal(X[:, [0, 2, 1, 3]], loci_seqs)
+
+
 def test_extract_loci_int(loci_seqs):
 	loci = "tests/data/test_int.bed"
 	fasta = "tests/data/test_int_chroms.fa"
