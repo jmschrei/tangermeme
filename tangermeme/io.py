@@ -33,10 +33,17 @@ def _load_exclusion_zones(chrom_lengths, exclusion_lists):
 		exclusion_list = _interleave_loci(exclusion_lists)
 
 		for _, (chrom, start, end) in exclusion_list.iterrows():
-			start = start // 100
-			end = end // 100 + 1
+			# A region on a chromosome absent from the sequences cannot
+			# overlap a locus that can be extracted.
+			if chrom not in exclusion_zones:
+				continue
 
-			exclusion_zones[chrom][start:end] = True
+			# Ends are exclusive, so the last base covered is end - 1 and a
+			# region with end <= start covers no base.
+			if end <= start:
+				continue
+
+			exclusion_zones[chrom][start // 100:(end - 1) // 100 + 1] = True
 		
 		return exclusion_zones
 
@@ -488,7 +495,7 @@ def extract_loci(
 			continue
 
 		if exclusion_zones is not None:
-			s, e = start // 100, end // 100 + 1
+			s, e = start // 100, (end - 1) // 100 + 1
 			if exclusion_zones[str(chrom)][s:e].any():
 				kept_mask.append(False)
 				continue

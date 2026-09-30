@@ -918,6 +918,60 @@ def test_extract_loci_exclusion_lists_multiple(tmp_path):
 	assert mask.tolist() == mask0.tolist()
 
 
+def test_extract_loci_exclusion_lists_chrom_not_in_sequences():
+	# A genome-wide exclusion list names chromosomes that a FASTA of a subset
+	# of the genome lacks. Those regions cannot overlap any locus, so they are
+	# skipped; they used to raise KeyError.
+	exclusion = pandas.DataFrame({0: ['chrM', 'chr1', 'chrUn_KI270302v1'],
+		1: [0, 10, 5], 2: [100, 30, 50]})
+
+	X, mask = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		in_window=10, return_mask=True, exclusion_lists=exclusion)
+	X0, mask0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		in_window=10, return_mask=True, exclusion_lists=exclusion.iloc[1:2])
+
+	assert mask.tolist() == [False, False, True, True, True]
+	assert mask.tolist() == mask0.tolist()
+	assert_array_almost_equal(X, X0)
+
+
+def test_extract_loci_exclusion_lists_end_exclusive():
+	# Loci are removed when their window shares a 100 bp chunk with an
+	# exclusion region. Ends are exclusive, so a region or a window ending at
+	# a multiple of 100 does not reach into the next chunk; both used to.
+	# chr7 is 2000 bp and in_window=10 makes each window equal to its locus.
+	loci = pandas.DataFrame({
+		'chrom': ['chr7'] * 6,
+		'start': [85, 90, 95, 195, 200, 305],
+		'end':   [95, 100, 105, 205, 210, 315],
+	})
+	fasta = "tests/data/test.fa"
+
+	# [100, 200) covers only the chunk 100-199.
+	exclusion = pandas.DataFrame({0: ['chr7'], 1: [100], 2: [200]})
+	X, mask = extract_loci(loci, fasta, in_window=10, return_mask=True,
+		exclusion_lists=exclusion)
+
+	assert mask.tolist() == [True, True, False, False, True, True]
+	assert X.shape == (4, 4, 10)
+
+	# Overlap is decided by chunk, not by base: [250, 260) and the window
+	# [200, 210) share the chunk 200-299 without sharing a base.
+	exclusion = pandas.DataFrame({0: ['chr7'], 1: [250], 2: [260]})
+	_, mask = extract_loci(loci, fasta, in_window=10, return_mask=True,
+		exclusion_lists=exclusion)
+
+	assert mask.tolist() == [True, True, True, False, False, True]
+
+	# A region with end <= start covers no base, wherever it falls.
+	for s in (100, 150):
+		exclusion = pandas.DataFrame({0: ['chr7'], 1: [s], 2: [s]})
+		_, mask = extract_loci(loci, fasta, in_window=10, return_mask=True,
+			exclusion_lists=exclusion)
+
+		assert mask.tolist() == [True] * 6
+
+
 def test_extract_loci_int_chroms_filter_ints():
 	X = extract_loci("tests/data/test_int.bed",
 		"tests/data/test_int_chroms.fa", chroms=[1], in_window=10)
