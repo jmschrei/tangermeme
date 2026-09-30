@@ -159,7 +159,8 @@ def _load_signals(signals):
 	The passed in signals must be a list but can either be a list of strings,
 	which are interpreted as strings for bigwig files that should be opened,
 	or dictionaries where the keys are chromosome names and the values are
-	numpy arrays of values across the chromosome, which are kept as is.
+	numpy arrays of values across the chromosome. The keys of a dictionary are
+	coerced to strings so that they match the chromosome names of the loci.
 
 
 	Parameters
@@ -187,6 +188,8 @@ def _load_signals(signals):
 				"or a list of dictionaries.")
 		elif not isinstance(list(signal.values())[0], numpy.ndarray):
 			raise ValueError("Values in dictionaries must be numpy.ndarrays.")
+		else:
+			signal = {str(key): value for key, value in signal.items()}
 
 		_signals.append(signal)
 
@@ -488,8 +491,9 @@ def extract_loci(
 		for key, value in sequences.items():
 			chrom_lengths[str(key)] = len(value)
 	else:
+		sequences = {str(key): value for key, value in sequences.items()}
 		for key, value in sequences.items():
-			chrom_lengths[str(key)] = sequences[key].shape[-1]
+			chrom_lengths[key] = value.shape[-1]
 
 
 	# Create the exclusion zones from the exclusion lists, if provided

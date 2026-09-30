@@ -185,6 +185,17 @@ def dict_signal():
 		for i, (chrom, length) in enumerate(lengths.items())}
 
 
+@pytest.fixture
+def dict_sequences():
+	# tests/data/test.fa one-hot encoded, as C-contiguous int8 numpy arrays of
+	# shape (4, length). chr5 has a Z, which is left as an all-zero column.
+	fasta = pyfaidx.Fasta("tests/data/test.fa")
+
+	return {chrom: numpy.ascontiguousarray(one_hot_encode(
+		str(fasta[chrom]).upper(), ignore=['N', 'Z']).numpy())
+		for chrom in fasta.keys()}
+
+
 
 ##
 
@@ -1043,6 +1054,22 @@ def test_extract_loci_int_chroms_filter_ints():
 
 	assert X.shape == (3, 4, 10)
 	assert_array_almost_equal(X, X0)
+
+
+def test_extract_loci_int_dict_keys(dict_sequences, dict_signal, loci_seqs):
+	# Dict keys are coerced to strings like the chromosome names of the loci.
+	# Integer keys used to raise KeyError: '1'.
+	sequences = {int(chrom[3:]): X for chrom, X in dict_sequences.items()}
+	signal = {int(chrom[3:]): y for chrom, y in dict_signal.items()}
+
+	X, y = extract_loci("tests/data/test_int.bed", sequences, [signal],
+		in_window=10, out_window=10)
+	X0, y0 = extract_loci("tests/data/test.bed", dict_sequences, [dict_signal],
+		in_window=10, out_window=10)
+
+	assert_array_almost_equal(X, loci_seqs)
+	assert_array_almost_equal(X, X0)
+	assert_array_almost_equal(y, y0)
 
 
 def test_extract_loci_seq_N(loci2_seqs):
