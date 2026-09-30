@@ -545,6 +545,9 @@ def extract_loci(
 		y_return.append(torch.from_numpy(numpy.stack(in_signals_)))
 		
 	if return_mask:
+		# Loci after the n_loci cap was reached were never examined and are
+		# not returned, so they are False.
+		kept_mask += [False] * (len(loci) - len(kept_mask))
 		kept_mask = torch.tensor(kept_mask)
 		y_return.append(kept_mask)
 

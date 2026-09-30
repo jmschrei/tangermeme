@@ -601,6 +601,39 @@ def test_extract_loci_seq_first_n(loci_seqs):
 	assert_array_almost_equal(X, loci_seqs[:2])
 
 
+def test_extract_loci_n_loci_mask_covers_every_locus(loci_seqs):
+	# The mask has one entry per input locus. Stopping at n_loci used to leave
+	# it only as long as the loci examined, so indexing the loci with it
+	# raised.
+	loci = "tests/data/test.bed"
+	fasta = "tests/data/test.fa"
+
+	X, mask = extract_loci(loci, fasta, in_window=10, n_loci=2,
+		return_mask=True)
+
+	assert mask.tolist() == [True, True, False, False, False]
+	assert_array_almost_equal(X, loci_seqs[:2])
+
+	# n_loci counts kept loci, so loci dropped along the way do not use up
+	# the cap: the exclusion removes the first two and the next two are kept.
+	exclusion = pandas.DataFrame({0: ['chr1'], 1: [10], 2: [30]})
+	X, mask = extract_loci(loci, fasta, in_window=10, n_loci=2,
+		exclusion_lists=exclusion, return_mask=True)
+
+	assert mask.tolist() == [False, False, True, True, False]
+	assert_array_almost_equal(X, loci_seqs[2:4])
+
+	X_all = extract_loci(loci, fasta, in_window=10)
+	assert_array_almost_equal(X, X_all[mask])
+
+	# A cap larger than the number of loci returns them all.
+	X, mask = extract_loci(loci, fasta, in_window=10, n_loci=50,
+		return_mask=True)
+
+	assert mask.tolist() == [True] * 5
+	assert_array_almost_equal(X, loci_seqs)
+
+
 
 def test_extract_loci_seq_out_window(loci_seqs):
 	loci = "tests/data/test.bed"
