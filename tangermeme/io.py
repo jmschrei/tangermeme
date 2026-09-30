@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import mmap
+import operator
 import warnings
 
 import numpy
@@ -367,7 +368,7 @@ def _write_locus_signal(signals, chrom, start, end, out, scratch):
 
 
 def _read_signal_windows(signals, chroms, starts, width, out, kind=0,
-	max_gap=4096, max_span=65536):
+	max_gap=4096, max_span=65536, names=None):
 	"""An internal function for reading the bigWig windows of many loci.
 
 	This gives the values `_write_locus_signal` gives when called on each
@@ -391,8 +392,8 @@ def _read_signal_windows(signals, chroms, starts, width, out, kind=0,
 	signals: list of pybigtools' BBIRead objects
 		A list of BBIRead objects, as returned by pybigtools.open().
 
-	chroms: list of str
-		The chromosome of each window.
+	chroms: list of str, or numpy.ndarray of int when `names` is given
+		The chromosome of each window, or its index into `names`.
 
 	starts: numpy.ndarray, shape=(n,), dtype=int64
 		The start of each window, inclusive and base-0.
@@ -414,6 +415,10 @@ def _read_signal_windows(signals, chroms, starts, width, out, kind=0,
 	max_span: int, optional
 		The largest number of bases read in one call. Default is 65536.
 
+	names: list of str or None, optional
+		The chromosome names that `chroms` indexes into, or None when `chroms`
+		holds the names. Default is None.
+
 
 	Returns
 	-------
@@ -426,7 +431,11 @@ def _read_signal_windows(signals, chroms, starts, width, out, kind=0,
 	if n == 0:
 		return []
 
-	codes, names = pandas.factorize(numpy.array(chroms, dtype=object))
+	if names is None:
+		codes, names = pandas.factorize(numpy.array(chroms, dtype=object))
+	else:
+		codes = chroms
+
 	order = numpy.lexsort((starts, codes))
 	s_starts, s_codes = starts[order], codes[order]
 
@@ -520,7 +529,8 @@ def _nan_to_num_rows(values, block_size=2**20):
 	return values
 
 
-def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore):
+def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
+	names=None):
 	"""Encode fasta windows from a memory map of the file, or return None.
 
 	Each window's bytes are gathered through the .fai index that pyfaidx
@@ -529,7 +539,7 @@ def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore):
 	alphabet is not ASCII, the file is compressed or cannot be mapped, the
 	index describes lines that the file does not have, or a window holds a
 	byte that pyfaidx would remove or decode, so that the result is always
-	the one pyfaidx gives.
+	the one pyfaidx gives. `windows` is as in _read_fasta_windows.
 	"""
 
 	table = _one_hot_rows_mapping(alphabet, ignore)
@@ -542,8 +552,12 @@ def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore):
 	mapping[[ord('\n'), ord('\r')]] = -3
 	mapping[128:] = -3
 
-	chroms, starts = zip(*windows)
-	codes, names = pandas.factorize(numpy.array(chroms, dtype=object))
+	if names is None:
+		chroms, starts = zip(*windows)
+		codes, names = pandas.factorize(numpy.array(chroms, dtype=object))
+	else:
+		codes, starts = windows
+
 	records = [faidx.index[name] for name in names]
 
 	starts = numpy.array(starts, dtype=numpy.int64)
@@ -560,7 +574,7 @@ def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore):
 	except (AttributeError, OSError, ValueError):
 		return None
 
-	X = numpy.empty((len(windows), n_characters, length), dtype=numpy.int8)
+	X = numpy.empty((len(starts), n_characters, length), dtype=numpy.int8)
 	try:
 		data = numpy.frombuffer(fasta_map, dtype=numpy.uint8)
 		try:
@@ -581,18 +595,27 @@ def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore):
 	return X
 
 
-def _read_fasta_windows(fasta, windows, length, alphabet, ignore):
+def _read_fasta_windows(fasta, windows, length, alphabet, ignore,
+	names=None):
 	"""One-hot encode windows of a pyfaidx.Fasta opened from a path.
 
 	`windows` holds a (chrom, start) pair for each window, each covering
-	`length` bases inside its record. The result is identical to fetching
-	each window with pyfaidx and encoding the strings with
-	_one_hot_encode_rows, including its errors, which is what is done when
-	the windows cannot be read from a memory map of the file.
+	`length` bases inside its record. When `names` is given, it is instead a
+	pair of int64 arrays: the index of each window's chromosome into `names`,
+	and each window's start. The result is identical to fetching each window
+	with pyfaidx and encoding the strings with _one_hot_encode_rows,
+	including its errors, which is what is done when the windows cannot be
+	read from a memory map of the file.
 	"""
 
-	X = _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore)
+	X = _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
+		names=names)
 	if X is None:
+		if names is not None:
+			codes, starts = windows
+			windows = zip(numpy.array(names, dtype=object)[codes].tolist(),
+				starts.tolist())
+
 		seqs = []
 		for chrom, start in windows:
 			seq = fasta[chrom][start:start + length]
@@ -854,7 +877,6 @@ def extract_loci(
 				.format(target_idx, len(signals)))
 
 	seqs, signals_, in_signals_ = [], [], []
-	kept_mask = []
 	in_width, out_width = in_window // 2, out_window // 2
 	out_extra = out_window % 2
 	if signals is None:
@@ -885,7 +907,11 @@ def extract_loci(
 	# Load the loci
 	loci = _interleave_loci(loci, chroms, summits=summits)
 
-	missing = sorted(set(loci['chrom']) - set(chrom_lengths))
+	# Each row's chromosome as an index into the unique names, with missing
+	# values kept as their own name so that they are reported below.
+	codes, names = pandas.factorize(loci['chrom'], use_na_sentinel=False)
+
+	missing = sorted(set(names) - set(chrom_lengths))
 	if len(missing) > 0:
 		if opened_fasta:
 			sequences.close()
@@ -893,6 +919,8 @@ def extract_loci(
 		raise ValueError("Loci are on chromosomes that are not in the " +
 			"sequences: {}. Pass `chroms` to select the chromosomes to use."
 			.format(", ".join(missing)))
+
+	names = [str(name) for name in names]
 
 	desc = "Loading Loci"
 	d = not verbose
@@ -912,113 +940,169 @@ def extract_loci(
 		in_window + 2 * max_jitter)
 	count_filter = min_counts is not None or max_counts is not None
 
+	# Every locus's window is checked at once. int64 gives the values that
+	# Python ints do while the coordinates and windows are far inside its range.
+	# Otherwise the coordinates are Python ints, and one that is not an integer
+	# raises a TypeError, as slicing a sequence with it would.
+	starts, ends = loci['start'].to_numpy(), loci['end'].to_numpy()
+	if (starts.dtype.kind in 'iu' and ends.dtype.kind in 'iu' and
+			max(abs(left), abs(right)) < 2 ** 40 and
+			all(-2 ** 40 < int(x.min(initial=0)) and
+				int(x.max(initial=0)) < 2 ** 40 for x in (starts, ends))):
+		starts, ends = starts.astype(numpy.int64), ends.astype(numpy.int64)
+	else:
+		starts, ends = [numpy.array([operator.index(x) for x in loci[col]],
+			dtype=object) for col in ('start', 'end')]
+
+	mids = starts + (ends - starts) // 2
+	lengths = numpy.array([chrom_lengths[name] for name in names],
+		dtype=numpy.int64)[codes]
+
+	# Does it fall off the end of a chromosome?
+	keep = ~((mids - left < 0) | (mids + right > lengths))
+
+	# Does it overlap an excluded 100 bp chunk? The chunks of every chromosome
+	# are placed end to end, so that one sorted array holds every excluded
+	# chunk, and the chunks [s, e) of a window hold one when fewer excluded
+	# chunks come before s than before e.
+	if exclusion_zones is not None:
+		sizes = [len(exclusion_zones[name]) for name in names]
+		offsets = numpy.cumsum([0] + sizes, dtype=numpy.int64)
+		excluded = numpy.concatenate([numpy.zeros(0, dtype=numpy.int64)] + [
+			numpy.flatnonzero(exclusion_zones[name]) + offsets[k]
+			for k, name in enumerate(names)])
+
+		idxs = numpy.flatnonzero(keep)
+		offsets = offsets[codes[idxs]]
+		s = (mids[idxs] - left).astype(numpy.int64) // 100 + offsets
+		e = (mids[idxs] + right - 1).astype(numpy.int64) // 100 + 1 + offsets
+		keep[idxs[numpy.searchsorted(excluded, s) <
+			numpy.searchsorted(excluded, e)]] = False
+		del sizes, offsets, excluded, s, e
+
+	# Only the loci that remain are read, in order, until n_loci are kept.
+	idxs = numpy.flatnonzero(keep)
+	kept_mask = numpy.zeros(len(loci), dtype=bool)
+	del starts, ends, lengths, keep
+
 	# Without a count filter every locus that reaches the signals is kept, so
-	# when every signal is a bigWig the loop records only the chromosome and
-	# midpoint of each kept locus, and the windows are read after the loop,
-	# sorted by position and grouped (_read_signal_windows).
+	# when every signal is a bigWig the windows of the kept loci are read
+	# after the loop, sorted by position and grouped (_read_signal_windows).
 	defer = (not count_filter
 		and (out_values is not None or in_values is not None)
 		and (signals is None or out_values is not None)
 		and (in_signals is None or in_values is not None)
 		and pandas.api.types.is_integer_dtype(loci['start'])
 		and pandas.api.types.is_integer_dtype(loci['end']))
-	window_chroms, window_mids = [], []
 
-	for chrom, start, end in tqdm(loci.values, disable=d, desc=desc):
-		mid = start + (end - start) // 2
+	# When the sequences are also a fasta opened from a path, whose windows
+	# are read after the loop too, the loop would only record the loci it
+	# keeps. Those are the first n_loci loci that pass the checks above, so
+	# they are found without it. This holds with no signals at all as well.
+	vectorized = (not count_filter and opened_fasta
+		and (signals is None or out_values is not None)
+		and (in_signals is None or in_values is not None)
+		and mids.dtype == numpy.int64)
 
-		start = mid - left
-		end = mid + right
+	if vectorized:
+		n_remaining = len(idxs)
+		idxs = idxs[:n_loci]
+		kept_mask[idxs] = True
 
-		# Does it fall off the end of a chromosome?
-		if start < 0 or end > chrom_lengths[str(chrom)]:
-			kept_mask.append(False)
-			continue
+		# The progress bar counts the loci that pass the checks, as the
+		# loop's does, and is filled in one step to the number kept.
+		with tqdm(total=n_remaining, disable=d, desc=desc) as progress:
+			progress.update(len(idxs))
+	else:
+		loci_iter = zip(idxs.tolist(), numpy.array(names, dtype=object)[
+			codes[idxs]].tolist(), mids[idxs].tolist())
 
-		if exclusion_zones is not None:
-			s, e = start // 100, (end - 1) // 100 + 1
-			if exclusion_zones[str(chrom)][s:e].any():
-				kept_mask.append(False)
-				continue
+		for idx, chrom, mid in tqdm(loci_iter, total=len(idxs), disable=d,
+			desc=desc):
+			# Extract a window of signal using the output size
+			start = mid - out_width - max_jitter
+			end = mid + out_width + max_jitter + (out_window % 2)
 
-		# Extract a window of signal using the output size
-		start = mid - out_width - max_jitter
-		end = mid + out_width + max_jitter + (out_window % 2)
+			if signals is not None:
+				if out_values is None:
+					signal = _extract_locus_signal(signals, str(chrom), start,
+						end)
+				elif not defer:
+					signal = out_values[len(seqs)]
+					_write_locus_signal(signals, str(chrom), start, end, signal,
+						out_scratch)
 
-		if signals is not None:
-			if out_values is None:
-				signal = _extract_locus_signal(signals, str(chrom), start, end)
-			elif not defer:
-				signal = out_values[len(seqs)]
-				_write_locus_signal(signals, str(chrom), start, end, signal,
-					out_scratch)
+					# The counts are summed after NaN and infinities are
+					# replaced.
+					if count_filter:
+						numpy.nan_to_num(signal[target_idx], copy=False)
 
-				# The counts are summed after NaN and infinities are replaced.
-				if count_filter:
-					numpy.nan_to_num(signal[target_idx], copy=False)
+				if (min_counts is not None and
+						signal[target_idx].sum() < min_counts):
+					continue
 
-			if min_counts is not None and signal[target_idx].sum() < min_counts:
-				kept_mask.append(False)
-				continue
+				if (max_counts is not None and
+						signal[target_idx].sum() > max_counts):
+					continue
 
-			if max_counts is not None and signal[target_idx].sum() > max_counts:
-				kept_mask.append(False)
-				continue
+				if out_values is None:
+					signals_.append(signal)
 
-			if out_values is None:
-				signals_.append(signal)
+			# Extract a window of signal using the input size
+			start = mid - in_width - max_jitter
+			end = mid + in_width + max_jitter + (in_window % 2)
 
-		# Extract a window of signal using the input size
-		start = mid - in_width - max_jitter
-		end = mid + in_width + max_jitter + (in_window % 2)
+			if in_signals is not None:
+				if in_values is None:
+					in_signal = _extract_locus_signal(in_signals, str(chrom),
+						start, end)
+					in_signals_.append(in_signal)
+				elif not defer:
+					_write_locus_signal(in_signals, str(chrom), start, end,
+						in_values[len(seqs)], in_scratch)
 
-		if in_signals is not None:
-			if in_values is None:
-				in_signal = _extract_locus_signal(in_signals, str(chrom), start,
-					end)
-				in_signals_.append(in_signal)
-			elif not defer:
-				_write_locus_signal(in_signals, str(chrom), start, end,
-					in_values[len(seqs)], in_scratch)
+			# Extract a window of sequence using the input size. The windows
+			# of a fasta opened from a path are read together after the loop.
+			if isinstance(sequences, dict):
+				seq = sequences[str(chrom)][:, start:end]
+			elif opened_fasta:
+				seq = (str(chrom), start)
+			else:
+				# A Fasta opened with as_raw=True returns strings rather than
+				# pyfaidx.Sequence objects.
+				seq = sequences[str(chrom)][start:end]
+				if not isinstance(seq, str):
+					seq = seq.seq
 
-		# Extract a window of sequence using the input size. The windows of a
-		# fasta opened from a path are read together after the loop.
-		if isinstance(sequences, dict):
-			seq = sequences[str(chrom)][:, start:end]
-		elif opened_fasta:
-			seq = (str(chrom), start)
-		else:
-			# A Fasta opened with as_raw=True returns strings rather than
-			# pyfaidx.Sequence objects.
-			seq = sequences[str(chrom)][start:end]
-			if not isinstance(seq, str):
-				seq = seq.seq
+			kept_mask[idx] = True
+			seqs.append(seq)
 
-		kept_mask.append(True)
-		seqs.append(seq)
+			if n_loci is not None and len(seqs) == n_loci:
+				break
 
-		if defer:
-			window_chroms.append(str(chrom))
-			window_mids.append(mid)
+		del loci_iter
 
-		if n_loci is not None and len(seqs) == n_loci:
-			break 
+	# The chromosome, as an index into names, and the midpoint of each kept
+	# locus, in order, for the reads made after the loop.
+	if defer or vectorized:
+		kept = idxs if vectorized else numpy.flatnonzero(kept_mask)
+		window_codes, window_mids = codes[kept], mids[kept].astype(numpy.int64)
+		del kept
 
 	# The failed reads are warned about in the order the loop would have
 	# made them: by locus, then signals before in_signals, then by signal.
 	if defer and len(window_mids) > 0:
-		mids = numpy.array(window_mids, dtype=numpy.int64)
 		failures = []
 
 		if signals is not None:
-			failures += _read_signal_windows(signals, window_chroms,
-				mids - out_width - max_jitter, out_window + 2 * max_jitter,
-				out_values, kind=0)
+			failures += _read_signal_windows(signals, window_codes,
+				window_mids - out_width - max_jitter,
+				out_window + 2 * max_jitter, out_values, kind=0, names=names)
 
 		if in_signals is not None:
-			failures += _read_signal_windows(in_signals, window_chroms,
-				mids - in_width - max_jitter, in_window + 2 * max_jitter,
-				in_values, kind=1)
+			failures += _read_signal_windows(in_signals, window_codes,
+				window_mids - in_width - max_jitter,
+				in_window + 2 * max_jitter, in_values, kind=1, names=names)
 
 		for _, _, _, chrom, start, end in sorted(failures):
 			warnings.warn(f"{chrom} {start} {end} not valid bigwig indexes. "
@@ -1026,11 +1110,20 @@ def extract_loci(
 
 	if opened_fasta:
 		try:
-			if len(seqs) > 0:
+			if vectorized:
+				if len(window_mids) > 0:
+					seqs = _read_fasta_windows(sequences, (window_codes,
+						window_mids - in_width - max_jitter), in_window +
+						2 * max_jitter, alphabet, ignore, names=names)
+			elif len(seqs) > 0:
 				seqs = _read_fasta_windows(sequences, seqs, in_window +
 					2 * max_jitter, alphabet, ignore)
 		finally:
 			sequences.close()
+
+	del codes, mids, idxs
+	if defer or vectorized:
+		del window_codes, window_mids
 
 	if len(seqs) == 0:
 		raise ValueError("No loci remain after filtering. Loci are removed " +
@@ -1068,11 +1161,9 @@ def extract_loci(
 			y_return.append(torch.from_numpy(in_values))
 		
 	if return_mask:
-		# Loci after the n_loci cap was reached were never examined and are
-		# not returned, so they are False.
-		kept_mask += [False] * (len(loci) - len(kept_mask))
-		kept_mask = torch.tensor(kept_mask)
-		y_return.append(kept_mask)
+		# Loci after the n_loci cap was reached were never read and are not
+		# returned, so they are False.
+		y_return.append(torch.from_numpy(kept_mask))
 
 	return y_return[0] if len(y_return) == 1 else y_return
 

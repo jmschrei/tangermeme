@@ -1,6 +1,7 @@
 # test_io.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import re
 import numpy
 import torch
 import warnings
@@ -14,6 +15,7 @@ from tangermeme.io import _interleave_loci
 from tangermeme.io import _load_signals
 from tangermeme.io import _load_exclusion_zones
 from tangermeme.io import _extract_locus_signal
+from tangermeme.io import _read_fasta_windows
 from tangermeme.io import _read_fasta_windows_mmap
 from tangermeme.io import _read_signal_windows
 from tangermeme.io import _write_locus_signal
@@ -1714,6 +1716,51 @@ def test_extract_loci_window_at_chrom_start():
 	assert mask.tolist() == [True, False, True]
 
 
+@pytest.mark.parametrize("dtype", ['int32', 'uint32', 'uint64', 'Int64',
+	object])
+def test_extract_loci_coordinate_dtypes(dtype):
+	# Coordinates of any integer dtype give what int64 coordinates do: a locus
+	# off each end of its chromosome, one in an excluded chunk, and two kept.
+	fasta = "tests/data/test.fa"
+	loci = pandas.DataFrame({'chrom': ['chr1', 'chr1', 'chr2', 'chr4', 'chr1'],
+		'start': [0, 50, 201, 100, 250], 'end': [8, 61, 211, 111, 261]})
+	exclusion = pandas.DataFrame({'chrom': ['chr1'], 'start': [260],
+		'end': [270]})
+
+	X0, y0, mask0 = extract_loci(loci, fasta, ["tests/data/test.bw"],
+		in_window=11, out_window=6, exclusion_lists=exclusion, return_mask=True)
+	assert mask0.tolist() == [False, True, False, True, False]
+
+	loci = loci.astype({'start': dtype, 'end': dtype})
+	X, y, mask = extract_loci(loci, fasta, ["tests/data/test.bw"],
+		in_window=11, out_window=6, exclusion_lists=exclusion, return_mask=True)
+
+	assert torch.equal(X, X0)
+	assert torch.equal(y, y0)
+	assert torch.equal(mask, mask0)
+
+
+@pytest.mark.parametrize("dtype", [numpy.int64, numpy.uint64, object])
+def test_extract_loci_coordinates_near_int64_max(dtype):
+	# A window that ends past 2**63 falls off the end of its chromosome; it
+	# does not wrap around to a negative end that passes the check.
+	fasta = "tests/data/test.fa"
+	loci = pandas.DataFrame({'chrom': ['chr4', 'chr4'],
+		'start': numpy.array([100, 2 ** 63 - 10], dtype=dtype),
+		'end': numpy.array([111, 2 ** 63 - 1], dtype=dtype)})
+
+	X, mask = extract_loci(loci, fasta, in_window=11, return_mask=True)
+	assert mask.tolist() == [True, False]
+	assert X.shape == (1, 4, 11)
+
+
+def test_extract_loci_raises_float_coordinates():
+	loci = pandas.DataFrame({'chrom': ['chr4'], 'start': [100.0],
+		'end': [111.0]})
+	assert_raises(TypeError, extract_loci, loci, "tests/data/test.fa",
+		in_window=11)
+
+
 def test_extract_loci_summits(dict_signal):
 	# With summits=True the windows are centered on start + summit, the tenth
 	# column, rather than on the middle of the locus.
@@ -3154,3 +3201,158 @@ def test_extract_loci_bigwig_grouped_n_loci(n_loci):
 	_assert_same(result, _per_locus_call(loci, "tests/data/test.fa",
 		["tests/data/test.bw"], ["tests/data/test2.bw"], **kwargs))
 	assert len(result[0]) == n_loci
+
+
+###
+# The kept loci found without the per-locus loop: a fasta opened from a path,
+# bigWig signals or none, and no count filter
+###
+
+
+def _unlooped_loci():
+	# Loci off the ends of chr1 and chr6, repeats, interleaved chromosomes,
+	# chr7, which the bigWigs do not have, and chr1 past the end of test3.bw.
+	return [pandas.read_csv("tests/data/test.bed", sep="\t", header=None),
+		pandas.DataFrame({0: ['chr7', 'chr1', 'chr6', 'chr2', 'chr1', 'chr7',
+			'chr4', 'chr1', 'chr3', 'chr1'],
+			1: [500, 2, 70, 30, 270, 900, 100, 10, 60, 210],
+			2: [520, 6, 80, 50, 280, 940, 111, 30, 64, 230]})]
+
+
+def _with_warnings(*args, **kwargs):
+	with warnings.catch_warnings(record=True) as record:
+		warnings.simplefilter("always")
+		result = extract_loci(*args, **kwargs)
+
+	return result, [str(w.message) for w in record]
+
+
+_UNLOOPED_SIGNALS = {
+	'none': (None, None),
+	'signals': (["tests/data/test.bw", "tests/data/test3.bw"], None),
+	'in_signals': (None, ["tests/data/test2.bw"]),
+	'both': (["tests/data/test.bw"], ["tests/data/test3.bw",
+		"tests/data/test.bw"]),
+}
+
+
+@pytest.mark.parametrize("signals", list(_UNLOOPED_SIGNALS))
+@pytest.mark.parametrize("n_loci", [None, 1, 3, 100])
+@pytest.mark.parametrize("exclusion", [False, True])
+@pytest.mark.parametrize("windows", [(10, 20, 0), (9, 13, 3)])
+def test_extract_loci_unlooped_matches_loop(signals, n_loci, exclusion,
+	windows):
+	# A pyfaidx.Fasta object is read one locus at a time in the loop, and so
+	# is every locus when there is a count filter, so both give what the loop
+	# gives for the same loci, including the warnings and their order.
+	in_window, out_window, max_jitter = windows
+	signals, in_signals = _UNLOOPED_SIGNALS[signals]
+	kwargs = dict(in_window=in_window, out_window=out_window,
+		max_jitter=max_jitter, n_loci=n_loci, return_mask=True)
+	if exclusion:
+		kwargs['exclusion_lists'] = pandas.DataFrame({0: ['chr1', 'chr7'],
+			1: [205, 890], 2: [210, 905]})
+
+	loci = _unlooped_loci()
+	result, messages = _with_warnings(loci, "tests/data/test.fa", signals,
+		in_signals, **kwargs)
+
+	expected, expected_messages = _with_warnings(loci,
+		pyfaidx.Fasta("tests/data/test.fa"), signals, in_signals, **kwargs)
+	_assert_same(result, expected)
+	assert messages == expected_messages
+
+	if signals is not None:
+		expected, expected_messages = _with_warnings(loci, "tests/data/test.fa",
+			signals, in_signals, max_counts=float("inf"), **kwargs)
+		_assert_same(result, expected)
+		assert messages == expected_messages
+
+	# The kept loci are the first n_loci of those whose windows fit.
+	fits = _with_warnings(loci, "tests/data/test.fa", signals, in_signals,
+		**dict(kwargs, n_loci=None))[0][-1]
+	kept = torch.nonzero(fits)[:, 0][:n_loci]
+	assert torch.nonzero(result[-1])[:, 0].tolist() == kept.tolist()
+	assert len(result[0]) == len(kept)
+	assert 0 < len(kept) < len(fits)
+
+
+@pytest.mark.parametrize("n_loci", [None, 2])
+def test_extract_loci_unlooped_progress_bar(capsys, n_loci):
+	# The bar counts the loci whose windows fit, and is filled in one step to
+	# the number kept.
+	loci = _unlooped_loci()
+	n_fit = len(extract_loci(loci, "tests/data/test.fa", in_window=10))
+	assert capsys.readouterr().err == ""
+
+	X = extract_loci(loci, "tests/data/test.fa", in_window=10, n_loci=n_loci,
+		verbose=True)
+	err = capsys.readouterr().err
+	assert "Loading Loci" in err
+	assert re.findall(r"(\d+)/(\d+) \[", err)[-1] == (str(len(X)), str(n_fit))
+	assert len(X) == (n_fit if n_loci is None else n_loci)
+
+
+def test_extract_loci_unlooped_errors():
+	# No locus fits, with and without signals; a chromosome not in the fasta.
+	loci = pandas.DataFrame({0: ['chr1', 'chr6'], 1: [0, 70], 2: [4, 80]})
+	for signals in [None, ["tests/data/test.bw"]]:
+		with pytest.raises(ValueError, match="No loci remain"):
+			extract_loci(loci, "tests/data/test.fa", signals, in_window=20)
+
+	loci = pandas.DataFrame({0: ['chr1', 'chrZ'], 1: [100, 100],
+		2: [110, 110]})
+	with pytest.raises(ValueError, match="not in the sequences: chrZ"):
+		extract_loci(loci, "tests/data/test.fa", ["tests/data/test.bw"],
+			in_window=20)
+
+
+def test_read_signal_windows_names():
+	# Chromosomes given as indices into names read what the names do, and
+	# the failures carry the name. One name is not used.
+	rng = numpy.random.default_rng(2)
+	signals = _load_signals(["tests/data/test.bw", "tests/data/test2.bw"])
+	names = ['chr7', 'chr2', 'chr1', 'chr5', 'chr3']
+	codes = rng.integers(0, 4, 150)
+	starts = rng.integers(0, 200, 150)
+
+	out = numpy.full((150, 2, 11), -1, dtype=numpy.float32)
+	failures = _read_signal_windows(signals, codes, starts, 11, out, kind=1,
+		names=names)
+
+	expected = numpy.full((150, 2, 11), -1, dtype=numpy.float32)
+	expected_failures = _read_signal_windows(signals,
+		[names[code] for code in codes], starts, 11, expected, kind=1)
+
+	numpy.testing.assert_array_equal(out, expected)
+	assert sorted(failures) == sorted(expected_failures)
+	assert len(failures) > 0 and all(f[3] == 'chr7' for f in failures)
+
+
+@pytest.mark.parametrize("alphabet", [['A', 'C', 'G', 'T'],
+	['A', 'C', 'G', 'T', '\u00e9']])
+def test_read_fasta_windows_names(alphabet):
+	# Chromosomes given as indices into names read what the names do, from
+	# the memory map and, with an alphabet that is not ASCII, through pyfaidx.
+	# One name is not used.
+	fasta = pyfaidx.Fasta("tests/data/test.fa")
+	rng = numpy.random.default_rng(3)
+	names = ['chr4', 'chr1', 'chr3', 'chr7']
+	codes = rng.integers(0, 3, 50)
+	starts = rng.integers(0, 100, 50)
+	windows = [(names[code], int(start)) for code, start in zip(codes, starts)]
+
+	X = _read_fasta_windows(fasta, (codes, starts), 20, alphabet, ['N'],
+		names=names)
+	expected = _read_fasta_windows(fasta, windows, 20, alphabet, ['N'])
+	assert X.dtype == expected.dtype and X.flags.c_contiguous
+	numpy.testing.assert_array_equal(X, expected)
+
+	X = _read_fasta_windows_mmap(fasta, (codes, starts), 20, alphabet, ['N'],
+		names=names)
+	if len(alphabet) == 4:
+		numpy.testing.assert_array_equal(X, expected)
+	else:
+		assert X is None
+
+	fasta.close()
