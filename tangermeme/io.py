@@ -278,6 +278,124 @@ def _extract_locus_signal(signals, chrom, start, end):
 	return values
 
 
+def _allocate_signal(signals, n, width):
+	"""An internal function for allocating the output of bigWig signals.
+
+	When every signal is a bigWig, extract_loci writes each locus straight
+	into a row of one float32 array rather than keeping an array per locus and
+	stacking them. Dictionaries, an empty list of signals and a negative
+	width keep the per-locus path, whose outputs and errors differ there.
+
+
+	Parameters
+	----------
+	signals: list of pybigtools' BBIRead objects or dictionaries, or None
+		The signals, as returned by `_load_signals`.
+
+	n: int
+		The largest number of loci that can be kept.
+
+	width: int
+		The length of the window extracted from each signal.
+
+
+	Returns
+	-------
+	values: numpy.ndarray, shape=(n, len(signals), width), or None
+		An uninitialized float32 array, or None when the per-locus path is
+		used.
+
+	scratch: numpy.ndarray, shape=(width,), or None
+		A float64 array that pybigtools reads each locus into, or None.
+	"""
+
+	if signals is None or len(signals) == 0 or width < 0:
+		return None, None
+
+	if not all(isinstance(signal, pybigtools.BBIRead) for signal in signals):
+		return None, None
+
+	values = numpy.empty((n, len(signals), width), dtype=numpy.float32)
+	scratch = numpy.empty(width, dtype=numpy.float64)
+	return values, scratch
+
+
+def _write_locus_signal(signals, chrom, start, end, out, scratch):
+	"""An internal function for writing the bigWig signal of a single locus.
+
+	This gives the values `_extract_locus_signal` gives for bigWigs, but
+	writes them into `out` instead of new arrays. pybigtools writes only into
+	float64 arrays, so each bigWig is read into `scratch` and cast into its
+	row of `out`. NaN and infinities are left for the caller to replace.
+
+
+	Parameters
+	----------
+	signals: list of pybigtools' BBIRead objects
+		A list of BBIRead objects, as returned by pybigtools.open().
+
+	chrom: str
+		The name of the chromosome.
+
+	start: int
+		The starting coordinate to extract from, inclusive and base-0.
+
+	end: int
+		The ending coordinate to extract from, exclusive and base-0.
+
+	out: numpy.ndarray, shape=(len(signals), end-start)
+		The float32 array to write the values into.
+
+	scratch: numpy.ndarray, shape=(end-start,)
+		A float64 array to read each bigWig into.
+	"""
+
+	for i, signal in enumerate(signals):
+		try:
+			signal.values(chrom, start, end, arr=scratch)
+		except (RuntimeError, ValueError, KeyError):
+			warnings.warn(
+				f"{chrom} {start} {end} not valid bigwig indexes. "
+				"Using zeros instead.", TangermemeWarning, stacklevel=2)
+			out[i] = 0
+			continue
+
+		out[i] = scratch
+
+
+def _nan_to_num_rows(values, block_size=2**20):
+	"""An internal function for applying numpy.nan_to_num in place.
+
+	The rows are processed in blocks of about `block_size` elements, so the
+	masks that numpy.nan_to_num makes stay small, and a block whose values are
+	all finite is skipped because numpy.nan_to_num would leave it unchanged.
+
+
+	Parameters
+	----------
+	values: numpy.ndarray, shape=(n, ...)
+		The float32 array to modify in place.
+
+	block_size: int, optional
+		The approximate number of elements in each block. Default is 2**20.
+
+
+	Returns
+	-------
+	values: numpy.ndarray, shape=(n, ...)
+		The same array, with NaN replaced by zero and infinities by the
+		largest finite float32 of the same sign.
+	"""
+
+	step = max(1, block_size // max(1, values[0].size))
+	for i in range(0, len(values), step):
+		block = values[i:i+step]
+		if not numpy.isfinite(block).all():
+			numpy.nan_to_num(block, copy=False)
+
+	return values
+
+
 def extract_loci(
 	loci: str | os.PathLike | pandas.DataFrame | list,
 	sequences: str | os.PathLike | pyfaidx.Fasta | dict,
@@ -575,6 +693,15 @@ def extract_loci(
 	left = max(in_width, out_width) + max_jitter
 	right = max(in_width + in_window % 2, out_width + out_extra) + max_jitter
 
+	# bigWig signals are written into row len(seqs) of a preallocated array,
+	# so a locus that is filtered out is overwritten by the next one.
+	n_max = len(loci) if n_loci is None else min(len(loci), n_loci)
+	out_values, out_scratch = _allocate_signal(signals, n_max,
+		out_window + 2 * max_jitter)
+	in_values, in_scratch = _allocate_signal(in_signals, n_max,
+		in_window + 2 * max_jitter)
+	count_filter = min_counts is not None or max_counts is not None
+
 	for chrom, start, end in tqdm(loci.values, disable=d, desc=desc):
 		mid = start + (end - start) // 2
 
@@ -597,7 +724,16 @@ def extract_loci(
 		end = mid + out_width + max_jitter + (out_window % 2)
 
 		if signals is not None:
-			signal = _extract_locus_signal(signals, str(chrom), start, end)
+			if out_values is None:
+				signal = _extract_locus_signal(signals, str(chrom), start, end)
+			else:
+				signal = out_values[len(seqs)]
+				_write_locus_signal(signals, str(chrom), start, end, signal,
+					out_scratch)
+
+				# The counts are summed after NaN and infinities are replaced.
+				if count_filter:
+					numpy.nan_to_num(signal[target_idx], copy=False)
 
 			if min_counts is not None and signal[target_idx].sum() < min_counts:
 				kept_mask.append(False)
@@ -607,15 +743,21 @@ def extract_loci(
 				kept_mask.append(False)
 				continue
 
-			signals_.append(signal)
+			if out_values is None:
+				signals_.append(signal)
 
 		# Extract a window of signal using the input size
 		start = mid - in_width - max_jitter
 		end = mid + in_width + max_jitter + (in_window % 2)
 
 		if in_signals is not None:
-			in_signal = _extract_locus_signal(in_signals, str(chrom), start, end)
-			in_signals_.append(in_signal)
+			if in_values is None:
+				in_signal = _extract_locus_signal(in_signals, str(chrom), start,
+					end)
+				in_signals_.append(in_signal)
+			else:
+				_write_locus_signal(in_signals, str(chrom), start, end,
+					in_values[len(seqs)], in_scratch)
 
 		# Extract a window of sequence using the input size
 		if isinstance(sequences, dict):
@@ -655,11 +797,21 @@ def extract_loci(
 	seqs = torch.from_numpy(seqs)
 	y_return = [seqs]
 
+	# A preallocated array is trimmed to the kept loci with a view, which is
+	# contiguous; its rows past the last kept locus were never written.
 	if signals is not None:
-		y_return.append(torch.from_numpy(numpy.stack(signals_)))
+		if out_values is None:
+			y_return.append(torch.from_numpy(numpy.stack(signals_)))
+		else:
+			out_values = _nan_to_num_rows(out_values[:len(seqs)])
+			y_return.append(torch.from_numpy(out_values))
 
 	if in_signals is not None:
-		y_return.append(torch.from_numpy(numpy.stack(in_signals_)))
+		if in_values is None:
+			y_return.append(torch.from_numpy(numpy.stack(in_signals_)))
+		else:
+			in_values = _nan_to_num_rows(in_values[:len(seqs)])
+			y_return.append(torch.from_numpy(in_values))
 		
 	if return_mask:
 		# Loci after the n_loci cap was reached were never examined and are

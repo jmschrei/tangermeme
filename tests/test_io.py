@@ -1867,6 +1867,99 @@ def test_extract_loci_nan_and_inf(dict_signal):
 			23, 24])
 
 
+@pytest.fixture
+def inf_bigwig(tmp_path):
+	# chr1 is 50 bp here but 284 bp in test.fa, so windows past base 50 read
+	# NaN from pybigtools. A NaN interval would be read back as missing, so
+	# the past-the-end positions are the only NaN.
+	filename = str(tmp_path / "inf.bw")
+	bw = pybigtools.open(filename, "w")
+	bw.write({'chr1': 50, 'chr2': 211}, [('chr1', 0, 10, 1.0),
+		('chr1', 10, 12, numpy.inf), ('chr1', 12, 14, -numpy.inf),
+		('chr1', 14, 50, 2.0), ('chr2', 0, 211, 0.5)])
+	return filename
+
+
+def test_extract_loci_bigwig_nan_and_inf(inf_bigwig):
+	# bigWigs are written into a preallocated output and nan_to_num runs once
+	# at the end: NaN still becomes 0 and an infinity the largest finite
+	# float32 of its sign, in signals and in_signals, as in the per-locus
+	# values of _extract_locus_signal.
+	loci = pandas.DataFrame({0: ['chr1', 'chr1'], 1: [7, 43], 2: [17, 53]})
+	big = numpy.finfo(numpy.float32).max
+
+	_, y, y_in = extract_loci(loci, "tests/data/test.fa", [inf_bigwig],
+		[inf_bigwig], in_window=6, out_window=10)
+
+	for tensor in (y, y_in):
+		assert tensor.dtype == torch.float32
+		assert tensor.is_contiguous()
+
+	assert_array_almost_equal(y[:, 0], [[1, 1, 1, big, big, -big, -big, 2, 2,
+		2], [2, 2, 2, 2, 2, 2, 2, 0, 0, 0]])
+	assert_array_almost_equal(y_in[:, 0], [[1, big, big, -big, -big, 2],
+		[2, 2, 2, 2, 2, 0]])
+
+	bw = pybigtools.open(inf_bigwig)
+	for i, (start, end) in enumerate([(7, 17), (43, 53)]):
+		expected = _extract_locus_signal([bw], 'chr1', start, end)[0]
+		assert y[i, 0].numpy().tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("kwargs, kept", [
+	({'min_counts': 14}, [True, False, True]),
+	({'min_counts': 15}, [False, False, True]),
+	({'max_counts': 14}, [True, True, False]),
+	({'max_counts': 13}, [False, True, False]),
+])
+def test_extract_loci_bigwig_counts_after_nan_to_num(inf_bigwig, kwargs,
+	kept):
+	# The window around base 48 on chr1 runs past the end of the bigWig, so
+	# its counts are 7 * 2 plus three NaN, which count as 0. A NaN left in
+	# the sum would compare False against both thresholds and keep it.
+	loci = pandas.DataFrame({0: ['chr1', 'chr2', 'chr1'], 1: [43, 95, 25],
+		2: [53, 105, 35]})
+
+	X, y, y_in, mask = extract_loci(loci, "tests/data/test.fa", [inf_bigwig],
+		[inf_bigwig], in_window=6, out_window=10, return_mask=True, **kwargs)
+
+	assert mask.tolist() == kept
+	assert X.shape == (sum(kept), 4, 6)
+	assert y_in.shape == (sum(kept), 1, 6)
+	assert_array_almost_equal(y.sum(axis=(1, 2)),
+		[s for s, k in zip([14, 5, 20], kept) if k])
+
+
+@pytest.mark.parametrize("n_loci", [None, 1, 3, 100])
+def test_extract_loci_bigwig_trimmed_rows(n_loci):
+	# The preallocated outputs hold a row for every locus that could be kept,
+	# and are cut to the kept loci. A locus rejected by min_counts is
+	# overwritten by the next one, so each row is the values of one kept locus.
+	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
+	X, y, y_in, mask = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		bw, bw[:1], in_window=8, out_window=10, min_counts=7, target_idx=1,
+		n_loci=n_loci, return_mask=True)
+
+	n = 4 if n_loci is None else min(4, n_loci)
+	assert y.shape == (n, 2, 10)
+	assert y_in.shape == (n, 1, 8)
+	for tensor in (X, y, y_in):
+		assert tensor.is_contiguous()
+
+	bws = [pybigtools.open(name) for name in bw]
+	loci = pandas.read_csv("tests/data/test.bed", sep="\t", header=None)
+	kept = loci[mask.numpy()]
+	for i, (chrom, start, end) in enumerate(kept.values):
+		mid = start + (end - start) // 2
+		expected = numpy.stack(_extract_locus_signal(bws, chrom, mid - 5,
+			mid + 5))
+		assert y[i].numpy().tobytes() == expected.tobytes()
+
+		expected = numpy.stack(_extract_locus_signal(bws[:1], chrom, mid - 4,
+			mid + 4))
+		assert y_in[i].numpy().tobytes() == expected.tobytes()
+
+
 def test_extract_loci_does_not_modify_inputs(dict_sequences, dict_signal):
 	# The loci, sequences, signals and exclusion lists are left unchanged, and
 	# the returned tensors do not share memory with them.
