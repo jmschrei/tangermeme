@@ -444,7 +444,7 @@ def extract_loci(
 	kept_mask = []
 	in_width, out_width = in_window // 2, out_window // 2
 	out_extra = out_window % 2
-	if signals is None and in_signals is None:
+	if signals is None:
 		out_width, out_extra = 0, 0
 
 	# Extract the length of each chromosome. Track whether we opened the

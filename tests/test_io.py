@@ -1209,6 +1209,27 @@ def test_extract_loci_controls(loci_signal):
 	assert_array_almost_equal(controls[:, :, 3:-3], loci_signal)
 
 
+def test_extract_loci_in_signals_only(loci_signal):
+	# Without signals no output window is extracted, so out_window must not
+	# decide which loci fit. It used to: the default out_window of 1000 ran
+	# every locus off these short chromosomes.
+	loci = "tests/data/test.bed"
+	controls = ["tests/data/test.bw", "tests/data/test2.bw"]
+	fasta = "tests/data/test.fa"
+
+	X, controls_, mask = extract_loci(loci, fasta, in_signals=controls,
+		in_window=10, return_mask=True)
+
+	assert X.shape == (5, 4, 10)
+	assert controls_.shape == (5, 2, 10)
+	assert controls_.dtype == torch.float32
+	assert mask.tolist() == [True] * 5
+	assert_array_almost_equal(controls_, loci_signal)
+
+	X0 = extract_loci(loci, fasta, in_window=10)
+	assert_array_almost_equal(X, X0)
+
+
 ###
 
 
