@@ -25,6 +25,8 @@ from tangermeme.io import _read_fasta_windows_mmap
 from tangermeme.io import _read_signal_windows
 from tangermeme.io import _write_locus_signal
 from tangermeme.io import _BigWigFile
+from tangermeme.io import _inflate_bigwig_blocks
+from tangermeme.io import _zlib_uncompress
 
 from tangermeme.io import read_meme
 from tangermeme.io import extract_loci
@@ -4299,3 +4301,296 @@ def test_extract_loci_n_jobs_reaches_encoder(monkeypatch, kwargs):
 	assert calls == [1, 3]
 	for x, x1 in zip(X, X1):
 		assert torch.equal(x, x1)
+
+
+###
+# The inflater that _BigWigFile's tasks run without the GIL
+###
+
+
+class _CountingInflater():
+	# _inflate_bigwig_blocks, recording each call's number of blocks and the
+	# read flag it leaves on each block.
+	def __init__(self, kernel):
+		self.kernel, self.calls, self.flags = kernel, [], []
+
+	@property
+	def signatures(self):
+		return self.kernel.signatures
+
+	def __call__(self, uncompress, data, starts, sizes, buffer, blocks,
+		length):
+		used = self.kernel(uncompress, data, starts, sizes, buffer, blocks,
+			length)
+		self.calls.append(len(starts))
+		self.flags.extend(blocks[:, 5].tolist())
+		return used
+
+
+def _counting_inflater(monkeypatch):
+	counting = _CountingInflater(tangermeme.io._inflate_bigwig_blocks)
+	monkeypatch.setattr(tangermeme.io, '_inflate_bigwig_blocks', counting)
+	return counting
+
+
+def test_zlib_uncompress_loads():
+	import sys
+	import ctypes
+
+	uncompress = _zlib_uncompress()
+	if sys.platform.startswith('linux'):
+		assert uncompress is not None
+
+	if uncompress is not None:
+		assert uncompress[1].itemsize == ctypes.sizeof(ctypes.c_ulong)
+
+	assert _zlib_uncompress() is uncompress
+
+
+@pytest.mark.parametrize("capacity", [32768, 5000, 400, 0])
+def test_inflate_bigwig_blocks(capacity):
+	# Whole-word streams of several sizes, a stream of 22 bytes, an empty
+	# stream, bytes that are not a zlib stream, and a block whose read flag
+	# is 0, inflated into buffers that hold all, some or none of them.
+	uncompress = _zlib_uncompress()
+	if uncompress is None:
+		pytest.skip("zlib's uncompress() cannot be loaded here")
+
+	rng = numpy.random.default_rng(3)
+	raws = [rng.integers(0, 4, size, dtype=numpy.uint8).tobytes() for size in
+		[4, 400, 12288, 4096]] + [b'\x01' * 22, b'']
+	streams = [zlib.compress(raw) for raw in raws] + [b'not a zlib stream!!!',
+		zlib.compress(raws[1])]
+
+	sizes = numpy.array([len(s) for s in streams], dtype=numpy.int64)
+	starts = numpy.cumsum(sizes) - sizes
+	data = numpy.frombuffer(b''.join(streams), dtype=numpy.uint8)
+	buffer = numpy.full(capacity, 255, dtype=numpy.uint8)
+	blocks = numpy.zeros((len(streams), 6), dtype=numpy.int64)
+	blocks[:, 2:5] = [5, 6, 7]
+	blocks[:, 5] = 1
+	blocks[-1, 5] = 0
+
+	used = _inflate_bigwig_blocks(uncompress[0], data, starts, sizes, buffer,
+		blocks, numpy.zeros(1, dtype=uncompress[1]))
+
+	# What zlib.decompress gives, placed one after another while they fit.
+	position, expected = 0, []
+	for k, stream in enumerate(streams):
+		if k == len(streams) - 1:
+			expected.append((0, 0, 0))
+			continue
+
+		try:
+			raw = zlib.decompress(stream)
+		except zlib.error:
+			expected.append((0, 0, 2))
+			continue
+
+		if len(raw) >= capacity - position and len(raw) > 0:
+			expected.append((0, 0, 2))
+		elif len(raw) == 0 or len(raw) % 4 != 0:
+			expected.append((0, 0, 0))
+		else:
+			expected.append((position // 4, (position + len(raw)) // 4, 1))
+			assert buffer[position:position + len(raw)].tobytes() == raw
+			position += len(raw)
+
+	assert used == position
+	assert [tuple(b) for b in blocks[:, [0, 1, 5]].tolist()] == expected
+	assert (blocks[:, 2:5] == [5, 6, 7]).all()
+	assert sum(flag == 1 for _, _, flag in expected) == {32768: 4, 5000: 3,
+		400: 1, 0: 0}[capacity]
+
+
+def _inflate_mode(monkeypatch, mode, buffer_size):
+	# 'kernel' is the default. 'python' has no uncompress(), so every block
+	# is inflated by zlib.decompress. 'retry' fits no block into the buffer,
+	# and 'some' fits about two in three.
+	if mode == 'python':
+		monkeypatch.setattr(tangermeme.io, '_zlib_uncompress', lambda: None)
+	elif mode == 'retry':
+		monkeypatch.setattr(tangermeme.io, '_BIGWIG_MAX_BLOCK_BYTES', 4)
+	elif mode == 'some':
+		monkeypatch.setattr(tangermeme.io, '_BIGWIG_MAX_BLOCK_BYTES',
+			buffer_size * 2 // 3)
+
+
+@pytest.mark.parametrize("mode", ['kernel', 'python', 'retry', 'some'])
+@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("batch_blocks", [2, 256])
+def test_bigwig_file_inflate_paths(pybigtools_bigwig, monkeypatch, mode,
+	n_jobs, batch_blocks):
+	# The same values whichever way a block is inflated, with batches of two
+	# blocks that split chr1's blocks across tasks, and with one batch.
+	bw = pybigtools.open(str(pybigtools_bigwig))
+	reader = _BigWigFile.open(str(pybigtools_bigwig), bw)
+	assert reader.buffer_size > 0
+
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_BATCH_BLOCKS', batch_blocks)
+	_inflate_mode(monkeypatch, mode, reader.buffer_size)
+	counting = _counting_inflater(monkeypatch)
+
+	rng = numpy.random.default_rng(11)
+	chroms, starts = _random_windows(rng, bw.chroms(), 400, 1000)
+	y, fallback = _reader_windows(pybigtools_bigwig, chroms, starts, 1000,
+		n_jobs)
+	y0 = _pybigtools_windows(pybigtools_bigwig, chroms, starts, 1000)
+
+	assert len(fallback) == 0
+	_assert_bits_equal(y, y0)
+
+	flags = set(counting.flags)
+	if mode == 'python':
+		assert counting.calls == []
+	else:
+		assert flags == {'kernel': {1}, 'retry': {2}, 'some': {1, 2}}[mode]
+
+	# chr1 has at least five blocks, so batches of two split it across at
+	# least three tasks.
+	assert (reader._read_index()['chroms'] == 0).sum() >= 5
+	if mode != 'python':
+		assert len(counting.calls) >= (3 if batch_blocks == 2 else 1)
+
+
+def test_bigwig_file_inflate_uncompressed(tmp_path, monkeypatch):
+	# A file stored without compression is not inflated by the kernel.
+	path = tmp_path / "raw.bw"
+	_write_raw_bigwig(path, {'chr1': 1000}, [('chr1', 1, 0, 0, [(10, 20, 1.5),
+		(30, 40, 2.5)]), ('chr1', 3, 3, 3, (300, [10.0, 11.0]))],
+		compress=False)
+	counting = _counting_inflater(monkeypatch)
+
+	starts = numpy.arange(0, 400, 7, dtype=numpy.int64)
+	chroms = ['chr1'] * len(starts)
+	y, fallback = _reader_windows(path, chroms, starts, 50, 2)
+	y0 = _pybigtools_windows(path, chroms, starts, 50)
+
+	assert len(fallback) == 0
+	_assert_bits_equal(y, y0)
+	assert counting.calls == []
+
+
+@pytest.mark.parametrize("mode", ['kernel', 'python', 'retry'])
+def test_bigwig_file_inflate_unsupported_blocks(tmp_path, monkeypatch, mode):
+	# Blocks that are not zlib, are not whole words, or hold overlapping
+	# items: their windows are left to pybigtools on every path, and the
+	# other windows are read.
+	path = tmp_path / "bad.bw"
+	sections = [('chr1', 1, 0, 0, [(0, 5, 9.0)]),
+		('chr1', 10, 20, b'not a zlib stream!!!'),
+		('chr1', 30, 40, zlib.compress(b'\x00' * 22)),
+		('chr1', 1, 0, 0, [(100, 110, 8.0)]),
+		('chr1', 1, 0, 0, [(200, 210, 7.0), (205, 215, 1.0)]),
+		('chr1', 1, 0, 0, [(300, 310, 6.0)] + [(400 + i, 401 + i, float(i))
+			for i in range(300)]),
+		('chr2', 1, 0, 0, [(0, 10, 7.0)])]
+	_write_raw_bigwig(path, {'chr1': 1000, 'chr2': 100}, sections)
+	reader = _BigWigFile.open(str(path), pybigtools.open(str(path)))
+	_inflate_mode(monkeypatch, mode, reader.buffer_size)
+	counting = _counting_inflater(monkeypatch)
+
+	chroms = ['chr1'] * 7 + ['chr2']
+	starts = numpy.array([0, 12, 95, 32, 203, 305, 450, 0], dtype=numpy.int64)
+	y, fallback = _reader_windows(path, chroms, starts, 5, 2)
+
+	assert fallback.tolist() == [1, 3, 4]
+	keep = [0, 2, 5, 6, 7]
+	y0 = _pybigtools_windows(path, [chroms[k] for k in keep], starts[keep], 5)
+	_assert_bits_equal(y[keep], y0)
+
+	if mode == 'python':
+		assert counting.calls == []
+	else:
+		assert 2 in counting.flags and 0 in counting.flags
+		assert (1 in counting.flags) == (mode == 'kernel')
+
+
+@pytest.mark.parametrize("mode", ['kernel', 'python'])
+def test_bigwig_file_short_read(pybigtools_bigwig, monkeypatch, mode):
+	# A read that stops halfway leaves unread the blocks it does not reach
+	# in full, and their windows go to pybigtools, on either path.
+	pread = tangermeme.io._pread_into
+	monkeypatch.setattr(tangermeme.io, '_pread_into', lambda fd, buffer,
+		offset: pread(fd, buffer[:len(buffer) // 2], offset))
+	_inflate_mode(monkeypatch, mode, 0)
+
+	bw = pybigtools.open(str(pybigtools_bigwig))
+	rng = numpy.random.default_rng(12)
+	chroms, starts = _random_windows(rng, bw.chroms(), 300, 100)
+	y, fallback = _reader_windows(pybigtools_bigwig, chroms, starts, 100, 2)
+	y0 = _pybigtools_windows(pybigtools_bigwig, chroms, starts, 100)
+
+	assert 0 < len(fallback) < len(starts)
+	keep = numpy.setdiff1d(numpy.arange(len(starts)), fallback)
+	_assert_bits_equal(y[keep], y0[keep])
+
+	# The same windows are handed back on both paths.
+	with monkeypatch.context() as m:
+		_inflate_mode(m, 'python' if mode == 'kernel' else 'kernel', 0)
+		_, fallback2 = _reader_windows(pybigtools_bigwig, chroms, starts, 100,
+			2)
+
+	assert fallback.tolist() == fallback2.tolist()
+
+
+def test_bigwig_file_without_preadv(pybigtools_bigwig, monkeypatch):
+	# Where os.preadv is missing, each run is read with os.pread and copied.
+	import os
+
+	monkeypatch.delattr(os, 'preadv', raising=False)
+	bw = pybigtools.open(str(pybigtools_bigwig))
+	rng = numpy.random.default_rng(13)
+	chroms, starts = _random_windows(rng, bw.chroms(), 300, 700)
+	y, fallback = _reader_windows(pybigtools_bigwig, chroms, starts, 700, 3)
+	y0 = _pybigtools_windows(pybigtools_bigwig, chroms, starts, 700)
+
+	assert len(fallback) == 0
+	_assert_bits_equal(y, y0)
+
+
+@pytest.mark.parametrize("mode", ['python', 'retry', 'some'])
+@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("count_filter", [False, True])
+def test_extract_loci_bigwig_reader_inflate_paths(reader_fasta,
+	pybigtools_bigwig, tmp_path, monkeypatch, mode, n_jobs, count_filter):
+	# extract_loci gives the same outputs whichever way the reader inflates
+	# its blocks: after the loop, and in the loop under a count filter.
+	path = tmp_path / "sections.bw"
+	_write_raw_bigwig(path, {'chr1': 30000, 'chr2': 9000, 'chr3': 4000},
+		[('chr1', 3, 10, 4, (0, [float(i) for i in range(2900)])),
+		('chr2', 2, 0, 3, [(i * 5, float(i)) for i in range(1700)]),
+		('chr3', 1, 0, 0, [(10, 3000, 2.5)])])
+
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_MIN_WINDOWS', 1)
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_BATCH_BLOCKS', 2)
+	rng = numpy.random.default_rng(14)
+	loci = _reader_loci(rng, 400)
+	kwargs = dict(signals=[str(pybigtools_bigwig), str(path)],
+		in_signals=[str(pybigtools_bigwig)], in_window=301, out_window=101,
+		max_jitter=5, return_mask=True, n_jobs=n_jobs)
+	if count_filter:
+		kwargs.update(min_counts=1.0, target_idx=1)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("ignore")
+		y = extract_loci(loci, reader_fasta, **kwargs)
+
+		counting = _counting_inflater(monkeypatch)
+		bw = _BigWigFile.open(str(pybigtools_bigwig), pybigtools.open(str(
+			pybigtools_bigwig)))
+		_inflate_mode(monkeypatch, mode, bw.buffer_size)
+		y1 = extract_loci(loci, reader_fasta, **kwargs)
+
+	assert len(y) == len(y1) == 4
+	for x, x1 in zip(y, y1):
+		assert x.dtype == x1.dtype and x.shape == x1.shape
+		assert torch.equal(x.view(torch.uint8) if x.dtype == torch.bool else
+			x.view(torch.int32) if x.dtype == torch.float32 else x,
+			x1.view(torch.uint8) if x1.dtype == torch.bool else
+			x1.view(torch.int32) if x1.dtype == torch.float32 else x1)
+
+	if mode == 'python':
+		assert counting.calls == []
+	else:
+		assert len(counting.calls) > 0

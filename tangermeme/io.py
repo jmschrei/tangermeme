@@ -558,6 +558,106 @@ _BIGWIG_MIN_WINDOWS = 1024
 # hold at most n_jobs * 256 * 32 KB of decompressed data.
 _BIGWIG_BATCH_BLOCKS = 256
 
+# A task inflates its blocks into a buffer of uncompressBufSize bytes per
+# block, or of this many when uncompressBufSize is larger. A block that does
+# not fit in what is left of the buffer is inflated by zlib.decompress.
+_BIGWIG_MAX_BLOCK_BYTES = 2 ** 20
+
+# zlib's uncompress() through ctypes, loaded on the first read.
+_ZLIB_UNCOMPRESS = []
+
+
+def _zlib_uncompress():
+	"""zlib's uncompress() as a ctypes function, or None if it cannot be loaded.
+
+	_inflate_bigwig_blocks calls it without the GIL, which zlib.decompress
+	holds between blocks. The zlib module links the same library on Linux,
+	where it is already loaded under this name. Without it, every block is
+	inflated by zlib.decompress.
+	"""
+
+	if len(_ZLIB_UNCOMPRESS) == 0:
+		_ZLIB_UNCOMPRESS.append(_load_zlib_uncompress())
+
+	return _ZLIB_UNCOMPRESS[0]
+
+
+def _load_zlib_uncompress():
+	"""(uncompress, the dtype of a C unsigned long), or None."""
+
+	try:
+		import ctypes
+		import ctypes.util
+	except ImportError:
+		return None
+
+	for name in ('libz.so.1', 'libz.dylib', 'zlib1.dll', 'z'):
+		try:
+			if name == 'z':
+				name = ctypes.util.find_library('z')
+				if name is None:
+					continue
+
+			function = ctypes.CDLL(name).uncompress
+		except (OSError, AttributeError):
+			continue
+
+		function.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+			ctypes.c_ulong]
+		function.restype = ctypes.c_int
+		return function, numpy.dtype(ctypes.c_ulong)
+
+	return None
+
+
+@numba.njit(nogil=True, cache=True)
+def _inflate_bigwig_blocks(uncompress, data, starts, sizes, buffer, blocks,
+	length):
+	"""Inflate data blocks one after another into `buffer`, without the GIL.
+
+	Block k is the zlib stream data[starts[k]:starts[k] + sizes[k]], and is
+	inflated only when blocks[k, 5] is 1. Its words are then
+	buffer[4 * blocks[k, 0]:4 * blocks[k, 1]]. A block that inflates to no
+	bytes or to bytes that are not whole 32-bit words gets blocks[k, 5] = 0,
+	as it would from zlib.decompress. A block that uncompress() cannot
+	inflate into the rest of `buffer` gets 2, and is left to zlib.decompress.
+	`length` is a one-element array of C unsigned longs. Returns the number
+	of bytes of `buffer` that were used.
+	"""
+
+	position = 0
+	for k in range(starts.shape[0]):
+		if blocks[k, 5] != 1:
+			continue
+
+		length[0] = buffer.shape[0] - position
+		source = data[starts[k]:starts[k] + sizes[k]]
+		status = uncompress(buffer[position:].ctypes, length.ctypes,
+			source.ctypes, sizes[k])
+		n = numpy.int64(length[0])
+
+		if status != 0:
+			blocks[k, 5] = 2
+		elif n == 0 or n % 4 != 0:
+			blocks[k, 5] = 0
+		else:
+			blocks[k, 0] = position // 4
+			blocks[k, 1] = (position + n) // 4
+			position += n
+
+	return position
+
+
+def _pread_into(fd, buffer, offset):
+	"""Read into the uint8 array `buffer` from `offset`; return the bytes read."""
+
+	if hasattr(os, 'preadv'):
+		return os.preadv(fd, [buffer], offset)
+
+	data = os.pread(fd, len(buffer), offset)
+	buffer[:len(data)] = numpy.frombuffer(data, dtype=numpy.uint8)
+	return len(data)
+
 
 @numba.njit(nogil=True, cache=True)
 def _check_bigwig_block(words, begin, end, chrom, base_start, base_end):
@@ -982,17 +1082,21 @@ class _BigWigFile():
 		def read_batch(k):
 			w0, w1 = bounds[k], bounds[k + 1]
 			b0, b1 = int(windows[w0, 0]), int(windows[w0:w1, 1].max())
-			words, blocks = self._read_blocks(fd, needed[b0:b1], index)
+			words, blocks = self._read_blocks(fd, needed[b0:b1], index,
+				uncompress)
 			local = windows[w0:w1].copy()
 			local[:, :2] -= b0
 			_read_bigwig_windows(words, blocks, local, out, signal,
 				failed[w0:w1])
 
-		# The first batch is read on this thread when the decoder has not been
-		# compiled yet, so that it is compiled once and before any thread
-		# starts. pread takes no file position, so the threads share one fd.
+		# The first batch is read on this thread when the decoder or the
+		# inflater has not been compiled yet, so that each is compiled once and
+		# before any thread starts. pread takes no file position, so the
+		# threads share one fd.
+		uncompress = _zlib_uncompress() if self.buffer_size > 0 else None
 		n_batches = len(bounds) - 1
-		first = int(n_batches > 0 and not _read_bigwig_windows.signatures)
+		first = int(n_batches > 0 and not (_read_bigwig_windows.signatures and
+			(uncompress is None or _inflate_bigwig_blocks.signatures)))
 		fd = os.open(self.path, os.O_RDONLY)
 		try:
 			if first:
@@ -1010,46 +1114,74 @@ class _BigWigFile():
 		fallback = numpy.concatenate([numpy.flatnonzero(~usable), order[failed]])
 		return numpy.sort(fallback)
 
-	def _read_blocks(self, fd, leaves, index):
+	def _read_blocks(self, fd, leaves, index, uncompress=None):
 		"""Read and decompress data blocks into one array of 32-bit words.
 
 		Returns the words and a (len(leaves), 6) array of each block's first
 		and last word, its index entry's chromosome, start and end, and 1 if
 		it was read or 0 if it could not be.
+
+		The compressed blocks are read with one os.pread per run of adjacent
+		blocks, into one array. `uncompress`, the result of _zlib_uncompress(),
+		inflates them without the GIL. The blocks it leaves, and every block
+		when it is None or the file is not compressed, are inflated with
+		zlib.decompress, with the same result.
 		"""
 
 		offsets, sizes = index['offsets'][leaves], index['sizes'][leaves]
 		breaks = numpy.flatnonzero(offsets[1:] != offsets[:-1] + sizes[:-1]) + 1
 		breaks = [0] + breaks.tolist() + [len(leaves)] if len(leaves) > 0 else []
 
-		parts, read = [], numpy.ones(len(leaves), dtype=numpy.int64)
+		# Blocks in a run are adjacent in the file, so each run is read to
+		# the positions its blocks have when they are packed end to end. A
+		# block that a short read does not reach in full is not read.
+		ends = numpy.cumsum(sizes)
+		starts = ends - sizes
+		data = numpy.empty(int(sizes.sum()), dtype=numpy.uint8)
+		read = numpy.ones(len(leaves), dtype=numpy.int64)
 		for r0, r1 in zip(breaks[:-1], breaks[1:]):
-			begin = int(offsets[r0])
-			length = int(offsets[r1 - 1] + sizes[r1 - 1]) - begin
-			data = memoryview(os.pread(fd, length, begin))
+			position, end = int(starts[r0]), int(ends[r1 - 1])
+			got = _pread_into(fd, data[position:end], int(offsets[r0]))
+			read[r0:r1][ends[r0:r1] > position + got] = 0
 
-			for k in range(r0, r1):
-				a = int(offsets[k]) - begin
-				raw = data[a:a + int(sizes[k])]
-				try:
-					block = zlib.decompress(raw) if self.buffer_size > 0 else \
-						bytes(raw)
-				except zlib.error:
-					block = b''
-
-				if len(raw) != sizes[k] or len(block) % 4 != 0 or \
-						len(block) == 0:
-					block, read[k] = b'', 0
-
-				parts.append(block)
-
-		lengths = numpy.array([len(part) // 4 for part in parts],
-			dtype=numpy.int64)
-		ends = numpy.cumsum(lengths)
-		blocks = numpy.stack([ends - lengths, ends, index['chroms'][leaves],
+		zeros = numpy.zeros(len(leaves), dtype=numpy.int64)
+		blocks = numpy.stack([zeros, zeros, index['chroms'][leaves],
 			index['bases'][leaves, 0], index['bases'][leaves, 1], read], axis=1)
-		words = numpy.frombuffer(b''.join(parts), dtype=numpy.uint32)
-		return words, blocks
+
+		used, buffer = 0, numpy.empty(0, dtype=numpy.uint8)
+		if uncompress is not None and self.buffer_size > 0:
+			function, ulong = uncompress
+			buffer = numpy.empty(len(leaves) * min(self.buffer_size,
+				_BIGWIG_MAX_BLOCK_BYTES), dtype=numpy.uint8)
+			used = _inflate_bigwig_blocks(function, data, starts, sizes, buffer,
+				blocks, numpy.zeros(1, dtype=ulong))
+		else:
+			blocks[:, 5] *= 2
+
+		parts, position = [], used
+		for k in numpy.flatnonzero(blocks[:, 5] == 2).tolist():
+			raw = data[starts[k]:ends[k]]
+			try:
+				block = zlib.decompress(raw) if self.buffer_size > 0 else \
+					raw.tobytes()
+			except zlib.error:
+				block = b''
+
+			if len(block) % 4 != 0 or len(block) == 0:
+				blocks[k, 5] = 0
+				continue
+
+			blocks[k, 0], blocks[k, 1], blocks[k, 5] = position // 4, (position +
+				len(block)) // 4, 1
+			position += len(block)
+			parts.append(block)
+
+		words = buffer[:used]
+		if len(parts) > 0:
+			words = numpy.concatenate([words, numpy.frombuffer(b''.join(parts),
+				dtype=numpy.uint8)])
+
+		return words.view(numpy.uint32), blocks
 
 
 def _open_bigwig_files(paths, signals, values, n_max):
