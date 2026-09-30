@@ -46,6 +46,8 @@ io
 
 	- The sequences returned by ``extract_loci`` are C-contiguous. They used to keep the layout of the transposed view that ``one_hot_encode`` returns, with strides ``(4 * L, 1, 4)``, so ``.view`` raised a ``RuntimeError`` on them. The values are unchanged.
 
+	- ``extract_loci``'s return annotation is ``torch.Tensor | list[torch.Tensor]``, which is what it returns: the sequences alone, or a list of the sequences followed by the signals, the input signals and the mask that were asked for. It was annotated as ``tuple``.
+
 utils
 -----
 
@@ -60,6 +62,8 @@ variant_effect
 
 Documentation
 -------------
+
+	- The ``alphabet`` parameters of ``insert``, ``substitute``, ``multisubstitute``, ``marginalize``, ``space``, ``greedy_substitution``, ``beam_substitution`` and ``greedy_marginalize`` no longer say that characters outside the alphabet are ignored. A character of a string motif that is not in the alphabet raises a ``ValueError`` in each of them. The exceptions are the characters in ``ignore`` for ``substitute`` and ``multisubstitute``, and ``N`` for ``marginalize``, ``space`` and the three design functions; ``insert`` has none and rejects an ``N`` too. These parameters, and those of ``characters`` and ``one_hot_to_fasta``, no longer list a set, whose characters have no order and which ``characters`` cannot index. The design functions no longer say that ``alphabet`` goes unused for a one-hot encoded motif, since they take motifs only as strings, and ``marginalize`` and ``space`` say that the length of ``alphabet`` is checked against ``X`` either way.
 
 	- The first ``dinucleotide_shuffle`` example in the README printed two shuffles that ``dinucleotide_shuffle(seq, random_state=0)`` does not return. It now shows the two it does.
 

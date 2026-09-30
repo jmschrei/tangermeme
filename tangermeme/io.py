@@ -296,7 +296,7 @@ def extract_loci(
 	exclusion_lists: str | os.PathLike | pandas.DataFrame | list | None = None,
 	return_mask: bool = False,
 	verbose: bool = False,
-) -> tuple:
+) -> torch.Tensor | list[torch.Tensor]:
 	"""Extract sequence and signal information for each provided locus.
 
 	This function will take in a set of loci, sequences, and optionally signals,
@@ -695,7 +695,7 @@ def one_hot_to_fasta(
 		A list of one header per sequence in `X`. If None, the numeric index of
 		each sequence is used as its header. Default is None.
 
-	alphabet: set or tuple or list, optional
+	alphabet: list or tuple, optional
 		A pre-defined alphabet where the ordering of the symbols is the same as
 		the index into the one-hot encoding. Default is ['A', 'C', 'G', 'T'].
 	"""

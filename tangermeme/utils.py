@@ -356,7 +356,7 @@ def characters(
 		or contain numeric values. These numerics can be probabilities but can
 		also be frequencies.
 
-	alphabet : set or tuple or list
+	alphabet : list or tuple
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor. This is used to determine the
 		letters in the returned sequence. Default is the DNA alphabet.
