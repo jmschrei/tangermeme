@@ -28,6 +28,11 @@ variant_effect
 
 	- ``insertion_effect`` and ``deletion_effect`` build their edited sequences with a numba kernel that works out which position of the original sequence each output position comes from, followed by a single ``torch.gather``. ``insertion_effect`` previously looped over the examples in Python and called ``ersatz.insert`` once per insertion, re-validating the whole sequence each time, and ``deletion_effect`` selected positions through a boolean mask repeated over every channel. With DeepSEA Beluga on a GPU and 1,000 examples of 2,000 bp, building the sequences took 0.15 s for one insertion per example, 1.2 s for ten, and 0.04 s for one deletion, against 0.07 s for one forward pass; it now takes 2-3 ms, so each function costs about its two forward passes. The edited sequences, their dtypes, and the predictions made from them are unchanged. ``insertion_effect`` now accepts ``X`` on a GPU, where it previously raised a device mismatch. It no longer checks that the examples receiving insertions are one-hot encoded, which it did only as a side effect of calling ``ersatz.insert``, and which ``substitution_effect`` and ``deletion_effect`` never did. Several insertions at one position are placed in reverse of the order given, as before; for an example with more than 16 insertions that order had depended on torch's unstable sort, and no longer does.
 
+Documentation
+-------------
+
+	- The first ``dinucleotide_shuffle`` example in the README printed two shuffles that ``dinucleotide_shuffle(seq, random_state=0)`` does not return. It now shows the two it does.
+
 
 Version 1.5.0
 =============
