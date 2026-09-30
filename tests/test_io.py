@@ -13,6 +13,7 @@ from tangermeme.io import _interleave_loci
 from tangermeme.io import _load_signals
 from tangermeme.io import _load_exclusion_zones
 from tangermeme.io import _extract_locus_signal
+from tangermeme.io import _read_fasta_windows_mmap
 
 from tangermeme.io import read_meme
 from tangermeme.io import extract_loci
@@ -2569,5 +2570,329 @@ def test_interleave_loci_empty_dataframe():
 	assert list(result.columns) == ['chrom', 'start', 'end']
 
 
+###
 
 
+# A fasta opened from a path is read through its .fai index from a memory map
+# of the file. These tests check that each window equals what pyfaidx returns
+# for it: across line ends of every width and kind, at both ends of every
+# record, and at the end of a file that lacks a final line end. When the
+# bytes are not what pyfaidx would return unchanged, or the file cannot be
+# mapped, pyfaidx reads the windows instead, so the output or the error is
+# the one a pyfaidx.Fasta object gives.
+
+FASTA_GENOME_LENGTHS = {'chr1': 97, 'empty': 0, 'chr2': 70, 'chr3': 23,
+	'chrLast': 420}
+
+
+def _fasta_genome(seed=0):
+	rng = numpy.random.RandomState(seed)
+	return {chrom: ''.join(rng.choice(list('ACGTacgtN'), size=length))
+		for chrom, length in FASTA_GENOME_LENGTHS.items()}
+
+
+def _write_fasta(path, genome, width, newline='\n', final_newline=True):
+	lines = []
+	for chrom, sequence in genome.items():
+		lines.append('>' + chrom)
+		lines.extend(sequence[i:i+width] for i in range(0, len(sequence),
+			width))
+
+	text = newline.join(lines) + (newline if final_newline else '')
+	with open(path, 'wb') as handle:
+		handle.write(text.encode('utf8'))
+
+
+def _every_window(genome, in_window):
+	# One-base loci whose windows start at every base where they fit.
+	rows = []
+	for chrom, sequence in genome.items():
+		for start in range(len(sequence) - in_window + 1):
+			mid = start + in_window // 2
+			rows.append((chrom, mid, mid + 1))
+
+	return pandas.DataFrame(rows)
+
+
+def _encode_windows(genome, loci, in_window, alphabet=['A', 'C', 'G', 'T'],
+	ignore=['N']):
+	X = []
+	for chrom, mid, _ in loci.itertuples(index=False):
+		start = mid - in_window // 2
+		sequence = genome[chrom][start:start + in_window].upper()
+		X.append(one_hot_encode(sequence, alphabet=alphabet, ignore=ignore))
+
+	return torch.stack(X)
+
+
+def _same_as_pyfaidx_object(loci, path, **kwargs):
+	# The output, or the type and message of the error, equal those of the
+	# same call given a pyfaidx.Fasta object, whose windows pyfaidx reads.
+	fasta = None
+	try:
+		fasta = pyfaidx.Fasta(path)
+		expected = extract_loci(loci, fasta, **kwargs)
+	except Exception as error:
+		with pytest.raises(type(error)) as info:
+			extract_loci(loci, path, **kwargs)
+
+		assert str(info.value) == str(error)
+		return None
+	finally:
+		if fasta is not None:
+			fasta.close()
+
+	X = extract_loci(loci, path, **kwargs)
+	assert X.dtype == expected.dtype
+	assert X.shape == expected.shape
+	assert X.is_contiguous()
+	assert torch.equal(X, expected)
+	return X
+
+
+@pytest.mark.parametrize("width", [1, 7, 10, 60])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("final_newline", [True, False])
+def test_extract_loci_fasta_every_window(tmp_path, width, newline,
+	final_newline):
+	genome = _fasta_genome()
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, width, newline, final_newline)
+
+	for in_window in [1, 5, 8, 61]:
+		loci = _every_window(genome, in_window)
+		X = _same_as_pyfaidx_object(loci, path, in_window=in_window)
+		assert torch.equal(X, _encode_windows(genome, loci, in_window))
+
+
+def test_extract_loci_fasta_crlf_index(tmp_path):
+	# With \r\n line ends the index has two bytes per line more than bases.
+	genome = _fasta_genome(1)
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 10, "\r\n")
+
+	loci = _every_window(genome, 13)
+	X = _same_as_pyfaidx_object(loci, path, in_window=13)
+	assert torch.equal(X, _encode_windows(genome, loci, 13))
+
+	index = pandas.read_csv(path + ".fai", sep="\t", header=None)
+	nonempty = index[index[1] > 0]
+	assert ((nonempty[4] - nonempty[3]) == 2).all()
+
+
+def test_extract_loci_fasta_builds_missing_index(tmp_path):
+	# pyfaidx builds a missing .fai when the file is opened, as before.
+	genome = _fasta_genome(2)
+	path = tmp_path / "genome.fa"
+	_write_fasta(str(path), genome, 7)
+	assert not (tmp_path / "genome.fa.fai").exists()
+
+	loci = _every_window(genome, 9)
+	X = extract_loci(loci, path, in_window=9)
+	assert (tmp_path / "genome.fa.fai").exists()
+	assert torch.equal(X, _encode_windows(genome, loci, 9))
+
+
+def test_extract_loci_fasta_alphabet_and_ignore(tmp_path):
+	# Upper-casing, ignored characters and the unknown-character error are
+	# those of one_hot_encode on the upper-cased window.
+	genome = {'chr1': 'ACGTNacgtnZzACGT' * 5, 'chr2': 'ACGTACGTAC' * 3}
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 9)
+
+	loci = _every_window(genome, 6)
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, path, in_window=6)
+
+	_same_as_pyfaidx_object(loci, path, in_window=6)
+
+	X = _same_as_pyfaidx_object(loci, path, in_window=6, ignore=['N', 'Z'])
+	assert torch.equal(X, _encode_windows(genome, loci, 6, ignore=['N', 'Z']))
+
+	alphabet = ['A', 'C', 'G', 'T', 'Z']
+	X = _same_as_pyfaidx_object(loci, path, in_window=6, alphabet=alphabet)
+	assert X.shape[1] == 5
+	assert torch.equal(X, _encode_windows(genome, loci, 6, alphabet=alphabet))
+
+	with pytest.raises(ValueError, match="in the alphabet and also"):
+		extract_loci(loci, path, in_window=6, ignore=['A'])
+
+	# A non-ASCII alphabet is encoded by one_hot_encode after pyfaidx reads.
+	_same_as_pyfaidx_object(loci, path, in_window=6, alphabet=['A', 'C', 'G',
+		'T', 'Z', 'é'])
+
+
+def test_extract_loci_fasta_uses_memory_map(tmp_path):
+	# A plain fasta is read from the memory map rather than through pyfaidx.
+	genome = _fasta_genome(3)
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+
+	fasta = pyfaidx.Fasta(path)
+	windows = [('chr1', 0), ('chrLast', 400), ('chr2', 50)]
+	X = _read_fasta_windows_mmap(fasta, windows, 20, ['A', 'C', 'G', 'T'],
+		['N'])
+	fasta.close()
+
+	assert X is not None
+	assert X.dtype == numpy.int8
+	assert X.flags['C_CONTIGUOUS']
+	for x, (chrom, start) in zip(X, windows):
+		assert numpy.array_equal(x, one_hot_encode(genome[chrom][start:start+20]
+			.upper()).numpy())
+
+
+def test_extract_loci_fasta_irregular_lines_raises(tmp_path):
+	# pyfaidx rejects lines of unequal length inside a record, as before.
+	path = str(tmp_path / "genome.fa")
+	with open(path, "w") as handle:
+		handle.write(">chr1\nACGTACGT\nACG\nACGTACGT\nACGT\n")
+
+	loci = pandas.DataFrame([('chr1', 10, 11)])
+	with pytest.raises(pyfaidx.FastaIndexingError):
+		extract_loci(loci, path, in_window=4)
+
+	_same_as_pyfaidx_object(loci, path, in_window=4)
+
+
+@pytest.mark.parametrize("line", [
+	# A carriage return inside a line, which pyfaidx removes.
+	b"AC\rTAC",
+	# A byte outside ASCII, which pyfaidx decodes as UTF-8, so that the
+	# window holds one character fewer.
+	"ACGéA".encode('utf8'),
+	# A lone byte outside ASCII, which cannot be decoded.
+	b"ACG\xffTA",
+])
+@pytest.mark.parametrize("in_window", [3, 5, 8])
+def test_extract_loci_fasta_bytes_pyfaidx_changes(tmp_path, line, in_window):
+	# The second of four lines of six bytes holds a byte that pyfaidx does not
+	# return unchanged. The index is written by hand, since pyfaidx cannot
+	# build one for the last two files.
+	path = str(tmp_path / "genome.fa")
+	with open(path, "wb") as handle:
+		handle.write(b">chr1\nACGTAC\n" + line + b"\nACGTAC\nACGTAC\n")
+
+	with open(path + ".fai", "w") as handle:
+		handle.write("chr1\t24\t6\t6\t7\n")
+
+	loci = pandas.DataFrame([('chr1', mid, mid + 1) for mid in range(
+		in_window // 2, 25 - in_window + in_window // 2)])
+	for n in [1, 3, len(loci)]:
+		_same_as_pyfaidx_object(loci.iloc[:n], path, in_window=in_window)
+		_same_as_pyfaidx_object(loci.iloc[-n:], path, in_window=in_window)
+
+	for i in range(len(loci)):
+		_same_as_pyfaidx_object(loci.iloc[i:i+1], path, in_window=in_window)
+
+
+def test_extract_loci_fasta_stale_index(tmp_path):
+	# An index that describes other lines than the file has, but is newer so
+	# pyfaidx keeps it, gives what pyfaidx reads with it.
+	genome = {'chr1': 'ACGTAACCGGTT' * 4}
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 12)
+	with open(path + ".fai", "w") as handle:
+		handle.write("chr1\t48\t6\t10\t11\n")
+
+	for in_window in [3, 9, 20]:
+		loci = _every_window(genome, in_window)
+		_same_as_pyfaidx_object(loci, path, in_window=in_window)
+		for i in range(len(loci)):
+			_same_as_pyfaidx_object(loci.iloc[i:i+1], path, in_window=in_window)
+
+
+def _write_bgzf(path, data, block_size=100):
+	# Block-gzip, as bgzip writes: gzip members carrying their compressed
+	# size in a BC extra field, followed by an empty end-of-file block.
+	import zlib
+	import struct
+
+	with open(path, "wb") as handle:
+		for i in range(0, len(data), block_size):
+			block = data[i:i+block_size]
+			compressor = zlib.compressobj(6, zlib.DEFLATED, -15)
+			compressed = compressor.compress(block) + compressor.flush()
+			handle.write(struct.pack('<BBBBIBBHBBHH', 31, 139, 8, 4, 0, 0, 255,
+				6, 66, 67, 2, len(compressed) + 25))
+			handle.write(compressed)
+			handle.write(struct.pack('<II', zlib.crc32(block), len(block)))
+
+		handle.write(bytes.fromhex("1f8b08040000000000ff0600424302001b00"
+			"03000000000000000000"))
+
+
+def _has_biopython():
+	try:
+		import Bio  # noqa: F401
+	except ImportError:
+		return False
+
+	return True
+
+
+def _bgzf_genome(tmp_path):
+	import gzip
+
+	genome = _fasta_genome(4)
+	plain = str(tmp_path / "plain.fa")
+	_write_fasta(plain, genome, 10)
+	with open(plain, "rb") as handle:
+		data = handle.read()
+
+	path = str(tmp_path / "genome.fa.gz")
+	_write_bgzf(path, data)
+	with gzip.open(path, "rb") as handle:
+		assert handle.read() == data
+
+	return genome, path
+
+
+@pytest.mark.skipif(not _has_biopython(), reason="pyfaidx reads block-gzip "
+	"fasta files with BioPython")
+def test_extract_loci_fasta_bgzip(tmp_path):
+	genome, path = _bgzf_genome(tmp_path)
+	loci = _every_window(genome, 7)
+	X = _same_as_pyfaidx_object(loci, path, in_window=7)
+	assert torch.equal(X, _encode_windows(genome, loci, 7))
+
+
+@pytest.mark.skipif(_has_biopython(), reason="BioPython is installed")
+def test_extract_loci_fasta_bgzip_without_biopython(tmp_path):
+	genome, path = _bgzf_genome(tmp_path)
+	loci = _every_window(genome, 7)
+	with pytest.raises(ImportError, match="BioPython"):
+		extract_loci(loci, path, in_window=7)
+
+	_same_as_pyfaidx_object(loci, path, in_window=7)
+
+
+def _mapped_paths():
+	with open("/proc/self/maps") as handle:
+		return handle.read()
+
+
+@pytest.mark.skipif(not pathlib.Path("/proc/self/maps").exists(),
+	reason="needs /proc/self/maps")
+def test_extract_loci_fasta_unmapped(tmp_path):
+	# The memory map is closed on return and on the errors raised after the
+	# windows are chosen.
+	genome = {'chr1': 'ACGTNacgtnZzACGT' * 5}
+	path = str(tmp_path / "genome_unmapped.fa")
+	_write_fasta(path, genome, 9)
+	loci = _every_window(genome, 6)
+
+	extract_loci(loci.iloc[:2], path, in_window=6)
+	assert "genome_unmapped.fa" not in _mapped_paths()
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, path, in_window=6)
+	assert "genome_unmapped.fa" not in _mapped_paths()
+
+	with pytest.raises(ValueError, match="in the alphabet and also"):
+		extract_loci(loci, path, in_window=6, ignore=['A'])
+	assert "genome_unmapped.fa" not in _mapped_paths()
+
+	with pytest.raises(ValueError, match="No loci remain"):
+		extract_loci(loci, path, in_window=1000)
+	assert "genome_unmapped.fa" not in _mapped_paths()

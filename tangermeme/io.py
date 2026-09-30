@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import mmap
 import warnings
 
 import numpy
@@ -18,6 +19,8 @@ from tqdm import tqdm
 
 from .utils import one_hot_encode  # noqa: F401, importable from here
 from .utils import _one_hot_encode_rows
+from .utils import _one_hot_rows_mapping
+from .utils import _fast_one_hot_encode_fasta
 from .utils import characters
 from .utils import TangermemeWarning
 
@@ -396,6 +399,92 @@ def _nan_to_num_rows(values, block_size=2**20):
 	return values
 
 
+def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore):
+	"""Encode fasta windows from a memory map of the file, or return None.
+
+	Each window's bytes are gathered through the .fai index that pyfaidx
+	read, skipping the line ends, and encoded straight into the output. None
+	is returned, and the caller reads the windows through pyfaidx, when the
+	alphabet is not ASCII, the file is compressed or cannot be mapped, the
+	index describes lines that the file does not have, or a window holds a
+	byte that pyfaidx would remove or decode, so that the result is always
+	the one pyfaidx gives.
+	"""
+
+	table = _one_hot_rows_mapping(alphabet, ignore)
+	faidx = fasta.faidx
+	if table is None or length <= 0 or faidx._bgzf:
+		return None
+
+	mapping, n_characters = table
+	mapping = mapping.copy()
+	mapping[[ord('\n'), ord('\r')]] = -3
+	mapping[128:] = -3
+
+	chroms, starts = zip(*windows)
+	codes, names = pandas.factorize(numpy.array(chroms, dtype=object))
+	records = [faidx.index[name] for name in names]
+
+	starts = numpy.array(starts, dtype=numpy.int64)
+	offsets = numpy.array([r.offset for r in records], dtype=numpy.int64)[codes]
+	line_bases = numpy.array([r.lenc for r in records], dtype=numpy.int64)[codes]
+	line_bytes = numpy.array([r.lenb for r in records], dtype=numpy.int64)[codes]
+
+	if (starts < 0).any() or (offsets < 0).any() or (line_bases < 1).any() or \
+			(line_bytes < line_bases).any():
+		return None
+
+	try:
+		fasta_map = mmap.mmap(faidx.file.fileno(), 0, access=mmap.ACCESS_READ)
+	except (AttributeError, OSError, ValueError):
+		return None
+
+	X = numpy.empty((len(windows), n_characters, length), dtype=numpy.int8)
+	try:
+		data = numpy.frombuffer(fasta_map, dtype=numpy.uint8)
+		try:
+			status = _fast_one_hot_encode_fasta(X, data, starts, offsets,
+				line_bases, line_bytes, mapping)
+		finally:
+			del data
+	finally:
+		fasta_map.close()
+
+	if status == -2:
+		return None
+
+	if status >= 0:
+		raise ValueError("Encountered character that is not in " +
+			"`alphabet` or in `ignore`.")
+
+	return X
+
+
+def _read_fasta_windows(fasta, windows, length, alphabet, ignore):
+	"""One-hot encode windows of a pyfaidx.Fasta opened from a path.
+
+	`windows` holds a (chrom, start) pair for each window, each covering
+	`length` bases inside its record. The result is identical to fetching
+	each window with pyfaidx and encoding the strings with
+	_one_hot_encode_rows, including its errors, which is what is done when
+	the windows cannot be read from a memory map of the file.
+	"""
+
+	X = _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore)
+	if X is None:
+		seqs = []
+		for chrom, start in windows:
+			seq = fasta[chrom][start:start + length]
+			if not isinstance(seq, str):
+				seq = seq.seq
+
+			seqs.append(seq)
+
+		X = _one_hot_encode_rows(seqs, alphabet=alphabet, ignore=ignore)
+
+	return X
+
+
 def extract_loci(
 	loci: str | os.PathLike | pandas.DataFrame | list,
 	sequences: str | os.PathLike | pyfaidx.Fasta | dict,
@@ -759,9 +848,12 @@ def extract_loci(
 				_write_locus_signal(in_signals, str(chrom), start, end,
 					in_values[len(seqs)], in_scratch)
 
-		# Extract a window of sequence using the input size
+		# Extract a window of sequence using the input size. The windows of a
+		# fasta opened from a path are read together after the loop.
 		if isinstance(sequences, dict):
 			seq = sequences[str(chrom)][:, start:end]
+		elif opened_fasta:
+			seq = (str(chrom), start)
 		else:
 			# A Fasta opened with as_raw=True returns strings rather than
 			# pyfaidx.Sequence objects.
@@ -776,7 +868,12 @@ def extract_loci(
 			break 
 
 	if opened_fasta:
-		sequences.close()
+		try:
+			if len(seqs) > 0:
+				seqs = _read_fasta_windows(sequences, seqs, in_window +
+					2 * max_jitter, alphabet, ignore)
+		finally:
+			sequences.close()
 
 	if len(seqs) == 0:
 		raise ValueError("No loci remain after filtering. Loci are removed " +
@@ -787,11 +884,11 @@ def extract_loci(
 	# Figure out how to format the outputs depending on the provided parameters.
 	# numpy.stack keeps the memory layout of its inputs, so a stack of slices
 	# of Fortran-ordered arrays is not contiguous by default. Fasta windows
-	# were kept as strings and are encoded together, straight into one
-	# C-contiguous array.
+	# were kept as strings, or read from a fasta opened from a path, and are
+	# encoded together, straight into one C-contiguous array.
 	if isinstance(sequences, dict):
 		seqs = numpy.ascontiguousarray(numpy.stack(seqs))
-	else:
+	elif not opened_fasta:
 		seqs = _one_hot_encode_rows(seqs, alphabet=alphabet, ignore=ignore)
 
 	seqs = torch.from_numpy(seqs)

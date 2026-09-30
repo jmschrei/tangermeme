@@ -536,6 +536,157 @@ def _fast_one_hot_encode_rows(X_ohe, seqs, mapping):
 				X_ohe[i, k, j] = idxs[j] == k
 
 
+@numba.njit(numba.int64(numba.int8[:, :, ::1],
+	numba.types.Array(numba.uint8, 1, 'C', readonly=True),
+	numba.int64[::1], numba.int64[::1], numba.int64[::1], numba.int64[::1],
+	numba.int8[::1]), cache=True)
+def _fast_one_hot_encode_fasta(X_ohe, fasta, starts, offsets, line_bases,
+	line_bytes, mapping):
+	"""An internal function that one-hot encodes windows of a fasta file.
+
+	`fasta` holds the bytes of an uncompressed fasta file. Row i of `X_ohe`,
+	shape (n_characters, length), receives bases `[starts[i], starts[i] +
+	length)` of a record whose first base is at byte `offsets[i]` and whose
+	lines each hold `line_bases[i]` bases followed by `line_bytes[i] -
+	line_bases[i]` line-end bytes, as in a .fai index. The line ends are
+	skipped and each base byte is looked up in `mapping`.
+
+	A window's bases are what pyfaidx returns for it only when every line-end
+	byte that pyfaidx reads, including the one before a window that starts a
+	line and the one after a window that ends a line, is a newline or a
+	carriage return, and no base byte is, since pyfaidx removes both from
+	what it reads. It also reads bytes outside ASCII as UTF-8. So `mapping`
+	gives -3 for newlines, carriage returns and bytes of 128 or more, and -2
+	is returned as soon as a window breaks one of these conditions or runs
+	past the end of `fasta`, and nothing that was written can be used.
+	Otherwise the index of the first row with a byte that maps to -2, a
+	character in neither the alphabet nor the ignored characters, is
+	returned, or -1 when there is none. Every element of every other row is
+	written, so `X_ohe` does not need to be zeroed beforehand.
+	"""
+
+	n, m, length = X_ohe.shape
+	size = fasta.shape[0]
+	idxs = numpy.empty(length, dtype=numpy.int8)
+	first_invalid = -1
+
+	for i in range(n):
+		start = starts[i]
+		lenc = line_bases[i]
+		lenb = line_bytes[i]
+		n_end = lenb - lenc
+
+		line = start // lenc
+		col = start - line * lenc
+		pos = offsets[i] + line * lenb + col
+
+		last = start + length - 1
+		if offsets[i] + (last // lenc) * lenb + last % lenc >= size:
+			return -2
+
+		if col == 0 and start > 0:
+			for k in range(pos - n_end, pos):
+				if fasta[k] != 10 and fasta[k] != 13:
+					return -2
+
+		# An int8 minimum and unsigned indices: an int64 minimum and signed
+		# indices made this loop five times slower.
+		low = numpy.int8(0)
+		j = 0
+		while j < length:
+			width = min(lenc - col, length - j)
+			for t in range(width):
+				idx = mapping[fasta[numba.uint64(pos + t)]]
+				low = min(low, idx)
+				idxs[numba.uint64(j + t)] = idx
+
+			j += width
+			pos += width
+			col += width
+			if col == lenc:
+				for k in range(pos, min(pos + n_end, size)):
+					if fasta[k] != 10 and fasta[k] != 13:
+						return -2
+
+				pos += n_end
+				col = 0
+
+		if low == -3:
+			return -2
+
+		if low == -2:
+			if first_invalid < 0:
+				first_invalid = i
+			continue
+
+		for k in range(m):
+			for j in range(length):
+				X_ohe[i, k, j] = idxs[j] == k
+
+	return first_invalid
+
+
+def _one_hot_rows_mapping(
+	alphabet: list[str] | tuple[str, ...] | str,
+	ignore: list[str],
+) -> tuple[numpy.ndarray, int] | None:
+	"""The byte lookup table of the upper-casing row encoders, or None.
+
+	A byte maps to its character's index in `alphabet`, to -1 when it is in
+	`ignore`, and to -2 otherwise, and a lower-case ASCII byte takes the entry
+	of its upper-case form, so that looking up a byte of a string gives the
+	encoding of the upper-cased string. The ValueError of one_hot_encode for
+	a character that is in both `alphabet` and `ignore` is raised here. None
+	is returned when `alphabet` or `ignore` is not an ASCII string, where
+	`str.upper` is not a byte-wise map.
+
+
+	Parameters
+	----------
+	alphabet : list, tuple, or str
+		The characters that map to each index of the second axis.
+
+	ignore: list
+		The characters that set no bit.
+
+
+	Returns
+	-------
+	table: tuple of (numpy.ndarray, int) or None
+		The int8 table of 256 entries and the number of characters in the
+		joined alphabet, or None.
+	"""
+
+	for char in ignore:
+		if char in alphabet:
+			raise ValueError("Character {} in the alphabet ".format(char) +
+				"and also in the list of ignored characters.")
+
+	alphabet_ = ''.join(alphabet) if isinstance(alphabet, (list, tuple)) \
+		else alphabet
+	ignore_ = ''.join(ignore)
+
+	if not (isinstance(alphabet_, str) and alphabet_.isascii() and
+			ignore_.isascii()):
+		return None
+
+	alpha_idxs = numpy.frombuffer(alphabet_.encode('ascii'), dtype=numpy.uint8)
+	ignore_idxs = numpy.frombuffer(ignore_.encode('ascii'), dtype=numpy.uint8)
+
+	mapping = numpy.zeros(256, dtype=numpy.int8) - 2
+	for i, idx in enumerate(alpha_idxs):
+		mapping[idx] = i
+
+	for i, idx in enumerate(ignore_idxs):
+		mapping[idx] = -1
+
+	# Fold str.upper into the table: a lower-case ASCII byte takes the
+	# entry of its upper-case form. Only ASCII rows are looked up.
+	lower = numpy.arange(ord('a'), ord('z') + 1)
+	mapping[lower] = mapping[lower - 32]
+	return mapping, len(alphabet_)
+
+
 def _one_hot_encode_rows(
 	sequences: list[str],
 	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
@@ -578,40 +729,16 @@ def _one_hot_encode_rows(
 		The one-hot encodings as a C-contiguous int8 array.
 	"""
 
-	for char in ignore:
-		if char in alphabet:
-			raise ValueError("Character {} in the alphabet ".format(char) +
-				"and also in the list of ignored characters.")
-
-	alphabet_ = ''.join(alphabet) if isinstance(alphabet, (list, tuple)) \
-		else alphabet
-	ignore_ = ''.join(ignore)
+	table = _one_hot_rows_mapping(alphabet, ignore)
 
 	n = len(sequences)
 	length = len(sequences[0]) if n > 0 else 0
 
-	fast = isinstance(alphabet_, str) and alphabet_.isascii() and \
-		ignore_.isascii() and set(map(len, sequences)) <= {length}
+	fast = table is not None and set(map(len, sequences)) <= {length}
 
 	if fast:
-		alpha_idxs = numpy.frombuffer(alphabet_.encode('ascii'),
-			dtype=numpy.uint8)
-		ignore_idxs = numpy.frombuffer(ignore_.encode('ascii'),
-			dtype=numpy.uint8)
-
-		mapping = numpy.zeros(256, dtype=numpy.int8) - 2
-		for i, idx in enumerate(alpha_idxs):
-			mapping[idx] = i
-
-		for i, idx in enumerate(ignore_idxs):
-			mapping[idx] = -1
-
-		# Fold str.upper into the table: a lower-case ASCII byte takes the
-		# entry of its upper-case form. Only ASCII rows are looked up.
-		lower = numpy.arange(ord('a'), ord('z') + 1)
-		mapping[lower] = mapping[lower - 32]
-
-		X_ohe = numpy.empty((n, len(alphabet_), length), dtype=numpy.int8)
+		mapping, n_characters = table
+		X_ohe = numpy.empty((n, n_characters, length), dtype=numpy.int8)
 		for start in range(0, n, chunk_size):
 			end = min(start + chunk_size, n)
 
