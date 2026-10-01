@@ -1,18 +1,32 @@
 # test_io.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import re
+import zlib
 import numpy
+import numba
 import torch
+import struct
+import warnings
 import pytest
 import pandas
 import pathlib
 import pyfaidx
 import pybigtools
 
+import tangermeme.io
+
 from tangermeme.io import _interleave_loci
 from tangermeme.io import _load_signals
 from tangermeme.io import _load_exclusion_zones
 from tangermeme.io import _extract_locus_signal
+from tangermeme.io import _read_fasta_windows
+from tangermeme.io import _read_fasta_windows_mmap
+from tangermeme.io import _read_signal_windows
+from tangermeme.io import _write_locus_signal
+from tangermeme.io import _BigWigFile
+from tangermeme.io import _inflate_bigwig_blocks
+from tangermeme.io import _zlib_uncompress
 
 from tangermeme.io import read_meme
 from tangermeme.io import extract_loci
@@ -1710,6 +1724,51 @@ def test_extract_loci_window_at_chrom_start():
 	assert mask.tolist() == [True, False, True]
 
 
+@pytest.mark.parametrize("dtype", ['int32', 'uint32', 'uint64', 'Int64',
+	object])
+def test_extract_loci_coordinate_dtypes(dtype):
+	# Coordinates of any integer dtype give what int64 coordinates do: a locus
+	# off each end of its chromosome, one in an excluded chunk, and two kept.
+	fasta = "tests/data/test.fa"
+	loci = pandas.DataFrame({'chrom': ['chr1', 'chr1', 'chr2', 'chr4', 'chr1'],
+		'start': [0, 50, 201, 100, 250], 'end': [8, 61, 211, 111, 261]})
+	exclusion = pandas.DataFrame({'chrom': ['chr1'], 'start': [260],
+		'end': [270]})
+
+	X0, y0, mask0 = extract_loci(loci, fasta, ["tests/data/test.bw"],
+		in_window=11, out_window=6, exclusion_lists=exclusion, return_mask=True)
+	assert mask0.tolist() == [False, True, False, True, False]
+
+	loci = loci.astype({'start': dtype, 'end': dtype})
+	X, y, mask = extract_loci(loci, fasta, ["tests/data/test.bw"],
+		in_window=11, out_window=6, exclusion_lists=exclusion, return_mask=True)
+
+	assert torch.equal(X, X0)
+	assert torch.equal(y, y0)
+	assert torch.equal(mask, mask0)
+
+
+@pytest.mark.parametrize("dtype", [numpy.int64, numpy.uint64, object])
+def test_extract_loci_coordinates_near_int64_max(dtype):
+	# A window that ends past 2**63 falls off the end of its chromosome; it
+	# does not wrap around to a negative end that passes the check.
+	fasta = "tests/data/test.fa"
+	loci = pandas.DataFrame({'chrom': ['chr4', 'chr4'],
+		'start': numpy.array([100, 2 ** 63 - 10], dtype=dtype),
+		'end': numpy.array([111, 2 ** 63 - 1], dtype=dtype)})
+
+	X, mask = extract_loci(loci, fasta, in_window=11, return_mask=True)
+	assert mask.tolist() == [True, False]
+	assert X.shape == (1, 4, 11)
+
+
+def test_extract_loci_raises_float_coordinates():
+	loci = pandas.DataFrame({'chrom': ['chr4'], 'start': [100.0],
+		'end': [111.0]})
+	assert_raises(TypeError, extract_loci, loci, "tests/data/test.fa",
+		in_window=11)
+
+
 def test_extract_loci_summits(dict_signal):
 	# With summits=True the windows are centered on start + summit, the tenth
 	# column, rather than on the middle of the locus.
@@ -1865,6 +1924,99 @@ def test_extract_loci_nan_and_inf(dict_signal):
 		assert values.dtype == torch.float32
 		assert_array_almost_equal(values, [15, 16, 17, 0, big, -big, 21, 22,
 			23, 24])
+
+
+@pytest.fixture
+def inf_bigwig(tmp_path):
+	# chr1 is 50 bp here but 284 bp in test.fa, so windows past base 50 read
+	# NaN from pybigtools. A NaN interval would be read back as missing, so
+	# the past-the-end positions are the only NaN.
+	filename = str(tmp_path / "inf.bw")
+	bw = pybigtools.open(filename, "w")
+	bw.write({'chr1': 50, 'chr2': 211}, [('chr1', 0, 10, 1.0),
+		('chr1', 10, 12, numpy.inf), ('chr1', 12, 14, -numpy.inf),
+		('chr1', 14, 50, 2.0), ('chr2', 0, 211, 0.5)])
+	return filename
+
+
+def test_extract_loci_bigwig_nan_and_inf(inf_bigwig):
+	# bigWigs are written into a preallocated output and nan_to_num runs once
+	# at the end: NaN still becomes 0 and an infinity the largest finite
+	# float32 of its sign, in signals and in_signals, as in the per-locus
+	# values of _extract_locus_signal.
+	loci = pandas.DataFrame({0: ['chr1', 'chr1'], 1: [7, 43], 2: [17, 53]})
+	big = numpy.finfo(numpy.float32).max
+
+	_, y, y_in = extract_loci(loci, "tests/data/test.fa", [inf_bigwig],
+		[inf_bigwig], in_window=6, out_window=10)
+
+	for tensor in (y, y_in):
+		assert tensor.dtype == torch.float32
+		assert tensor.is_contiguous()
+
+	assert_array_almost_equal(y[:, 0], [[1, 1, 1, big, big, -big, -big, 2, 2,
+		2], [2, 2, 2, 2, 2, 2, 2, 0, 0, 0]])
+	assert_array_almost_equal(y_in[:, 0], [[1, big, big, -big, -big, 2],
+		[2, 2, 2, 2, 2, 0]])
+
+	bw = pybigtools.open(inf_bigwig)
+	for i, (start, end) in enumerate([(7, 17), (43, 53)]):
+		expected = _extract_locus_signal([bw], 'chr1', start, end)[0]
+		assert y[i, 0].numpy().tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("kwargs, kept", [
+	({'min_counts': 14}, [True, False, True]),
+	({'min_counts': 15}, [False, False, True]),
+	({'max_counts': 14}, [True, True, False]),
+	({'max_counts': 13}, [False, True, False]),
+])
+def test_extract_loci_bigwig_counts_after_nan_to_num(inf_bigwig, kwargs,
+	kept):
+	# The window around base 48 on chr1 runs past the end of the bigWig, so
+	# its counts are 7 * 2 plus three NaN, which count as 0. A NaN left in
+	# the sum would compare False against both thresholds and keep it.
+	loci = pandas.DataFrame({0: ['chr1', 'chr2', 'chr1'], 1: [43, 95, 25],
+		2: [53, 105, 35]})
+
+	X, y, y_in, mask = extract_loci(loci, "tests/data/test.fa", [inf_bigwig],
+		[inf_bigwig], in_window=6, out_window=10, return_mask=True, **kwargs)
+
+	assert mask.tolist() == kept
+	assert X.shape == (sum(kept), 4, 6)
+	assert y_in.shape == (sum(kept), 1, 6)
+	assert_array_almost_equal(y.sum(axis=(1, 2)),
+		[s for s, k in zip([14, 5, 20], kept) if k])
+
+
+@pytest.mark.parametrize("n_loci", [None, 1, 3, 100])
+def test_extract_loci_bigwig_trimmed_rows(n_loci):
+	# The preallocated outputs hold a row for every locus that could be kept,
+	# and are cut to the kept loci. A locus rejected by min_counts is
+	# overwritten by the next one, so each row is the values of one kept locus.
+	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
+	X, y, y_in, mask = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		bw, bw[:1], in_window=8, out_window=10, min_counts=7, target_idx=1,
+		n_loci=n_loci, return_mask=True)
+
+	n = 4 if n_loci is None else min(4, n_loci)
+	assert y.shape == (n, 2, 10)
+	assert y_in.shape == (n, 1, 8)
+	for tensor in (X, y, y_in):
+		assert tensor.is_contiguous()
+
+	bws = [pybigtools.open(name) for name in bw]
+	loci = pandas.read_csv("tests/data/test.bed", sep="\t", header=None)
+	kept = loci[mask.numpy()]
+	for i, (chrom, start, end) in enumerate(kept.values):
+		mid = start + (end - start) // 2
+		expected = numpy.stack(_extract_locus_signal(bws, chrom, mid - 5,
+			mid + 5))
+		assert y[i].numpy().tobytes() == expected.tobytes()
+
+		expected = numpy.stack(_extract_locus_signal(bws[:1], chrom, mid - 4,
+			mid + 4))
+		assert y_in[i].numpy().tobytes() == expected.tobytes()
 
 
 def test_extract_loci_does_not_modify_inputs(dict_sequences, dict_signal):
@@ -2476,5 +2628,2243 @@ def test_interleave_loci_empty_dataframe():
 	assert list(result.columns) == ['chrom', 'start', 'end']
 
 
+###
 
 
+# A fasta opened from a path is read through its .fai index from a memory map
+# of the file. These tests check that each window equals what pyfaidx returns
+# for it: across line ends of every width and kind, at both ends of every
+# record, and at the end of a file that lacks a final line end. When the
+# bytes are not what pyfaidx would return unchanged, or the file cannot be
+# mapped, pyfaidx reads the windows instead, so the output or the error is
+# the one a pyfaidx.Fasta object gives.
+
+FASTA_GENOME_LENGTHS = {'chr1': 97, 'empty': 0, 'chr2': 70, 'chr3': 23,
+	'chrLast': 420}
+
+
+def _fasta_genome(seed=0):
+	rng = numpy.random.RandomState(seed)
+	return {chrom: ''.join(rng.choice(list('ACGTacgtN'), size=length))
+		for chrom, length in FASTA_GENOME_LENGTHS.items()}
+
+
+def _write_fasta(path, genome, width, newline='\n', final_newline=True):
+	lines = []
+	for chrom, sequence in genome.items():
+		lines.append('>' + chrom)
+		lines.extend(sequence[i:i+width] for i in range(0, len(sequence),
+			width))
+
+	text = newline.join(lines) + (newline if final_newline else '')
+	with open(path, 'wb') as handle:
+		handle.write(text.encode('utf8'))
+
+
+def _every_window(genome, in_window):
+	# One-base loci whose windows start at every base where they fit.
+	rows = []
+	for chrom, sequence in genome.items():
+		for start in range(len(sequence) - in_window + 1):
+			mid = start + in_window // 2
+			rows.append((chrom, mid, mid + 1))
+
+	return pandas.DataFrame(rows)
+
+
+def _encode_windows(genome, loci, in_window, alphabet=['A', 'C', 'G', 'T'],
+	ignore=['N']):
+	X = []
+	for chrom, mid, _ in loci.itertuples(index=False):
+		start = mid - in_window // 2
+		sequence = genome[chrom][start:start + in_window].upper()
+		X.append(one_hot_encode(sequence, alphabet=alphabet, ignore=ignore))
+
+	return torch.stack(X)
+
+
+def _same_as_pyfaidx_object(loci, path, **kwargs):
+	# The output, or the type and message of the error, equal those of the
+	# same call given a pyfaidx.Fasta object, whose windows pyfaidx reads.
+	fasta = None
+	try:
+		fasta = pyfaidx.Fasta(path)
+		expected = extract_loci(loci, fasta, **kwargs)
+	except Exception as error:
+		with pytest.raises(type(error)) as info:
+			extract_loci(loci, path, **kwargs)
+
+		assert str(info.value) == str(error)
+		return None
+	finally:
+		if fasta is not None:
+			fasta.close()
+
+	X = extract_loci(loci, path, **kwargs)
+	assert X.dtype == expected.dtype
+	assert X.shape == expected.shape
+	assert X.is_contiguous()
+	assert torch.equal(X, expected)
+	return X
+
+
+@pytest.mark.parametrize("width", [1, 7, 10, 60])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("final_newline", [True, False])
+def test_extract_loci_fasta_every_window(tmp_path, width, newline,
+	final_newline):
+	genome = _fasta_genome()
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, width, newline, final_newline)
+
+	for in_window in [1, 5, 8, 61]:
+		loci = _every_window(genome, in_window)
+		X = _same_as_pyfaidx_object(loci, path, in_window=in_window)
+		assert torch.equal(X, _encode_windows(genome, loci, in_window))
+
+
+def test_extract_loci_fasta_crlf_index(tmp_path):
+	# With \r\n line ends the index has two bytes per line more than bases.
+	genome = _fasta_genome(1)
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 10, "\r\n")
+
+	loci = _every_window(genome, 13)
+	X = _same_as_pyfaidx_object(loci, path, in_window=13)
+	assert torch.equal(X, _encode_windows(genome, loci, 13))
+
+	index = pandas.read_csv(path + ".fai", sep="\t", header=None)
+	nonempty = index[index[1] > 0]
+	assert ((nonempty[4] - nonempty[3]) == 2).all()
+
+
+def test_extract_loci_fasta_builds_missing_index(tmp_path):
+	# pyfaidx builds a missing .fai when the file is opened, as before.
+	genome = _fasta_genome(2)
+	path = tmp_path / "genome.fa"
+	_write_fasta(str(path), genome, 7)
+	assert not (tmp_path / "genome.fa.fai").exists()
+
+	loci = _every_window(genome, 9)
+	X = extract_loci(loci, path, in_window=9)
+	assert (tmp_path / "genome.fa.fai").exists()
+	assert torch.equal(X, _encode_windows(genome, loci, 9))
+
+
+def test_extract_loci_fasta_alphabet_and_ignore(tmp_path):
+	# Upper-casing, ignored characters and the unknown-character error are
+	# those of one_hot_encode on the upper-cased window.
+	genome = {'chr1': 'ACGTNacgtnZzACGT' * 5, 'chr2': 'ACGTACGTAC' * 3}
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 9)
+
+	loci = _every_window(genome, 6)
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, path, in_window=6)
+
+	_same_as_pyfaidx_object(loci, path, in_window=6)
+
+	X = _same_as_pyfaidx_object(loci, path, in_window=6, ignore=['N', 'Z'])
+	assert torch.equal(X, _encode_windows(genome, loci, 6, ignore=['N', 'Z']))
+
+	alphabet = ['A', 'C', 'G', 'T', 'Z']
+	X = _same_as_pyfaidx_object(loci, path, in_window=6, alphabet=alphabet)
+	assert X.shape[1] == 5
+	assert torch.equal(X, _encode_windows(genome, loci, 6, alphabet=alphabet))
+
+	with pytest.raises(ValueError, match="in the alphabet and also"):
+		extract_loci(loci, path, in_window=6, ignore=['A'])
+
+	# A non-ASCII alphabet is encoded by one_hot_encode after pyfaidx reads.
+	_same_as_pyfaidx_object(loci, path, in_window=6, alphabet=['A', 'C', 'G',
+		'T', 'Z', 'é'])
+
+
+def test_extract_loci_fasta_uses_memory_map(tmp_path):
+	# A plain fasta is read from the memory map rather than through pyfaidx.
+	genome = _fasta_genome(3)
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+
+	fasta = pyfaidx.Fasta(path)
+	windows = [('chr1', 0), ('chrLast', 400), ('chr2', 50)]
+	X = _read_fasta_windows_mmap(fasta, windows, 20, ['A', 'C', 'G', 'T'],
+		['N'])
+	fasta.close()
+
+	assert X is not None
+	assert X.dtype == numpy.int8
+	assert X.flags['C_CONTIGUOUS']
+	for x, (chrom, start) in zip(X, windows):
+		assert numpy.array_equal(x, one_hot_encode(genome[chrom][start:start+20]
+			.upper()).numpy())
+
+
+def test_extract_loci_fasta_irregular_lines_raises(tmp_path):
+	# pyfaidx rejects lines of unequal length inside a record, as before.
+	path = str(tmp_path / "genome.fa")
+	with open(path, "w") as handle:
+		handle.write(">chr1\nACGTACGT\nACG\nACGTACGT\nACGT\n")
+
+	loci = pandas.DataFrame([('chr1', 10, 11)])
+	with pytest.raises(pyfaidx.FastaIndexingError):
+		extract_loci(loci, path, in_window=4)
+
+	_same_as_pyfaidx_object(loci, path, in_window=4)
+
+
+@pytest.mark.parametrize("line", [
+	# A carriage return inside a line, which pyfaidx removes.
+	b"AC\rTAC",
+	# A byte outside ASCII, which pyfaidx decodes as UTF-8, so that the
+	# window holds one character fewer.
+	"ACGéA".encode('utf8'),
+	# A lone byte outside ASCII, which cannot be decoded.
+	b"ACG\xffTA",
+])
+@pytest.mark.parametrize("in_window", [3, 5, 8])
+def test_extract_loci_fasta_bytes_pyfaidx_changes(tmp_path, line, in_window):
+	# The second of four lines of six bytes holds a byte that pyfaidx does not
+	# return unchanged. The index is written by hand, since pyfaidx cannot
+	# build one for the last two files.
+	path = str(tmp_path / "genome.fa")
+	with open(path, "wb") as handle:
+		handle.write(b">chr1\nACGTAC\n" + line + b"\nACGTAC\nACGTAC\n")
+
+	with open(path + ".fai", "w") as handle:
+		handle.write("chr1\t24\t6\t6\t7\n")
+
+	loci = pandas.DataFrame([('chr1', mid, mid + 1) for mid in range(
+		in_window // 2, 25 - in_window + in_window // 2)])
+	for n in [1, 3, len(loci)]:
+		_same_as_pyfaidx_object(loci.iloc[:n], path, in_window=in_window)
+		_same_as_pyfaidx_object(loci.iloc[-n:], path, in_window=in_window)
+
+	for i in range(len(loci)):
+		_same_as_pyfaidx_object(loci.iloc[i:i+1], path, in_window=in_window)
+
+
+def test_extract_loci_fasta_stale_index(tmp_path):
+	# An index that describes other lines than the file has, but is newer so
+	# pyfaidx keeps it, gives what pyfaidx reads with it.
+	genome = {'chr1': 'ACGTAACCGGTT' * 4}
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 12)
+	with open(path + ".fai", "w") as handle:
+		handle.write("chr1\t48\t6\t10\t11\n")
+
+	for in_window in [3, 9, 20]:
+		loci = _every_window(genome, in_window)
+		_same_as_pyfaidx_object(loci, path, in_window=in_window)
+		for i in range(len(loci)):
+			_same_as_pyfaidx_object(loci.iloc[i:i+1], path, in_window=in_window)
+
+
+def _write_bgzf(path, data, block_size=100):
+	# Block-gzip, as bgzip writes: gzip members carrying their compressed
+	# size in a BC extra field, followed by an empty end-of-file block.
+	import zlib
+	import struct
+
+	with open(path, "wb") as handle:
+		for i in range(0, len(data), block_size):
+			block = data[i:i+block_size]
+			compressor = zlib.compressobj(6, zlib.DEFLATED, -15)
+			compressed = compressor.compress(block) + compressor.flush()
+			handle.write(struct.pack('<BBBBIBBHBBHH', 31, 139, 8, 4, 0, 0, 255,
+				6, 66, 67, 2, len(compressed) + 25))
+			handle.write(compressed)
+			handle.write(struct.pack('<II', zlib.crc32(block), len(block)))
+
+		handle.write(bytes.fromhex("1f8b08040000000000ff0600424302001b00"
+			"03000000000000000000"))
+
+
+def _has_biopython():
+	try:
+		import Bio  # noqa: F401
+	except ImportError:
+		return False
+
+	return True
+
+
+def _bgzf_genome(tmp_path):
+	import gzip
+
+	genome = _fasta_genome(4)
+	plain = str(tmp_path / "plain.fa")
+	_write_fasta(plain, genome, 10)
+	with open(plain, "rb") as handle:
+		data = handle.read()
+
+	path = str(tmp_path / "genome.fa.gz")
+	_write_bgzf(path, data)
+	with gzip.open(path, "rb") as handle:
+		assert handle.read() == data
+
+	return genome, path
+
+
+@pytest.mark.skipif(not _has_biopython(), reason="pyfaidx reads block-gzip "
+	"fasta files with BioPython")
+def test_extract_loci_fasta_bgzip(tmp_path):
+	genome, path = _bgzf_genome(tmp_path)
+	loci = _every_window(genome, 7)
+	X = _same_as_pyfaidx_object(loci, path, in_window=7)
+	assert torch.equal(X, _encode_windows(genome, loci, 7))
+
+
+@pytest.mark.skipif(_has_biopython(), reason="BioPython is installed")
+def test_extract_loci_fasta_bgzip_without_biopython(tmp_path):
+	genome, path = _bgzf_genome(tmp_path)
+	loci = _every_window(genome, 7)
+	with pytest.raises(ImportError, match="BioPython"):
+		extract_loci(loci, path, in_window=7)
+
+	_same_as_pyfaidx_object(loci, path, in_window=7)
+
+
+def _mapped_paths():
+	with open("/proc/self/maps") as handle:
+		return handle.read()
+
+
+@pytest.mark.skipif(not pathlib.Path("/proc/self/maps").exists(),
+	reason="needs /proc/self/maps")
+def test_extract_loci_fasta_unmapped(tmp_path):
+	# The memory map is closed on return and on the errors raised after the
+	# windows are chosen.
+	genome = {'chr1': 'ACGTNacgtnZzACGT' * 5}
+	path = str(tmp_path / "genome_unmapped.fa")
+	_write_fasta(path, genome, 9)
+	loci = _every_window(genome, 6)
+
+	extract_loci(loci.iloc[:2], path, in_window=6)
+	assert "genome_unmapped.fa" not in _mapped_paths()
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, path, in_window=6)
+	assert "genome_unmapped.fa" not in _mapped_paths()
+
+	with pytest.raises(ValueError, match="in the alphabet and also"):
+		extract_loci(loci, path, in_window=6, ignore=['A'])
+	assert "genome_unmapped.fa" not in _mapped_paths()
+
+	with pytest.raises(ValueError, match="No loci remain"):
+		extract_loci(loci, path, in_window=1000)
+	assert "genome_unmapped.fa" not in _mapped_paths()
+
+
+###
+# bigWig windows read together, sorted by position (_read_signal_windows)
+###
+
+
+class _PositionSignal():
+	"""A stand-in for a bigWig whose value at a base is its position.
+
+	It records the length of every read, so a test can see how the windows
+	were grouped.
+	"""
+
+	def __init__(self, length=10**7):
+		self.length = length
+		self.reads = []
+
+	def values(self, chrom, start, end, arr=None):
+		self.reads.append((chrom, start, end))
+		arr[:] = numpy.arange(start, end, dtype=numpy.float64)
+		arr[max(0, self.length - start):] = numpy.nan
+		return arr
+
+
+def _per_window(signals, chroms, starts, width):
+	out = numpy.full((len(starts), len(signals), width), -1, dtype=numpy.float32)
+	scratch = numpy.empty(width, dtype=numpy.float64)
+	for k, (chrom, start) in enumerate(zip(chroms, starts)):
+		_write_locus_signal(signals, chrom, int(start), int(start) + width,
+			out[k], scratch)
+
+	return out
+
+
+def _per_locus_call(*args, **kwargs):
+	# max_counts=inf keeps every locus but reads each window in the loop with
+	# one values() call, which is the path the grouped reads must reproduce.
+	return extract_loci(*args, max_counts=float("inf"), **kwargs)
+
+
+def _assert_same(a, b):
+	a = a if isinstance(a, (list, tuple)) else [a]
+	b = b if isinstance(b, (list, tuple)) else [b]
+	assert len(a) == len(b)
+	for x, y in zip(a, b):
+		assert x.dtype == y.dtype
+		assert x.shape == y.shape
+		assert x.is_contiguous() == y.is_contiguous()
+		assert torch.equal(x, y)
+
+
+def test_extract_loci_bigwig_overlapping_and_repeated_windows():
+	# Repeats of one locus, windows that overlap in both directions, and
+	# chromosomes interleaved, so the sorted order differs from locus order.
+	loci = pandas.DataFrame({
+		'chrom': ['chr1', 'chr2', 'chr1', 'chr1', 'chr2', 'chr1', 'chr1',
+			'chr1', 'chr3', 'chr1'],
+		'start': [10, 25, 10, 12, 35, 8, 80, 10, 5, 140],
+		'end': [30, 55, 30, 32, 65, 28, 100, 30, 25, 160]
+	})
+
+	X, y, y_in = extract_loci(loci, "tests/data/test.fa",
+		["tests/data/test.bw", "tests/data/test2.bw"], ["tests/data/test.bw"],
+		in_window=10, out_window=20)
+
+	_assert_same([X, y, y_in], _per_locus_call(loci, "tests/data/test.fa",
+		["tests/data/test.bw", "tests/data/test2.bw"], ["tests/data/test.bw"],
+		in_window=10, out_window=20))
+
+	signals = _load_signals(["tests/data/test.bw", "tests/data/test2.bw"])
+	for k, (chrom, start, end) in enumerate(loci.values):
+		mid = start + (end - start) // 2
+		expected = _extract_locus_signal(signals, chrom, mid - 10, mid + 10)
+		assert torch.equal(y[k], torch.from_numpy(numpy.stack(expected)))
+
+	assert torch.equal(y[0], y[2]) and torch.equal(y[0], y[7])
+	assert torch.equal(y[0, :, 2:], y[3, :, :-2])
+
+
+def test_extract_loci_bigwig_window_at_chrom_end():
+	# test3.bw has a 40 bp chr1 and test.fa a 284 bp one: the first window is
+	# inside it, the second runs past its end and the third starts past it,
+	# and all three are close enough to be read together.
+	loci = pandas.DataFrame({
+		'chrom': ['chr1', 'chr1', 'chr1', 'chr1'],
+		'start': [15, 30, 50, 15],
+		'end': [25, 40, 70, 25]
+	})
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error")
+		X, y = extract_loci(loci, "tests/data/test.fa", ["tests/data/test3.bw"],
+			in_window=10, out_window=20)
+
+	_assert_same([X, y], _per_locus_call(loci, "tests/data/test.fa",
+		["tests/data/test3.bw"], in_window=10, out_window=20))
+
+	signal = pybigtools.open("tests/data/test3.bw")
+	inside = numpy.nan_to_num(signal.values("chr1", 10, 30)).astype('float32')
+	assert_array_almost_equal(y[0, 0], inside)
+	assert torch.equal(y[0], y[3])
+
+	# chr1 of test3.bw ends at 40, so the window [25, 45) ends in five zeros.
+	straddle = numpy.nan_to_num(signal.values("chr1", 25, 45))
+	assert numpy.isnan(signal.values("chr1", 25, 45)[15:]).all()
+	assert_array_almost_equal(y[1, 0], straddle)
+	assert (y[1, 0, 15:] == 0).all()
+	assert (y[2] == 0).all()
+
+
+def test_extract_loci_bigwig_group_spans_gap(tmp_path):
+	# A bigWig with data at [0, 100) and [3000, 3100) only. The windows
+	# [0, 120) and [2990, 3110) are 2,870 bp apart, so one read spans the
+	# empty stretch, which reads as missing, 0.0, and the window [1440, 1560)
+	# lies inside it.
+	path = str(tmp_path / "gap.bw")
+	pybigtools.open(path, "w").write({'chr1': 10000},
+		[('chr1', 0, 100, 1.5), ('chr1', 3000, 3100, 2.5)])
+
+	sequences = {'chr1': numpy.zeros((4, 10000), dtype=numpy.int8)}
+	loci = pandas.DataFrame({
+		'chrom': ['chr1', 'chr1', 'chr1'],
+		'start': [3040, 50, 1490],
+		'end': [3060, 70, 1510]
+	})
+
+	X, y = extract_loci(loci, sequences, [path], in_window=10, out_window=120)
+	_assert_same([X, y], _per_locus_call(loci, sequences, [path],
+		in_window=10, out_window=120))
+
+	expected = numpy.zeros((3, 1, 120), dtype=numpy.float32)
+	expected[0, 0, 10:110] = 2.5
+	expected[1, 0, :100] = 1.5
+	assert torch.equal(y, torch.from_numpy(expected))
+
+	# The same windows read with no grouping, and with one read over all.
+	signals = _load_signals([path])
+	starts = numpy.array([2990, 0, 1440])
+	for max_gap, max_span in [(0, 120), (-1, 10**6), (4096, 65536),
+		(10**6, 10**6)]:
+		out = numpy.full((3, 1, 120), -1, dtype=numpy.float32)
+		failures = _read_signal_windows(signals, ['chr1'] * 3, starts, 120,
+			out, max_gap=max_gap, max_span=max_span)
+		assert failures == []
+		numpy.testing.assert_array_equal(out, _per_window(signals,
+			['chr1'] * 3, starts, 120))
+		numpy.testing.assert_array_equal(out, expected)
+
+
+@pytest.mark.parametrize("max_gap", [-10**6, -1, 0, 1, 7, 50, 10**6])
+@pytest.mark.parametrize("max_span", [1, 12, 13, 14, 40, 10**6])
+def test_read_signal_windows_groups(max_gap, max_span):
+	# Every row is the positions of its window, whatever the grouping, and no
+	# read is longer than max(max_span, width).
+	rng = numpy.random.default_rng(0)
+	width = 13
+	chroms = list(rng.choice(['a', 'b', 'c'], 300))
+	starts = rng.integers(0, 400, 300)
+	starts[:20] = starts[20:40]
+
+	signal = _PositionSignal(length=380)
+	out = numpy.full((310, 1, width), -1, dtype=numpy.float32)
+	failures = _read_signal_windows([signal], chroms, starts, width, out,
+		max_gap=max_gap, max_span=max_span)
+
+	assert failures == []
+	expected = (starts[:, None] + numpy.arange(width)).astype(numpy.float32)
+	expected[starts[:, None] + numpy.arange(width) >= 380] = numpy.nan
+	numpy.testing.assert_array_equal(out[:300, 0], expected)
+	assert (out[300:] == -1).all()
+
+	lengths = [end - start for _, start, end in signal.reads]
+	assert max(lengths) <= max(max_span, width)
+	assert sorted(set(chroms)) == sorted(set(c for c, _, _ in signal.reads))
+	# Every window alone when a span cannot hold two starts or no gap is
+	# small enough, only repeats together when it holds exactly one start,
+	# and one read per chromosome when nothing splits them.
+	if max_span <= width or max_gap < -width:
+		assert len(signal.reads) == 300
+	elif max_span == width + 1:
+		assert len(signal.reads) == len(set(zip(chroms, starts.tolist())))
+	elif max_gap == 10**6 and max_span == 10**6:
+		assert len(signal.reads) == 3
+
+
+def test_read_signal_windows_matches_per_window():
+	# Random windows on test.bw, including repeats, windows past the end of
+	# a chromosome and a chromosome it does not have, which fails whether it
+	# is read alone or in a group, and is zero-filled.
+	rng = numpy.random.default_rng(1)
+	signals = _load_signals(["tests/data/test.bw", "tests/data/test2.bw"])
+	width = 17
+	chroms = list(rng.choice(['chr1', 'chr2', 'chr3', 'chr6', 'chr7'], 200))
+	starts = rng.integers(0, 300, 200)
+
+	for max_gap, max_span in [(0, 17), (4096, 65536), (5, 40), (10**6, 10**6)]:
+		out = numpy.full((200, 2, width), -1, dtype=numpy.float32)
+		failures = _read_signal_windows(signals, chroms, starts, width, out,
+			kind=1, max_gap=max_gap, max_span=max_span)
+
+		expected = _per_window(signals, chroms, starts, width)
+		numpy.testing.assert_array_equal(out, expected)
+
+		missing = [k for k, chrom in enumerate(chroms) if chrom == 'chr7']
+		assert len(missing) > 0
+		assert sorted(failures) == [(k, 1, i, 'chr7', int(starts[k]),
+			int(starts[k]) + width) for k in missing for i in range(2)]
+		assert (out[missing] == 0).all()
+
+
+def test_extract_loci_bigwig_missing_chrom_warns_in_locus_order():
+	# The warnings for a chromosome missing from a bigWig come in the order
+	# the per-locus path gives them: by locus, signals before in_signals, and
+	# by signal, even though the windows are read sorted by position.
+	peaks = pandas.read_csv("tests/data/test.bed", sep="\t", header=None)
+	others = pandas.DataFrame({0: ['chr2', 'chr1', 'chr2', 'chr1'],
+		1: [120, 150, 30, 12], 2: [140, 170, 50, 32]})
+	kwargs = dict(in_window=8, out_window=10, return_mask=True)
+	signals = ["tests/data/test3.bw", "tests/data/test.bw", "tests/data/test3.bw"]
+	in_signals = ["tests/data/test.bw", "tests/data/test3.bw"]
+
+	with pytest.warns(TangermemeWarning) as record:
+		result = extract_loci([peaks, others], "tests/data/test.fa", signals,
+			in_signals, **kwargs)
+
+	with pytest.warns(TangermemeWarning) as expected_record:
+		expected = _per_locus_call([peaks, others], "tests/data/test.fa",
+			signals, in_signals, **kwargs)
+
+	_assert_same(result, expected)
+	messages = [str(w.message) for w in record]
+	assert messages == [str(w.message) for w in expected_record]
+	assert len(messages) == 4 * 3
+	# The first chr2 locus is the second of `others`; sorted by position,
+	# its window [125, 135) would come after [35, 45).
+	assert messages[0].startswith("chr2 125 135 ")
+
+
+@pytest.mark.parametrize("n_loci", [1, 2, 5, 7])
+def test_extract_loci_bigwig_grouped_n_loci(n_loci):
+	# Only the windows of the loci kept before the cap are read.
+	loci = pandas.DataFrame({
+		'chrom': ['chr2', 'chr1', 'chr1', 'chr2', 'chr1', 'chr1', 'chr3',
+			'chr1'],
+		'start': [25, 10, 10, 35, 270, 80, 5, 140],
+		'end': [55, 30, 30, 65, 280, 100, 25, 160]
+	})
+
+	kwargs = dict(in_window=10, out_window=20, n_loci=n_loci, return_mask=True)
+	result = extract_loci(loci, "tests/data/test.fa", ["tests/data/test.bw"],
+		["tests/data/test2.bw"], **kwargs)
+	_assert_same(result, _per_locus_call(loci, "tests/data/test.fa",
+		["tests/data/test.bw"], ["tests/data/test2.bw"], **kwargs))
+	assert len(result[0]) == n_loci
+
+
+###
+# The kept loci found without the per-locus loop: a fasta opened from a path,
+# bigWig signals or none, and no count filter
+###
+
+
+def _unlooped_loci():
+	# Loci off the ends of chr1 and chr6, repeats, interleaved chromosomes,
+	# chr7, which the bigWigs do not have, and chr1 past the end of test3.bw.
+	return [pandas.read_csv("tests/data/test.bed", sep="\t", header=None),
+		pandas.DataFrame({0: ['chr7', 'chr1', 'chr6', 'chr2', 'chr1', 'chr7',
+			'chr4', 'chr1', 'chr3', 'chr1'],
+			1: [500, 2, 70, 30, 270, 900, 100, 10, 60, 210],
+			2: [520, 6, 80, 50, 280, 940, 111, 30, 64, 230]})]
+
+
+def _with_warnings(*args, **kwargs):
+	with warnings.catch_warnings(record=True) as record:
+		warnings.simplefilter("always")
+		result = extract_loci(*args, **kwargs)
+
+	return result, [str(w.message) for w in record]
+
+
+_UNLOOPED_SIGNALS = {
+	'none': (None, None),
+	'signals': (["tests/data/test.bw", "tests/data/test3.bw"], None),
+	'in_signals': (None, ["tests/data/test2.bw"]),
+	'both': (["tests/data/test.bw"], ["tests/data/test3.bw",
+		"tests/data/test.bw"]),
+}
+
+
+@pytest.mark.parametrize("signals", list(_UNLOOPED_SIGNALS))
+@pytest.mark.parametrize("n_loci", [None, 1, 3, 100])
+@pytest.mark.parametrize("exclusion", [False, True])
+@pytest.mark.parametrize("windows", [(10, 20, 0), (9, 13, 3)])
+def test_extract_loci_unlooped_matches_loop(signals, n_loci, exclusion,
+	windows):
+	# A pyfaidx.Fasta object is read one locus at a time in the loop, and so
+	# is every locus when there is a count filter, so both give what the loop
+	# gives for the same loci, including the warnings and their order.
+	in_window, out_window, max_jitter = windows
+	signals, in_signals = _UNLOOPED_SIGNALS[signals]
+	kwargs = dict(in_window=in_window, out_window=out_window,
+		max_jitter=max_jitter, n_loci=n_loci, return_mask=True)
+	if exclusion:
+		kwargs['exclusion_lists'] = pandas.DataFrame({0: ['chr1', 'chr7'],
+			1: [205, 890], 2: [210, 905]})
+
+	loci = _unlooped_loci()
+	result, messages = _with_warnings(loci, "tests/data/test.fa", signals,
+		in_signals, **kwargs)
+
+	expected, expected_messages = _with_warnings(loci,
+		pyfaidx.Fasta("tests/data/test.fa"), signals, in_signals, **kwargs)
+	_assert_same(result, expected)
+	assert messages == expected_messages
+
+	if signals is not None:
+		expected, expected_messages = _with_warnings(loci, "tests/data/test.fa",
+			signals, in_signals, max_counts=float("inf"), **kwargs)
+		_assert_same(result, expected)
+		assert messages == expected_messages
+
+	# The kept loci are the first n_loci of those whose windows fit.
+	fits = _with_warnings(loci, "tests/data/test.fa", signals, in_signals,
+		**dict(kwargs, n_loci=None))[0][-1]
+	kept = torch.nonzero(fits)[:, 0][:n_loci]
+	assert torch.nonzero(result[-1])[:, 0].tolist() == kept.tolist()
+	assert len(result[0]) == len(kept)
+	assert 0 < len(kept) < len(fits)
+
+
+@pytest.mark.parametrize("n_loci", [None, 2])
+def test_extract_loci_unlooped_progress_bar(capsys, n_loci):
+	# The bar counts the loci whose windows fit, and is filled in one step to
+	# the number kept.
+	loci = _unlooped_loci()
+	n_fit = len(extract_loci(loci, "tests/data/test.fa", in_window=10))
+	assert capsys.readouterr().err == ""
+
+	X = extract_loci(loci, "tests/data/test.fa", in_window=10, n_loci=n_loci,
+		verbose=True)
+	err = capsys.readouterr().err
+	assert "Loading Loci" in err
+	assert re.findall(r"(\d+)/(\d+) \[", err)[-1] == (str(len(X)), str(n_fit))
+	assert len(X) == (n_fit if n_loci is None else n_loci)
+
+
+def test_extract_loci_unlooped_errors():
+	# No locus fits, with and without signals; a chromosome not in the fasta.
+	loci = pandas.DataFrame({0: ['chr1', 'chr6'], 1: [0, 70], 2: [4, 80]})
+	for signals in [None, ["tests/data/test.bw"]]:
+		with pytest.raises(ValueError, match="No loci remain"):
+			extract_loci(loci, "tests/data/test.fa", signals, in_window=20)
+
+	loci = pandas.DataFrame({0: ['chr1', 'chrZ'], 1: [100, 100],
+		2: [110, 110]})
+	with pytest.raises(ValueError, match="not in the sequences: chrZ"):
+		extract_loci(loci, "tests/data/test.fa", ["tests/data/test.bw"],
+			in_window=20)
+
+
+def test_read_signal_windows_names():
+	# Chromosomes given as indices into names read what the names do, and
+	# the failures carry the name. One name is not used.
+	rng = numpy.random.default_rng(2)
+	signals = _load_signals(["tests/data/test.bw", "tests/data/test2.bw"])
+	names = ['chr7', 'chr2', 'chr1', 'chr5', 'chr3']
+	codes = rng.integers(0, 4, 150)
+	starts = rng.integers(0, 200, 150)
+
+	out = numpy.full((150, 2, 11), -1, dtype=numpy.float32)
+	failures = _read_signal_windows(signals, codes, starts, 11, out, kind=1,
+		names=names)
+
+	expected = numpy.full((150, 2, 11), -1, dtype=numpy.float32)
+	expected_failures = _read_signal_windows(signals,
+		[names[code] for code in codes], starts, 11, expected, kind=1)
+
+	numpy.testing.assert_array_equal(out, expected)
+	assert sorted(failures) == sorted(expected_failures)
+	assert len(failures) > 0 and all(f[3] == 'chr7' for f in failures)
+
+
+@pytest.mark.parametrize("alphabet", [['A', 'C', 'G', 'T'],
+	['A', 'C', 'G', 'T', '\u00e9']])
+def test_read_fasta_windows_names(alphabet):
+	# Chromosomes given as indices into names read what the names do, from
+	# the memory map and, with an alphabet that is not ASCII, through pyfaidx.
+	# One name is not used.
+	fasta = pyfaidx.Fasta("tests/data/test.fa")
+	rng = numpy.random.default_rng(3)
+	names = ['chr4', 'chr1', 'chr3', 'chr7']
+	codes = rng.integers(0, 3, 50)
+	starts = rng.integers(0, 100, 50)
+	windows = [(names[code], int(start)) for code, start in zip(codes, starts)]
+
+	X = _read_fasta_windows(fasta, (codes, starts), 20, alphabet, ['N'],
+		names=names)
+	expected = _read_fasta_windows(fasta, windows, 20, alphabet, ['N'])
+	assert X.dtype == expected.dtype and X.flags.c_contiguous
+	numpy.testing.assert_array_equal(X, expected)
+
+	X = _read_fasta_windows_mmap(fasta, (codes, starts), 20, alphabet, ['N'],
+		names=names)
+	if len(alphabet) == 4:
+		numpy.testing.assert_array_equal(X, expected)
+	else:
+		assert X is None
+
+	fasta.close()
+
+
+###
+# bigWig paths read with _BigWigFile
+###
+
+
+READER_GENOME_LENGTHS = {'chr1': 30000, 'chr2': 9000, 'chr3': 4000}
+
+
+def _write_raw_bigwig(path, chroms, sections, compress=True):
+	# A bigWig laid out exactly as given, for the sections pybigtools does not
+	# write. Each section is one data block: (chrom, kind, step, span, items),
+	# where bedGraph (kind 1) items are (start, end, value), varStep (2) are
+	# (start, value), and fixedStep (3) is (start, [values]). A block given as
+	# bytes is written as it is, under the index entry (chrom, start, end).
+	names = list(chroms)
+	ids = {name: i for i, name in enumerate(names)}
+	key_size = max(len(name) for name in names)
+
+	blocks = []
+	for section in sections:
+		if isinstance(section[-1], bytes):
+			chrom, start, end, raw = section
+			blocks.append((ids[chrom], start, end, raw, False))
+			continue
+
+		chrom, kind, step, span, items = section
+		if kind == 1:
+			body = b''.join(struct.pack('<IIf', s, e, v) for s, e, v in items)
+			n, start = len(items), min(s for s, _, _ in items)
+			end = max(e for _, e, _ in items)
+		elif kind == 2:
+			body = b''.join(struct.pack('<If', s, v) for s, v in items)
+			n, start = len(items), min(s for s, _ in items)
+			end = max(s for s, _ in items) + span
+		else:
+			first, values = items
+			body = b''.join(struct.pack('<f', v) for v in values)
+			n, start, end = len(values), first, first + step * (len(values) -
+				1) + span
+
+		header = struct.pack('<IIIIIBBH', ids[chrom], start, end, step, span,
+			kind, 0, n)
+		blocks.append((ids[chrom], start, end, header + body, compress))
+
+	ctree_offset = 64 + 40
+	ctree = struct.pack('<IIIIQQ', 0x78CA8C91, len(names), key_size, 8,
+		len(names), 0) + struct.pack('<BBH', 1, 0, len(names))
+	for i, name in enumerate(names):
+		ctree += name.encode().ljust(key_size, b'\0') + struct.pack('<II', i,
+			chroms[name])
+
+	data_offset = ctree_offset + len(ctree)
+	data, leaves, largest = struct.pack('<Q', len(blocks)), [], 0
+	for chrom, start, end, raw, packed in blocks:
+		payload = zlib.compress(raw) if packed else raw
+		largest = max(largest, len(raw))
+		leaves.append((chrom, start, chrom, end, data_offset + len(data),
+			len(payload)))
+		data += payload
+
+	index_offset = data_offset + len(data)
+	rtree = struct.pack('<IIQIIIIQII', 0x2468ACE0, len(leaves), len(leaves),
+		leaves[0][0], leaves[0][1], leaves[-1][2], leaves[-1][3],
+		index_offset, 1, 0) + struct.pack('<BBH', 1, 0, len(leaves))
+	for leaf in leaves:
+		rtree += struct.pack('<IIIIQQ', *leaf)
+
+	header = struct.pack('<IHHQQQHHQQIQ', 0x888FFC26, 4, 0, ctree_offset,
+		data_offset, index_offset, 0, 0, 0, 64, largest if compress else 0, 0)
+	with open(path, 'wb') as handle:
+		handle.write(header + struct.pack('<Qdddd', 0, 0, 0, 0, 0) + ctree +
+			data + rtree)
+
+
+def _random_bedgraph(rng, lengths, n_intervals):
+	# Sorted, non-overlapping intervals with gaps and adjacent runs, and some
+	# values that stress the cast: -0.0, a denormal, infinities and NaN.
+	# pybigtools puts 1024 intervals in a block, so these short intervals
+	# give several blocks per chromosome.
+	special = [-0.0, 1e-45, float('inf'), -float('inf'), float('nan'), 0.0]
+	values = []
+	for chrom, n in n_intervals.items():
+		position = int(rng.integers(0, 50))
+		for _ in range(n):
+			width = int(rng.integers(1, 5))
+			if position + width > lengths[chrom]:
+				break
+
+			value = float(numpy.float32(rng.normal() * 10))
+			if rng.random() < 0.05:
+				value = special[int(rng.integers(len(special)))]
+
+			values.append((chrom, position, position + width, value))
+			position += width + int(rng.choice([0, 0, 1, 2, 10]))
+
+	return values
+
+
+def _random_windows(rng, lengths, n, width):
+	# Windows inside each chromosome, some running past its end and some
+	# starting past it.
+	chroms = list(lengths)
+	names = [chroms[k] for k in rng.integers(0, len(chroms), n)]
+	starts = []
+	for name in names:
+		u = rng.random()
+		if u < 0.1:
+			starts.append(max(0, lengths[name] - int(rng.integers(1, width +
+				1))))
+		elif u < 0.13:
+			starts.append(lengths[name] + int(rng.integers(0, 10)))
+		else:
+			starts.append(int(rng.integers(0, max(1, lengths[name] - width))))
+
+	return names, numpy.array(starts, dtype=numpy.int64)
+
+
+def _pybigtools_windows(path, chroms, starts, width):
+	bw = pybigtools.open(str(path))
+	out = numpy.empty((len(starts), width), dtype=numpy.float32)
+	for k, (chrom, start) in enumerate(zip(chroms, starts.tolist())):
+		out[k] = bw.values(chrom, start, start + width)
+
+	return out
+
+
+def _reader_windows(path, chroms, starts, width, n_jobs=1):
+	# The windows through _BigWigFile.read into the second of two signals,
+	# whose first is filled with a marker that must not be touched.
+	reader = _BigWigFile.open(str(path), pybigtools.open(str(path)))
+	assert reader is not None
+
+	out = numpy.full((len(starts) + 3, 2, width), 7, dtype=numpy.float32)
+	rows = numpy.arange(len(starts), dtype=numpy.int64)[::-1] + 3
+	fallback = reader.read(numpy.ascontiguousarray(rows), chroms, starts, out,
+		1, n_jobs)
+
+	assert (out[:, 0] == 7).all()
+	assert (out[:3] == 7).all()
+	return out[rows, 1], fallback
+
+
+def _assert_bits_equal(x, y):
+	assert x.dtype == y.dtype == numpy.float32
+	assert x.shape == y.shape
+	assert (x.view(numpy.uint32) == y.view(numpy.uint32)).all()
+
+
+@pytest.fixture
+def pybigtools_bigwig(tmp_path):
+	# chr3 has no data, so pybigtools leaves it out of the file.
+	rng = numpy.random.default_rng(0)
+	values = _random_bedgraph(rng, READER_GENOME_LENGTHS, {'chr1': 6000,
+		'chr2': 1500})
+	path = tmp_path / "written.bw"
+	pybigtools.open(str(path), 'w').write({'chr1': 30000, 'chr2': 9000},
+		values)
+	return path
+
+
+@pytest.fixture
+def reader_fasta(tmp_path):
+	# The genome is longer than the bigWigs' chromosomes, so windows near the
+	# end of a chromosome run past the end of its signal.
+	rng = numpy.random.RandomState(1)
+	lengths = {'chr1': 30500, 'chr2': 9000, 'chr3': 4000, 'chr4': 3000}
+	genome = {chrom: ''.join(rng.choice(list('ACGT'), size=length)) for chrom,
+		length in lengths.items()}
+	path = tmp_path / "reader.fa"
+	_write_fasta(path, genome, 60)
+	return str(path)
+
+
+@pytest.mark.parametrize("width", [1, 13, 1000, 5000])
+@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("batch_blocks", [1, 256])
+def test_bigwig_file_pybigtools_written(pybigtools_bigwig, width, n_jobs,
+	batch_blocks, monkeypatch):
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_BATCH_BLOCKS', batch_blocks)
+	bw = pybigtools.open(str(pybigtools_bigwig))
+	lengths = bw.chroms()
+	assert list(lengths) == ['chr1', 'chr2']
+
+	reader = _BigWigFile.open(str(pybigtools_bigwig), bw)
+	reader.read(numpy.zeros(0, dtype=numpy.int64), [], numpy.zeros(0,
+		dtype=numpy.int64), numpy.zeros((0, 1, 1), dtype=numpy.float32), 0)
+	assert (reader._index['chroms'] == 0).sum() >= 5
+
+	rng = numpy.random.default_rng(width)
+	chroms, starts = _random_windows(rng, lengths, 300, width)
+	y, fallback = _reader_windows(pybigtools_bigwig, chroms, starts, width,
+		n_jobs)
+	y0 = _pybigtools_windows(pybigtools_bigwig, chroms, starts, width)
+
+	assert len(fallback) == 0
+	_assert_bits_equal(y, y0)
+	assert numpy.isnan(y0).any()
+
+
+def test_bigwig_file_every_window(pybigtools_bigwig):
+	# A window starting at every base of chr2, including those past its end.
+	starts = numpy.arange(0, 9020, dtype=numpy.int64)
+	chroms = ['chr2'] * len(starts)
+	for width in [1, 37]:
+		y, fallback = _reader_windows(pybigtools_bigwig, chroms, starts, width,
+			2)
+		y0 = _pybigtools_windows(pybigtools_bigwig, chroms, starts, width)
+		assert len(fallback) == 0
+		_assert_bits_equal(y, y0)
+
+
+@pytest.mark.parametrize("compress", [True, False])
+def test_bigwig_file_section_types(tmp_path, compress):
+	# bedGraph, varStep and fixedStep sections, in separate blocks and with
+	# gaps between and inside them, compressed or stored as they are.
+	path = tmp_path / "sections.bw"
+	sections = [
+		('chr1', 1, 0, 0, [(10, 20, 1.5), (20, 25, -2.5), (40, 41, 3.0)]),
+		('chr1', 2, 0, 5, [(100, 4.0), (105, 5.0), (120, float('nan')),
+			(130, 6.0)]),
+		('chr1', 3, 10, 4, (200, [7.0, -0.0, 9.0, 1e-45])),
+		('chr1', 3, 3, 3, (300, [10.0, 11.0, 12.0])),
+		('chr1', 2, 0, 0, [(400, 13.0), (401, 14.0)]),
+		('chr1', 1, 0, 0, [(990, 1000, float('inf'))]),
+		('chr2', 3, 1, 1, (0, [float(i) for i in range(50)])),
+		('chr2', 1, 0, 0, [(60, 60, 5.0), (60, 70, 6.0)]),
+	]
+	_write_raw_bigwig(path, {'chr1': 1000, 'chr2': 100}, sections,
+		compress=compress)
+
+	for width in [1, 9, 64, 400]:
+		chroms = ['chr1'] * 1100 + ['chr2'] * 120
+		starts = numpy.concatenate([numpy.arange(1100), numpy.arange(120)])
+		y, fallback = _reader_windows(path, chroms, starts, width, 3)
+		y0 = _pybigtools_windows(path, chroms, starts, width)
+		assert len(fallback) == 0
+		_assert_bits_equal(y, y0)
+
+	assert y0[0, 10] == 1.5 and y0[0, 100] == 4.0 and y0[0, 104] == 4.0
+	assert y0[0, 105] == 5.0 and y0[0, 120] == 0 and y0[0, 203] == 7.0
+	assert y0[0, 204] == 0 and y0[0, 302] == 10.0 and y0[0, 303] == 11.0
+
+
+@pytest.mark.parametrize("section", [
+	('chr1', 1, 0, 0, [(10, 20, 1.0), (15, 25, 2.0)]),
+	('chr1', 1, 0, 0, [(30, 40, 1.0), (10, 20, 2.0)]),
+	('chr1', 10, 20, zlib.compress(struct.pack('<IIIIIBBH', 0, 10, 20, 0, 0,
+		1, 0, 1) + struct.pack('<IIf', 15, 12, 1.0))),
+	('chr1', 2, 0, 10, [(10, 1.0), (15, 2.0)]),
+	('chr1', 3, 3, 5, (10, [1.0, 2.0, 3.0])),
+	('chr1', 10, 20, b'not a zlib stream!!!'),
+	('chr1', 10, 20, zlib.compress(b'\x00' * 22)),
+	('chr1', 10, 20, zlib.compress(struct.pack('<IIIIIBBH', 0, 10, 20, 0, 0,
+		4, 0, 1) + struct.pack('<IIf', 10, 20, 1.0))),
+	('chr1', 10, 20, zlib.compress(struct.pack('<IIIIIBBH', 0, 10, 20, 0, 0,
+		1, 0, 5) + struct.pack('<IIf', 10, 20, 1.0))),
+	('chr1', 10, 20, zlib.compress(struct.pack('<IIIIIBBH', 1, 10, 20, 0, 0,
+		1, 0, 1) + struct.pack('<IIf', 10, 20, 1.0))),
+	('chr1', 12, 20, zlib.compress(struct.pack('<IIIIIBBH', 0, 10, 20, 0, 0,
+		1, 0, 1) + struct.pack('<IIf', 10, 20, 1.0))),
+])
+def test_bigwig_file_unsupported_block(tmp_path, section):
+	# Overlapping, unsorted or inverted items, a block that is not zlib, is
+	# not whole words, has an unknown section type, overruns itself, is on
+	# another chromosome, or holds an item outside its index entry. Windows
+	# that touch the block are left to pybigtools; the others are read.
+	path = tmp_path / "bad.bw"
+	sections = [('chr1', 1, 0, 0, [(0, 5, 9.0)]), section,
+		('chr1', 1, 0, 0, [(100, 110, 8.0)]), ('chr2', 1, 0, 0,
+		[(0, 10, 7.0)])]
+	_write_raw_bigwig(path, {'chr1': 1000, 'chr2': 100}, sections)
+
+	chroms = ['chr1', 'chr1', 'chr1', 'chr2', 'chr1']
+	starts = numpy.array([0, 12, 95, 0, 18], dtype=numpy.int64)
+	y, fallback = _reader_windows(path, chroms, starts, 5, 2)
+
+	# pybigtools raises or panics on some of these blocks, so only the other
+	# windows are compared.
+	assert fallback.tolist() == [1, 4]
+	y0 = _pybigtools_windows(path, ['chr1', 'chr1', 'chr2'], starts[[0, 2, 3]],
+		5)
+	_assert_bits_equal(y[[0, 2, 3]], y0)
+
+
+def test_bigwig_file_open_unsupported(tmp_path):
+	# A bigBed, and a bigWig whose chromosome tree differs from pybigtools'.
+	path = tmp_path / "intervals.bb"
+	pybigtools.open(str(path), 'w').write({'chr1': 1000}, [('chr1', 10, 20,
+		''), ('chr1', 15, 30, '')])
+	assert _BigWigFile.open(str(path), pybigtools.open(str(path))) is None
+
+	a, b = tmp_path / "a.bw", tmp_path / "b.bw"
+	_write_raw_bigwig(a, {'chr1': 1000}, [('chr1', 1, 0, 0, [(0, 5, 9.0)])])
+	_write_raw_bigwig(b, {'chr1': 999}, [('chr1', 1, 0, 0, [(0, 5, 9.0)])])
+	assert _BigWigFile.open(str(a), pybigtools.open(str(a))) is not None
+	assert _BigWigFile.open(str(a), pybigtools.open(str(b))) is None
+	assert _BigWigFile.open(str(tmp_path / "missing.bw"),
+		pybigtools.open(str(a))) is None
+
+
+def test_bigwig_file_unsupported_index(tmp_path):
+	# Index entries that overlap: every window is left to pybigtools.
+	path = tmp_path / "overlapping.bw"
+	_write_raw_bigwig(path, {'chr1': 1000}, [('chr1', 1, 0, 0, [(0, 50,
+		1.0)]), ('chr1', 1, 0, 0, [(40, 60, 2.0)])])
+
+	starts = numpy.array([0, 45, 100], dtype=numpy.int64)
+	y, fallback = _reader_windows(path, ['chr1'] * 3, starts, 10)
+	assert fallback.tolist() == [0, 1, 2]
+
+
+def test_bigwig_file_windows_not_read(pybigtools_bigwig):
+	# A chromosome that is not in the file, and a negative start.
+	chroms = ['chr1', 'chr3', 'chr2', 'chr1']
+	starts = numpy.array([5, 5, 5, -3], dtype=numpy.int64)
+	y, fallback = _reader_windows(pybigtools_bigwig, chroms, starts, 10)
+
+	assert fallback.tolist() == [1, 3]
+	y0 = _pybigtools_windows(pybigtools_bigwig, chroms[:1] + chroms[2:3],
+		starts[[0, 2]], 10)
+	_assert_bits_equal(y[[0, 2]], y0)
+
+
+def test_write_locus_signal_skips_none():
+	bw = pybigtools.open("tests/data/test.bw")
+	out = numpy.full((3, 10), 7, dtype=numpy.float32)
+	scratch = numpy.empty(10, dtype=numpy.float64)
+	_write_locus_signal([bw, None, bw], 'chr1', 0, 10, out, scratch)
+
+	y0 = bw.values('chr1', 0, 10).astype(numpy.float32)
+	assert (out[1] == 7).all()
+	_assert_bits_equal(out[0], y0)
+	_assert_bits_equal(out[2], y0)
+
+
+def _reader_loci(rng, n):
+	chroms = rng.choice(['chr1', 'chr1', 'chr2', 'chr3', 'chr4'], n)
+	lengths = {'chr1': 30500, 'chr2': 9000, 'chr3': 4000, 'chr4': 3000}
+	starts = numpy.array([rng.integers(0, lengths[c]) for c in chroms])
+	return pandas.DataFrame({'chrom': chroms, 'start': starts,
+		'end': starts + rng.integers(1, 300, n)})
+
+
+def _extract_both(monkeypatch, paths, *args, n_jobs=8, **kwargs):
+	# extract_loci with bigWig paths, so they are read by _BigWigFile, and
+	# with the same files opened with pybigtools, so they are not.
+	reads = []
+	read = _BigWigFile.read
+
+	def counting(self, rows, *a, **k):
+		reads.append(len(rows))
+		return read(self, rows, *a, **k)
+
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_MIN_WINDOWS', 1)
+	monkeypatch.setattr(_BigWigFile, 'read', counting)
+
+	def opened(signals):
+		return None if signals is None else [pybigtools.open(str(s)) for s in
+			signals]
+
+	with warnings.catch_warnings(record=True) as w:
+		warnings.simplefilter("always")
+		y = extract_loci(*args, n_jobs=n_jobs, **kwargs,
+			**{key: [str(s) for s in paths[key]] for key in paths})
+		n_reads = len(reads)
+
+	with warnings.catch_warnings(record=True) as w0:
+		warnings.simplefilter("always")
+		y0 = extract_loci(*args, **kwargs, **{key: opened(paths[key]) for key
+			in paths})
+
+	assert len(reads) == n_reads
+	return y, y0, n_reads, [str(x.message) for x in w], [str(x.message) for
+		x in w0]
+
+
+@pytest.mark.parametrize("n_jobs", [1, 3, 8])
+@pytest.mark.parametrize("n_loci", [None, 1, 250])
+def test_extract_loci_bigwig_reader(reader_fasta, pybigtools_bigwig, tmp_path,
+	monkeypatch, n_jobs, n_loci):
+	# Two path signals, one of which is also an in_signal, odd windows,
+	# jitter, repeated loci, an exclusion list and a mask, against the same
+	# call with the files opened with pybigtools.
+	path = tmp_path / "sections.bw"
+	_write_raw_bigwig(path, {'chr1': 30000, 'chr2': 9000, 'chr3': 4000},
+		[('chr1', 3, 10, 4, (0, [float(i) for i in range(2900)])),
+		('chr2', 2, 0, 3, [(i * 5, float(i)) for i in range(1700)]),
+		('chr3', 1, 0, 0, [(10, 3000, 2.5)])])
+
+	rng = numpy.random.default_rng(2)
+	loci = _reader_loci(rng, 400)
+	loci = pandas.concat([loci, loci.iloc[:50]])
+	exclusion = pandas.DataFrame({0: ['chr1'], 1: [5000], 2: [6000]})
+
+	y, y0, n_reads, w, w0 = _extract_both(monkeypatch, {'signals':
+		[pybigtools_bigwig, path], 'in_signals': [path]}, loci, reader_fasta,
+		n_jobs=n_jobs, in_window=211, out_window=101, max_jitter=7,
+		n_loci=n_loci, exclusion_lists=[exclusion], return_mask=True)
+
+	# One read per path; the first locus may be on a chromosome that is not
+	# in both files, and so be read with pybigtools.
+	assert n_reads == 3 or n_loci == 1
+	assert w == w0
+	assert len(y) == len(y0) == 4
+	for x, x0 in zip(y, y0):
+		assert x.dtype == x0.dtype and x.shape == x0.shape
+		assert x.is_contiguous() and torch.equal(x, x0)
+
+	assert (y[1] != 0).any() or n_loci == 1
+
+
+@pytest.mark.parametrize("target_idx", [0, 1, -1])
+@pytest.mark.parametrize("min_counts, max_counts", [(1, None), (None, 5000),
+	(1, 5000)])
+def test_extract_loci_bigwig_reader_counts(reader_fasta, pybigtools_bigwig,
+	monkeypatch, target_idx, min_counts, max_counts):
+	# The count filter's target is read in the loop and the other signals
+	# after it, only for the loci that are kept.
+	rng = numpy.random.default_rng(3)
+	loci = _reader_loci(rng, 300)
+
+	y, y0, n_reads, _, _ = _extract_both(monkeypatch, {'signals':
+		[pybigtools_bigwig, pybigtools_bigwig]}, loci, reader_fasta,
+		in_window=100, out_window=50, min_counts=min_counts,
+		max_counts=max_counts, target_idx=target_idx, n_loci=120,
+		return_mask=True)
+
+	assert n_reads == 1
+	for x, x0 in zip(y, y0):
+		assert torch.equal(x, x0)
+
+	assert 0 < y[-1].sum() < len(loci)
+
+
+def test_extract_loci_bigwig_reader_missing_chrom_warns(reader_fasta,
+	pybigtools_bigwig, monkeypatch):
+	# chr3 and chr4 are not in the bigWig: their loci are read with
+	# pybigtools in the loop, which warns in the same order.
+	rng = numpy.random.default_rng(4)
+	loci = _reader_loci(rng, 200)
+
+	y, y0, n_reads, w, w0 = _extract_both(monkeypatch, {'signals':
+		[pybigtools_bigwig], 'in_signals': [pybigtools_bigwig]}, loci,
+		reader_fasta, in_window=100, out_window=50)
+
+	assert n_reads == 2
+	assert len(w) > 0 and w == w0
+	assert all('chr3' in m or 'chr4' in m for m in w)
+	for x, x0 in zip(y, y0):
+		assert torch.equal(x, x0)
+
+
+def test_extract_loci_bigwig_reader_missing_chrom_warning_order(reader_fasta,
+	pybigtools_bigwig, tmp_path, monkeypatch):
+	# The path lacks chr3 and chr4 and the object lacks chr2 and chr4, so
+	# the warnings of the two are interleaved by locus, as the loop makes
+	# them.
+	path = tmp_path / "chr1_chr3.bw"
+	_write_raw_bigwig(path, {'chr1': 30000, 'chr3': 4000}, [('chr1', 1, 0, 0,
+		[(0, 100, 1.0)]), ('chr3', 1, 0, 0, [(0, 100, 2.0)])])
+
+	rng = numpy.random.default_rng(7)
+	loci = _reader_loci(rng, 300)
+
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_MIN_WINDOWS', 1)
+	results = []
+	for first in [str(pybigtools_bigwig), pybigtools.open(str(
+			pybigtools_bigwig))]:
+		with warnings.catch_warnings(record=True) as w:
+			warnings.simplefilter("always")
+			y = extract_loci(loci, reader_fasta, signals=[first,
+				pybigtools.open(str(path))], in_window=100, out_window=50)
+
+		results.append((y, [str(x.message) for x in w]))
+
+	(y, w), (y0, w0) = results
+	assert w == w0
+	assert {m.split()[0] for m in w} == {'chr2', 'chr3', 'chr4'}
+	assert torch.equal(y[0], y0[0]) and torch.equal(y[1], y0[1])
+
+
+def test_extract_loci_bigwig_reader_fallback_blocks(reader_fasta, tmp_path,
+	monkeypatch):
+	# Windows that touch a block pybigtools sums the overlapping items of are
+	# read with pybigtools after the loop.
+	path = tmp_path / "overlapping.bw"
+	_write_raw_bigwig(path, {'chr1': 30000}, [('chr1', 1, 0, 0,
+		[(0, 100, 1.0), (50, 200, 2.0)]), ('chr1', 1, 0, 0,
+		[(1000, 2000, 3.0)])])
+
+	loci = pandas.DataFrame({'chrom': ['chr1'] * 4, 'start': [60, 100, 1500,
+		150], 'end': [61, 101, 1501, 151]})
+	y, y0, _, _, _ = _extract_both(monkeypatch, {'signals': [path]}, loci,
+		reader_fasta, in_window=20, out_window=20)
+
+	assert torch.equal(y[1], y0[1])
+	assert y0[1][0, 0, 0] == 3.0
+
+
+def test_extract_loci_bigwig_reader_threshold(reader_fasta, pybigtools_bigwig,
+	monkeypatch):
+	# Calls that can keep fewer than _BIGWIG_MIN_WINDOWS loci, or that are
+	# given float coordinates, do not use _BigWigFile.
+	reads = []
+	read = _BigWigFile.read
+	monkeypatch.setattr(_BigWigFile, 'read', lambda self, rows, *a, **k:
+		reads.append(len(rows)) or read(self, rows, *a, **k))
+
+	rng = numpy.random.default_rng(5)
+	loci = _reader_loci(rng, 2000)
+	loci = loci[loci['chrom'].isin(['chr1', 'chr2'])]
+	assert len(loci) > 1100
+	kwargs = dict(signals=[str(pybigtools_bigwig)], in_window=100,
+		out_window=50)
+
+	X, y = extract_loci(loci.iloc[:10], reader_fasta, **kwargs)
+	X, y = extract_loci(loci, reader_fasta, n_loci=1023, **kwargs)
+	assert reads == []
+
+	X, y = extract_loci(loci, reader_fasta, n_loci=1024, **kwargs)
+	assert reads == [1024]
+
+	# pybigtools raises for float coordinates, and so does extract_loci.
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_MIN_WINDOWS', 1)
+	floats = loci.iloc[:20].astype({'start': float, 'end': float})
+	with pytest.raises(TypeError):
+		extract_loci(floats, reader_fasta, **kwargs)
+
+	assert reads == [1024]
+
+
+@pytest.mark.parametrize("n_jobs", [0, -1, 2.5, True, "4", None])
+def test_extract_loci_n_jobs_raises(n_jobs):
+	with pytest.raises(ValueError, match="n_jobs"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa",
+			signals=["tests/data/test.bw"], n_jobs=n_jobs)
+
+
+def test_extract_loci_n_jobs_same_outputs(reader_fasta, pybigtools_bigwig,
+	monkeypatch):
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_MIN_WINDOWS', 1)
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_BATCH_BLOCKS', 1)
+	rng = numpy.random.default_rng(6)
+	loci = _reader_loci(rng, 500)
+	loci = loci[loci['chrom'].isin(['chr1', 'chr2'])]
+
+	y0 = extract_loci(loci, reader_fasta, signals=[str(pybigtools_bigwig)],
+		in_window=100, out_window=5000, n_jobs=1)
+	for n_jobs in [2, 5, 16]:
+		y = extract_loci(loci, reader_fasta, signals=[str(pybigtools_bigwig)],
+			in_window=100, out_window=5000, n_jobs=n_jobs)
+		assert torch.equal(y[0], y0[0]) and torch.equal(y[1], y0[1])
+
+
+###
+# The reader for bigWig paths on the reads made after the loop
+###
+
+
+def _recording_bigwig_read(monkeypatch, decline=None):
+	# Records the number of windows, n_jobs and the number of windows handed
+	# back of each _BigWigFile.read. With `decline`, the windows at positions
+	# decline(n, signal) are also handed back, after their rows are filled
+	# with 7 so that a missed read shows.
+	calls = []
+	read = _BigWigFile.read
+
+	def recording(self, rows, chroms, starts, out, signal, n_jobs=1,
+		names=None):
+		left = read(self, rows, chroms, starts, out, signal, n_jobs,
+			names=names)
+		calls.append((len(rows), n_jobs, len(left)))
+		if decline is not None:
+			extra = decline(len(rows), signal)
+			out[rows[extra], signal] = 7
+			left = numpy.union1d(left, extra)
+
+		return left
+
+	monkeypatch.setattr(_BigWigFile, 'read', recording)
+	return calls
+
+
+@pytest.mark.parametrize("n_jobs", [1, 3, 8])
+def test_extract_loci_n_jobs_reaches_bigwig_reader(reader_fasta,
+	pybigtools_bigwig, monkeypatch, n_jobs):
+	# n_jobs reaches the reader on each path that uses it: loci found without
+	# the loop (a fasta path), the loop that reads no signal (a pyfaidx.Fasta)
+	# and the loop that reads a count filter's target.
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_MIN_WINDOWS', 1)
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_BATCH_BLOCKS', 1)
+	calls = _recording_bigwig_read(monkeypatch)
+
+	workers = []
+
+	class RecordingPool(tangermeme.io.ThreadPoolExecutor):
+		def __init__(self, max_workers=None, *args, **kwargs):
+			workers.append(max_workers)
+			super().__init__(max_workers, *args, **kwargs)
+
+	monkeypatch.setattr(tangermeme.io, 'ThreadPoolExecutor', RecordingPool)
+
+	rng = numpy.random.default_rng(8)
+	loci = _reader_loci(rng, 300)
+	path = str(pybigtools_bigwig)
+	fasta = pyfaidx.Fasta(reader_fasta)
+
+	for sequences, kwargs in [(reader_fasta, {}), (fasta, {}), (reader_fasta,
+			{'min_counts': 1, 'target_idx': 1})]:
+		del calls[:], workers[:]
+		mask = extract_loci(loci, sequences, signals=[path, path],
+			in_signals=[path], in_window=100, out_window=50, n_jobs=n_jobs,
+			return_mask=True, **kwargs)[-1]
+
+		assert len(calls) == (2 if kwargs else 3)
+		assert all(c[1] == n_jobs for c in calls)
+
+		# The reader reads the kept windows on chr1 and chr2 itself, which
+		# are the only ones given to it under a count filter.
+		kept = loci[mask.numpy()]
+		n_readable = kept['chrom'].isin(['chr1', 'chr2']).sum()
+		assert n_readable > 0
+		assert all(c[0] - c[2] == n_readable for c in calls)
+		assert all(c[0] == (n_readable if kwargs else len(kept)) for c in
+			calls)
+		if n_jobs == 1:
+			assert workers == []
+		else:
+			assert len(workers) > 0 and max(workers) == n_jobs
+
+	fasta.close()
+
+
+@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("min_counts", [None, 1])
+def test_extract_loci_bigwig_reader_declined_windows(reader_fasta,
+	pybigtools_bigwig, tmp_path, monkeypatch, n_jobs, min_counts):
+	# The windows the reader hands back are read with pybigtools, sorted and
+	# grouped, into their own rows, next to a signal opened with pybigtools
+	# and with the windows on chromosomes the file lacks.
+	path = tmp_path / "chr1_chr3.bw"
+	_write_raw_bigwig(path, {'chr1': 30000, 'chr3': 4000}, [('chr1', 1, 0, 0,
+		[(i * 50, i * 50 + 30, float(i)) for i in range(500)]), ('chr3', 1,
+		0, 0, [(0, 3000, 2.0)])])
+
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_MIN_WINDOWS', 1)
+	calls = _recording_bigwig_read(monkeypatch, decline=lambda n, signal:
+		numpy.arange(signal % 2, n, 3))
+
+	grouped = []
+	read_windows = tangermeme.io._read_signal_windows
+
+	def recording(signals, *args, rows=None, **kwargs):
+		grouped.append(rows is not None)
+		return read_windows(signals, *args, rows=rows, **kwargs)
+
+	monkeypatch.setattr(tangermeme.io, '_read_signal_windows', recording)
+
+	rng = numpy.random.default_rng(9)
+	loci = _reader_loci(rng, 400)
+	kwargs = dict(in_window=100, out_window=51, max_jitter=3,
+		min_counts=min_counts, target_idx=1, return_mask=True)
+
+	with warnings.catch_warnings(record=True) as w:
+		warnings.simplefilter("always")
+		y = extract_loci(loci, reader_fasta, signals=[str(path),
+			pybigtools.open(str(pybigtools_bigwig)), str(pybigtools_bigwig)],
+			in_signals=[str(pybigtools_bigwig)], n_jobs=n_jobs, **kwargs)
+
+	assert len(calls) == 3 and any(grouped)
+	del calls[:]
+
+	with warnings.catch_warnings(record=True) as w0:
+		warnings.simplefilter("always")
+		y0 = extract_loci(loci, reader_fasta, signals=[pybigtools.open(str(
+			path)), pybigtools.open(str(pybigtools_bigwig)), pybigtools.open(
+			str(pybigtools_bigwig))], in_signals=[pybigtools.open(str(
+			pybigtools_bigwig))], **kwargs)
+
+	assert len(calls) == 0
+	assert len(w0) > 0 and [str(x.message) for x in w] == [str(x.message) for
+		x in w0]
+	for x, x0 in zip(y, y0):
+		assert x.dtype == x0.dtype and x.shape == x0.shape
+		assert x.is_contiguous() and torch.equal(x, x0)
+
+	assert not (y[1] == 7).all(dim=-1).any()
+
+
+def test_read_signal_windows_rows(pybigtools_bigwig):
+	# Window k is written into row rows[k], and its failure names that row.
+	signals = [pybigtools.open(str(pybigtools_bigwig))]
+	chroms = ['chr2', 'chr1', 'chr4', 'chr1', 'chr1']
+	starts = numpy.array([100, 29990, 5, 2000, 2010])
+	rows = numpy.array([5, 0, 3, 2, 6])
+
+	out = numpy.full((8, 1, 20), 7, dtype=numpy.float32)
+	failures = _read_signal_windows(signals, chroms, starts, 20, out, kind=1,
+		rows=rows)
+
+	expected = numpy.full((5, 1, 20), 7, dtype=numpy.float32)
+	expected_failures = _read_signal_windows(signals, chroms, starts, 20,
+		expected, kind=1)
+
+	assert failures == [(int(rows[f[0]]),) + f[1:] for f in expected_failures]
+	assert failures == [(3, 1, 0, 'chr4', 5, 25)]
+	numpy.testing.assert_array_equal(out[rows].view(numpy.uint32),
+		expected.view(numpy.uint32))
+	assert (out[[1, 4, 7]] == 7).all()
+
+
+def test_bigwig_reader_names(pybigtools_bigwig):
+	# Chromosomes given as indices into names read as the names do.
+	bw = pybigtools.open(str(pybigtools_bigwig))
+	reader = _BigWigFile.open(str(pybigtools_bigwig), bw)
+	names = ['chr4', 'chr2', 'chr1']
+	codes = numpy.array([2, 1, 0, 2, 1, 2])
+	starts = numpy.array([29950, 10, 3, 0, 8990, 1234])
+	rows = numpy.arange(6, dtype=numpy.int64)
+
+	out = numpy.full((6, 1, 100), 7, dtype=numpy.float32)
+	left = reader.read(rows, codes, starts, out, 0, 2, names=names)
+
+	expected = numpy.full((6, 1, 100), 7, dtype=numpy.float32)
+	expected_left = reader.read(rows, [names[c] for c in codes], starts,
+		expected, 0, 2)
+
+	assert left.tolist() == expected_left.tolist() == [2]
+	numpy.testing.assert_array_equal(out.view(numpy.uint32),
+		expected.view(numpy.uint32))
+
+
+@pytest.mark.parametrize("n_jobs", [1, 4])
+def test_extract_loci_bigwig_reader_summed_overlaps(reader_fasta, tmp_path,
+	monkeypatch, n_jobs):
+	# The windows of blocks with overlapping items are handed back and read
+	# with pybigtools, sorted and grouped. Each gets the values a read of that
+	# window alone gives, which sums the overlapping items.
+	path = tmp_path / "overlapping.bw"
+	_write_raw_bigwig(path, {'chr1': 30000}, [('chr1', 1, 0, 0, [(0, 100, 1.0),
+		(50, 200, 2.0), (150, 400, 0.5)]), ('chr1', 1, 0, 0, [(1000, 2000,
+		3.0)]), ('chr1', 1, 0, 0, [(2500, 2600, 1.5), (2550, 2700, 0.25)])])
+
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_MIN_WINDOWS', 1)
+	calls = _recording_bigwig_read(monkeypatch)
+	starts = numpy.arange(60, 3000, 37)
+	loci = pandas.DataFrame({'chrom': 'chr1', 'start': starts, 'end': starts +
+		1})
+
+	X, y = extract_loci(loci, reader_fasta, signals=[str(path)], in_window=20,
+		out_window=120, n_jobs=n_jobs)
+	assert len(calls) == 1
+
+	bw = pybigtools.open(str(path))
+	scratch = numpy.empty(120, dtype=numpy.float64)
+	expected = numpy.empty((len(starts), 1, 120), dtype=numpy.float32)
+	for k, mid in enumerate(starts):
+		_write_locus_signal([bw], 'chr1', int(mid) - 60, int(mid) + 60,
+			expected[k], scratch)
+
+	expected = numpy.nan_to_num(expected)
+	assert (expected == 2.5).any() and (expected == 1.75).any()
+	numpy.testing.assert_array_equal(y.numpy().view(numpy.uint32),
+		expected.view(numpy.uint32))
+
+
+###
+# n_jobs: the sequences of a fasta file are one-hot encoded in blocks of
+# rows on numba's threads, which changes no output and no error.
+
+
+@pytest.mark.parametrize("n_jobs", [2, 3, 8, 1000])
+def test_extract_loci_n_jobs(tmp_path, n_jobs):
+	# The loci fill several blocks of rows. Every n_jobs gives the output of
+	# one thread, from a path and from a pyfaidx.Fasta object, and one above
+	# NUMBA_NUM_THREADS is capped rather than raising.
+	genome = _fasta_genome()
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+	loci = _every_window(genome, 7)
+	assert len(loci) > 500
+
+	X1 = extract_loci(loci, path, in_window=7, n_jobs=1)
+	X = extract_loci(loci, path, in_window=7, n_jobs=n_jobs)
+	assert X.dtype == torch.int8
+	assert X.is_contiguous()
+	assert torch.equal(X, X1)
+	assert torch.equal(X, _encode_windows(genome, loci, 7))
+
+	fasta = pyfaidx.Fasta(path)
+	X = extract_loci(loci, fasta, in_window=7, n_jobs=n_jobs)
+	fasta.close()
+	assert X.is_contiguous()
+	assert torch.equal(X, X1)
+
+
+def test_extract_loci_n_jobs_signals_and_mask():
+	# With signals, in_signals and a mask, only the sequences are threaded.
+	loci = pandas.concat([pandas.read_csv("tests/data/test.bed", sep="\t",
+		header=None)] * 40)
+
+	kwargs = dict(signals=["tests/data/test.bw"], in_signals=[
+		"tests/data/test.bw"], in_window=10, out_window=6, max_jitter=2,
+		return_mask=True)
+	outputs1 = extract_loci(loci, "tests/data/test.fa", n_jobs=1, **kwargs)
+	outputs = extract_loci(loci, "tests/data/test.fa", n_jobs=4, **kwargs)
+	assert len(outputs) == len(outputs1) == 4
+	assert outputs[0].shape[0] > 64
+	for x, x1 in zip(outputs, outputs1):
+		assert x.dtype == x1.dtype
+		assert x.is_contiguous()
+		assert torch.equal(x, x1)
+
+
+@pytest.mark.parametrize("n_jobs", [1, 4])
+def test_extract_loci_n_jobs_unknown_character(tmp_path, n_jobs):
+	# Unknown characters under loci of several blocks raise the error one
+	# thread raises, from a path and from a pyfaidx.Fasta object.
+	genome = _fasta_genome()
+	genome['chr2'] = genome['chr2'][:30] + 'Z' + genome['chr2'][31:]
+	genome['chrLast'] = genome['chrLast'][:400] + 'Z' + genome['chrLast'][401:]
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+	loci = _every_window(genome, 7)
+
+	with pytest.raises(ValueError) as info1:
+		extract_loci(loci, path, in_window=7, n_jobs=1)
+
+	with pytest.raises(ValueError) as info:
+		extract_loci(loci, path, in_window=7, n_jobs=n_jobs)
+
+	assert "Encountered character" in str(info.value)
+	assert str(info.value) == str(info1.value)
+	_same_as_pyfaidx_object(loci, path, in_window=7, n_jobs=n_jobs)
+
+
+@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("line", [180, 3])
+def test_extract_loci_n_jobs_read_through_pyfaidx(tmp_path, n_jobs, line):
+	# A byte that pyfaidx removes, in a late or an early block of rows, sends
+	# every window to pyfaidx, so the result is the one pyfaidx gives.
+	lines = [b"ACGTAC"] * 200
+	lines[line] = b"AC\rTAC"
+	path = str(tmp_path / "genome.fa")
+	with open(path, "wb") as handle:
+		handle.write(b">chr1\n" + b"\n".join(lines) + b"\n")
+
+	with open(path + ".fai", "w") as handle:
+		handle.write("chr1\t1200\t6\t6\t7\n")
+
+	loci = pandas.DataFrame([('chr1', mid, mid + 1) for mid in range(2, 1198)])
+	_same_as_pyfaidx_object(loci, path, in_window=5, n_jobs=n_jobs)
+
+
+@pytest.mark.parametrize("n_jobs", [0, -1, 1.5, "2", None])
+def test_extract_loci_n_jobs_raises_without_signals(n_jobs):
+	with pytest.raises(ValueError, match="n_jobs must be an integer"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
+			n_jobs=n_jobs)
+
+
+def test_extract_loci_n_jobs_restores_numba_threads(tmp_path):
+	# numba's thread count is the caller's after a call, and after a call
+	# that raises inside the threaded encoding.
+	genome = _fasta_genome()
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+	loci = _every_window(genome, 7)
+
+	genome['chr2'] = genome['chr2'][:30] + 'Z' + genome['chr2'][31:]
+	path_z = str(tmp_path / "genome_z.fa")
+	_write_fasta(path_z, genome, 11)
+
+	previous = numba.get_num_threads()
+	threads = min(3, numba.config.NUMBA_NUM_THREADS)
+	numba.set_num_threads(threads)
+	try:
+		extract_loci(loci, path, in_window=7, n_jobs=2)
+		assert numba.get_num_threads() == threads
+
+		fasta = pyfaidx.Fasta(path)
+		extract_loci(loci, fasta, in_window=7, n_jobs=2)
+		fasta.close()
+		assert numba.get_num_threads() == threads
+
+		with pytest.raises(ValueError, match="Encountered character"):
+			extract_loci(loci, path_z, in_window=7, n_jobs=2)
+		assert numba.get_num_threads() == threads
+	finally:
+		numba.set_num_threads(previous)
+
+
+@pytest.mark.parametrize("kwargs", [
+	dict(),
+	dict(signals=["tests/data/test.bw"], in_signals=["tests/data/test.bw"]),
+	dict(signals=["tests/data/test.bw"], min_counts=0),
+	dict(fasta_object=True),
+], ids=["no_signals", "signals", "count_filter", "fasta_object"])
+def test_extract_loci_n_jobs_reaches_encoder(monkeypatch, kwargs):
+	# n_jobs reaches the encoder whether the kept loci are found with or
+	# without the per-locus loop, and from a pyfaidx.Fasta object.
+	import tangermeme.io
+	import tangermeme.utils
+
+	encoder = tangermeme.utils._one_hot_encode_fasta
+	calls = []
+
+	def recording_encoder(*args, n_jobs=1):
+		calls.append(n_jobs)
+		return encoder(*args, n_jobs=n_jobs)
+
+	monkeypatch.setattr(tangermeme.io, "_one_hot_encode_fasta",
+		recording_encoder)
+	monkeypatch.setattr(tangermeme.utils, "_one_hot_encode_fasta",
+		recording_encoder)
+
+	kwargs = dict(kwargs)
+	sequences = "tests/data/test.fa"
+	if kwargs.pop("fasta_object", False):
+		sequences = pyfaidx.Fasta(sequences)
+
+	loci = pandas.concat([pandas.read_csv("tests/data/test.bed", sep="\t",
+		header=None)] * 40)
+	X1 = extract_loci(loci, sequences, in_window=10, out_window=6, n_jobs=1,
+		**kwargs)
+	X = extract_loci(loci, sequences, in_window=10, out_window=6, n_jobs=3,
+		**kwargs)
+
+	if isinstance(sequences, pyfaidx.Fasta):
+		sequences.close()
+
+	assert len(calls) == 2
+	assert calls == [1, 3]
+	for x, x1 in zip(X, X1):
+		assert torch.equal(x, x1)
+
+
+###
+# The inflater that _BigWigFile's tasks run without the GIL
+###
+
+
+class _CountingInflater():
+	# _inflate_bigwig_blocks, recording each call's number of blocks and the
+	# read flag it leaves on each block.
+	def __init__(self, kernel):
+		self.kernel, self.calls, self.flags = kernel, [], []
+
+	@property
+	def signatures(self):
+		return self.kernel.signatures
+
+	def __call__(self, uncompress, data, starts, sizes, buffer, blocks,
+		length):
+		used = self.kernel(uncompress, data, starts, sizes, buffer, blocks,
+			length)
+		self.calls.append(len(starts))
+		self.flags.extend(blocks[:, 5].tolist())
+		return used
+
+
+def _counting_inflater(monkeypatch):
+	counting = _CountingInflater(tangermeme.io._inflate_bigwig_blocks)
+	monkeypatch.setattr(tangermeme.io, '_inflate_bigwig_blocks', counting)
+	return counting
+
+
+def test_zlib_uncompress_loads():
+	import sys
+	import ctypes
+
+	uncompress = _zlib_uncompress()
+	if sys.platform.startswith('linux'):
+		assert uncompress is not None
+
+	if uncompress is not None:
+		assert uncompress[1].itemsize == ctypes.sizeof(ctypes.c_ulong)
+
+	assert _zlib_uncompress() is uncompress
+
+
+@pytest.mark.parametrize("capacity", [32768, 5000, 400, 0])
+def test_inflate_bigwig_blocks(capacity):
+	# Whole-word streams of several sizes, a stream of 22 bytes, an empty
+	# stream, bytes that are not a zlib stream, and a block whose read flag
+	# is 0, inflated into buffers that hold all, some or none of them.
+	uncompress = _zlib_uncompress()
+	if uncompress is None:
+		pytest.skip("zlib's uncompress() cannot be loaded here")
+
+	rng = numpy.random.default_rng(3)
+	raws = [rng.integers(0, 4, size, dtype=numpy.uint8).tobytes() for size in
+		[4, 400, 12288, 4096]] + [b'\x01' * 22, b'']
+	streams = [zlib.compress(raw) for raw in raws] + [b'not a zlib stream!!!',
+		zlib.compress(raws[1])]
+
+	sizes = numpy.array([len(s) for s in streams], dtype=numpy.int64)
+	starts = numpy.cumsum(sizes) - sizes
+	data = numpy.frombuffer(b''.join(streams), dtype=numpy.uint8)
+	buffer = numpy.full(capacity, 255, dtype=numpy.uint8)
+	blocks = numpy.zeros((len(streams), 6), dtype=numpy.int64)
+	blocks[:, 2:5] = [5, 6, 7]
+	blocks[:, 5] = 1
+	blocks[-1, 5] = 0
+
+	used = _inflate_bigwig_blocks(uncompress[0], data, starts, sizes, buffer,
+		blocks, numpy.zeros(1, dtype=uncompress[1]))
+
+	# What zlib.decompress gives, placed one after another while they fit.
+	position, expected = 0, []
+	for k, stream in enumerate(streams):
+		if k == len(streams) - 1:
+			expected.append((0, 0, 0))
+			continue
+
+		try:
+			raw = zlib.decompress(stream)
+		except zlib.error:
+			expected.append((0, 0, 2))
+			continue
+
+		if len(raw) >= capacity - position and len(raw) > 0:
+			expected.append((0, 0, 2))
+		elif len(raw) == 0 or len(raw) % 4 != 0:
+			expected.append((0, 0, 0))
+		else:
+			expected.append((position // 4, (position + len(raw)) // 4, 1))
+			assert buffer[position:position + len(raw)].tobytes() == raw
+			position += len(raw)
+
+	assert used == position
+	assert [tuple(b) for b in blocks[:, [0, 1, 5]].tolist()] == expected
+	assert (blocks[:, 2:5] == [5, 6, 7]).all()
+	assert sum(flag == 1 for _, _, flag in expected) == {32768: 4, 5000: 3,
+		400: 1, 0: 0}[capacity]
+
+
+def _inflate_mode(monkeypatch, mode, buffer_size):
+	# 'kernel' is the default. 'python' has no uncompress(), so every block
+	# is inflated by zlib.decompress. 'retry' fits no block into the buffer,
+	# and 'some' fits about two in three.
+	if mode == 'python':
+		monkeypatch.setattr(tangermeme.io, '_zlib_uncompress', lambda: None)
+	elif mode == 'retry':
+		monkeypatch.setattr(tangermeme.io, '_BIGWIG_MAX_BLOCK_BYTES', 4)
+	elif mode == 'some':
+		monkeypatch.setattr(tangermeme.io, '_BIGWIG_MAX_BLOCK_BYTES',
+			buffer_size * 2 // 3)
+
+
+@pytest.mark.parametrize("mode", ['kernel', 'python', 'retry', 'some'])
+@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("batch_blocks", [2, 256])
+def test_bigwig_file_inflate_paths(pybigtools_bigwig, monkeypatch, mode,
+	n_jobs, batch_blocks):
+	# The same values whichever way a block is inflated, with batches of two
+	# blocks that split chr1's blocks across tasks, and with one batch.
+	bw = pybigtools.open(str(pybigtools_bigwig))
+	reader = _BigWigFile.open(str(pybigtools_bigwig), bw)
+	assert reader.buffer_size > 0
+
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_BATCH_BLOCKS', batch_blocks)
+	_inflate_mode(monkeypatch, mode, reader.buffer_size)
+	counting = _counting_inflater(monkeypatch)
+
+	rng = numpy.random.default_rng(11)
+	chroms, starts = _random_windows(rng, bw.chroms(), 400, 1000)
+	y, fallback = _reader_windows(pybigtools_bigwig, chroms, starts, 1000,
+		n_jobs)
+	y0 = _pybigtools_windows(pybigtools_bigwig, chroms, starts, 1000)
+
+	assert len(fallback) == 0
+	_assert_bits_equal(y, y0)
+
+	flags = set(counting.flags)
+	if mode == 'python':
+		assert counting.calls == []
+	else:
+		assert flags == {'kernel': {1}, 'retry': {2}, 'some': {1, 2}}[mode]
+
+	# chr1 has at least five blocks, so batches of two split it across at
+	# least three tasks.
+	assert (reader._read_index()['chroms'] == 0).sum() >= 5
+	if mode != 'python':
+		assert len(counting.calls) >= (3 if batch_blocks == 2 else 1)
+
+
+def test_bigwig_file_inflate_uncompressed(tmp_path, monkeypatch):
+	# A file stored without compression is not inflated by the kernel.
+	path = tmp_path / "raw.bw"
+	_write_raw_bigwig(path, {'chr1': 1000}, [('chr1', 1, 0, 0, [(10, 20, 1.5),
+		(30, 40, 2.5)]), ('chr1', 3, 3, 3, (300, [10.0, 11.0]))],
+		compress=False)
+	counting = _counting_inflater(monkeypatch)
+
+	starts = numpy.arange(0, 400, 7, dtype=numpy.int64)
+	chroms = ['chr1'] * len(starts)
+	y, fallback = _reader_windows(path, chroms, starts, 50, 2)
+	y0 = _pybigtools_windows(path, chroms, starts, 50)
+
+	assert len(fallback) == 0
+	_assert_bits_equal(y, y0)
+	assert counting.calls == []
+
+
+@pytest.mark.parametrize("mode", ['kernel', 'python', 'retry'])
+def test_bigwig_file_inflate_unsupported_blocks(tmp_path, monkeypatch, mode):
+	# Blocks that are not zlib, are not whole words, or hold overlapping
+	# items: their windows are left to pybigtools on every path, and the
+	# other windows are read.
+	path = tmp_path / "bad.bw"
+	sections = [('chr1', 1, 0, 0, [(0, 5, 9.0)]),
+		('chr1', 10, 20, b'not a zlib stream!!!'),
+		('chr1', 30, 40, zlib.compress(b'\x00' * 22)),
+		('chr1', 1, 0, 0, [(100, 110, 8.0)]),
+		('chr1', 1, 0, 0, [(200, 210, 7.0), (205, 215, 1.0)]),
+		('chr1', 1, 0, 0, [(300, 310, 6.0)] + [(400 + i, 401 + i, float(i))
+			for i in range(300)]),
+		('chr2', 1, 0, 0, [(0, 10, 7.0)])]
+	_write_raw_bigwig(path, {'chr1': 1000, 'chr2': 100}, sections)
+	reader = _BigWigFile.open(str(path), pybigtools.open(str(path)))
+	_inflate_mode(monkeypatch, mode, reader.buffer_size)
+	counting = _counting_inflater(monkeypatch)
+
+	chroms = ['chr1'] * 7 + ['chr2']
+	starts = numpy.array([0, 12, 95, 32, 203, 305, 450, 0], dtype=numpy.int64)
+	y, fallback = _reader_windows(path, chroms, starts, 5, 2)
+
+	assert fallback.tolist() == [1, 3, 4]
+	keep = [0, 2, 5, 6, 7]
+	y0 = _pybigtools_windows(path, [chroms[k] for k in keep], starts[keep], 5)
+	_assert_bits_equal(y[keep], y0)
+
+	if mode == 'python':
+		assert counting.calls == []
+	else:
+		assert 2 in counting.flags and 0 in counting.flags
+		assert (1 in counting.flags) == (mode == 'kernel')
+
+
+@pytest.mark.parametrize("mode", ['kernel', 'python'])
+def test_bigwig_file_short_read(pybigtools_bigwig, monkeypatch, mode):
+	# A read that reports that it stopped halfway leaves unread the blocks
+	# it does not reach in full, and their windows go to pybigtools, on
+	# either path. The whole run is read, so a block past the reported end
+	# would decode if it were not left unread.
+	pread = tangermeme.io._pread_into
+	monkeypatch.setattr(tangermeme.io, '_pread_into', lambda fd, buffer,
+		offset: pread(fd, buffer, offset) // 2)
+	_inflate_mode(monkeypatch, mode, 0)
+
+	bw = pybigtools.open(str(pybigtools_bigwig))
+	rng = numpy.random.default_rng(12)
+	chroms, starts = _random_windows(rng, bw.chroms(), 300, 100)
+	y, fallback = _reader_windows(pybigtools_bigwig, chroms, starts, 100, 2)
+	y0 = _pybigtools_windows(pybigtools_bigwig, chroms, starts, 100)
+
+	assert 0 < len(fallback) < len(starts)
+	keep = numpy.setdiff1d(numpy.arange(len(starts)), fallback)
+	_assert_bits_equal(y[keep], y0[keep])
+
+	# The same windows are handed back on both paths.
+	with monkeypatch.context() as m:
+		_inflate_mode(m, 'python' if mode == 'kernel' else 'kernel', 0)
+		_, fallback2 = _reader_windows(pybigtools_bigwig, chroms, starts, 100,
+			2)
+
+	assert fallback.tolist() == fallback2.tolist()
+
+
+def test_bigwig_file_without_preadv(pybigtools_bigwig, monkeypatch):
+	# Where os.preadv is missing, each run is read with os.pread and copied.
+	import os
+
+	monkeypatch.delattr(os, 'preadv', raising=False)
+	bw = pybigtools.open(str(pybigtools_bigwig))
+	rng = numpy.random.default_rng(13)
+	chroms, starts = _random_windows(rng, bw.chroms(), 300, 700)
+	y, fallback = _reader_windows(pybigtools_bigwig, chroms, starts, 700, 3)
+	y0 = _pybigtools_windows(pybigtools_bigwig, chroms, starts, 700)
+
+	assert len(fallback) == 0
+	_assert_bits_equal(y, y0)
+
+
+@pytest.mark.parametrize("mode", ['python', 'retry', 'some'])
+@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("count_filter", [False, True])
+def test_extract_loci_bigwig_reader_inflate_paths(reader_fasta,
+	pybigtools_bigwig, tmp_path, monkeypatch, mode, n_jobs, count_filter):
+	# extract_loci gives the same outputs whichever way the reader inflates
+	# its blocks: after the loop, and in the loop under a count filter.
+	path = tmp_path / "sections.bw"
+	_write_raw_bigwig(path, {'chr1': 30000, 'chr2': 9000, 'chr3': 4000},
+		[('chr1', 3, 10, 4, (0, [float(i) for i in range(2900)])),
+		('chr2', 2, 0, 3, [(i * 5, float(i)) for i in range(1700)]),
+		('chr3', 1, 0, 0, [(10, 3000, 2.5)])])
+
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_MIN_WINDOWS', 1)
+	monkeypatch.setattr(tangermeme.io, '_BIGWIG_BATCH_BLOCKS', 2)
+	rng = numpy.random.default_rng(14)
+	loci = _reader_loci(rng, 400)
+	kwargs = dict(signals=[str(pybigtools_bigwig), str(path)],
+		in_signals=[str(pybigtools_bigwig)], in_window=301, out_window=101,
+		max_jitter=5, return_mask=True, n_jobs=n_jobs)
+	if count_filter:
+		kwargs.update(min_counts=1.0, target_idx=1)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("ignore")
+		y = extract_loci(loci, reader_fasta, **kwargs)
+
+		counting = _counting_inflater(monkeypatch)
+		bw = _BigWigFile.open(str(pybigtools_bigwig), pybigtools.open(str(
+			pybigtools_bigwig)))
+		_inflate_mode(monkeypatch, mode, bw.buffer_size)
+		y1 = extract_loci(loci, reader_fasta, **kwargs)
+
+	assert len(y) == len(y1) == 4
+	for x, x1 in zip(y, y1):
+		assert x.dtype == x1.dtype and x.shape == x1.shape
+		assert torch.equal(x.view(torch.uint8) if x.dtype == torch.bool else
+			x.view(torch.int32) if x.dtype == torch.float32 else x,
+			x1.view(torch.uint8) if x1.dtype == torch.bool else
+			x1.view(torch.int32) if x1.dtype == torch.float32 else x1)
+
+	if mode == 'python':
+		assert counting.calls == []
+	else:
+		assert len(counting.calls) > 0
+
+
+###
+# The threaded nan_to_num (_nan_to_num_rows) and the threaded unmap
+# (_close_map)
+###
+
+
+class _RecordingPool(tangermeme.io.ThreadPoolExecutor):
+	"""A ThreadPoolExecutor that records how many workers each pool has."""
+
+	sizes = []
+
+	def __init__(self, max_workers=None, *args, **kwargs):
+		_RecordingPool.sizes.append(max_workers)
+		super().__init__(max_workers, *args, **kwargs)
+
+
+def _non_finite_rows(n, width):
+	# Rows of finite values with NaN of both signs and several payloads,
+	# both infinities and -0.0 scattered through them.
+	rng = numpy.random.default_rng(0)
+	values = rng.normal(size=(n, 2, width)).astype(numpy.float32)
+	bits = values.view(numpy.uint32)
+	flat, flat_bits = values.reshape(-1), bits.reshape(-1)
+	idxs = rng.choice(flat.size, size=flat.size // 5, replace=False)
+	for k, idx in enumerate(idxs):
+		kind = k % 6
+		if kind == 0:
+			flat[idx] = numpy.nan
+		elif kind == 1:
+			flat_bits[idx] = 0xFFC00000
+		elif kind == 2:
+			flat_bits[idx] = 0x7F800001 + k
+		elif kind == 3:
+			flat[idx] = numpy.inf
+		elif kind == 4:
+			flat[idx] = -numpy.inf
+		else:
+			flat[idx] = -0.0
+
+	# The first rows are all finite, so that some blocks are skipped.
+	values[:3] = 1.5
+	return values
+
+
+@pytest.mark.parametrize("n_jobs", [1, 2, 3, 8])
+@pytest.mark.parametrize("block_size", [1, 7, 40, 2**20])
+def test_nan_to_num_rows_threads_match_numpy(monkeypatch, n_jobs, block_size):
+	# Every block is replaced as numpy.nan_to_num replaces it, bit for bit,
+	# on any number of threads: NaN of any sign or payload becomes +0.0, an
+	# infinity the largest finite float32 of its sign, and -0.0 is kept.
+	monkeypatch.setattr(tangermeme.io, "_NAN_TO_NUM_MIN_BLOCKS", 1)
+	monkeypatch.setattr(tangermeme.io, "ThreadPoolExecutor", _RecordingPool)
+	monkeypatch.setattr(_RecordingPool, "sizes", [])
+
+	values = _non_finite_rows(23, 5)
+	expected = numpy.nan_to_num(values.copy())
+	out = tangermeme.io._nan_to_num_rows(values, block_size=block_size,
+		n_jobs=n_jobs)
+
+	assert out is values
+	assert values.tobytes() == expected.tobytes()
+	assert numpy.isfinite(values).all()
+
+	n_blocks = len(range(0, 23, max(1, block_size // 10)))
+	if n_jobs == 1:
+		assert _RecordingPool.sizes == []
+	else:
+		assert _RecordingPool.sizes == [min(n_jobs, n_blocks)]
+
+
+def test_nan_to_num_rows_few_blocks_are_serial(monkeypatch):
+	# Fewer blocks than _NAN_TO_NUM_MIN_BLOCKS are checked without threads.
+	monkeypatch.setattr(tangermeme.io, "ThreadPoolExecutor", _RecordingPool)
+	monkeypatch.setattr(_RecordingPool, "sizes", [])
+
+	n_min = tangermeme.io._NAN_TO_NUM_MIN_BLOCKS
+	for n_blocks, sizes in [(n_min - 1, []), (n_min, [8])]:
+		_RecordingPool.sizes = []
+		values = _non_finite_rows(n_blocks, 5)
+		expected = numpy.nan_to_num(values.copy())
+		tangermeme.io._nan_to_num_rows(values, block_size=10, n_jobs=8)
+		assert values.tobytes() == expected.tobytes()
+		assert _RecordingPool.sizes == sizes
+
+
+@pytest.mark.parametrize("n_jobs", [2, 8])
+def test_extract_loci_bigwig_nan_and_inf_threads(inf_bigwig, monkeypatch,
+	n_jobs):
+	# extract_loci passes n_jobs to _nan_to_num_rows for signals and
+	# in_signals, and the threaded replacement gives the bytes that one
+	# thread gives, blocks of one row each.
+	nan_to_num_rows = tangermeme.io._nan_to_num_rows
+	calls = []
+
+	def one_row_blocks(values, n_jobs=1):
+		calls.append(n_jobs)
+		return nan_to_num_rows(values, block_size=1, n_jobs=n_jobs)
+
+	monkeypatch.setattr(tangermeme.io, "_NAN_TO_NUM_MIN_BLOCKS", 1)
+	monkeypatch.setattr(tangermeme.io, "_nan_to_num_rows", one_row_blocks)
+
+	loci = pandas.DataFrame({0: ['chr1'] * 4, 1: [7, 43, 20, 45],
+		2: [17, 53, 30, 55]})
+	X1, y1, y_in1 = extract_loci(loci, "tests/data/test.fa", [inf_bigwig],
+		[inf_bigwig], in_window=6, out_window=10, n_jobs=1)
+	X, y, y_in = extract_loci(loci, "tests/data/test.fa", [inf_bigwig],
+		[inf_bigwig], in_window=6, out_window=10, n_jobs=n_jobs)
+
+	assert calls == [1, 1, n_jobs, n_jobs]
+	assert torch.equal(X, X1)
+	assert y.numpy().tobytes() == y1.numpy().tobytes()
+	assert y_in.numpy().tobytes() == y_in1.numpy().tobytes()
+
+	big = numpy.finfo(numpy.float32).max
+	assert_array_almost_equal(y[:2, 0], [[1, 1, 1, big, big, -big, -big, 2, 2,
+		2], [2, 2, 2, 2, 2, 2, 2, 0, 0, 0]])
+	assert numpy.isfinite(y.numpy()).all()
+	assert numpy.isfinite(y_in.numpy()).all()
+
+
+_linux_only = pytest.mark.skipif(not pathlib.Path("/proc/self/maps").exists()
+	or tangermeme.io._madvise() is None, reason="needs Linux madvise and "
+	"/proc/self/maps")
+
+
+def _recording_madvise(monkeypatch, fail=None):
+	# Record every madvise call, made through the real function unless
+	# `fail` is an exception to raise instead.
+	madvise = tangermeme.io._madvise()
+	calls = []
+
+	def recording(address, length, advice):
+		calls.append((address, length, advice))
+		if fail is not None:
+			raise fail
+
+		return madvise(address, length, advice)
+
+	monkeypatch.setattr(tangermeme.io, "_madvise", lambda: recording)
+	return calls
+
+
+def _unmap_genome(tmp_path, name, bad=False):
+	# About 31 KB, so that the map spans several pages and is split into
+	# several chunks, and one window in five, which still covers every base.
+	genome = {'chr1': 'ACGTNacgtnACGT' * 1500, 'chr2': 'TTGCA' * 1500}
+	if bad:
+		genome['chr2'] = genome['chr2'][:300] + 'Z' + genome['chr2'][301:]
+
+	path = str(tmp_path / name)
+	_write_fasta(path, genome, 11)
+	return genome, path, _every_window(genome, 9).iloc[::5]
+
+
+@_linux_only
+@pytest.mark.parametrize("n_jobs", [2, 3, 8])
+def test_extract_loci_unmap_threads(tmp_path, monkeypatch, n_jobs):
+	# A map read by at least _UNMAP_MIN_WINDOWS windows has its pages dropped
+	# with madvise(MADV_DONTNEED) in page-aligned chunks that cover the whole
+	# file, on up to n_jobs threads, before it is closed. The output is the
+	# one n_jobs=1 gives, and the file is unmapped on return.
+	import mmap
+	import threading
+
+	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise.fa")
+	X1 = extract_loci(loci, path, in_window=9, n_jobs=1)
+
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", 1)
+	monkeypatch.setattr(tangermeme.io, "ThreadPoolExecutor", _RecordingPool)
+	monkeypatch.setattr(_RecordingPool, "sizes", [])
+	calls = _recording_madvise(monkeypatch)
+	n_threads = threading.active_count()
+
+	X = extract_loci(loci, path, in_window=9, n_jobs=n_jobs)
+	assert torch.equal(X, X1)
+	assert torch.equal(X, _encode_windows(genome, loci, 9))
+	assert "genome_madvise.fa" not in _mapped_paths()
+	assert threading.active_count() == n_threads
+
+	size = pathlib.Path(path).stat().st_size
+	calls = sorted(calls)
+	assert len(calls) > 0
+	assert all(advice == mmap.MADV_DONTNEED for _, _, advice in calls)
+	assert all((a - calls[0][0]) % mmap.PAGESIZE == 0 for a, _, _ in calls)
+	assert all(a + n == b for (a, n, _), (b, _, _) in zip(calls, calls[1:]))
+	assert calls[-1][0] + calls[-1][1] - calls[0][0] == size
+	assert _RecordingPool.sizes == [min(n_jobs, len(calls))]
+
+
+@_linux_only
+def test_extract_loci_unmap_threads_on_error(tmp_path, monkeypatch):
+	# The pages are dropped and the map closed when the encoder finds a
+	# character that is in neither the alphabet nor `ignore`, and the error
+	# is the one n_jobs=1 raises.
+	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise_bad.fa",
+		bad=True)
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, path, in_window=9, n_jobs=1)
+
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", 1)
+	calls = _recording_madvise(monkeypatch)
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, path, in_window=9, n_jobs=4)
+
+	assert len(calls) > 0
+	assert "genome_madvise_bad.fa" not in _mapped_paths()
+
+
+@_linux_only
+@pytest.mark.parametrize("fail", [OSError(12, "no memory"),
+	RuntimeError("can't start new thread")])
+def test_extract_loci_unmap_madvise_raises(tmp_path, monkeypatch, fail):
+	# madvise only speeds up the close, so when it raises the map is still
+	# closed and the output is unchanged.
+	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise_raises.fa")
+	X1 = extract_loci(loci, path, in_window=9, n_jobs=1)
+
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", 1)
+	calls = _recording_madvise(monkeypatch, fail=fail)
+
+	X = extract_loci(loci, path, in_window=9, n_jobs=4)
+	assert len(calls) > 0
+	assert torch.equal(X, X1)
+	assert "genome_madvise_raises.fa" not in _mapped_paths()
+
+
+@_linux_only
+@pytest.mark.parametrize("n_jobs, n_min", [(1, 1), (8, 10**9)])
+def test_extract_loci_unmap_without_threads(tmp_path, monkeypatch, n_jobs,
+	n_min):
+	# With one thread, or fewer windows than _UNMAP_MIN_WINDOWS, the map is
+	# closed directly.
+	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise_direct.fa")
+
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", n_min)
+	calls = _recording_madvise(monkeypatch)
+
+	X = extract_loci(loci, path, in_window=9, n_jobs=n_jobs)
+	assert calls == []
+	assert torch.equal(X, _encode_windows(genome, loci, 9))
+	assert "genome_madvise_direct.fa" not in _mapped_paths()
+
+
+@_linux_only
+def test_madvise_dontneed_keeps_file_contents(tmp_path):
+	# MADV_DONTNEED on a read-only shared map of a file drops its pages, and
+	# reading the map again reads the file's bytes, which are unchanged.
+	import mmap
+
+	path = tmp_path / "pages.bin"
+	data = numpy.random.default_rng(0).integers(0, 256, size=5 * mmap.PAGESIZE
+		+ 17, dtype=numpy.uint8).tobytes()
+	path.write_bytes(data)
+
+	madvise = tangermeme.io._madvise()
+	with open(path, 'rb') as handle:
+		fasta_map = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
+		view = numpy.frombuffer(fasta_map, dtype=numpy.uint8)
+		assert view.tobytes() == data
+
+		assert madvise(view.ctypes.data, len(fasta_map),
+			mmap.MADV_DONTNEED) == 0
+		assert view.tobytes() == data
+
+		del view
+		fasta_map.close()
+
+	assert path.read_bytes() == data

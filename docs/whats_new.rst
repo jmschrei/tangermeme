@@ -12,6 +12,8 @@ Version 1.5.1 (unreleased)
 Claude Code skill
 -----------------
 
+	- ``references/io-loci.md`` gives ``extract_loci``'s new ``n_jobs`` keyword, says that the results do not depend on it, says to pass ``n_jobs=1`` inside processes that already run in parallel, and says which inputs the new FASTA and bigWig readers handle.
+
 	- ``references/io-loci.md`` follows the ``extract_loci`` changes below: a locus on a chromosome missing from the FASTA, and an empty result, raise ``ValueError``; the mask has one entry per locus under ``n_loci``; the count thresholds are inclusive and require ``signals``; exclusion regions are matched by 100bp chunk and ignored on chromosomes the FASTA lacks; and it gives the bounds of an odd window and says that ``out_window`` is unused without ``signals``.
 
 	- The variant-effect reference no longer says that ``insertion_effect`` applies insertions one at a time in a loop, which stopped being true when the function was rewritten below. It says instead what happens to several insertions at one position: all are made, with the last one given ending up first.
@@ -47,6 +49,19 @@ io
 	- The sequences returned by ``extract_loci`` are C-contiguous. They used to keep the layout of the transposed view that ``one_hot_encode`` returns, with strides ``(4 * L, 1, 4)``, so ``.view`` raised a ``RuntimeError`` on them. The values are unchanged.
 
 	- ``extract_loci``'s return annotation is ``torch.Tensor | list[torch.Tensor]``, which is what it returns: the sequences alone, or a list of the sequences followed by the signals, the input signals and the mask that were asked for. It was annotated as ``tuple``.
+
+	- ``extract_loci`` is about 30 times faster on large calls, with the same outputs bit for bit. On 167,750 ATAC-seq peaks and negatives, with 2114 bp sequence and 1000 bp signal windows and one bigWig, a call takes 0.23 s at 8 threads where it took 7.4 s, and its peak memory fell from 5.0 GB to 2.1 GB. Four changes do this.
+
+	  - The sequence windows are one-hot encoded together, by a numba kernel, straight into the returned array.
+	  - A FASTA given as a path is read through a memory map of the file, using its ``.fai``, rather than with one pyfaidx read per locus. With hg38 on Ceph, which costs a kernel round trip per read, the same call fell from 50 s to 0.5 s.
+	  - When at least 1,024 loci can be kept, bigWigs given as paths are read in genomic order by a reader built on numpy, zlib and numba, on several threads, because it releases the GIL and pybigtools does not.
+	  - The outputs are written into preallocated arrays rather than stacked from lists.
+
+	  The calls ``cherimoya fit`` makes for 92 Cherimoya models (30 TF ChIP-seq, 10 ATAC-seq, 10 DNase-seq, 42 PRO-cap) return the same tensors, bit for bit, as before. A ``pyfaidx.Fasta``, a bigWig opened with pybigtools, a URL, a dictionary, the signal a count filter is measured on, and any file or block the new readers do not handle are read with pyfaidx and pybigtools as before. The first call in a new environment compiles the new numba kernels, which takes about a second once.
+
+	- ``extract_loci`` has an ``n_jobs`` keyword, the largest number of threads it uses to one-hot encode sequences and to read bigWigs, with a default of 8. The results do not depend on it, and ``n_jobs=1`` keeps every step in the calling thread.
+
+	- A character that is in neither ``alphabet`` nor ``ignore`` still raises the same ``ValueError``, but once every window has been read rather than at the first locus that contains one. Warnings from later loci can therefore come before it. With ``verbose=True`` and no count filter, the progress bar fills in one step, since loci are no longer read one at a time.
 
 utils
 -----
