@@ -16,7 +16,11 @@ Claude Code skill
 
 	- The variant-effect reference no longer says that ``insertion_effect`` applies insertions one at a time in a loop, which stopped being true when the function was rewritten below. It says instead what happens to several insertions at one position: all are made, with the last one given ending up first.
 
+	- ``references/model-wrapping.md`` gives the output shape ``deep_lift_shap`` and ``pisa`` accept, following the changes below: both read their outputs from axis 1, trailing axes of length 1 are dropped, and any other axis after it raises ``ValueError``.
+
 	- The ersatz notes in ``SKILL.md`` and ``references/motif-effects.md`` no longer say that ``dinucleotide_shuffle`` rejects unknown characters outright; they give ``allow_N=True`` as the way to shuffle them. The third footgun in ``references/deep_lift_shap.md`` gains the route for attributing a sequence that contains them, ``only_warn=True`` with ``references=partial(dinucleotide_shuffle, allow_N=True)``.
+
+	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
 
 deep_lift_shap
 --------------
