@@ -225,8 +225,9 @@ def pisa(
 				references_.append(_references)
 
 			# Pull out the additional arguments for this example, if additional
-			# arguments are being provided
-			_args = None if args is None else tuple([a[i].to(device) 
+			# arguments are being provided, keeping the batch axis so that each
+			# can be expanded to the batch of `X_` below
+			_args = None if args is None else tuple([a[i].unsqueeze(0).to(device)
 				for a in args])
 
 			multipliers = []
@@ -250,7 +251,8 @@ def pisa(
 						# Materialize into a tuple and bind to a fresh name so
 						# `_args` is not overwritten by an exhausted generator
 						# for the next shuffle iteration.
-						_args_batched = tuple(torch.cat([arg, arg]) for arg in _args)
+						_args_batched = tuple(arg.expand(X_.shape[0], *arg.shape[1:])
+							.contiguous() for arg in _args)
 						y = model(X_, *_args_batched)
 					else:
 						y = model(X_)

@@ -62,6 +62,8 @@ pisa
 
 	- ``pisa`` reads ``n_outputs`` from axis 1 of the model's output, the axis it indexes the outputs on, rather than from the last axis. A model that returns ``(batch_size, n_outputs, 1)``, such as one ending in ``AdaptiveAvgPool1d(1)``, used to be attributed for its first output only, with no error. Trailing axes of length 1 are now dropped, as in ``deep_lift_shap``, and any other axis after the outputs raises a ``ValueError``. The Notes section said that a profile model returning ``(batch, n_tasks, length)`` would be attributed over ``length``, which never worked: such models raised an ``IndexError`` when they had fewer tasks than positions, and otherwise could run without error while attributing the wrong outputs. The Notes now say to wrap such a model to return ``(batch, length)`` for one task. Thanks @avantikalal!
 
+	- ``pisa`` passes each of ``args`` to the model with a batch axis that matches the sequences. It used to take ``a[i]``, which drops the batch axis, and concatenate it with itself, which then doubled the feature axis, so an argument of shape ``(n, d)`` reached the model as ``(2 * d,)``. A model that added such an argument to a ``(batch, d)`` output raised a ``RuntimeError`` for ``d > 1``, and so did one that concatenated it to its input, although ``deep_lift_shap`` ran both. An argument of shape ``(n,)`` raised ``RuntimeError: zero-dimensional tensor (at position 0) cannot be concatenated`` and now works. Arguments of shape ``(n, 1)``, which broadcast to the same values either way, give the same attributions as before.
+
 utils
 -----
 
