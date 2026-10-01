@@ -18,6 +18,8 @@ Claude Code skill
 
 	- ``references/model-wrapping.md`` gives the output shape ``deep_lift_shap`` and ``pisa`` accept, following the changes below: both read their outputs from axis 1, trailing axes of length 1 are dropped, and any other axis after it raises ``ValueError``.
 
+	- ``SKILL.md`` no longer says that ``model(X)`` returns a tensor with layout ``(batch, channels, length)``, which is the layout of ``X``. It says that ``deep_lift_shap`` and ``pisa`` need ``(batch, n_outputs)``.
+
 	- The ersatz notes in ``SKILL.md`` and ``references/motif-effects.md`` no longer say that ``dinucleotide_shuffle`` rejects unknown characters outright; they give ``allow_N=True`` as the way to shuffle them. The third footgun in ``references/deep_lift_shap.md`` gains the route for attributing a sequence that contains them, ``only_warn=True`` with ``references=partial(dinucleotide_shuffle, allow_N=True)``.
 
 	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.

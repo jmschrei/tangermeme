@@ -28,11 +28,11 @@ reproducibility traps).
   trap. **This is what makes the library compose.**
 
 - **Wrapping models** (`references/model-wrapping.md`) — tangermeme assumes
-  `y = model(X)` returns a single tensor with layout `(batch, channels, length)`.
-  Real multi-input / multi-output models must be wrapped first. Read this before
-  attribution or design on any non-trivial model. Data preprocessing or output
-  post-processing should be handled in custom wrappers rather than in custom
-  functions.
+  `y = model(X)` returns a single tensor; `deep_lift_shap` and `pisa` need it
+  to be `(batch, n_outputs)`. Real multi-input / multi-output models must be
+  wrapped first. Read this before attribution or design on any non-trivial
+  model. Data preprocessing or output post-processing should be handled in
+  custom wrappers rather than in custom functions.
 
 ## Task → reference file
 
