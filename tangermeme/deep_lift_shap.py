@@ -291,6 +291,30 @@ def _attributing(model, device, nonlinear_ops):
 			model.to(_orig_device)
 
 
+def _squeeze_output(y, name):
+	"""Return a `(batch_size, n_outputs)` model output, or raise a ValueError.
+
+	`deep_lift_shap` and `pisa` index the outputs on axis 1 and check each
+	against one input difference per example, so they share this check. A
+	model ending in a global pool returns `(batch_size, n_outputs, 1)`, and its
+	trailing axes are dropped; left in place, they broadcast against the input
+	differences. Any other axis after the outputs leaves no single value per
+	output to explain.
+	"""
+
+	if y.ndim > 2:
+		if y.shape[2:].numel() != 1:
+			raise ValueError("{} requires the model to return a (batch_size, "
+				"n_outputs) tensor, optionally followed by axes of length 1, but "
+				"it returned shape {} per example. Wrap the model so that it "
+				"returns one value per output, e.g., by summing or slicing the "
+				"extra axes.".format(name, tuple(y.shape[1:])))
+
+		y = y.reshape(y.shape[0], y.shape[1])
+
+	return y
+
+
 class BilinearOp(torch.nn.Module):
 	"""A bilinear contraction of two tensors, written as a hookable module.
 
@@ -518,10 +542,13 @@ def deep_lift_shap(
 	issued to let you know that the deltas have been exceeded.
 
 	NOTE: predictions MUST yield a `(batch_size, n_targets)` tensor, even if
-	n_targets is 1. If your model yields something more complicated you must
-	wrap the model in a small class that operates on the outputs in a manner
-	that yields such a tensor, e.g., by slicing the output or summing along
-	a relevant axis.
+	n_targets is 1. Trailing axes of length 1, such as the one a global
+	pooling layer leaves, are dropped, so `(batch_size, n_targets, 1)` also
+	works. Any other axis after `n_targets`, such as the length axis of a
+	profile, raises a ValueError. Wrap such a model in a small class that
+	operates on the outputs in a manner that yields a `(batch_size,
+	n_targets)` tensor, e.g., by slicing the output or summing along a
+	relevant axis.
 
 
 	Parameters
@@ -544,7 +571,8 @@ def deep_lift_shap(
 
 	target: int, optional
 		The output of the model to calculate gradients/attributions for. This
-		will index the last dimension of the predictions. Default is 0.
+		indexes the second axis of the predictions, `model(X)[:, target]`.
+		Default is 0.
 
 	batch_size: int, optional
 		The number of sequence-reference pairs to pass through DeepLiftShap at
@@ -728,10 +756,11 @@ def deep_lift_shap(
 					with autocast_ctx:
 						if _args is not None:
 							_args = (torch.cat([arg, arg]) for arg in _args)
-							y = model(X_, *_args)[:, target]
+							y = model(X_, *_args)
 						else:
-							y = model(X_)[:, target]
+							y = model(X_)
 
+						y = _squeeze_output(y, "deep_lift_shap")[:, target]
 						multipliers = torch.autograd.grad(y.sum(), _X)[0]
 
 				# Check that the prediction-difference-from-reference is equal to

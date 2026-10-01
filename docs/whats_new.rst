@@ -18,6 +18,11 @@ Claude Code skill
 
 	- The ersatz notes in ``SKILL.md`` and ``references/motif-effects.md`` no longer say that ``dinucleotide_shuffle`` rejects unknown characters outright; they give ``allow_N=True`` as the way to shuffle them. The third footgun in ``references/deep_lift_shap.md`` gains the route for attributing a sequence that contains them, ``only_warn=True`` with ``references=partial(dinucleotide_shuffle, allow_N=True)``.
 
+deep_lift_shap
+--------------
+
+	- ``deep_lift_shap`` drops trailing output axes of length 1, so a model that returns ``(batch_size, n_targets, 1)``, such as one ending in ``AdaptiveAvgPool1d(1)``, gets correct convergence deltas. ``model(X)[:, target]`` used to keep the trailing axis, and subtracting the ``(batch_size,)`` input differences from it broadcast the deltas into a ``(batch_size, batch_size)`` matrix that compared unrelated example-reference pairs. On two small convolutional models whose outputs change under shuffling, attributing 8 sequences of 100bp with 20 shuffles each raised "Convergence deltas too high" on every batch, with reported deltas as large as ``0.34`` where the true ones were below ``1e-7``. The attributions were not affected, since the gradient is taken of the sum of the outputs either way. Any other axis after the targets, such as the length axis of a profile, now raises a ``ValueError`` that names the shape and says to wrap the model. Such outputs usually raised a ``RuntimeError`` from the broadcast, or, for ``(batch_size, n_targets, length, 1)``, returned attributions of the summed profile with meaningless deltas and no error. The docstring of ``target`` now says that it indexes the second axis of the predictions, not the last. Thanks @avantikalal!
+
 ersatz
 ------
 

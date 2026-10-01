@@ -3039,6 +3039,81 @@ def test_deep_lift_shap_invalid_target(X, device):
 		n_shuffles=2, device=device, random_state=0)
 
 
+@pytest.mark.parametrize("n_trailing", [1, 2])
+def test_deep_lift_shap_trailing_singleton_output(X, device, n_trailing,
+	capsys):
+	"""Trailing output axes of length 1 are dropped.
+
+	A model ending in a global pool, such as `AdaptiveAvgPool1d(1)`, returns
+	`(batch_size, n_targets, 1)`. `model(X)[:, target]` used to keep the
+	trailing axis, and subtracting the per-pair input differences broadcast
+	the convergence deltas into a `(batch_size, batch_size)` matrix comparing
+	unrelated example-reference pairs, which raised spurious warnings (#106).
+	The attributions were not affected.
+	"""
+
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=3)
+
+	def unsqueeze(model, X):
+		y = model(X)
+		return y.reshape(*y.shape, *([1] * n_trailing))
+
+	X_attr0 = deep_lift_shap(model, X, target=1, device=device,
+		random_state=0, print_convergence_deltas=True)
+	deltas0 = capsys.readouterr().out
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr1 = deep_lift_shap(LambdaWrapper(model, unsqueeze), X, target=1,
+			device=device, random_state=0, print_convergence_deltas=True)
+	deltas1 = capsys.readouterr().out
+
+	assert deltas1 == deltas0
+	assert_array_almost_equal(X_attr1, X_attr0)
+
+
+def test_deep_lift_shap_trailing_singleton_output_args(X, device, capsys):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=3)
+	alpha = torch.randn(16, 1)
+	beta = torch.randn(16, 1)
+
+	X_attr0 = deep_lift_shap(model, X, args=(alpha, beta), target=1,
+		device=device, random_state=0, print_convergence_deltas=True)
+	deltas0 = capsys.readouterr().out
+
+	model1 = LambdaWrapper(model, lambda model, X, alpha, beta: model(X,
+		alpha, beta).unsqueeze(-1))
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr1 = deep_lift_shap(model1, X, args=(alpha, beta), target=1,
+			device=device, random_state=0, print_convergence_deltas=True)
+	deltas1 = capsys.readouterr().out
+
+	assert deltas1 == deltas0
+	assert_array_almost_equal(X_attr1, X_attr0)
+
+
+@pytest.mark.parametrize("shape", [(3, 2), (3, 1, 2), (3, 2, 1)])
+def test_deep_lift_shap_multidimensional_output_raises(X, device, shape):
+	"""An output axis longer than 1 after the targets raises a ValueError.
+
+	A profile output, `(batch_size, n_targets, length)`, has no single value
+	per target to explain, so the model has to be wrapped to sum, slice or
+	weight the length axis. This used to raise a RuntimeError from
+	broadcasting inside the convergence check.
+	"""
+
+	torch.manual_seed(0)
+	model = LambdaWrapper(FlattenDense(n_outputs=6), lambda model, X: model(
+		X).reshape(X.shape[0], *shape))
+
+	assert_raises(ValueError, deep_lift_shap, model, X, n_shuffles=2,
+		device=device, random_state=0)
+
+
 def test_deep_lift_shap_empty_X(device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
