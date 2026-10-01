@@ -25,6 +25,7 @@ extract_loci(
     exclusion_lists=None,  # BED path, DataFrame, or list of them
     return_mask=False,
     verbose=False,
+    n_jobs=8,              # threads for one-hot encoding and bigWig reads
 )
 ```
 
@@ -97,6 +98,22 @@ window has its extra base on the right. `out_window` has no effect when
 `signals` is None. `summits=True` centers on the narrowPeak summit instead of
 the region midpoint. `max_jitter` *expands* both windows so a downstream data
 generator can jitter cheaply — it does not jitter the returned data itself.
+
+### Threads and readers
+
+`n_jobs` (default 8) is the most threads `extract_loci` uses, and the results
+are identical for every value. Pass `n_jobs=1` inside a DataLoader worker or
+any other process that already runs in parallel, so the threads do not
+multiply.
+
+- A FASTA path is read through a memory map of the file.
+- bigWig paths, in calls that keep at least 1,024 loci, are read by
+  tangermeme's own GIL-free reader.
+- A `pyfaidx.Fasta`, a bigWig opened with `pybigtools.open`, a URL and a dict
+  are read as before.
+
+The first call in a new environment compiles numba kernels, about a second,
+once.
 
 ## read_meme — motif PWMs
 

@@ -1637,8 +1637,9 @@ def extract_loci(
 		values.
 
 	signals: list or None, optional
-		A list whose elements are each a path to a bigwig file, which will be
-		read using pybigtools, a bigwig file already opened with
+		A list whose elements are each a path to a bigwig file, which is
+		read by tangermeme's own reader or by pybigtools, as `n_jobs`
+		describes, a bigwig file already opened with
 		`pybigtools.open`, which is left open, or a dictionary where the keys
 		are chromosomes and the values are numpy arrays or memory maps of the
 		signal across each chromosome. The keys of a dictionary are coerced to
