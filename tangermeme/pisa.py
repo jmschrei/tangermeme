@@ -24,6 +24,7 @@ from tangermeme._deep_lift_utils import _build_nonlinear_ops
 
 from tangermeme.deep_lift_shap import _attributing
 from tangermeme.deep_lift_shap import _reset_caches
+from tangermeme.deep_lift_shap import _squeeze_output
 from tangermeme.deep_lift_shap import hypothetical_attributions
 
 
@@ -171,11 +172,13 @@ def pisa(
 
 	Notes
 	-----
-	`n_outputs` is inferred from the *last* axis of the model's output
-	(`predict(model, X[:1]).shape[-1]`). Profile-style models that return
-	`(batch, n_tasks, length)` will therefore be attributed over `length`
-	only — to attribute over tasks instead, wrap the model in a small
-	adapter that transposes or flattens the output.
+	`n_outputs` is the size of axis 1 of the model's output. Trailing axes of
+	length 1, such as the one a global pooling layer leaves, are dropped, so
+	a `(batch, n_outputs, 1)` output is attributed over its `n_outputs`
+	outputs. Any other axis after `n_outputs` raises a ValueError. To
+	attribute each position of a profile model that returns `(batch, n_tasks,
+	length)`, wrap it to return `(batch, length)` for one task, e.g.,
+	`model(X)[:, task]`.
 
 	The returned `attributions` and `references` tensors are produced via
 	`torch.stack` over per-example accumulators and may live on the input
@@ -202,7 +205,8 @@ def pisa(
 			n_shuffles = references.shape[1]
 
 		_probe_args = None if args is None else tuple(a[:1] for a in args)
-		n_outputs = predict(model, X[:1], args=_probe_args, device=device).shape[-1]
+		n_outputs = _squeeze_output(predict(model, X[:1], args=_probe_args,
+			device=device), "pisa").shape[1]
 
 		# Loop over each of the examples
 		for i in trange(len(X), disable=not verbose):
@@ -250,6 +254,8 @@ def pisa(
 						y = model(X_, *_args_batched)
 					else:
 						y = model(X_)
+
+					y = _squeeze_output(y, "pisa")
 
 					_multipliers = []
 					edge_size = n_outputs % batch_size

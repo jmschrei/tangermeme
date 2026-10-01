@@ -598,6 +598,55 @@ def test_pisa_flattendense_n_outputs(X, device):
 	assert X_attr.shape == (2, 12, 4, 100)
 
 
+@pytest.mark.parametrize("n_trailing", [1, 2])
+def test_pisa_trailing_singleton_output(X, device, n_trailing, capsys):
+	"""Trailing output axes of length 1 are dropped.
+
+	`n_outputs` used to be read from the last axis of the output, so a model
+	returning `(batch_size, n_outputs, 1)`, such as one ending in a global
+	pool, was attributed for its first output only (#106).
+	"""
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=3)
+
+	def unsqueeze(model, X):
+		y = model(X)
+		return y.reshape(*y.shape, *([1] * n_trailing))
+
+	X_attr0 = pisa(model, X, n_shuffles=3, device=device, random_state=0,
+		print_convergence_deltas=True)
+	deltas0 = capsys.readouterr().out
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr1 = pisa(LambdaWrapper(model, unsqueeze), X, n_shuffles=3,
+			device=device, random_state=0, print_convergence_deltas=True)
+	deltas1 = capsys.readouterr().out
+
+	assert X_attr1.shape == (2, 3, 4, 100)
+	assert deltas1 == deltas0
+	assert_array_almost_equal(X_attr1, X_attr0)
+
+
+@pytest.mark.parametrize("shape", [(3, 2), (3, 1, 2), (3, 2, 1)])
+def test_pisa_multidimensional_output_raises(X, device, shape):
+	"""An output axis longer than 1 after the outputs raises a ValueError.
+
+	`n_outputs` used to be read from the last axis while the outputs were
+	indexed on the second, so a profile `(batch_size, n_tasks, length)`
+	raised an IndexError or, with at least as many tasks as positions, was
+	attributed for the wrong outputs.
+	"""
+
+	torch.manual_seed(0)
+	model = LambdaWrapper(FlattenDense(n_outputs=6), lambda model, X: model(
+		X).reshape(X.shape[0], *shape))
+
+	assert_raises(ValueError, pisa, model, X, n_shuffles=2, device=device,
+		random_state=0)
+
+
 def test_pisa_convdense_dense_wrapper(X, references, device):
 	torch.manual_seed(0)
 	model = LambdaWrapper(ConvDense(n_outputs=1), lambda model, X: model(X)[1])

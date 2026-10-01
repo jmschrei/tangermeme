@@ -53,6 +53,11 @@ io
 
 	- ``extract_loci``'s return annotation is ``torch.Tensor | list[torch.Tensor]``, which is what it returns: the sequences alone, or a list of the sequences followed by the signals, the input signals and the mask that were asked for. It was annotated as ``tuple``.
 
+pisa
+----
+
+	- ``pisa`` reads ``n_outputs`` from axis 1 of the model's output, the axis it indexes the outputs on, rather than from the last axis. A model that returns ``(batch_size, n_outputs, 1)``, such as one ending in ``AdaptiveAvgPool1d(1)``, used to be attributed for its first output only, with no error. Trailing axes of length 1 are now dropped, as in ``deep_lift_shap``, and any other axis after the outputs raises a ``ValueError``. The Notes section said that a profile model returning ``(batch, n_tasks, length)`` would be attributed over ``length``, which never worked: such models raised an ``IndexError`` when they had fewer tasks than positions, and otherwise could run without error while attributing the wrong outputs. The Notes now say to wrap such a model to return ``(batch, length)`` for one task. Thanks @avantikalal!
+
 utils
 -----
 
