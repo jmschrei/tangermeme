@@ -503,11 +503,12 @@ def extract_loci(
 		or a dictionary gives zeros and a TangermemeWarning, positions past the
 		end of the chromosome or array give zeros, NaN values become zero, and
 		infinities become the largest finite float32 of the same sign. The
-		bigwig files given as local paths are read by figwig, all of them in
-		one call on `n_jobs` threads once the kept loci are known. A URL, a
-		file figwig does not read, and a bigwig opened with pybigtools are read
-		with pybigtools one locus at a time, and the values are the same either
-		way. If None, no signal tensor is returned. Default is None.
+		bigwig files given as local paths are read by figwig on `n_jobs`
+		threads, in one call for the kept loci, or in groups of loci under
+		`min_counts` and `max_counts`. A URL, a file figwig does not read, and
+		a bigwig opened with pybigtools are read with pybigtools one locus at a
+		time, and the values are the same either way. If None, no signal tensor
+		is returned. Default is None.
 
 	in_signals: list or None, optional
 		The same as `signals`, but extracted using the input window rather
