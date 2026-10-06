@@ -22,6 +22,8 @@ Claude Code skill
 
 	- The ersatz notes in ``SKILL.md`` and ``references/motif-effects.md`` no longer say that ``dinucleotide_shuffle`` rejects unknown characters outright; they give ``allow_N=True`` as the way to shuffle them. The third footgun in ``references/deep_lift_shap.md`` gains the route for attributing a sequence that contains them, ``only_warn=True`` with ``references=partial(dinucleotide_shuffle, allow_N=True)``.
 
+	- ``references/io-loci.md`` gives ``extract_loci``'s new ``n_jobs`` keyword and says to pass bigWigs as paths, since those opened with ``pybigtools.open`` are read one locus at a time.
+
 	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
 
 deep_lift_shap
@@ -36,6 +38,8 @@ ersatz
 
 io
 --
+
+	- ``extract_loci`` reads bigWigs given as local paths with figwig, which reads every kept locus in one call on the new ``n_jobs`` threads, 8 by default. It used to read each locus through pybigtools inside its loop. The loci are now found first, by the window, exclusion, count and ``n_loci`` rules, and the signals read after them. On the 167,750 training peaks and negatives of ENCODE ATAC-seq experiment ENCSR123WME, with hg38 and the bigWigs on tmpfs and 8 threads, a call with one bigWig took 3.76 s against 7.87 s, and one with two bigWigs in ``signals`` and one in ``in_signals`` took 4.78 s against 17.36 s. The returned tensors are identical. Most of the remaining time goes to reading and one-hot encoding the FASTA, which is unchanged. A URL, a bigWig opened with ``pybigtools.open``, a dictionary and a file figwig does not read are read one locus at a time, as before. Under ``min_counts`` or ``max_counts``, only ``signals[target_idx]`` is read before the counts are compared, so a locus they remove no longer warns about a chromosome that another signal lacks. figwig is a new dependency.
 
 	- ``extract_loci`` no longer keeps a locus whose odd window runs one base off the end of its chromosome. A window of size ``w`` is ``[mid - w // 2, mid + w // 2 + w % 2)``, but the chromosome-end check left out the ``w % 2``, so such a window passed the check and came back one base short. With other loci alongside it, stacking raised ``ValueError: all input arrays must have the same shape``; alone, it was returned short. This affected an odd ``in_window``, and an odd ``out_window`` with bigWig or dict signals. A bigWig signal did not crash, since pybigtools pads past the end of a chromosome with NaN, but it kept the locus with a zero at the missing base.
 
