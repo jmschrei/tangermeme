@@ -11,7 +11,8 @@ mistake.
 from tangermeme.io import extract_loci
 
 extract_loci(
-    loci,                 # BED/narrowPeak path, DataFrame, or list of them
+    loci,                 # BED/narrowPeak path (track, browser and # lines are
+                          # skipped), DataFrame, or list of them
     sequences,            # FASTA path, pyfaidx.Fasta, or {chrom: tensor} dict
     signals=None,         # list of bigWig paths/objects -> OUTPUT signal tensor
     in_signals=None,      # list of bigWig -> INPUT signal tensor (e.g. controls)

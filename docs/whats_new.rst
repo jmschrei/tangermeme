@@ -22,7 +22,7 @@ Claude Code skill
 
 	- The ersatz notes in ``SKILL.md`` and ``references/motif-effects.md`` no longer say that ``dinucleotide_shuffle`` rejects unknown characters outright; they give ``allow_N=True`` as the way to shuffle them. The third footgun in ``references/deep_lift_shap.md`` gains the route for attributing a sequence that contains them, ``only_warn=True`` with ``references=partial(dinucleotide_shuffle, allow_N=True)``.
 
-	- ``references/io-loci.md`` gives ``extract_loci``'s new ``n_jobs`` keyword and says to pass bigWigs as paths, since those opened with ``pybigtools.open`` are read one locus at a time.
+	- ``references/io-loci.md`` gives ``extract_loci``'s new ``n_jobs`` keyword and says to pass bigWigs as paths, since those opened with ``pybigtools.open`` are read one locus at a time, and says that the track, browser and ``#`` lines of a BED file are skipped.
 
 	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
 
@@ -40,6 +40,12 @@ io
 --
 
 	- ``extract_loci`` reads bigWigs given as local paths with figwig, which reads every kept locus in one call on the new ``n_jobs`` threads, 8 by default. It used to read each locus through pybigtools inside its loop. The loci are now found first, by the window, exclusion, count and ``n_loci`` rules, and the signals read after them. On the 167,750 training peaks and negatives of ENCODE ATAC-seq experiment ENCSR123WME, with hg38 and the bigWigs on tmpfs and 8 threads, a call with one bigWig took 3.65 s against 7.79 s, and one with two bigWigs in ``signals`` and one in ``in_signals`` took 4.77 s against 17.78 s. The returned tensors are identical. Most of the remaining time goes to reading and one-hot encoding the FASTA, which is unchanged. A URL, a bigWig opened with ``pybigtools.open``, a dictionary and a file figwig does not read are read one locus at a time, as before. Under ``min_counts`` and ``max_counts`` the loci are read in groups. The warnings for chromosomes a signal does not have are the same, except in a call that raises partway through the loci, such as at a character not in ``alphabet``, where the signals of the loci after that one have been read and may have warned. figwig is a new dependency.
+
+	- A bigBed given in ``signals`` or ``in_signals``, as a path or opened with ``pybigtools.open``, raises a ``ValueError`` that names it. pybigtools opens bigBed files as well as bigWigs, and reading values from one panicked in Rust, which reached Python as pyo3's ``PanicException``. That derives from ``BaseException``, so ``except Exception`` did not catch it.
+
+	- A dictionary signal without any chromosomes gives zeros and a ``TangermemeWarning`` at each locus, as a chromosome missing from a dictionary does. It raised an ``IndexError``.
+
+	- The track and browser lines of a BED file given as ``loci``, and its lines that start with ``#``, are skipped. A track line raised ``TypeError: unsupported operand type(s) for -: 'str' and 'str'``. ``#`` lines, such as those that open a 10x Genomics peaks file, left the coordinates as floats, which raised a ``TypeError`` where the windows were read. And since pandas takes the number of columns from the first line, a header line shorter than ten columns made it read every summit as NaN.
 
 	- ``extract_loci`` no longer keeps a locus whose odd window runs one base off the end of its chromosome. A window of size ``w`` is ``[mid - w // 2, mid + w // 2 + w % 2)``, but the chromosome-end check left out the ``w % 2``, so such a window passed the check and came back one base short. With other loci alongside it, stacking raised ``ValueError: all input arrays must have the same shape``; alone, it was returned short. This affected an odd ``in_window``, and an odd ``out_window`` with bigWig or dict signals. A bigWig signal did not crash, since pybigtools pads past the end of a chromosome with NaN, but it kept the locus with a zero at the missing base.
 
