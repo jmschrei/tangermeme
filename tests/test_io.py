@@ -2726,3 +2726,59 @@ def test_interleave_loci_empty_dataframe():
 
 
 
+
+
+# Lines a BED file may carry before or between its rows, which are skipped.
+BED_HEADERS = {
+	'track': 'track name=peaks description="some peaks"\n',
+	'track_tab': 'track\tname=peaks\n',
+	'browser': 'browser position chr1:1-100\nbrowser hide all\n',
+	'comment': '# a comment\n',
+	'column_names': '#chrom\tstart\tend\n',
+	'tenx': '# id=pbmc\n# description=PBMC from a donor\n#\n',
+}
+
+
+@pytest.mark.parametrize("header", list(BED_HEADERS))
+@pytest.mark.parametrize("compressed", [False, True])
+def test_interleave_loci_skips_bed_header_lines(tmp_path, header, compressed):
+	# The rows of a file with a header are those of the file without it, with
+	# integer coordinates. A track line used to raise a TypeError on string
+	# arithmetic, and # lines left the coordinates as floats.
+	import gzip
+
+	rows = "chr1\t10\t30\nchr2\t25\t55\nchr2\t35\t65\n"
+	opener = gzip.open if compressed else open
+	suffix = ".bed.gz" if compressed else ".bed"
+
+	with opener(tmp_path / ("plain" + suffix), "wt") as f:
+		f.write(rows)
+	with opener(tmp_path / ("header" + suffix), "wt") as f:
+		lines = rows.splitlines(keepends=True)
+		f.write(BED_HEADERS[header] + lines[0] + "# between rows\n" +
+			"".join(lines[1:]))
+
+	result = _interleave_loci(str(tmp_path / ("header" + suffix)))
+	expected = _interleave_loci(str(tmp_path / ("plain" + suffix)))
+
+	pandas.testing.assert_frame_equal(result, expected)
+	assert result['start'].dtype == numpy.int64
+	assert result['end'].dtype == numpy.int64
+
+
+def test_extract_loci_bed_header_lines(tmp_path):
+	# A BED10 file with a track line and # lines gives what the same file
+	# without them gives, with summits and bigWig signals.
+	rows = "chr1\t10\t30\t.\t0\t.\t0\t0\t0\t4\nchr2\t25\t55\t.\t0\t.\t0\t0\t0\t20\n"
+	(tmp_path / "plain.bed").write_text(rows)
+	(tmp_path / "header.bed").write_text(BED_HEADERS['track'] +
+		BED_HEADERS['tenx'] + rows)
+
+	kwargs = dict(in_window=8, out_window=10, summits=True, return_mask=True)
+	result = extract_loci(str(tmp_path / "header.bed"), "tests/data/test.fa",
+		["tests/data/test.bw"], **kwargs)
+	expected = extract_loci(str(tmp_path / "plain.bed"), "tests/data/test.fa",
+		["tests/data/test.bw"], **kwargs)
+
+	for tensor, expected_tensor in zip(result, expected):
+		assert torch.equal(tensor, expected_tensor)

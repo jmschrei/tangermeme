@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import csv
 import warnings
 
 import numpy
@@ -48,6 +49,55 @@ def _load_exclusion_zones(chrom_lengths, exclusion_lists):
 			exclusion_zones[chrom][start // 100:(end - 1) // 100 + 1] = True
 		
 		return exclusion_zones
+
+
+# The start of a line of a BED file that holds no interval: a track or a
+# browser line, or a comment.
+_BED_HEADER = r'#|(track|browser)(\s|$)'
+
+
+def _read_bed(filename, cols, names):
+	"""An internal function for reading columns of a BED file.
+
+	Track and browser lines, and lines that start with #, are skipped, as
+	UCSC's tools skip them. A file without them is read once. Otherwise
+	pandas, which takes the number of columns from the first line, reads the
+	columns of the other lines wrongly, so the file is read again without
+	those lines.
+
+
+	Parameters
+	----------
+	filename: str or os.PathLike
+		The BED file, which may be compressed.
+
+	cols: list of int
+		The columns to read.
+
+	names: list of str
+		The names to give the columns.
+
+
+	Returns
+	-------
+	df: pandas.DataFrame
+		The columns of the file's intervals.
+	"""
+
+	df = pandas.read_csv(filename, sep='\t', usecols=cols, header=None,
+		index_col=False, names=names)
+	if not df['chrom'].astype(str).str.match(_BED_HEADER).any():
+		return df
+
+	# One row per line, blank lines included, so that a row's index is its
+	# line number, which is what skiprows takes.
+	lines = pandas.read_csv(filename, sep='\t', usecols=[0], header=None,
+		names=['chrom'], dtype=str, skip_blank_lines=False,
+		quoting=csv.QUOTE_NONE)
+	skip = numpy.flatnonzero(lines['chrom'].fillna('').str.match(_BED_HEADER))
+
+	return pandas.read_csv(filename, sep='\t', usecols=cols, header=None,
+		index_col=False, names=names, skiprows=skip.tolist())
 
 
 def _interleave_loci(loci, chroms=None, summits=False):
@@ -114,8 +164,7 @@ def _interleave_loci(loci, chroms=None, summits=False):
 	for i, df in enumerate(loci):
 		# Extract the relevant columns from the dataframes
 		if isinstance(df, (str, os.PathLike)):
-			df = pandas.read_csv(df, sep='\t', usecols=cols,
-				header=None, index_col=False, names=names)
+			df = _read_bed(df, cols, names)
 		elif isinstance(df, pandas.DataFrame):
 			df = df.iloc[:, cols].copy()
 			df.columns = names
@@ -479,8 +528,9 @@ def extract_loci(
 		three columns: the chromosome, the start, and the end, of each locus
 		to train on. The three columns are taken positionally regardless of
 		what they are named, and the chromosome column is coerced to a string
-		so that it matches the record names used by the sequences.
-		Alternatively, a list or tuple of paths/DataFrames where the
+		so that it matches the record names used by the sequences. The track
+		and browser lines of a bed file, and its lines that start with #, are
+		skipped. Alternatively, a list or tuple of paths/DataFrames where the
 		intention is to train on the interleaved concatenation, i.e., when you
 		want to train on peaks and negatives.
 
