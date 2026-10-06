@@ -2005,6 +2005,24 @@ def test_extract_loci_reads_bigwig_paths_with_figwig(monkeypatch, kwargs):
 		assert torch.equal(tensor, expected_tensor)
 
 
+def test_extract_loci_float_coordinates_raise_as_pybigtools():
+	# Coordinates read as floats, as a BED file with a header line gives, make
+	# figwig raise; the bigWigs are then read with pybigtools, which raises
+	# the error it raises for bigWigs opened with pybigtools.
+	loci = pandas.DataFrame({0: ['chr1', 'chr2'], 1: [10.0, 25.0],
+		2: [30.0, 55.0]})
+
+	with pytest.raises(TypeError) as error:
+		extract_loci(loci, "tests/data/test.fa",
+			[pybigtools.open("tests/data/test.bw")], in_window=8, out_window=10)
+
+	with pytest.raises(TypeError) as figwig_error:
+		extract_loci(loci, "tests/data/test.fa", ["tests/data/test.bw"],
+			in_window=8, out_window=10)
+
+	assert str(figwig_error.value) == str(error.value)
+
+
 @pytest.mark.parametrize("n_jobs", [1, 2, -1, numpy.int64(3)])
 def test_extract_loci_n_jobs(n_jobs):
 	paths = ["tests/data/test.bw", "tests/data/test2.bw"]

@@ -312,9 +312,10 @@ def _extract_signals(signals, chroms, starts, width, n_jobs):
 	threads, and every other signal one locus at a time by
 	`_extract_locus_signal`, and the values are the same either way. A locus
 	on a chromosome that a bigWig does not have is zero and gives a
-	TangermemeWarning, as it does in `_extract_locus_signal`. If figwig raises
-	for a file it does not read, such as one with a corrupt data block, the
-	figwig bigWigs are read with pybigtools instead.
+	TangermemeWarning, as it does in `_extract_locus_signal`. If figwig raises,
+	for a file it does not read, such as one with a corrupt data block, or for
+	starts that are not integers, the figwig bigWigs are read with pybigtools
+	instead, so that the values or the error are pybigtools'.
 
 
 	Parameters
@@ -351,7 +352,7 @@ def _extract_signals(signals, chroms, starts, width, n_jobs):
 					category=UserWarning)
 				figwig_values = figwig.read_bigwig([signals[j] for j in readers],
 					chroms, starts, width, n_jobs=n_jobs)
-		except ValueError:
+		except (TypeError, ValueError):
 			signals = [pybigtools.open(signal.path) if j in readers else signal
 				for j, signal in enumerate(signals)]
 			readers = []
