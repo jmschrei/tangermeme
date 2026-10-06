@@ -6,6 +6,9 @@ import torch
 import pytest
 import pandas
 import pathlib
+import warnings
+
+import figwig
 import pyfaidx
 import pybigtools
 
@@ -13,6 +16,7 @@ from tangermeme.io import _interleave_loci
 from tangermeme.io import _load_signals
 from tangermeme.io import _load_exclusion_zones
 from tangermeme.io import _extract_locus_signal
+from tangermeme.io import _extract_signals
 
 from tangermeme.io import read_meme
 from tangermeme.io import extract_loci
@@ -567,6 +571,44 @@ def test_load_signals_raises_dict_values():
 		_load_signals([{'chr1': torch.zeros(6)}])
 
 
+def test_load_signals_figwig():
+	# Local paths open with figwig, and opened bigWigs and dicts pass through.
+	bw = pybigtools.open("tests/data/test2.bw")
+	signals = _load_signals(["tests/data/test.bw",
+		pathlib.Path("tests/data/test3.bw"), bw, {'chr1': numpy.zeros(5)}],
+		use_figwig=True)
+
+	assert isinstance(signals[0], figwig.BigWigReader)
+	assert isinstance(signals[1], figwig.BigWigReader)
+	assert signals[2] is bw
+	assert isinstance(signals[3], dict)
+
+
+def test_load_signals_figwig_url(monkeypatch):
+	# figwig reads local files only, so a URL goes straight to pybigtools.
+	def no_figwig(path):
+		raise AssertionError("figwig opened {}".format(path))
+
+	monkeypatch.setattr(figwig, "BigWigReader", no_figwig)
+	monkeypatch.setattr(pybigtools, "open", lambda path: ("pybigtools", path))
+
+	url = "https://example.com/signal.bw"
+	assert _load_signals([url], use_figwig=True) == [("pybigtools", url)]
+
+
+@pytest.mark.parametrize("path", ["tests/data/test.bed",
+	"tests/data/missing.bw"])
+def test_load_signals_figwig_raises_as_pybigtools(path):
+	# A file figwig does not read, or a missing one, raises pybigtools' error.
+	with pytest.raises(Exception) as error:
+		_load_signals([path])
+
+	with pytest.raises(type(error.value)) as figwig_error:
+		_load_signals([path], use_figwig=True)
+
+	assert str(figwig_error.value) == str(error.value)
+
+
 ##
 
 
@@ -734,6 +776,76 @@ def test_extract_locus_signal_dict_past_array_end(dict_signal):
 	assert signal.shape == (10,)
 	assert_array_almost_equal(signal, [10205, 10206, 10207, 10208, 10209,
 		10210, 0, 0, 0, 0])
+
+
+# Windows inside chromosomes, at their ends, past the end of chr1, and on
+# chromosomes that test3.bw, which only has chr1, does not have.
+SIGNAL_CHROMS = numpy.array(['chr1', 'chr1', 'chr2', 'chr1', 'chr3', 'chr6'])
+SIGNAL_STARTS = numpy.array([0, 274, 100, 280, 3, 72])
+
+
+def _per_locus_signals(paths, width):
+	signals = [pybigtools.open(path) for path in paths]
+	return numpy.array([_extract_locus_signal(signals, chrom, start,
+		start + width) for chrom, start in zip(SIGNAL_CHROMS, SIGNAL_STARTS)])
+
+
+def test_extract_signals_figwig():
+	paths = ["tests/data/test.bw", "tests/data/test2.bw", "tests/data/test3.bw"]
+
+	with warnings.catch_warnings(record=True) as record:
+		warnings.simplefilter("always")
+		expected = _per_locus_signals(paths, 8)
+
+	with warnings.catch_warnings(record=True) as figwig_record:
+		warnings.simplefilter("always")
+		values = _extract_signals(_load_signals(paths, use_figwig=True),
+			SIGNAL_CHROMS, SIGNAL_STARTS, 8, 2)
+
+	assert values.dtype == numpy.float32
+	assert values.shape == (6, 3, 8)
+	assert values.flags.c_contiguous
+	assert values.tobytes() == expected.tobytes()
+
+	# One warning per locus that test3.bw lacks, with the same message.
+	assert len(figwig_record) == 3
+	assert all(w.category is TangermemeWarning for w in figwig_record)
+	assert sorted(str(w.message) for w in figwig_record) == sorted(
+		str(w.message) for w in record)
+
+
+def test_extract_signals_mixed(dict_signal):
+	# figwig bigWigs, pybigtools bigWigs and dicts in one list each give the
+	# values they give alone.
+	signals = [figwig.BigWigReader("tests/data/test.bw"), dict_signal,
+		pybigtools.open("tests/data/test2.bw")]
+
+	values = _extract_signals(signals, SIGNAL_CHROMS[:4], SIGNAL_STARTS[:4], 8,
+		1)
+
+	assert values.flags.c_contiguous
+	assert values[:, 0].tobytes() == _per_locus_signals(["tests/data/test.bw"],
+		8)[:4, 0].tobytes()
+	assert values[:, 2].tobytes() == _per_locus_signals(["tests/data/test2.bw"],
+		8)[:4, 0].tobytes()
+	for i, (chrom, start) in enumerate(zip(SIGNAL_CHROMS[:4],
+			SIGNAL_STARTS[:4])):
+		assert values[i, 1].tobytes() == _extract_locus_signal([dict_signal],
+			chrom, start, start + 8)[0].tobytes()
+
+
+def test_extract_signals_figwig_error_reads_with_pybigtools(monkeypatch):
+	# When figwig raises for a file it does not read, the bigWigs are read
+	# with pybigtools instead.
+	def corrupt(*args, **kwargs):
+		raise ValueError("corrupt data block")
+
+	paths = ["tests/data/test.bw", "tests/data/test2.bw"]
+	signals = _load_signals(paths, use_figwig=True)
+	monkeypatch.setattr(figwig, "read_bigwig", corrupt)
+
+	values = _extract_signals(signals, SIGNAL_CHROMS, SIGNAL_STARTS, 8, 2)
+	assert values.tobytes() == _per_locus_signals(paths, 8).tobytes()
 
 
 ##
@@ -1851,6 +1963,69 @@ def test_extract_loci_bigwig_missing_chrom_warns():
 	assert_array_almost_equal(y[3:], numpy.zeros((2, 1, 10)))
 
 
+def test_extract_loci_bigwig_missing_chrom_warns_once_per_locus():
+	# figwig's own warning about the missing chromosome is replaced by
+	# tangermeme's, so the two chr2 loci give two warnings and no others.
+	with warnings.catch_warnings(record=True) as record:
+		warnings.simplefilter("always")
+		extract_loci("tests/data/test.bed", "tests/data/test.fa",
+			["tests/data/test3.bw"], in_window=8, out_window=10)
+
+	assert [w.category for w in record] == [TangermemeWarning] * 2
+
+
+@pytest.mark.parametrize("kwargs", [{}, {'max_jitter': 3, 'in_window': 7,
+	'out_window': 5}, {'min_counts': 10.0, 'return_mask': True},
+	{'max_counts': 12.0, 'target_idx': 1, 'n_loci': 2, 'return_mask': True}])
+def test_extract_loci_reads_bigwig_paths_with_figwig(monkeypatch, kwargs):
+	# bigWig paths are read by figwig and give the same values as bigWigs
+	# opened with pybigtools, which are read one locus at a time.
+	calls = []
+	read_bigwig = figwig.read_bigwig
+
+	def spy(*args, **kw):
+		calls.append(kw['n_jobs'])
+		return read_bigwig(*args, **kw)
+
+	monkeypatch.setattr(figwig, "read_bigwig", spy)
+	kwargs = {'in_window': 8, 'out_window': 10, **kwargs}
+
+	paths = ["tests/data/test.bw", "tests/data/test2.bw"]
+	result = extract_loci("tests/data/test.bed", "tests/data/test.fa", paths,
+		paths[::-1], n_jobs=3, **kwargs)
+	assert len(calls) > 0 and set(calls) == {3}
+
+	bws = [pybigtools.open(path) for path in paths]
+	expected = extract_loci("tests/data/test.bed", "tests/data/test.fa", bws,
+		bws[::-1], **kwargs)
+
+	for tensor, expected_tensor in zip(result, expected):
+		assert tensor.dtype == expected_tensor.dtype
+		assert tensor.is_contiguous()
+		assert torch.equal(tensor, expected_tensor)
+
+
+@pytest.mark.parametrize("n_jobs", [1, 2, -1, numpy.int64(3)])
+def test_extract_loci_n_jobs(n_jobs):
+	paths = ["tests/data/test.bw", "tests/data/test2.bw"]
+	X0, y0, y_in0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		paths, paths, in_window=8, out_window=10, n_jobs=1)
+	X, y, y_in = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		paths, paths, in_window=8, out_window=10, n_jobs=n_jobs)
+
+	assert torch.equal(X, X0)
+	assert torch.equal(y, y0)
+	assert torch.equal(y_in, y_in0)
+
+
+@pytest.mark.parametrize("n_jobs, error", [(0, ValueError), (-2, ValueError),
+	(1.5, TypeError), (True, TypeError), ("2", TypeError), (None, TypeError)])
+def test_extract_loci_raises_n_jobs(n_jobs, error):
+	with pytest.raises(error, match="n_jobs"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa",
+			["tests/data/test.bw"], in_window=8, out_window=10, n_jobs=n_jobs)
+
+
 def test_extract_loci_nan_and_inf(dict_signal):
 	# NaN becomes 0 and an infinity the largest finite float32 of its sign,
 	# which is what numpy.nan_to_num does, in signals and in_signals alike.
@@ -2333,6 +2508,33 @@ def test_extract_loci_reference_grid_is_informative(reference_genome):
 	X_summits, _, _, _ = _reference_extract_loci(*args, summits=True)
 	assert len(X_summits) > 0
 	assert X_summits[:10] != X[:10]
+
+
+@pytest.mark.filterwarnings("ignore::tangermeme.utils.TangermemeWarning")
+@pytest.mark.parametrize("filters", ["min_counts", "counts_target_idx",
+	"combined"])
+@pytest.mark.parametrize("n_values", [1, 33, 500])
+def test_extract_loci_counts_in_groups(monkeypatch, reference_genome, filters,
+	n_values):
+	# min_counts and max_counts are measured on groups of loci, stopping once
+	# n_loci are kept. Groups of one locus, of three, and of 45 give what one
+	# group of every locus gives.
+	import tangermeme.io
+
+	data = reference_genome
+	kwargs = REFERENCE_FILTERS[filters](11, data['exclusion'])
+	args = (data['loci'], data['fasta'], data['bigwigs'][:2],
+		data['bigwigs'][2:])
+
+	expected = extract_loci(*args, in_window=7, out_window=5, max_jitter=3,
+		return_mask=True, **kwargs)
+
+	monkeypatch.setattr(tangermeme.io, "_COUNT_VALUES", n_values)
+	result = extract_loci(*args, in_window=7, out_window=5, max_jitter=3,
+		return_mask=True, **kwargs)
+
+	for tensor, expected_tensor in zip(result, expected):
+		assert torch.equal(tensor, expected_tensor)
 
 
 ###
