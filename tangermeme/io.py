@@ -269,6 +269,14 @@ def _load_signals(signals, use_figwig=False):
 		else:
 			signal = {str(key): value for key, value in signal.items()}
 
+		# pybigtools opens bigBed files too, and reading values from one
+		# panics in Rust, which raises an exception that is not an Exception.
+		if getattr(signal, "is_bigbed", False):
+			raise ValueError("Signals must be bigWig files, but signal {} ({}) "
+				"is a bigBed file.".format(i, os.fspath(signals[i]) if
+				isinstance(signals[i], (str, os.PathLike)) else
+				"opened with pybigtools"))
+
 		_signals.append(signal)
 
 	return _signals

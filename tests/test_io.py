@@ -571,6 +571,31 @@ def test_load_signals_raises_dict_values():
 		_load_signals([{'chr1': torch.zeros(6)}])
 
 
+@pytest.fixture
+def bigbed(tmp_path):
+	path = str(tmp_path / "peaks.bigBed")
+	pybigtools.open(path, "w").write({'chr1': 284, 'chr2': 211},
+		iter([('chr1', 10, 50, 'a\t0\t+'), ('chr2', 20, 80, 'b\t0\t-')]))
+	return path
+
+
+@pytest.mark.parametrize("use_figwig", [False, True])
+@pytest.mark.parametrize("opened", [False, True])
+def test_load_signals_raises_bigbed(bigbed, use_figwig, opened):
+	# pybigtools opens a bigBed, and reading values from it used to panic,
+	# raising a pyo3 PanicException, which is not an Exception.
+	signal = pybigtools.open(bigbed) if opened else bigbed
+	with pytest.raises(ValueError, match="signal 1 .* is a bigBed file"):
+		_load_signals(["tests/data/test.bw", signal], use_figwig=use_figwig)
+
+
+@pytest.mark.parametrize("which", ["signals", "in_signals"])
+def test_extract_loci_raises_bigbed(bigbed, which):
+	with pytest.raises(ValueError, match="bigBed"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa",
+			**{which: [bigbed]}, in_window=8, out_window=10)
+
+
 def test_load_signals_empty_dict():
 	# A dict without chromosomes is a signal that has none of them; it used to
 	# raise an IndexError.
