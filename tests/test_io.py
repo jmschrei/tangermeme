@@ -26,6 +26,8 @@ from tangermeme.io import one_hot_to_fasta
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import TangermemeWarning
 
+from .bigwig_writer import write_raw_bigwig
+
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
 
@@ -2487,6 +2489,34 @@ def reference_genome(tmp_path_factory):
 		tracks.append(track)
 		bigwigs.append(filename)
 
+	# The same tracks in layouts that pybigtools does not write, so that each
+	# kind of section is read against the reference: varStep sections,
+	# fixedStep sections over each run of bases with values, and bedGraph
+	# sections without compression.
+	layouts = {"varstep": [], "fixedstep": [], "uncompressed": []}
+	for t, track in enumerate(tracks):
+		chroms = {chrom: REFERENCE_CHROMS[chrom] for chrom in sorted(track)}
+		sections = {name: [] for name in layouts}
+		for chrom in chroms:
+			values = track[chrom]
+			bases = numpy.flatnonzero(~numpy.isnan(values))
+			for k in range(0, len(bases), 200):
+				block = bases[k:k+200]
+				sections["varstep"].append((chrom, 2, 0, 1, [(int(b),
+					float(values[b])) for b in block]))
+				sections["uncompressed"].append((chrom, 1, 0, 0, [(int(b),
+					int(b) + 1, float(values[b])) for b in block]))
+			for run in numpy.split(bases, numpy.flatnonzero(numpy.diff(bases)
+					> 1) + 1):
+				sections["fixedstep"].append((chrom, 3, 1, 1, (int(run[0]),
+					[float(values[b]) for b in run])))
+
+		for name in layouts:
+			filename = str(path / "track{}.{}.bw".format(t, name))
+			write_raw_bigwig(filename, chroms, sections[name],
+				compress=name != "uncompressed")
+			layouts[name].append(filename)
+
 	loci = []
 	for n in (60, 25, 40):
 		rows = []
@@ -2512,7 +2542,7 @@ def reference_genome(tmp_path_factory):
 		['chrM', 0, 1000], ['chr2', 699, 701]])
 
 	return {'genome': genome, 'fasta': fasta, 'one_hot': one_hot,
-		'tracks': tracks, 'bigwigs': bigwigs, 'loci': loci,
+		'tracks': tracks, 'bigwigs': bigwigs, 'layouts': layouts, 'loci': loci,
 		'exclusion': exclusion}
 
 
@@ -2533,7 +2563,8 @@ REFERENCE_FILTERS = {
 
 
 @pytest.mark.filterwarnings("ignore::tangermeme.utils.TangermemeWarning")
-@pytest.mark.parametrize("source", ["files", "dicts"])
+@pytest.mark.parametrize("source", ["files", "dicts", "varstep", "fixedstep",
+	"uncompressed"])
 @pytest.mark.parametrize("mode", ["none", "signals", "in_signals", "both"])
 @pytest.mark.parametrize("in_window, out_window, max_jitter", [(10, 4, 0),
 	(7, 5, 3), (33, 40, 0), (1, 1, 2), (8, 13, 1)])
@@ -2543,8 +2574,10 @@ def test_extract_loci_matches_reference(reference_genome, source, mode,
 	data = reference_genome
 	if source == "files":
 		sequences, signal_source = data['fasta'], data['bigwigs']
-	else:
+	elif source == "dicts":
 		sequences, signal_source = data['one_hot'], data['tracks']
+	else:
+		sequences, signal_source = data['fasta'], data['layouts'][source]
 
 	signals = signal_source[:2] if mode in ("signals", "both") else None
 	in_signals = signal_source[2:] if mode in ("in_signals", "both") else None
@@ -2846,3 +2879,378 @@ def test_extract_loci_bed_header_lines(tmp_path):
 
 	for tensor, expected_tensor in zip(result, expected):
 		assert torch.equal(tensor, expected_tensor)
+
+
+##
+# bigWig layouts. Each file is read by figwig, falls back to pybigtools where
+# figwig raises, and must give what the same file opened with pybigtools
+# gives, which is read one locus at a time. Where the file is well formed, it
+# must also give what a dict of the values written into it gives.
+##
+
+
+# The chromosomes of tests/data/test.fa, without chr5, whose Z raises.
+LAYOUT_CHROMS = {'chr1': 284, 'chr2': 211, 'chr3': 126, 'chr4': 240,
+	'chr6': 80}
+SPECIAL_VALUES = [float('nan'), float('inf'), float('-inf'), -0.0, 1e-45,
+	float(numpy.finfo(numpy.float32).max), -float(numpy.finfo(
+	numpy.float32).max), 1.0, -2.5]
+
+
+def _intervals(rng, length, values=None, max_gap=6, max_len=8):
+	"""Sorted, non-overlapping (start, end, value) intervals on [0, length)."""
+
+	rows, pos = [], int(rng.randint(0, 4))
+	while True:
+		width = int(rng.randint(1, max_len + 1))
+		if pos + width > length:
+			return rows
+		value = float(numpy.float32(rng.uniform(-1, 5))) if values is None \
+			else values[len(rows) % len(values)]
+		rows.append((pos, pos + width, value))
+		pos += width + int(rng.randint(0, max_gap + 1))
+
+
+def _bedgraph(chrom, rows, per_block=25):
+	return [(chrom, 1, 0, 0, rows[k:k+per_block])
+		for k in range(0, len(rows), per_block)]
+
+
+def _layout(name, rng):
+	"""The chromosome lengths, sections and writer arguments of one layout,
+	and the values it holds by chromosome, NaN where it has none, or None
+	for a layout figwig does not read."""
+
+	chroms, sections, kwargs = dict(LAYOUT_CHROMS), [], {}
+
+	if name in ("bedgraph", "uncompressed", "special_values",
+			"data_to_chrom_end"):
+		values = SPECIAL_VALUES if name == "special_values" else None
+		for chrom, length in chroms.items():
+			rows = _intervals(rng, length, values)
+			if name == "data_to_chrom_end":
+				rows = [r for r in rows if r[1] < length - 2] + [(length - 2,
+					length, 3.5)]
+			sections += _bedgraph(chrom, rows)
+		kwargs["compress"] = name != "uncompressed"
+	elif name in ("varstep_span1", "varstep_span5"):
+		span = 1 if name == "varstep_span1" else 5
+		for chrom, length in chroms.items():
+			starts = list(range(int(rng.randint(0, 3)), length - span, span +
+				int(rng.randint(0, 3))))
+			items = [(s, float(numpy.float32(rng.uniform(0, 4)))) for s in starts]
+			sections += [(chrom, 2, 0, span, items[k:k+30])
+				for k in range(0, len(items), 30)]
+	elif name in ("fixedstep_step1", "fixedstep_gaps"):
+		step, span = (1, 1) if name == "fixedstep_step1" else (7, 3)
+		for chrom, length in chroms.items():
+			start = int(rng.randint(0, 5))
+			while start + span <= length:
+				n = min(int(rng.randint(1, 15)), (length - span - start) // step
+					+ 1)
+				values = [float(numpy.float32(v)) for v in rng.uniform(0, 4,
+					size=n)]
+				sections.append((chrom, 3, step, span, (start, values)))
+				start += step * n + int(rng.randint(1, 10))
+	elif name == "mixed":
+		for chrom, length in chroms.items():
+			rows = _intervals(rng, length, max_gap=4, max_len=1)
+			for k in range(0, len(rows), 20):
+				block = rows[k:k+20]
+				kind = (k // 20) % 3
+				if kind == 0:
+					sections.append((chrom, 1, 0, 0, block))
+				elif kind == 1:
+					sections.append((chrom, 2, 0, 1, [(s, v) for s, _, v in
+						block]))
+				else:
+					first = block[0][0]
+					values = [v for _, _, v in block]
+					# A fixedStep section covers consecutive bases from its
+					# first, so it holds the block's values without gaps.
+					sections.append((chrom, 3, 1, 1, (first, values)))
+	elif name == "many_chroms":
+		for k in range(300):
+			chroms["chrUn_{:05d}".format(k)] = 40 + k
+		chroms = dict(sorted(chroms.items()))
+		for chrom, length in chroms.items():
+			if chrom in LAYOUT_CHROMS or chrom.endswith("7"):
+				sections += _bedgraph(chrom, _intervals(rng, length))
+		kwargs["chrom_block_size"] = 16
+	elif name == "short_chrom":
+		chroms["chr1"] = 200
+		for chrom, length in chroms.items():
+			sections += _bedgraph(chrom, _intervals(rng, length))
+	elif name == "chrom_without_data":
+		for chrom, length in chroms.items():
+			if chrom != "chr4":
+				sections += _bedgraph(chrom, _intervals(rng, length))
+	elif name == "absent_chrom":
+		del chroms["chr3"]
+		for chrom, length in chroms.items():
+			sections += _bedgraph(chrom, _intervals(rng, length))
+	elif name == "odd_names":
+		chroms.update({"chr1.alt_1": 50, "chrUn_KI270302v1": 60, "a" * 200: 30})
+		chroms = dict(sorted(chroms.items()))
+		for chrom, length in chroms.items():
+			sections += _bedgraph(chrom, _intervals(rng, length))
+	elif name == "dense_block":
+		for chrom, length in chroms.items():
+			sections.append((chrom, 1, 0, 0, [(i, i + 1, float(i % 13))
+				for i in range(length)]))
+	elif name == "overlapping":
+		for chrom, length in chroms.items():
+			rows = _intervals(rng, length)
+			middle = len(rows) // 2
+			rows.insert(middle, (rows[middle][0] + 1, rows[middle][1] + 4, 9.0))
+			sections += _bedgraph(chrom, rows)
+	elif name == "unsorted_blocks":
+		for chrom, length in chroms.items():
+			blocks = _bedgraph(chrom, _intervals(rng, length), per_block=10)
+			blocks[0], blocks[-1] = blocks[-1], blocks[0]
+			sections += blocks
+	elif name == "zero_length":
+		for chrom, length in chroms.items():
+			rows = [(s, s if k % 5 == 0 else e, v) for k, (s, e, v) in
+				enumerate(_intervals(rng, length))]
+			sections += _bedgraph(chrom, rows)
+
+	if name in ("overlapping", "unsorted_blocks", "zero_length"):
+		return chroms, sections, kwargs, None
+
+	values = {chrom: numpy.full(length, numpy.nan, dtype=numpy.float32)
+		for chrom, length in chroms.items()}
+	for chrom, kind, step, span, items in sections:
+		if kind == 1:
+			for s, e, v in items:
+				values[chrom][s:e] = v
+		elif kind == 2:
+			for s, v in items:
+				values[chrom][s:s+span] = v
+		else:
+			start, vs = items
+			for i, v in enumerate(vs):
+				values[chrom][start+i*step:start+i*step+span] = v
+	return chroms, sections, kwargs, values
+
+
+LAYOUTS = ["bedgraph", "varstep_span1", "varstep_span5", "fixedstep_step1",
+	"fixedstep_gaps", "mixed", "uncompressed", "special_values", "many_chroms",
+	"short_chrom", "chrom_without_data", "absent_chrom", "data_to_chrom_end",
+	"odd_names", "dense_block", "overlapping", "unsorted_blocks", "zero_length"]
+
+# The layouts figwig raises for, at least for windows across the defect.
+FIGWIG_RAISES = ("overlapping", "unsorted_blocks")
+
+
+@pytest.fixture(scope="module")
+def layout_bigwigs(tmp_path_factory):
+	path = tmp_path_factory.mktemp("layouts")
+	rng = numpy.random.RandomState(0)
+	layouts = {}
+	for name in LAYOUTS:
+		chroms, sections, kwargs, values = _layout(name, rng)
+		filename = str(path / "{}.bw".format(name))
+		write_raw_bigwig(filename, chroms, sections, **kwargs)
+		layouts[name] = (filename, values)
+	return layouts
+
+
+@pytest.fixture(scope="module")
+def layout_loci():
+	# Loci across the chromosomes, at their ends, and at the end of chr1 in
+	# the short_chrom layout, whose chr1 is 200 bases long.
+	rng = numpy.random.RandomState(1)
+	rows = []
+	for chrom, length in LAYOUT_CHROMS.items():
+		for center in list(rng.randint(0, length, size=12)) + [0, 1, length - 1,
+				length]:
+			width = int(rng.randint(1, 20))
+			start = max(int(center) - width // 2, 0)
+			rows.append((chrom, start, start + width))
+	rows += [('chr1', c, c + 2) for c in (185, 195, 199, 200, 205, 230)]
+	return pandas.DataFrame(rows)
+
+
+LAYOUT_CONFIGS = {
+	'both': {'in_window': 20, 'out_window': 10, 'max_jitter': 3,
+		'return_mask': True, 'in_signals': True},
+	'one_base': {'in_window': 1, 'out_window': 1, 'n_loci': 7},
+	'counts': {'in_window': 12, 'out_window': 6, 'min_counts': 0.5,
+		'return_mask': True, 'with_test_bw': True},
+	'counts_cap': {'in_window': 30, 'out_window': 30, 'n_loci': 12,
+		'min_counts': -1e9, 'max_counts': 1e9, 'target_idx': -1,
+		'with_test_bw': True},
+}
+
+
+def _layout_call(loci, signal, config):
+	kwargs = dict(LAYOUT_CONFIGS[config])
+	in_signals = [signal] if kwargs.pop('in_signals', False) else None
+	signals = [signal]
+	if kwargs.pop('with_test_bw', False):
+		signals = ["tests/data/test.bw", signal]
+
+	with warnings.catch_warnings(record=True) as record:
+		warnings.simplefilter("always")
+		result = extract_loci(loci, "tests/data/test.fa", signals, in_signals,
+			**kwargs)
+
+	messages = sorted((w.category.__name__, str(w.message)) for w in record)
+	return result, messages
+
+
+@pytest.mark.parametrize("config", list(LAYOUT_CONFIGS))
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_extract_loci_bigwig_layouts(layout_bigwigs, layout_loci, monkeypatch,
+	layout, config):
+	filename, values = layout_bigwigs[layout]
+
+	calls, errors = [], []
+	read_bigwig = figwig.read_bigwig
+
+	def spy(*args, **kwargs):
+		calls.append(1)
+		try:
+			return read_bigwig(*args, **kwargs)
+		except ValueError:
+			errors.append(1)
+			raise
+
+	monkeypatch.setattr(figwig, "read_bigwig", spy)
+	result, messages = _layout_call(layout_loci, filename, config)
+	monkeypatch.undo()
+
+	# figwig reads every well-formed layout without falling back.
+	assert len(calls) > 0
+	if layout in FIGWIG_RAISES:
+		assert len(errors) > 0
+	else:
+		assert errors == []
+
+	expected, expected_messages = _layout_call(layout_loci,
+		pybigtools.open(filename), config)
+	assert messages == expected_messages
+	for tensor, expected_tensor in zip(result, expected):
+		assert tensor.dtype == expected_tensor.dtype
+		assert tensor.is_contiguous()
+		assert tensor.numpy().tobytes() == expected_tensor.numpy().tobytes()
+
+	if values is not None:
+		track = {chrom: v for chrom, v in values.items() if chrom in
+			LAYOUT_CHROMS}
+		with warnings.catch_warnings():
+			warnings.simplefilter("ignore")
+			oracle, _ = _layout_call(layout_loci, track, config)
+		for tensor, oracle_tensor in zip(result, oracle):
+			assert tensor.numpy().tobytes() == oracle_tensor.numpy().tobytes()
+
+
+def test_extract_loci_reference_layouts_read_by_figwig(reference_genome,
+	monkeypatch):
+	# The reference comparison above means something for figwig only if
+	# figwig, rather than the pybigtools fallback, read the layouts.
+	errors = []
+	read_bigwig = figwig.read_bigwig
+
+	def spy(*args, **kwargs):
+		try:
+			return read_bigwig(*args, **kwargs)
+		except ValueError:
+			errors.append(1)
+			raise
+
+	monkeypatch.setattr(figwig, "read_bigwig", spy)
+	for name, paths in reference_genome['layouts'].items():
+		signals = _load_signals(paths, use_figwig=True)
+		assert all(isinstance(s, figwig.BigWigReader) for s in signals), name
+
+		with warnings.catch_warnings():
+			warnings.simplefilter("ignore", TangermemeWarning)
+			extract_loci(reference_genome['loci'], reference_genome['fasta'],
+				paths[:2], paths[2:], in_window=7, out_window=5, max_jitter=3)
+
+	assert errors == []
+
+
+def _without_prefix(tmp_path):
+	# test.bw with its chromosomes named 1, 2, ... rather than chr1, chr2.
+	bw = pybigtools.open("tests/data/test.bw")
+	sizes = {chrom[3:]: size for chrom, size in bw.chroms().items()}
+	entries = [(chrom[3:], s, e, v) for chrom in bw.chroms() for s, e, v in
+		bw.records(chrom)]
+	path = str(tmp_path / "no_prefix.bw")
+	pybigtools.open(path, "w").write(dict(sorted(sizes.items())), iter(entries))
+	return path
+
+
+@pytest.mark.parametrize("direction", ["bigwig", "fasta"])
+def test_extract_loci_chromosome_naming_mismatch(tmp_path, direction):
+	# chr1 against 1, in either file: every locus is on a chromosome the
+	# bigWig lacks, so it is zero and warns once, as with pybigtools.
+	if direction == "bigwig":
+		signal, fasta, loci = _without_prefix(tmp_path), "tests/data/test.fa", \
+			"tests/data/test.bed"
+	else:
+		records = pyfaidx.Fasta("tests/data/test.fa")
+		fasta = str(tmp_path / "no_prefix.fa")
+		with open(fasta, "w") as f:
+			for chrom in records.keys():
+				f.write(">{}\n{}\n".format(chrom[3:], str(records[chrom])))
+		loci = pandas.read_csv("tests/data/test.bed", sep="\t", header=None)
+		loci[0] = loci[0].str[3:]
+		signal = "tests/data/test.bw"
+
+	results = []
+	for s in (signal, pybigtools.open(signal)):
+		with warnings.catch_warnings(record=True) as record:
+			warnings.simplefilter("always")
+			X, y = extract_loci(loci, fasta, [s], in_window=8, out_window=10)
+		results.append((X, y, sorted(str(w.message) for w in record)))
+
+	(X, y, messages), (X0, y0, messages0) = results
+	assert torch.equal(X, X0) and torch.equal(y, y0)
+	assert torch.equal(y, torch.zeros(5, 1, 10))
+	assert messages == messages0
+	assert len(messages) == 5
+
+
+@pytest.mark.filterwarnings("ignore::tangermeme.utils.TangermemeWarning")
+@pytest.mark.parametrize("kwargs", [{}, {'min_counts': 10.0, 'target_idx': 2},
+	{'max_counts': 12.0, 'target_idx': -2, 'n_loci': 2, 'return_mask': True},
+	{'min_counts': 0.0, 'target_idx': 3, 'max_jitter': 2}])
+def test_extract_loci_mixed_signal_kinds(dict_signal, kwargs):
+	# A path, a pathlib.Path, a pybigtools bigWig and a dict in one call, in
+	# signals and in_signals, give what the same signals give when every
+	# bigWig is opened with pybigtools, which are read one locus at a time.
+	def signals(opened):
+		bigwig = (lambda p: pybigtools.open(p)) if opened else (lambda p: p)
+		return [bigwig("tests/data/test.bw"), pathlib.Path("tests/data/test2.bw")
+			if not opened else pybigtools.open("tests/data/test2.bw"),
+			pybigtools.open("tests/data/test3.bw"), dict_signal]
+
+	result = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		signals(False), signals(False)[::-1], in_window=8, out_window=10,
+		**kwargs)
+	expected = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		signals(True), signals(True)[::-1], in_window=8, out_window=10,
+		**kwargs)
+
+	for tensor, expected_tensor in zip(result, expected):
+		assert tensor.numpy().tobytes() == expected_tensor.numpy().tobytes()
+
+
+def test_extract_loci_in_signals_missing_chrom_warns_in_input_windows():
+	# in_signals warn with the input window of each locus on a chromosome
+	# they lack, once per locus, as with pybigtools. test3.bw only has chr1.
+	results = []
+	for signal in ("tests/data/test3.bw", pybigtools.open("tests/data/test3.bw")):
+		with warnings.catch_warnings(record=True) as record:
+			warnings.simplefilter("always")
+			extract_loci("tests/data/test.bed", "tests/data/test.fa",
+				in_signals=[signal], in_window=8, out_window=10)
+		results.append(sorted(str(w.message) for w in record))
+
+	assert results[0] == results[1] == ["chr2 36 44 not valid bigwig indexes. "
+		"Using zeros instead.", "chr2 46 54 not valid bigwig indexes. Using "
+		"zeros instead."]
