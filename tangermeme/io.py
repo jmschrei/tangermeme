@@ -305,7 +305,7 @@ _FIGWIG_ABSENT_CHROMS = r"\d+ windows are on chromosomes not in "
 _COUNT_VALUES = 1 << 24
 
 
-def _extract_signals(signals, chroms, starts, width, n_jobs):
+def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 	"""An internal function for extracting signal from many loci.
 
 	The bigWigs opened with figwig are read together in one call on `n_jobs`
@@ -335,12 +335,21 @@ def _extract_signals(signals, chroms, starts, width, n_jobs):
 	n_jobs: int
 		The number of threads figwig reads with, or -1 for one per CPU.
 
+	warn: bool, optional
+		Whether to give the TangermemeWarnings for chromosomes a signal does
+		not have. Default is True.
+
 
 	Returns
 	-------
 	values: numpy.ndarray, dtype=float32, shape=(n, len(signals), width)
 		The extracted signal at each locus from each of the signals.
 	"""
+
+	if not warn:
+		with warnings.catch_warnings():
+			warnings.simplefilter("ignore", TangermemeWarning)
+			return _extract_signals(signals, chroms, starts, width, n_jobs)
 
 	readers = [j for j, signal in enumerate(signals)
 		if isinstance(signal, figwig.BigWigReader)]
@@ -728,16 +737,23 @@ def extract_loci(
 	out_length = out_window + 2 * max_jitter
 
 	# The counts are measured on groups of loci, so that the windows held at
-	# once stay small and no more of the target is read than reaching n_loci
-	# needs. Each locus is compared as a float32 scalar, as its sum is.
+	# once stay small, first on the target alone and without warnings. Each
+	# locus is compared as a float32 scalar, as its sum is. Then every signal
+	# is read at each locus examined before n_loci loci are kept, which is
+	# where it was read one locus at a time, so that the warnings for
+	# chromosomes a signal does not have are the same, and the values at the
+	# kept loci are kept.
+	signals_ = None
 	if min_counts is not None or max_counts is not None:
-		keep = []
+		keep, kept_values = [], []
 		size = max(1, _COUNT_VALUES // out_length)
 		for c in range(0, len(idxs), size):
+			starts = mids[c:c+size] - out_start
 			counts = _extract_signals([signals[target_idx]],
-				loci_chroms[c:c+size], mids[c:c+size] - out_start, out_length,
-				n_jobs)[:, 0].sum(axis=1)
+				loci_chroms[c:c+size], starts, out_length, n_jobs,
+				warn=False)[:, 0].sum(axis=1)
 
+			kept, n_examined = [], len(counts)
 			for k, count in enumerate(counts):
 				if min_counts is not None and count < min_counts:
 					continue
@@ -745,13 +761,30 @@ def extract_loci(
 				if max_counts is not None and count > max_counts:
 					continue
 
-				keep.append(c + k)
+				kept.append(k)
+				if n_loci is not None and len(keep) + len(kept) == n_loci:
+					n_examined = k + 1
+					break
 
-			if n_loci is not None and len(keep) >= n_loci:
+			values = _extract_signals(signals, loci_chroms[c:c+n_examined],
+				starts[:n_examined], out_length, n_jobs)
+			kept_values.append(values[kept])
+			keep.extend(c + k for k in kept)
+
+			if n_loci is not None and len(keep) == n_loci:
 				break
 
 		keep = numpy.array(keep, dtype=numpy.int64)
 		idxs, mids, loci_chroms = idxs[keep], mids[keep], loci_chroms[keep]
+
+		# Copied group by group, so that the values are not held twice.
+		signals_ = numpy.empty((len(keep), len(signals), out_length),
+			dtype=numpy.float32)
+		k = 0
+		while kept_values:
+			values = kept_values.pop(0)
+			signals_[k:k+len(values)] = values
+			k += len(values)
 
 	if n_loci is not None:
 		idxs, mids = idxs[:n_loci], mids[:n_loci]
@@ -767,7 +800,7 @@ def extract_loci(
 			"region, or when their counts fall outside min_counts/max_counts.")
 
 	# Extract a window of signal using the output size
-	if signals is not None:
+	if signals is not None and signals_ is None:
 		signals_ = _extract_signals(signals, loci_chroms, mids - out_start,
 			out_length, n_jobs)
 

@@ -2005,6 +2005,34 @@ def test_extract_loci_reads_bigwig_paths_with_figwig(monkeypatch, kwargs):
 		assert torch.equal(tensor, expected_tensor)
 
 
+@pytest.mark.parametrize("signals, kwargs, windows", [
+	# test3.bw is not the target: both chr2 loci are examined and warn,
+	# although the counts on test.bw remove the first.
+	(["tests/data/test.bw", "tests/data/test3.bw"], {'min_counts': 10.0},
+		[(35, 45), (45, 55)]),
+	# test3.bw is the target: each chr2 locus warns once, although the
+	# target is read for the counts and again for the values.
+	(["tests/data/test3.bw", "tests/data/test.bw"], {'min_counts': 0.0},
+		[(35, 45), (45, 55)]),
+	# Loci after the n_loci-th kept one are not examined and do not warn.
+	(["tests/data/test3.bw"], {'min_counts': 0.0, 'n_loci': 4}, [(35, 45)]),
+])
+def test_extract_loci_counts_warn_once_per_examined_locus(signals, kwargs,
+	windows):
+	# Under min_counts, every signal warns once at each locus examined before
+	# n_loci loci are kept, for chromosomes it does not have, as it did when
+	# the signals were read one locus at a time. test3.bw only has chr1.
+	with warnings.catch_warnings(record=True) as record:
+		warnings.simplefilter("always")
+		extract_loci("tests/data/test.bed", "tests/data/test.fa", signals,
+			in_window=8, out_window=10, **kwargs)
+
+	assert [w.category for w in record] == [TangermemeWarning] * len(windows)
+	assert sorted(str(w.message) for w in record) == ["chr2 {} {} not valid "
+		"bigwig indexes. Using zeros instead.".format(start, end)
+		for start, end in windows]
+
+
 def test_extract_loci_float_coordinates_raise_as_pybigtools():
 	# Coordinates read as floats, as a BED file with a header line gives, make
 	# figwig raise; the bigWigs are then read with pybigtools, which raises
