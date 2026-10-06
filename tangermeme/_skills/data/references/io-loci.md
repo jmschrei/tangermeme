@@ -79,7 +79,7 @@ FASTA.
 bigWigs given as local paths are read by figwig, all kept loci in one call on
 `n_jobs` threads. A bigWig opened with `pybigtools.open`, a URL, and a dict are
 read one locus at a time: on 167,750 loci with hg38 and one bigWig, the call
-took 7.1 s with a pybigtools object and 3.9 s with the path, at `n_jobs=8`.
+took 6.9 s with a pybigtools object and 3.7 s with the path, at `n_jobs=8`.
 The values are the same either way.
 
 ### Multiple loci files are interleaved, not concatenated
