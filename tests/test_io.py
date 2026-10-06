@@ -571,6 +571,45 @@ def test_load_signals_raises_dict_values():
 		_load_signals([{'chr1': torch.zeros(6)}])
 
 
+def test_load_signals_empty_dict():
+	# A dict without chromosomes is a signal that has none of them; it used to
+	# raise an IndexError.
+	assert _load_signals([{}]) == [{}]
+
+
+@pytest.mark.parametrize("which", ["signals", "in_signals"])
+def test_extract_loci_empty_dict_signal(which):
+	# Every locus is zero and warns once, as a chromosome missing from a dict
+	# does.
+	kwargs = {which: [{}], "in_window": 8, "out_window": 10}
+	with warnings.catch_warnings(record=True) as record:
+		warnings.simplefilter("always")
+		_, values = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+			**kwargs)
+
+	width = 10 if which == "signals" else 8
+	assert values.shape == (5, 1, width)
+	assert torch.equal(values, torch.zeros(5, 1, width))
+	assert [w.category for w in record] == [TangermemeWarning] * 5
+	assert all("is not in the signal dictionary" in str(w.message)
+		for w in record)
+
+
+@pytest.mark.filterwarnings("ignore::tangermeme.utils.TangermemeWarning")
+def test_extract_loci_empty_dict_signal_counts():
+	# An empty dict as the target of min_counts has counts of zero.
+	X, y, mask = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		[{}, "tests/data/test.bw"], in_window=8, out_window=10, min_counts=0.0,
+		max_counts=0.0, return_mask=True)
+
+	assert mask.tolist() == [True] * 5
+	assert torch.equal(y[:, 0], torch.zeros(5, 10))
+
+	with pytest.raises(ValueError, match="No loci remain"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa", [{}],
+			in_window=8, out_window=10, min_counts=0.5)
+
+
 def test_load_signals_figwig():
 	# Local paths open with figwig, and opened bigWigs and dicts pass through.
 	bw = pybigtools.open("tests/data/test2.bw")

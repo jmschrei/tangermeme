@@ -263,7 +263,8 @@ def _load_signals(signals, use_figwig=False):
 		elif not isinstance(signal, dict):
 			raise ValueError("Signals must either be filenames, bigWigs " +
 				"opened with pybigtools, or dictionaries.")
-		elif not isinstance(list(signal.values())[0], numpy.ndarray):
+		elif len(signal) > 0 and not isinstance(next(iter(signal.values())),
+				numpy.ndarray):
 			raise ValueError("Values in dictionaries must be numpy.ndarrays.")
 		else:
 			signal = {str(key): value for key, value in signal.items()}
