@@ -17,6 +17,7 @@ from tangermeme.io import _load_signals
 from tangermeme.io import _load_exclusion_zones
 from tangermeme.io import _extract_locus_signal
 from tangermeme.io import _extract_signals
+from tangermeme.io import _kept_loci
 
 from tangermeme.io import read_meme
 from tangermeme.io import extract_loci
@@ -2105,6 +2106,87 @@ def test_extract_loci_float_coordinates_raise():
 	with pytest.raises(TypeError, match="integers"):
 		extract_loci(loci, "tests/data/test.fa", ["tests/data/test.bw"],
 			in_window=8, out_window=10)
+
+
+@pytest.mark.parametrize("sequences", ["path", "fasta", "dict"])
+def test_extract_loci_float_coordinates_raise_without_signals(sequences):
+	# Without signals, float coordinates raise a TypeError where the
+	# sequence window is sliced.
+	loci = pandas.DataFrame({0: ['chr4'], 1: [100.0], 2: [111.0]})
+	if sequences == "fasta":
+		sequences = pyfaidx.Fasta("tests/data/test.fa")
+	elif sequences == "dict":
+		sequences = {'chr4': numpy.zeros((4, 240), dtype=numpy.int8)}
+	else:
+		sequences = "tests/data/test.fa"
+
+	with pytest.raises(TypeError):
+		extract_loci(loci, sequences, in_window=11)
+
+
+@pytest.mark.parametrize("dtype", ['int32', 'uint32', 'uint64', 'Int64',
+	object])
+def test_extract_loci_coordinate_dtypes(dtype):
+	# Coordinates of any integer dtype give what int64 coordinates do: a locus
+	# off each end of its chromosome, one in an excluded chunk, and two kept.
+	fasta = "tests/data/test.fa"
+	loci = pandas.DataFrame({'chrom': ['chr1', 'chr1', 'chr2', 'chr4', 'chr1'],
+		'start': [0, 50, 201, 100, 250], 'end': [8, 61, 211, 111, 261]})
+	exclusion = pandas.DataFrame({'chrom': ['chr1'], 'start': [260],
+		'end': [270]})
+
+	X0, y0, mask0 = extract_loci(loci, fasta, ["tests/data/test.bw"],
+		in_window=11, out_window=6, exclusion_lists=exclusion, return_mask=True)
+	assert mask0.tolist() == [False, True, False, True, False]
+
+	loci = loci.astype({'start': dtype, 'end': dtype})
+	X, y, mask = extract_loci(loci, fasta, ["tests/data/test.bw"],
+		in_window=11, out_window=6, exclusion_lists=exclusion, return_mask=True)
+
+	assert torch.equal(X, X0)
+	assert torch.equal(y, y0)
+	assert torch.equal(mask, mask0)
+
+
+@pytest.mark.parametrize("dtype", [numpy.int64, numpy.uint64, object])
+def test_extract_loci_coordinates_near_int64_max(dtype):
+	# A window that ends past 2**63 falls off the end of its chromosome; it
+	# does not wrap around to a negative end that passes the check.
+	fasta = "tests/data/test.fa"
+	loci = pandas.DataFrame({'chrom': ['chr4', 'chr4'],
+		'start': numpy.array([100, 2 ** 63 - 10], dtype=dtype),
+		'end': numpy.array([111, 2 ** 63 - 1], dtype=dtype)})
+
+	X, mask = extract_loci(loci, fasta, in_window=11, return_mask=True)
+	assert mask.tolist() == [True, False]
+	assert X.shape == (1, 4, 11)
+
+
+@pytest.mark.parametrize("exclusion", [False, True])
+@pytest.mark.parametrize("left, right", [(0, 0), (5, 6), (57, 57), (300, 301)])
+def test_kept_loci_matches_loop(exclusion, left, right):
+	# Integer coordinates, checked together as int64, give what the loop over
+	# loci gives for the same coordinates as Python ints, at random loci on
+	# and off their chromosomes and around random excluded chunks.
+	rng = numpy.random.default_rng(0)
+	lengths = {'chr1': 284, 'chr2': 211, 'chr7': 2000}
+	starts = rng.integers(-20, 2020, 500)
+	loci = pandas.DataFrame({'chrom': rng.choice(list(lengths), 500),
+		'start': starts, 'end': starts + rng.integers(0, 40, 500)})
+
+	zones = None
+	if exclusion:
+		zones = {chrom: rng.random(length // 100 + 1) < 0.15
+			for chrom, length in lengths.items()}
+
+	idxs, mids = _kept_loci(loci, lengths, zones, left, right)
+	idxs0, mids0 = _kept_loci(loci.astype({'start': object, 'end': object}),
+		lengths, zones, left, right)
+
+	assert idxs.dtype == mids.dtype == numpy.int64
+	assert 0 < len(idxs) < len(loci)
+	assert idxs.tolist() == idxs0.tolist()
+	assert mids.tolist() == mids0.tolist()
 
 
 def test_extract_loci_bigwig_readers():
