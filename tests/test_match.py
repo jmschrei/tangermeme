@@ -605,6 +605,27 @@ def test_counts_from_coords(match_bigwig):
 	assert numpy.isinf(counts[-1])
 
 
+def test_counts_from_coords_past_chrom_end_bitwise(tmp_path):
+	# A long region past the end of a chromosome is summed over the bases
+	# before the end alone, so that the float64 sum adds the same values in
+	# the same order as a slice of the chromosome does. A float64 sum of
+	# float32 values is exact in any order unless they span more than about
+	# 2**29, so these span 24 orders of magnitude, with both signs.
+	import figwig
+
+	rng = numpy.random.RandomState(2)
+	track = (rng.choice([-1, 1], size=1000) * 10 ** rng.uniform(-12, 12,
+		size=1000)).astype(numpy.float32)
+	path = str(tmp_path / "wide.bw")
+	figwig.write_bigwig(path, {'chr1': 1000}, 'chr1', [0], track[None])
+
+	coords = [('chr1', start, start + width) for start in (0, 300, 700, 990)
+		for width in (700, 1500, 2114)]
+	counts = _counts_from_coords(path, coords)
+	expected = _expected_counts({'chr1': track}, coords)
+	assert counts.tobytes() == expected.tobytes()
+
+
 def test_counts_from_coords_generator(match_bigwig):
 	path, tracks = match_bigwig
 	coords = [('chr1', 10, 30), ('chr4', 100, 101), ('chr3', 5, 9)]
