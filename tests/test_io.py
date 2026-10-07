@@ -3504,6 +3504,38 @@ def test_extract_loci_fasta_bytes_pyfaidx_changes(tmp_path, line, in_window):
 		_same_as_pyfaidx_object(loci.iloc[i:i+1], path, in_window=in_window)
 
 
+@pytest.mark.parametrize("mids, ignore, error, match", [
+	([9, 11], ['N'], ValueError, "Encountered character"),
+	([11, 9], ['N'], UnicodeDecodeError, "utf-8"),
+	([9, 11], ['N', 'A'], ValueError, "in the alphabet and also"),
+	([11, 9], ['N', 'A'], UnicodeDecodeError, "utf-8"),
+], ids=["whole_first", "split_first", "overlap_whole_first",
+	"overlap_split_first"])
+def test_extract_loci_fasta_error_order(tmp_path, mids, ignore, error, match):
+	# The window around base 9 holds the two bytes of an é, which pyfaidx
+	# decodes to a character in neither the alphabet nor `ignore`, and the
+	# window around base 11 holds only its second byte, which pyfaidx cannot
+	# decode. The error is the one that reading and encoding each window in
+	# turn gives, as extract_loci did one locus at a time: that of the first
+	# window, from a path and from a pyfaidx.Fasta object.
+	path = str(tmp_path / "genome.fa")
+	with open(path, "wb") as handle:
+		handle.write(b">chr1\nACGTAC\nACG" + "é".encode('utf8') + b"A\nACGTAC\n"
+			b"ACGTAC\n")
+
+	with open(path + ".fai", "w") as handle:
+		handle.write("chr1\t24\t6\t6\t7\n")
+
+	loci = pandas.DataFrame([('chr1', mid, mid + 1) for mid in mids])
+	with pytest.raises(error, match=match):
+		extract_loci(loci, path, in_window=3, ignore=ignore)
+
+	fasta = pyfaidx.Fasta(path)
+	with pytest.raises(error, match=match):
+		extract_loci(loci, fasta, in_window=3, ignore=ignore)
+	fasta.close()
+
+
 def test_extract_loci_fasta_stale_index(tmp_path):
 	# An index that describes other lines than the file has, but is newer so
 	# pyfaidx keeps it, gives what pyfaidx reads with it.

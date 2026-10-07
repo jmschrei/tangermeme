@@ -698,6 +698,40 @@ def _close_map(fasta_map, address, n_windows, n_jobs=1):
 		fasta_map.close()
 
 
+def _read_pyfaidx_windows(fasta, windows, alphabet, ignore, n_jobs=1):
+	"""One-hot encode windows read one at a time through pyfaidx.
+
+	`windows` yields a (chrom, start, end) triple for each window. The
+	windows are read and then encoded together by `_one_hot_encode_rows`.
+	When a read raises, the windows read before it are first encoded one at
+	a time, so that the error raised is the one that reading and encoding
+	each window in turn gives: an error from encoding an earlier window,
+	otherwise the read's own error.
+	"""
+
+	seqs, error = [], None
+	try:
+		for chrom, start, end in windows:
+			# A Fasta opened with as_raw=True returns strings rather than
+			# pyfaidx.Sequence objects.
+			seq = fasta[chrom][start:end]
+			if not isinstance(seq, str):
+				seq = seq.seq
+
+			seqs.append(seq)
+	except Exception as e:
+		error = e
+
+	if error is not None:
+		for seq in seqs:
+			one_hot_encode(seq.upper(), alphabet=alphabet, ignore=ignore)
+
+		raise error
+
+	return _one_hot_encode_rows(seqs, alphabet=alphabet, ignore=ignore,
+		n_jobs=n_jobs)
+
+
 def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
 	names=None, n_jobs=1):
 	"""Encode fasta windows from a memory map of the file, or return None.
@@ -709,8 +743,13 @@ def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
 	alphabet is not ASCII, the file is compressed or cannot be mapped, the
 	index describes lines that the file does not have, or a window holds a
 	byte that pyfaidx would remove or decode, so that the result is always
-	the one pyfaidx gives. `windows` is as in _read_fasta_windows.
+	the one pyfaidx gives. It is also returned when a character is in both
+	`alphabet` and `ignore`, so that the error is raised where reading the
+	windows with pyfaidx raises it. `windows` is as in _read_fasta_windows.
 	"""
+
+	if any(char in alphabet for char in ignore):
+		return None
 
 	table = _one_hot_rows_mapping(alphabet, ignore)
 	faidx = fasta.faidx
@@ -774,11 +813,10 @@ def _read_fasta_windows(fasta, windows, length, alphabet, ignore,
 	`windows` holds a (chrom, start) pair for each window, each covering
 	`length` bases inside its record. When `names` is given, it is instead a
 	pair of int64 arrays: the index of each window's chromosome into `names`,
-	and each window's start. The result is identical to fetching each window
-	with pyfaidx and encoding the strings with _one_hot_encode_rows,
-	including its errors, which is what is done when the windows cannot be
-	read from a memory map of the file. The windows are encoded on at most
-	`n_jobs` threads.
+	and each window's start. The result is identical to reading each window
+	with pyfaidx, as `_read_pyfaidx_windows` does, including its errors,
+	which is what is done when the windows cannot be read from a memory map
+	of the file. The windows are encoded on at most `n_jobs` threads.
 	"""
 
 	X = _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
@@ -789,16 +827,8 @@ def _read_fasta_windows(fasta, windows, length, alphabet, ignore,
 			windows = zip(numpy.array(names, dtype=object)[codes].tolist(),
 				starts.tolist())
 
-		seqs = []
-		for chrom, start in windows:
-			seq = fasta[chrom][start:start + length]
-			if not isinstance(seq, str):
-				seq = seq.seq
-
-			seqs.append(seq)
-
-		X = _one_hot_encode_rows(seqs, alphabet=alphabet, ignore=ignore,
-			n_jobs=n_jobs)
+		X = _read_pyfaidx_windows(fasta, ((chrom, start, start + length)
+			for chrom, start in windows), alphabet, ignore, n_jobs=n_jobs)
 
 	return X
 
@@ -1222,30 +1252,19 @@ def extract_loci(
 					names=[str(name) for name in names], n_jobs=threads)
 				progress.update(len(mids))
 		else:
-			seqs = []
-			for chrom, mid in tqdm(zip(loci_chroms, mids.tolist()),
-					total=len(mids), disable=d, desc=desc):
-				start = mid - in_width - max_jitter
-				end = mid + in_width + max_jitter + (in_window % 2)
-
-				if isinstance(sequences, dict):
-					seq = sequences[str(chrom)][:, start:end]
-				else:
-					# A Fasta opened with as_raw=True returns strings rather
-					# than pyfaidx.Sequence objects.
-					seq = sequences[str(chrom)][start:end]
-					if not isinstance(seq, str):
-						seq = seq.seq
-
-				seqs.append(seq)
+			windows = ((str(chrom), mid - in_width - max_jitter, mid + in_width
+				+ max_jitter + (in_window % 2)) for chrom, mid in tqdm(zip(
+				loci_chroms, mids.tolist()), total=len(mids), disable=d,
+				desc=desc))
 
 			# numpy.stack keeps the memory layout of its inputs, so a stack of
 			# slices of Fortran-ordered arrays is not contiguous by default.
 			if isinstance(sequences, dict):
-				seqs = numpy.ascontiguousarray(numpy.stack(seqs))
+				seqs = numpy.ascontiguousarray(numpy.stack([sequences[chrom][:,
+					start:end] for chrom, start, end in windows]))
 			else:
-				seqs = _one_hot_encode_rows(seqs, alphabet=alphabet,
-					ignore=ignore, n_jobs=threads)
+				seqs = _read_pyfaidx_windows(sequences, windows, alphabet,
+					ignore, n_jobs=threads)
 	finally:
 		if opened_fasta:
 			sequences.close()
