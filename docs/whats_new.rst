@@ -22,7 +22,7 @@ Claude Code skill
 
 	- The ersatz notes in ``SKILL.md`` and ``references/motif-effects.md`` no longer say that ``dinucleotide_shuffle`` rejects unknown characters outright; they give ``allow_N=True`` as the way to shuffle them. The third footgun in ``references/deep_lift_shap.md`` gains the route for attributing a sequence that contains them, ``only_warn=True`` with ``references=partial(dinucleotide_shuffle, allow_N=True)``.
 
-	- ``references/io-loci.md`` gives ``extract_loci``'s new ``n_jobs`` keyword and says to pass bigWigs as paths, since those opened with ``pybigtools.open`` are read one locus at a time, and says that the track, browser and ``#`` lines of a BED file are skipped.
+	- ``references/io-loci.md`` gives ``extract_loci``'s new ``n_jobs`` keyword and says to pass bigWigs as paths, or figwig readers, since those opened with ``pybigtools.open`` are deprecated and read one locus at a time; that URLs are not read; and that the track, browser and ``#`` lines of a BED file are skipped.
 
 	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
 
@@ -39,7 +39,11 @@ ersatz
 io
 --
 
-	- ``extract_loci`` reads bigWigs given as local paths with figwig, which reads every kept locus in one call on the new ``n_jobs`` threads, 8 by default. It used to read each locus through pybigtools inside its loop. The loci are now found first, by the window, exclusion, count and ``n_loci`` rules, and the signals read after them. On the 167,750 training peaks and negatives of ENCODE ATAC-seq experiment ENCSR123WME, with hg38 and the bigWigs on tmpfs and 8 threads, a call with one bigWig took 3.65 s against 7.79 s, and one with two bigWigs in ``signals`` and one in ``in_signals`` took 4.77 s against 17.78 s. The returned tensors are identical. Most of the remaining time goes to reading and one-hot encoding the FASTA, which is unchanged. A URL, a bigWig opened with ``pybigtools.open``, a dictionary and a file figwig does not read are read one locus at a time, as before. Under ``min_counts`` and ``max_counts`` the loci are read in groups. The warnings for chromosomes a signal does not have are the same, except in a call that raises partway through the loci, such as at a character not in ``alphabet``, where the signals of the loci after that one have been read and may have warned. figwig is a new dependency.
+	- ``extract_loci`` reads bigWigs given as local paths with figwig, which reads every kept locus in one call on the new ``n_jobs`` threads, 8 by default. It used to read each locus through pybigtools inside its loop. The loci are now found first, by the window, exclusion, count and ``n_loci`` rules, and the signals read after them. On the 167,750 training peaks and negatives of ENCODE ATAC-seq experiment ENCSR123WME, with hg38 and the bigWigs on tmpfs and 8 threads, a call with one bigWig took 3.65 s against 7.79 s, and one with two bigWigs in ``signals`` and one in ``in_signals`` took 4.77 s against 17.78 s. The returned tensors are identical. Most of the remaining time goes to reading and one-hot encoding the FASTA, which is unchanged. A dictionary is read one locus at a time, as before. Under ``min_counts`` and ``max_counts`` the loci are read in groups. The warnings for chromosomes a signal does not have are the same, except in a call that raises partway through the loci, such as at a character not in ``alphabet``, where the signals of the loci after that one have been read and may have warned. figwig is a new dependency.
+
+	- bigWigs are read with figwig alone, and pybigtools is no longer a dependency. Remote bigWigs are not read: a URL in ``signals`` or ``in_signals`` raises a ``ValueError`` that says to download the file first, where pybigtools used to stream it. A file that figwig does not read, such as a bigWig whose intervals overlap or whose data blocks are unsorted, raises figwig's ``ValueError``, where pybigtools used to read it; none of the 188 public bigWig files we tested is such a file. A missing file raises ``FileNotFoundError``. ``extract_loci`` accepts bigWigs opened with ``figwig.BigWigReader`` in ``signals`` and ``in_signals``.
+
+	- bigWigs opened with ``pybigtools.open`` and given in ``signals`` or ``in_signals`` are deprecated. They are still read, one locus at a time, with a ``FutureWarning``, and will not be accepted from tangermeme 1.9.0. Pass their paths, or the bigWigs opened with ``figwig.BigWigReader``, instead.
 
 	- A bigBed given in ``signals`` or ``in_signals``, as a path or opened with ``pybigtools.open``, raises a ``ValueError`` that names it. pybigtools opens bigBed files as well as bigWigs, and reading values from one panicked in Rust, which reached Python as pyo3's ``PanicException``. That derives from ``BaseException``, so ``except Exception`` did not catch it. Where it did not panic, the coverage it gave, the number of intervals over each base, was often wrong: on 9,000 windows around the intervals of four bigBed files, pybigtools 0.2.5 panicked at 933 and gave the wrong coverage at 1,480.
 
@@ -61,13 +65,18 @@ io
 
 	- Dictionary signals are zero-filled the way bigWigs are. A chromosome missing from the dictionary gives zeros and a ``TangermemeWarning``, where it raised ``KeyError``, and an array shorter than its chromosome in ``sequences`` is padded with zeros rather than coming back short.
 
-	- ``extract_loci`` accepts a ``pathlib.Path`` or other ``os.PathLike`` wherever it accepts a filename, in ``loci``, ``sequences``, ``signals``, ``in_signals`` and ``exclusion_lists``. It accepts bigWigs already opened with ``pybigtools.open`` in ``signals`` and ``in_signals``, and leaves them open. It reads a ``pyfaidx.Fasta`` opened with ``as_raw=True``, which returns strings and used to raise ``AttributeError: 'str' object has no attribute 'seq'``. The keys of dictionary ``sequences`` and signals are coerced to strings, like the chromosome names of the loci, so integer keys work.
+	- ``extract_loci`` accepts a ``pathlib.Path`` or other ``os.PathLike`` wherever it accepts a filename, in ``loci``, ``sequences``, ``signals``, ``in_signals`` and ``exclusion_lists``. It accepts bigWigs already opened with ``pybigtools.open`` in ``signals`` and ``in_signals``, and leaves them open, though these are deprecated (above). It reads a ``pyfaidx.Fasta`` opened with ``as_raw=True``, which returns strings and used to raise ``AttributeError: 'str' object has no attribute 'seq'``. The keys of dictionary ``sequences`` and signals are coerced to strings, like the chromosome names of the loci, so integer keys work.
 
 	- A bare filename or dictionary passed as ``signals`` or ``in_signals`` raises a ``ValueError`` asking for a list. It used to be iterated over, opening each character or chromosome name as a bigWig, and fail with ``Invalid file type``.
 
 	- The sequences returned by ``extract_loci`` are C-contiguous. They used to keep the layout of the transposed view that ``one_hot_encode`` returns, with strides ``(4 * L, 1, 4)``, so ``.view`` raised a ``RuntimeError`` on them. The values are unchanged.
 
 	- ``extract_loci``'s return annotation is ``torch.Tensor | list[torch.Tensor]``, which is what it returns: the sequences alone, or a list of the sequences followed by the signals, the input signals and the mask that were asked for. It was annotated as ``tuple``.
+
+match
+-----
+
+	- ``extract_matching_loci`` with a ``bigwig`` returns loci again. The signal over each locus asked pybigtools for ``summary="sum"``, which pybigtools 0.2.5 does not have, so every locus's signal was NaN, the threshold was NaN, and no loci were returned, whatever ``signal_beta`` was. The bigWig is now read with figwig and each region summed as float64. On 288,176 regions of 184 public bigWigs, these sums equal pybigtools 0.3's ``summary="sum"`` at all but 36, which differ from it by at most 2.2e-16 of their value. A chromosome whose length in the bigWig differs from its length in the FASTA used to raise a broadcasting ``ValueError``; the bases past the end of the bigWig's chromosome now have no signal. A chromosome that the bigWig lacks used to raise pybigtools' ``KeyError``, and now gives no background loci.
 
 pisa
 ----
