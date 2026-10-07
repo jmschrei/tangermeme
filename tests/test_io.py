@@ -1,7 +1,9 @@
 # test_io.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import os
 import numpy
+import numba
 import torch
 import pytest
 import pandas
@@ -12,11 +14,17 @@ import figwig
 import pyfaidx
 import pybigtools
 
+import tangermeme.io
+import tangermeme.utils
+
 from tangermeme.io import _interleave_loci
 from tangermeme.io import _load_signals
 from tangermeme.io import _load_exclusion_zones
 from tangermeme.io import _extract_locus_signal
 from tangermeme.io import _extract_signals
+from tangermeme.io import _kept_loci
+from tangermeme.io import _read_fasta_windows
+from tangermeme.io import _read_fasta_windows_mmap
 
 from tangermeme.io import read_meme
 from tangermeme.io import extract_loci
@@ -2107,6 +2115,87 @@ def test_extract_loci_float_coordinates_raise():
 			in_window=8, out_window=10)
 
 
+@pytest.mark.parametrize("sequences", ["path", "fasta", "dict"])
+def test_extract_loci_float_coordinates_raise_without_signals(sequences):
+	# Without signals, float coordinates raise a TypeError where the
+	# sequence window is sliced.
+	loci = pandas.DataFrame({0: ['chr4'], 1: [100.0], 2: [111.0]})
+	if sequences == "fasta":
+		sequences = pyfaidx.Fasta("tests/data/test.fa")
+	elif sequences == "dict":
+		sequences = {'chr4': numpy.zeros((4, 240), dtype=numpy.int8)}
+	else:
+		sequences = "tests/data/test.fa"
+
+	with pytest.raises(TypeError):
+		extract_loci(loci, sequences, in_window=11)
+
+
+@pytest.mark.parametrize("dtype", ['int32', 'uint32', 'uint64', 'Int64',
+	object])
+def test_extract_loci_coordinate_dtypes(dtype):
+	# Coordinates of any integer dtype give what int64 coordinates do: a locus
+	# off each end of its chromosome, one in an excluded chunk, and two kept.
+	fasta = "tests/data/test.fa"
+	loci = pandas.DataFrame({'chrom': ['chr1', 'chr1', 'chr2', 'chr4', 'chr1'],
+		'start': [0, 50, 201, 100, 250], 'end': [8, 61, 211, 111, 261]})
+	exclusion = pandas.DataFrame({'chrom': ['chr1'], 'start': [260],
+		'end': [270]})
+
+	X0, y0, mask0 = extract_loci(loci, fasta, ["tests/data/test.bw"],
+		in_window=11, out_window=6, exclusion_lists=exclusion, return_mask=True)
+	assert mask0.tolist() == [False, True, False, True, False]
+
+	loci = loci.astype({'start': dtype, 'end': dtype})
+	X, y, mask = extract_loci(loci, fasta, ["tests/data/test.bw"],
+		in_window=11, out_window=6, exclusion_lists=exclusion, return_mask=True)
+
+	assert torch.equal(X, X0)
+	assert torch.equal(y, y0)
+	assert torch.equal(mask, mask0)
+
+
+@pytest.mark.parametrize("dtype", [numpy.int64, numpy.uint64, object])
+def test_extract_loci_coordinates_near_int64_max(dtype):
+	# A window that ends past 2**63 falls off the end of its chromosome; it
+	# does not wrap around to a negative end that passes the check.
+	fasta = "tests/data/test.fa"
+	loci = pandas.DataFrame({'chrom': ['chr4', 'chr4'],
+		'start': numpy.array([100, 2 ** 63 - 10], dtype=dtype),
+		'end': numpy.array([111, 2 ** 63 - 1], dtype=dtype)})
+
+	X, mask = extract_loci(loci, fasta, in_window=11, return_mask=True)
+	assert mask.tolist() == [True, False]
+	assert X.shape == (1, 4, 11)
+
+
+@pytest.mark.parametrize("exclusion", [False, True])
+@pytest.mark.parametrize("left, right", [(0, 0), (5, 6), (300, 301)])
+def test_kept_loci_matches_loop(exclusion, left, right):
+	# Integer coordinates, checked together as int64, give what the loop over
+	# loci gives for the same coordinates as Python ints, at random loci on
+	# and off their chromosomes and around random excluded chunks.
+	rng = numpy.random.default_rng(0)
+	lengths = {'chr1': 284, 'chr2': 211, 'chr7': 2000}
+	starts = rng.integers(-20, 2020, 500)
+	loci = pandas.DataFrame({'chrom': rng.choice(list(lengths), 500),
+		'start': starts, 'end': starts + rng.integers(0, 40, 500)})
+
+	zones = None
+	if exclusion:
+		zones = {chrom: rng.random(length // 100 + 1) < 0.15
+			for chrom, length in lengths.items()}
+
+	idxs, mids = _kept_loci(loci, lengths, zones, left, right)
+	idxs0, mids0 = _kept_loci(loci.astype({'start': object, 'end': object}),
+		lengths, zones, left, right)
+
+	assert idxs.dtype == mids.dtype == numpy.int64
+	assert 0 < len(idxs) < len(loci)
+	assert idxs.tolist() == idxs0.tolist()
+	assert mids.tolist() == mids0.tolist()
+
+
 def test_extract_loci_bigwig_readers():
 	# figwig readers as signals and in_signals give what their paths give,
 	# and can be read again.
@@ -3197,3 +3286,932 @@ def test_extract_loci_in_signals_missing_chrom_warns_in_input_windows():
 	assert results[0] == results[1] == ["chr2 36 44 not valid bigwig indexes. "
 		"Using zeros instead.", "chr2 46 54 not valid bigwig indexes. Using "
 		"zeros instead."]
+
+
+###
+# A fasta opened from a path is read through its .fai index from a memory map
+# of the file. These tests check that each window equals what pyfaidx returns
+# for it: across line ends of every width and kind, at both ends of every
+# record, and at the end of a file that lacks a final line end. When the
+# bytes are not what pyfaidx would return unchanged, or the file cannot be
+# mapped, pyfaidx reads the windows instead, so the output or the error is
+# the one a pyfaidx.Fasta object gives.
+###
+
+
+FASTA_GENOME_LENGTHS = {'chr1': 97, 'empty': 0, 'chr2': 70, 'chr3': 23,
+	'chrLast': 420}
+
+
+def _fasta_genome(seed=0):
+	rng = numpy.random.RandomState(seed)
+	return {chrom: ''.join(rng.choice(list('ACGTacgtN'), size=length))
+		for chrom, length in FASTA_GENOME_LENGTHS.items()}
+
+
+def _write_fasta(path, genome, width, newline='\n', final_newline=True):
+	lines = []
+	for chrom, sequence in genome.items():
+		lines.append('>' + chrom)
+		lines.extend(sequence[i:i+width] for i in range(0, len(sequence),
+			width))
+
+	text = newline.join(lines) + (newline if final_newline else '')
+	with open(path, 'wb') as handle:
+		handle.write(text.encode('utf8'))
+
+
+def _every_window(genome, in_window):
+	# One-base loci whose windows start at every base where they fit.
+	rows = []
+	for chrom, sequence in genome.items():
+		for start in range(len(sequence) - in_window + 1):
+			mid = start + in_window // 2
+			rows.append((chrom, mid, mid + 1))
+
+	return pandas.DataFrame(rows)
+
+
+def _encode_windows(genome, loci, in_window, alphabet=['A', 'C', 'G', 'T'],
+	ignore=['N']):
+	X = []
+	for chrom, mid, _ in loci.itertuples(index=False):
+		start = mid - in_window // 2
+		sequence = genome[chrom][start:start + in_window].upper()
+		X.append(one_hot_encode(sequence, alphabet=alphabet, ignore=ignore))
+
+	return torch.stack(X)
+
+
+def _same_as_pyfaidx_object(loci, path, **kwargs):
+	# The output, or the type and message of the error, equal those of the
+	# same call given a pyfaidx.Fasta object, whose windows pyfaidx reads.
+	fasta = None
+	try:
+		fasta = pyfaidx.Fasta(path)
+		expected = extract_loci(loci, fasta, **kwargs)
+	except Exception as error:
+		with pytest.raises(type(error)) as info:
+			extract_loci(loci, path, **kwargs)
+
+		assert str(info.value) == str(error)
+		return None
+	finally:
+		if fasta is not None:
+			fasta.close()
+
+	X = extract_loci(loci, path, **kwargs)
+	assert X.dtype == expected.dtype
+	assert X.shape == expected.shape
+	assert X.is_contiguous()
+	assert torch.equal(X, expected)
+	return X
+
+
+@pytest.mark.parametrize("width", [1, 7, 60])
+@pytest.mark.parametrize("newline, final_newline", [("\n", True),
+	("\r\n", False)])
+def test_extract_loci_fasta_every_window(tmp_path, width, newline,
+	final_newline):
+	genome = _fasta_genome()
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, width, newline, final_newline)
+
+	for in_window in [1, 5, 8, 61]:
+		loci = _every_window(genome, in_window)
+		X = _same_as_pyfaidx_object(loci, path, in_window=in_window)
+		assert torch.equal(X, _encode_windows(genome, loci, in_window))
+
+
+def test_extract_loci_fasta_crlf_index(tmp_path):
+	# With \r\n line ends the index has two bytes per line more than bases.
+	genome = _fasta_genome(1)
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 10, "\r\n")
+
+	loci = _every_window(genome, 13)
+	X = _same_as_pyfaidx_object(loci, path, in_window=13)
+	assert torch.equal(X, _encode_windows(genome, loci, 13))
+
+	index = pandas.read_csv(path + ".fai", sep="\t", header=None)
+	nonempty = index[index[1] > 0]
+	assert ((nonempty[4] - nonempty[3]) == 2).all()
+
+
+def test_extract_loci_fasta_builds_missing_index(tmp_path):
+	# pyfaidx builds a missing .fai when the file is opened, as before.
+	genome = _fasta_genome(2)
+	path = tmp_path / "genome.fa"
+	_write_fasta(str(path), genome, 7)
+	assert not (tmp_path / "genome.fa.fai").exists()
+
+	loci = _every_window(genome, 9)
+	X = extract_loci(loci, path, in_window=9)
+	assert (tmp_path / "genome.fa.fai").exists()
+	assert torch.equal(X, _encode_windows(genome, loci, 9))
+
+
+def test_extract_loci_fasta_alphabet_and_ignore(tmp_path):
+	# Upper-casing, ignored characters and the unknown-character error are
+	# those of one_hot_encode on the upper-cased window.
+	genome = {'chr1': 'ACGTNacgtnZzACGT' * 5, 'chr2': 'ACGTACGTAC' * 3}
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 9)
+
+	loci = _every_window(genome, 6)
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, path, in_window=6)
+
+	_same_as_pyfaidx_object(loci, path, in_window=6)
+
+	X = _same_as_pyfaidx_object(loci, path, in_window=6, ignore=['N', 'Z'])
+	assert torch.equal(X, _encode_windows(genome, loci, 6, ignore=['N', 'Z']))
+
+	alphabet = ['A', 'C', 'G', 'T', 'Z']
+	X = _same_as_pyfaidx_object(loci, path, in_window=6, alphabet=alphabet)
+	assert X.shape[1] == 5
+	assert torch.equal(X, _encode_windows(genome, loci, 6, alphabet=alphabet))
+
+	with pytest.raises(ValueError, match="in the alphabet and also"):
+		extract_loci(loci, path, in_window=6, ignore=['A'])
+
+	# A non-ASCII alphabet is encoded by one_hot_encode after pyfaidx reads.
+	_same_as_pyfaidx_object(loci, path, in_window=6, alphabet=['A', 'C', 'G',
+		'T', 'Z', 'é'])
+
+
+def test_extract_loci_fasta_uses_memory_map(tmp_path):
+	# A plain fasta is read from the memory map rather than through pyfaidx.
+	genome = _fasta_genome(3)
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+
+	fasta = pyfaidx.Fasta(path)
+	windows = [('chr1', 0), ('chrLast', 400), ('chr2', 50)]
+	X = _read_fasta_windows_mmap(fasta, windows, 20, ['A', 'C', 'G', 'T'],
+		['N'])
+	fasta.close()
+
+	assert X is not None
+	assert X.dtype == numpy.int8
+	assert X.flags['C_CONTIGUOUS']
+	for x, (chrom, start) in zip(X, windows):
+		assert numpy.array_equal(x, one_hot_encode(genome[chrom][start:start+20]
+			.upper()).numpy())
+
+
+def test_extract_loci_fasta_irregular_lines_raises(tmp_path):
+	# pyfaidx rejects lines of unequal length inside a record, as before.
+	path = str(tmp_path / "genome.fa")
+	with open(path, "w") as handle:
+		handle.write(">chr1\nACGTACGT\nACG\nACGTACGT\nACGT\n")
+
+	loci = pandas.DataFrame([('chr1', 10, 11)])
+	with pytest.raises(pyfaidx.FastaIndexingError):
+		extract_loci(loci, path, in_window=4)
+
+	_same_as_pyfaidx_object(loci, path, in_window=4)
+
+
+@pytest.mark.parametrize("line", [
+	# A carriage return inside a line, which pyfaidx removes.
+	b"AC\rTAC",
+	# A byte outside ASCII, which pyfaidx decodes as UTF-8, so that the
+	# window holds one character fewer.
+	"ACGéA".encode('utf8'),
+	# A lone byte outside ASCII, which cannot be decoded.
+	b"ACG\xffTA",
+])
+@pytest.mark.parametrize("in_window", [3, 8])
+def test_extract_loci_fasta_bytes_pyfaidx_changes(tmp_path, line, in_window):
+	# The second of four lines of six bytes holds a byte that pyfaidx does not
+	# return unchanged. The index is written by hand, since pyfaidx cannot
+	# build one for the last two files.
+	path = str(tmp_path / "genome.fa")
+	with open(path, "wb") as handle:
+		handle.write(b">chr1\nACGTAC\n" + line + b"\nACGTAC\nACGTAC\n")
+
+	with open(path + ".fai", "w") as handle:
+		handle.write("chr1\t24\t6\t6\t7\n")
+
+	loci = pandas.DataFrame([('chr1', mid, mid + 1) for mid in range(
+		in_window // 2, 25 - in_window + in_window // 2)])
+	for n in [1, 3, len(loci)]:
+		_same_as_pyfaidx_object(loci.iloc[:n], path, in_window=in_window)
+		_same_as_pyfaidx_object(loci.iloc[-n:], path, in_window=in_window)
+
+	for i in range(len(loci)):
+		_same_as_pyfaidx_object(loci.iloc[i:i+1], path, in_window=in_window)
+
+
+@pytest.mark.parametrize("mids, ignore, error, match", [
+	([9, 11], ['N'], ValueError, "Encountered character"),
+	([11, 9], ['N'], UnicodeDecodeError, "utf-8"),
+	([9, 11], ['N', 'A'], ValueError, "in the alphabet and also"),
+	([11, 9], ['N', 'A'], UnicodeDecodeError, "utf-8"),
+], ids=["whole_first", "split_first", "overlap_whole_first",
+	"overlap_split_first"])
+def test_extract_loci_fasta_error_order(tmp_path, mids, ignore, error, match):
+	# The window around base 9 holds the two bytes of an é, which pyfaidx
+	# decodes to a character in neither the alphabet nor `ignore`, and the
+	# window around base 11 holds only its second byte, which pyfaidx cannot
+	# decode. The error is the one that reading and encoding each window in
+	# turn gives, as extract_loci did one locus at a time: that of the first
+	# window, from a path and from a pyfaidx.Fasta object.
+	path = str(tmp_path / "genome.fa")
+	with open(path, "wb") as handle:
+		handle.write(b">chr1\nACGTAC\nACG" + "é".encode('utf8') + b"A\nACGTAC\n"
+			b"ACGTAC\n")
+
+	with open(path + ".fai", "w") as handle:
+		handle.write("chr1\t24\t6\t6\t7\n")
+
+	loci = pandas.DataFrame([('chr1', mid, mid + 1) for mid in mids])
+	with pytest.raises(error, match=match):
+		extract_loci(loci, path, in_window=3, ignore=ignore)
+
+	fasta = pyfaidx.Fasta(path)
+	with pytest.raises(error, match=match):
+		extract_loci(loci, fasta, in_window=3, ignore=ignore)
+	fasta.close()
+
+
+def test_extract_loci_fasta_stale_index(tmp_path):
+	# An index that describes other lines than the file has, but is newer so
+	# pyfaidx keeps it, gives what pyfaidx reads with it.
+	genome = {'chr1': 'ACGTAACCGGTT' * 4}
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 12)
+	with open(path + ".fai", "w") as handle:
+		handle.write("chr1\t48\t6\t10\t11\n")
+
+	for in_window in [3, 9, 20]:
+		loci = _every_window(genome, in_window)
+		_same_as_pyfaidx_object(loci, path, in_window=in_window)
+		for i in range(len(loci)):
+			_same_as_pyfaidx_object(loci.iloc[i:i+1], path, in_window=in_window)
+
+
+def _write_bgzf(path, data, block_size=100):
+	# Block-gzip, as bgzip writes: gzip members carrying their compressed
+	# size in a BC extra field, followed by an empty end-of-file block.
+	import zlib
+	import struct
+
+	with open(path, "wb") as handle:
+		for i in range(0, len(data), block_size):
+			block = data[i:i+block_size]
+			compressor = zlib.compressobj(6, zlib.DEFLATED, -15)
+			compressed = compressor.compress(block) + compressor.flush()
+			handle.write(struct.pack('<BBBBIBBHBBHH', 31, 139, 8, 4, 0, 0, 255,
+				6, 66, 67, 2, len(compressed) + 25))
+			handle.write(compressed)
+			handle.write(struct.pack('<II', zlib.crc32(block), len(block)))
+
+		handle.write(bytes.fromhex("1f8b08040000000000ff0600424302001b00"
+			"03000000000000000000"))
+
+
+def _has_biopython():
+	try:
+		import Bio  # noqa: F401
+	except ImportError:
+		return False
+
+	return True
+
+
+def _bgzf_genome(tmp_path):
+	import gzip
+
+	genome = _fasta_genome(4)
+	plain = str(tmp_path / "plain.fa")
+	_write_fasta(plain, genome, 10)
+	with open(plain, "rb") as handle:
+		data = handle.read()
+
+	path = str(tmp_path / "genome.fa.gz")
+	_write_bgzf(path, data)
+	with gzip.open(path, "rb") as handle:
+		assert handle.read() == data
+
+	return genome, path
+
+
+@pytest.mark.skipif(not _has_biopython(), reason="pyfaidx reads block-gzip "
+	"fasta files with BioPython")
+def test_extract_loci_fasta_bgzip(tmp_path):
+	genome, path = _bgzf_genome(tmp_path)
+	loci = _every_window(genome, 7)
+	X = _same_as_pyfaidx_object(loci, path, in_window=7)
+	assert torch.equal(X, _encode_windows(genome, loci, 7))
+
+
+@pytest.mark.skipif(_has_biopython(), reason="BioPython is installed")
+def test_extract_loci_fasta_bgzip_without_biopython(tmp_path):
+	genome, path = _bgzf_genome(tmp_path)
+	loci = _every_window(genome, 7)
+	with pytest.raises(ImportError, match="BioPython"):
+		extract_loci(loci, path, in_window=7)
+
+	_same_as_pyfaidx_object(loci, path, in_window=7)
+
+
+def _mapped_paths():
+	with open("/proc/self/maps") as handle:
+		return handle.read()
+
+
+@pytest.mark.skipif(not pathlib.Path("/proc/self/maps").exists(),
+	reason="needs /proc/self/maps")
+def test_extract_loci_fasta_unmapped(tmp_path):
+	# The memory map is closed on return and on the errors raised after the
+	# windows are chosen.
+	genome = {'chr1': 'ACGTNacgtnZzACGT' * 5}
+	path = str(tmp_path / "genome_unmapped.fa")
+	_write_fasta(path, genome, 9)
+	loci = _every_window(genome, 6)
+
+	extract_loci(loci.iloc[:2], path, in_window=6)
+	assert "genome_unmapped.fa" not in _mapped_paths()
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, path, in_window=6)
+	assert "genome_unmapped.fa" not in _mapped_paths()
+
+	with pytest.raises(ValueError, match="in the alphabet and also"):
+		extract_loci(loci, path, in_window=6, ignore=['A'])
+	assert "genome_unmapped.fa" not in _mapped_paths()
+
+	with pytest.raises(ValueError, match="No loci remain"):
+		extract_loci(loci, path, in_window=1000)
+	assert "genome_unmapped.fa" not in _mapped_paths()
+
+
+@pytest.mark.parametrize("alphabet", [['A', 'C', 'G', 'T'],
+	['A', 'C', 'G', 'T', 'é']])
+def test_read_fasta_windows_names(alphabet):
+	# Chromosomes given as indices into names read what the names do, from
+	# the memory map and, with an alphabet that is not ASCII, through pyfaidx.
+	# One name is not used.
+	fasta = pyfaidx.Fasta("tests/data/test.fa")
+	rng = numpy.random.default_rng(3)
+	names = ['chr4', 'chr1', 'chr3', 'chr7']
+	codes = rng.integers(0, 3, 50)
+	starts = rng.integers(0, 100, 50)
+	windows = [(names[code], int(start)) for code, start in zip(codes, starts)]
+
+	X = _read_fasta_windows(fasta, (codes, starts), 20, alphabet, ['N'],
+		names=names)
+	expected = _read_fasta_windows(fasta, windows, 20, alphabet, ['N'])
+	assert X.dtype == expected.dtype and X.flags.c_contiguous
+	numpy.testing.assert_array_equal(X, expected)
+
+	X = _read_fasta_windows_mmap(fasta, (codes, starts), 20, alphabet, ['N'],
+		names=names)
+	if len(alphabet) == 4:
+		numpy.testing.assert_array_equal(X, expected)
+	else:
+		assert X is None
+
+	fasta.close()
+
+
+@pytest.mark.parametrize("cause", ["index", "negative_start", "mmap_fails"])
+def test_read_fasta_windows_mmap_declines(tmp_path, monkeypatch, cause):
+	# The memory map is not read, and the windows go to pyfaidx, when the
+	# index gives fewer bytes than bases per line, a window starts before its
+	# record, or the file cannot be mapped. extract_loci then gives what a
+	# pyfaidx.Fasta object gives, here the error for windows of different
+	# lengths that the bad index leads pyfaidx to return.
+	genome = {'chr1': 'ACGTAC' * 4}
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 6)
+	windows = [('chr1', 0), ('chr1', 10)]
+
+	if cause == "index":
+		with open(path + ".fai", "w") as handle:
+			handle.write("chr1\t24\t6\t7\t6\n")
+	elif cause == "negative_start":
+		windows = [('chr1', -1), ('chr1', 10)]
+	else:
+		def no_map(*args, **kwargs):
+			raise OSError("cannot map")
+
+		monkeypatch.setattr(tangermeme.io.mmap, "mmap", no_map)
+
+	fasta = pyfaidx.Fasta(path)
+	assert _read_fasta_windows_mmap(fasta, windows, 4, ['A', 'C', 'G', 'T'],
+		['N']) is None
+	fasta.close()
+
+	loci = pandas.DataFrame([('chr1', mid, mid + 1) for mid in (2, 7, 12)])
+	_same_as_pyfaidx_object(loci, path, in_window=4)
+
+
+def test_extract_loci_fasta_zero_window(tmp_path):
+	# A window of no bases gives a sequence of no positions per locus, from a
+	# path, which the memory map leaves to pyfaidx, as from a pyfaidx.Fasta.
+	genome = _fasta_genome()
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+	loci = _every_window(genome, 8).iloc[::10]
+
+	X = _same_as_pyfaidx_object(loci, path, in_window=0)
+	assert X.shape == (len(loci), 4, 0)
+	assert X.dtype == torch.int8
+
+
+###
+# n_jobs: the sequences of a fasta file are one-hot encoded in blocks of
+# rows on numba's threads, which changes no output and no error.
+###
+
+
+@pytest.mark.parametrize("n_jobs", [3, 1000])
+def test_extract_loci_n_jobs_encoding(tmp_path, n_jobs):
+	# The loci fill several blocks of rows. Every n_jobs gives the output of
+	# one thread, from a path and from a pyfaidx.Fasta object, and one above
+	# NUMBA_NUM_THREADS is capped rather than raising.
+	genome = _fasta_genome()
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+	loci = _every_window(genome, 7)
+	assert len(loci) > 500
+
+	X1 = extract_loci(loci, path, in_window=7, n_jobs=1)
+	X = extract_loci(loci, path, in_window=7, n_jobs=n_jobs)
+	assert X.dtype == torch.int8
+	assert X.is_contiguous()
+	assert torch.equal(X, X1)
+	assert torch.equal(X, _encode_windows(genome, loci, 7))
+
+	fasta = pyfaidx.Fasta(path)
+	X = extract_loci(loci, fasta, in_window=7, n_jobs=n_jobs)
+	fasta.close()
+	assert X.is_contiguous()
+	assert torch.equal(X, X1)
+
+
+def test_extract_loci_n_jobs_signals_and_mask():
+	# With signals, in_signals and a mask, the outputs are those of one
+	# thread.
+	loci = pandas.concat([pandas.read_csv("tests/data/test.bed", sep="\t",
+		header=None)] * 40)
+
+	kwargs = dict(signals=["tests/data/test.bw"], in_signals=[
+		"tests/data/test.bw"], in_window=10, out_window=6, max_jitter=2,
+		return_mask=True)
+	outputs1 = extract_loci(loci, "tests/data/test.fa", n_jobs=1, **kwargs)
+	outputs = extract_loci(loci, "tests/data/test.fa", n_jobs=4, **kwargs)
+	assert len(outputs) == len(outputs1) == 4
+	assert outputs[0].shape[0] > 64
+	for x, x1 in zip(outputs, outputs1):
+		assert x.dtype == x1.dtype
+		assert x.is_contiguous()
+		assert torch.equal(x, x1)
+
+
+@pytest.mark.parametrize("n_jobs", [1, 4])
+def test_extract_loci_n_jobs_unknown_character(tmp_path, n_jobs):
+	# Unknown characters under loci of several blocks raise the error one
+	# thread raises, from a path and from a pyfaidx.Fasta object.
+	genome = _fasta_genome()
+	genome['chr2'] = genome['chr2'][:30] + 'Z' + genome['chr2'][31:]
+	genome['chrLast'] = genome['chrLast'][:400] + 'Z' + genome['chrLast'][401:]
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+	loci = _every_window(genome, 7)
+
+	with pytest.raises(ValueError) as info1:
+		extract_loci(loci, path, in_window=7, n_jobs=1)
+
+	with pytest.raises(ValueError) as info:
+		extract_loci(loci, path, in_window=7, n_jobs=n_jobs)
+
+	assert "Encountered character" in str(info.value)
+	assert str(info.value) == str(info1.value)
+	_same_as_pyfaidx_object(loci, path, in_window=7, n_jobs=n_jobs)
+
+
+@pytest.mark.parametrize("line", [180, 3])
+def test_extract_loci_n_jobs_read_through_pyfaidx(tmp_path, line):
+	# A byte that pyfaidx removes, in a late or an early block of rows, sends
+	# every window to pyfaidx, so the result is the one pyfaidx gives.
+	lines = [b"ACGTAC"] * 200
+	lines[line] = b"AC\rTAC"
+	path = str(tmp_path / "genome.fa")
+	with open(path, "wb") as handle:
+		handle.write(b">chr1\n" + b"\n".join(lines) + b"\n")
+
+	with open(path + ".fai", "w") as handle:
+		handle.write("chr1\t1200\t6\t6\t7\n")
+
+	loci = pandas.DataFrame([('chr1', mid, mid + 1) for mid in range(2, 1198)])
+	_same_as_pyfaidx_object(loci, path, in_window=5, n_jobs=4)
+
+
+def test_extract_loci_n_jobs_restores_numba_threads(tmp_path):
+	# numba's thread count is the caller's after a call, and after a call
+	# that raises inside the threaded encoding.
+	genome = _fasta_genome()
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+	loci = _every_window(genome, 7)
+
+	genome['chr2'] = genome['chr2'][:30] + 'Z' + genome['chr2'][31:]
+	path_z = str(tmp_path / "genome_z.fa")
+	_write_fasta(path_z, genome, 11)
+
+	previous = numba.get_num_threads()
+	threads = min(3, numba.config.NUMBA_NUM_THREADS)
+	numba.set_num_threads(threads)
+	try:
+		extract_loci(loci, path, in_window=7, n_jobs=2)
+		assert numba.get_num_threads() == threads
+
+		fasta = pyfaidx.Fasta(path)
+		extract_loci(loci, fasta, in_window=7, n_jobs=2)
+		fasta.close()
+		assert numba.get_num_threads() == threads
+
+		with pytest.raises(ValueError, match="Encountered character"):
+			extract_loci(loci, path_z, in_window=7, n_jobs=2)
+		assert numba.get_num_threads() == threads
+	finally:
+		numba.set_num_threads(previous)
+
+
+def test_cpu_count(monkeypatch):
+	# The CPUs this process may run on, or every CPU where the platform does
+	# not say which those are.
+	if hasattr(os, 'sched_getaffinity'):
+		assert tangermeme.io._cpu_count() == len(os.sched_getaffinity(0))
+		monkeypatch.delattr(os, 'sched_getaffinity')
+
+	assert tangermeme.io._cpu_count() == (os.cpu_count() or 1)
+
+
+@pytest.mark.parametrize("kwargs", [
+	dict(),
+	dict(signals=["tests/data/test.bw"], in_signals=["tests/data/test.bw"]),
+	dict(signals=["tests/data/test.bw"], min_counts=0),
+	dict(fasta_object=True),
+	dict(n_jobs=-1),
+], ids=["no_signals", "signals", "count_filter", "fasta_object", "all_cpus"])
+def test_extract_loci_n_jobs_reaches_encoder(monkeypatch, kwargs):
+	# n_jobs reaches the encoder with or without signals and a count filter,
+	# and from a pyfaidx.Fasta object, and -1 is the number of CPUs this
+	# process may run on.
+	encoder = tangermeme.utils._one_hot_encode_fasta
+	calls = []
+
+	def recording_encoder(*args, n_jobs=1):
+		calls.append(n_jobs)
+		return encoder(*args, n_jobs=n_jobs)
+
+	monkeypatch.setattr(tangermeme.io, "_one_hot_encode_fasta",
+		recording_encoder)
+	monkeypatch.setattr(tangermeme.utils, "_one_hot_encode_fasta",
+		recording_encoder)
+
+	kwargs = dict(kwargs)
+	sequences = "tests/data/test.fa"
+	if kwargs.pop("fasta_object", False):
+		sequences = pyfaidx.Fasta(sequences)
+
+	n_jobs = kwargs.pop("n_jobs", 3)
+	loci = pandas.concat([pandas.read_csv("tests/data/test.bed", sep="\t",
+		header=None)] * 40)
+	X1 = extract_loci(loci, sequences, in_window=10, out_window=6, n_jobs=1,
+		**kwargs)
+	X = extract_loci(loci, sequences, in_window=10, out_window=6,
+		n_jobs=n_jobs, **kwargs)
+
+	if isinstance(sequences, pyfaidx.Fasta):
+		sequences.close()
+
+	cpus = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') \
+		else os.cpu_count()
+	assert calls == [1, cpus if n_jobs == -1 else n_jobs]
+	for x, x1 in zip(X, X1):
+		assert torch.equal(x, x1)
+
+
+###
+# The threaded unmap (_close_map)
+###
+
+
+_linux_only = pytest.mark.skipif(not pathlib.Path("/proc/self/maps").exists()
+	or tangermeme.io._madvise() is None, reason="needs Linux madvise and "
+	"/proc/self/maps")
+
+
+class _RecordingPool(tangermeme.io.ThreadPoolExecutor):
+	"""A ThreadPoolExecutor that records how many workers each pool has."""
+
+	sizes = []
+
+	def __init__(self, max_workers=None, *args, **kwargs):
+		_RecordingPool.sizes.append(max_workers)
+		super().__init__(max_workers, *args, **kwargs)
+
+
+def _recording_madvise(monkeypatch, fail=None):
+	# Record every madvise call, made through the real function unless
+	# `fail` is an exception to raise instead.
+	madvise = tangermeme.io._madvise()
+	calls = []
+
+	def recording(address, length, advice):
+		calls.append((address, length, advice))
+		if fail is not None:
+			raise fail
+
+		return madvise(address, length, advice)
+
+	monkeypatch.setattr(tangermeme.io, "_madvise", lambda: recording)
+	return calls
+
+
+def _unmap_genome(tmp_path, name, bad=False):
+	# About 31 KB, so that the map spans several pages and is split into
+	# several chunks, and one window in five, which still covers every base.
+	genome = {'chr1': 'ACGTNacgtnACGT' * 1500, 'chr2': 'TTGCA' * 1500}
+	if bad:
+		genome['chr2'] = genome['chr2'][:300] + 'Z' + genome['chr2'][301:]
+
+	path = str(tmp_path / name)
+	_write_fasta(path, genome, 11)
+	return genome, path, _every_window(genome, 9).iloc[::5]
+
+
+@_linux_only
+@pytest.mark.parametrize("n_jobs", [2, 8])
+def test_extract_loci_unmap_threads(tmp_path, monkeypatch, n_jobs):
+	# A map read by at least _UNMAP_MIN_WINDOWS windows has its pages dropped
+	# with madvise(MADV_DONTNEED) in page-aligned chunks that cover the whole
+	# file, on up to n_jobs threads, before it is closed. The output is the
+	# one n_jobs=1 gives, and the file is unmapped on return.
+	import mmap
+	import threading
+
+	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise.fa")
+	X1 = extract_loci(loci, path, in_window=9, n_jobs=1)
+
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", 1)
+	monkeypatch.setattr(tangermeme.io, "ThreadPoolExecutor", _RecordingPool)
+	monkeypatch.setattr(_RecordingPool, "sizes", [])
+	calls = _recording_madvise(monkeypatch)
+	n_threads = threading.active_count()
+
+	X = extract_loci(loci, path, in_window=9, n_jobs=n_jobs)
+	assert torch.equal(X, X1)
+	assert torch.equal(X, _encode_windows(genome, loci, 9))
+	assert "genome_madvise.fa" not in _mapped_paths()
+	assert threading.active_count() == n_threads
+
+	size = pathlib.Path(path).stat().st_size
+	calls = sorted(calls)
+	assert len(calls) > 0
+	assert all(advice == mmap.MADV_DONTNEED for _, _, advice in calls)
+	assert all((a - calls[0][0]) % mmap.PAGESIZE == 0 for a, _, _ in calls)
+	assert all(a + n == b for (a, n, _), (b, _, _) in zip(calls, calls[1:]))
+	assert calls[-1][0] + calls[-1][1] - calls[0][0] == size
+	assert _RecordingPool.sizes == [min(n_jobs, len(calls))]
+
+
+@_linux_only
+def test_extract_loci_unmap_threads_on_error(tmp_path, monkeypatch):
+	# The pages are dropped and the map closed when the encoder finds a
+	# character that is in neither the alphabet nor `ignore`, and the error
+	# is the one n_jobs=1 raises.
+	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise_bad.fa",
+		bad=True)
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, path, in_window=9, n_jobs=1)
+
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", 1)
+	calls = _recording_madvise(monkeypatch)
+
+	with pytest.raises(ValueError, match="Encountered character"):
+		extract_loci(loci, path, in_window=9, n_jobs=4)
+
+	assert len(calls) > 0
+	assert "genome_madvise_bad.fa" not in _mapped_paths()
+
+
+@_linux_only
+@pytest.mark.parametrize("fail", [OSError(12, "no memory"),
+	RuntimeError("can't start new thread")])
+def test_extract_loci_unmap_madvise_raises(tmp_path, monkeypatch, fail):
+	# madvise only speeds up the close, so when it raises the map is still
+	# closed and the output is unchanged.
+	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise_raises.fa")
+	X1 = extract_loci(loci, path, in_window=9, n_jobs=1)
+
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", 1)
+	calls = _recording_madvise(monkeypatch, fail=fail)
+
+	X = extract_loci(loci, path, in_window=9, n_jobs=4)
+	assert len(calls) > 0
+	assert torch.equal(X, X1)
+	assert "genome_madvise_raises.fa" not in _mapped_paths()
+
+
+@_linux_only
+@pytest.mark.parametrize("n_jobs, n_min", [(1, 1), (8, 10**9)])
+def test_extract_loci_unmap_without_threads(tmp_path, monkeypatch, n_jobs,
+	n_min):
+	# With one thread, or fewer windows than _UNMAP_MIN_WINDOWS, the map is
+	# closed directly.
+	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise_direct.fa")
+
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", n_min)
+	calls = _recording_madvise(monkeypatch)
+
+	X = extract_loci(loci, path, in_window=9, n_jobs=n_jobs)
+	assert calls == []
+	assert torch.equal(X, _encode_windows(genome, loci, 9))
+	assert "genome_madvise_direct.fa" not in _mapped_paths()
+
+
+@_linux_only
+def test_madvise_dontneed_keeps_file_contents(tmp_path):
+	# MADV_DONTNEED on a read-only shared map of a file drops its pages, and
+	# reading the map again reads the file's bytes, which are unchanged.
+	import mmap
+
+	path = tmp_path / "pages.bin"
+	data = numpy.random.default_rng(0).integers(0, 256, size=5 * mmap.PAGESIZE
+		+ 17, dtype=numpy.uint8).tobytes()
+	path.write_bytes(data)
+
+	madvise = tangermeme.io._madvise()
+	with open(path, 'rb') as handle:
+		fasta_map = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
+		view = numpy.frombuffer(fasta_map, dtype=numpy.uint8)
+		assert view.tobytes() == data
+
+		assert madvise(view.ctypes.data, len(fasta_map),
+			mmap.MADV_DONTNEED) == 0
+		assert view.tobytes() == data
+
+		del view
+		fasta_map.close()
+
+	assert path.read_bytes() == data
+
+
+@pytest.mark.parametrize("cause", ["not_linux", "no_libc_madvise"])
+def test_madvise_unavailable(tmp_path, monkeypatch, cause):
+	# On another platform, or when libc's madvise cannot be loaded, there is
+	# no madvise, and the map is closed directly with the same output.
+	monkeypatch.setattr(tangermeme.io, "_MADVISE", None)
+	with monkeypatch.context() as patch:
+		if cause == "not_linux":
+			patch.setattr(tangermeme.io.sys, "platform", "darwin")
+		else:
+			def no_libc(*args, **kwargs):
+				raise OSError("no libc")
+
+			patch.setattr(tangermeme.io.ctypes, "CDLL", no_libc)
+
+		assert tangermeme.io._madvise() is None
+
+	# The result is kept, so madvise is not looked up again.
+	assert tangermeme.io._madvise() is None
+
+	genome, path, loci = _unmap_genome(tmp_path, "genome_no_madvise.fa")
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", 1)
+	X = extract_loci(loci, path, in_window=9, n_jobs=4)
+	assert torch.equal(X, _encode_windows(genome, loci, 9))
+	if pathlib.Path("/proc/self/maps").exists():
+		assert "genome_no_madvise.fa" not in _mapped_paths()
+
+
+###
+# The threaded nan_to_num (_nan_to_num_rows)
+###
+
+
+def _non_finite_rows(n, width):
+	# Rows of finite values with NaN of both signs and several payloads,
+	# both infinities and -0.0 scattered through them.
+	rng = numpy.random.default_rng(0)
+	values = rng.normal(size=(n, 2, width)).astype(numpy.float32)
+	bits = values.view(numpy.uint32)
+	flat, flat_bits = values.reshape(-1), bits.reshape(-1)
+	idxs = rng.choice(flat.size, size=flat.size // 5, replace=False)
+	for k, idx in enumerate(idxs):
+		kind = k % 6
+		if kind == 0:
+			flat[idx] = numpy.nan
+		elif kind == 1:
+			flat_bits[idx] = 0xFFC00000
+		elif kind == 2:
+			flat_bits[idx] = 0x7F800001 + k
+		elif kind == 3:
+			flat[idx] = numpy.inf
+		elif kind == 4:
+			flat[idx] = -numpy.inf
+		else:
+			flat[idx] = -0.0
+
+	# The first rows are all finite, so that some blocks are skipped.
+	values[:3] = 1.5
+	return values
+
+
+@pytest.mark.parametrize("n_jobs", [1, 3])
+@pytest.mark.parametrize("block_size", [1, 2**20])
+def test_nan_to_num_rows_threads_match_numpy(monkeypatch, n_jobs, block_size):
+	# Every block is replaced as numpy.nan_to_num replaces it, bit for bit,
+	# on any number of threads: NaN of any sign or payload becomes +0.0, an
+	# infinity the largest finite float32 of its sign, and -0.0 is kept.
+	monkeypatch.setattr(tangermeme.io, "_NAN_TO_NUM_MIN_BLOCKS", 1)
+	monkeypatch.setattr(tangermeme.io, "ThreadPoolExecutor", _RecordingPool)
+	monkeypatch.setattr(_RecordingPool, "sizes", [])
+
+	values = _non_finite_rows(23, 5)
+	expected = numpy.nan_to_num(values.copy())
+	out = tangermeme.io._nan_to_num_rows(values, block_size=block_size,
+		n_jobs=n_jobs)
+
+	assert out is values
+	assert values.tobytes() == expected.tobytes()
+	assert numpy.isfinite(values).all()
+
+	n_blocks = len(range(0, 23, max(1, block_size // 10)))
+	if n_jobs == 1:
+		assert _RecordingPool.sizes == []
+	else:
+		assert _RecordingPool.sizes == [min(n_jobs, n_blocks)]
+
+
+def test_nan_to_num_rows_few_blocks_are_serial(monkeypatch):
+	# Fewer blocks than _NAN_TO_NUM_MIN_BLOCKS are checked without threads.
+	monkeypatch.setattr(tangermeme.io, "ThreadPoolExecutor", _RecordingPool)
+	monkeypatch.setattr(_RecordingPool, "sizes", [])
+
+	n_min = tangermeme.io._NAN_TO_NUM_MIN_BLOCKS
+	for n_blocks, sizes in [(n_min - 1, []), (n_min, [8])]:
+		_RecordingPool.sizes = []
+		values = _non_finite_rows(n_blocks, 5)
+		expected = numpy.nan_to_num(values.copy())
+		tangermeme.io._nan_to_num_rows(values, block_size=10, n_jobs=8)
+		assert values.tobytes() == expected.tobytes()
+		assert _RecordingPool.sizes == sizes
+
+
+def test_nan_to_num_rows_empty():
+	# No rows, and rows of no values, are returned as they are.
+	for shape in [(0, 2, 5), (3, 2, 0)]:
+		values = numpy.zeros(shape, dtype=numpy.float32)
+		assert tangermeme.io._nan_to_num_rows(values, n_jobs=4) is values
+
+
+@pytest.mark.parametrize("n_jobs", [2, -1])
+def test_extract_loci_nan_and_inf_threads(tmp_path, monkeypatch, n_jobs):
+	# extract_loci passes n_jobs, with -1 as the number of CPUs, to
+	# _nan_to_num_rows for signals and in_signals, and the threaded
+	# replacement, in blocks of one row each, gives the bytes that one thread
+	# gives. chr1 is 50 bp in the bigWig but 284 bp in test.fa, so positions
+	# past base 50 are read as NaN.
+	path = str(tmp_path / "inf.bw")
+	write_raw_bigwig(path, {'chr1': 50, 'chr2': 211}, [('chr1', 1, 0, 0,
+		[(0, 10, 1.0), (10, 12, numpy.inf), (12, 14, -numpy.inf),
+		(14, 50, 2.0)]), ('chr2', 1, 0, 0, [(0, 211, 0.5)])])
+
+	nan_to_num_rows = tangermeme.io._nan_to_num_rows
+	calls = []
+
+	def one_row_blocks(values, n_jobs=1):
+		calls.append(n_jobs)
+		return nan_to_num_rows(values, block_size=1, n_jobs=n_jobs)
+
+	monkeypatch.setattr(tangermeme.io, "_NAN_TO_NUM_MIN_BLOCKS", 1)
+	monkeypatch.setattr(tangermeme.io, "_nan_to_num_rows", one_row_blocks)
+
+	loci = pandas.DataFrame({0: ['chr1'] * 4, 1: [7, 43, 20, 45],
+		2: [17, 53, 30, 55]})
+	X1, y1, y_in1 = extract_loci(loci, "tests/data/test.fa", [path], [path],
+		in_window=6, out_window=10, n_jobs=1)
+	X, y, y_in = extract_loci(loci, "tests/data/test.fa", [path], [path],
+		in_window=6, out_window=10, n_jobs=n_jobs)
+
+	cpus = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') \
+		else os.cpu_count()
+	threads = cpus if n_jobs == -1 else n_jobs
+	assert calls == [1, 1, threads, threads]
+	assert torch.equal(X, X1)
+	assert y.numpy().tobytes() == y1.numpy().tobytes()
+	assert y_in.numpy().tobytes() == y_in1.numpy().tobytes()
+
+	big = numpy.finfo(numpy.float32).max
+	assert_array_almost_equal(y[:2, 0], [[1, 1, 1, big, big, -big, -big, 2, 2,
+		2], [2, 2, 2, 2, 2, 2, 2, 0, 0, 0]])
+	assert numpy.isfinite(y.numpy()).all()
+	assert numpy.isfinite(y_in.numpy()).all()

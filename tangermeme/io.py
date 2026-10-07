@@ -6,7 +6,12 @@ from __future__ import annotations
 
 import os
 import csv
+import sys
+import mmap
+import ctypes
 import warnings
+
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy
 import torch
@@ -17,7 +22,10 @@ import pyfaidx
 
 from tqdm import tqdm
 
-from .utils import one_hot_encode
+from .utils import one_hot_encode  # noqa: F401, importable from here
+from .utils import _one_hot_encode_rows
+from .utils import _one_hot_rows_mapping
+from .utils import _one_hot_encode_fasta
 from .utils import characters
 from .utils import TangermemeWarning
 
@@ -203,6 +211,107 @@ def _interleave_loci(loci, chroms=None, summits=False):
 	return loci
 
 
+def _kept_loci(loci, chrom_lengths, exclusion_zones, left, right):
+	"""An internal function for finding the loci whose windows can be read.
+
+	A locus is kept when the union of its windows, `[mid - left, mid +
+	right)` around its middle `mid = start + (end - start) // 2`, fits on its
+	chromosome and does not overlap an excluded 100 bp chunk. Integer
+	coordinates are checked together as int64, which gives the values that
+	Python ints do while every coordinate and window is far inside its
+	range. Other coordinates, such as floats, are checked one locus at a time
+	with Python arithmetic, so that they raise or pass as they did before.
+
+
+	Parameters
+	----------
+	loci: pandas.DataFrame
+		The loci, with columns `chrom`, `start` and `end`, on chromosomes
+		that are all keys of `chrom_lengths`.
+
+	chrom_lengths: dict
+		The length of each chromosome.
+
+	exclusion_zones: dict or None
+		A boolean array per chromosome of the 100 bp chunks that are
+		excluded, as returned by `_load_exclusion_zones`, or None.
+
+	left: int
+		The number of bases the windows reach left of the middle.
+
+	right: int
+		The number of bases the windows reach right of the middle.
+
+
+	Returns
+	-------
+	idxs: numpy.ndarray, dtype=int64, shape=(n,)
+		The position in `loci` of each kept locus.
+
+	mids: numpy.ndarray, shape=(n,)
+		The middle of each kept locus, as int64 for integer coordinates.
+	"""
+
+	starts, ends = loci['start'].to_numpy(), loci['end'].to_numpy()
+	bound = 2 ** 40
+
+	if (starts.dtype.kind in 'iu' and ends.dtype.kind in 'iu' and
+			0 <= left + right and max(abs(left), abs(right)) < bound and
+			all(-bound < int(x.min(initial=0)) and int(x.max(initial=0)) < bound
+				for x in (starts, ends))):
+		starts, ends = starts.astype(numpy.int64), ends.astype(numpy.int64)
+		mids = starts + (ends - starts) // 2
+
+		codes, names = pandas.factorize(loci['chrom'])
+		lengths = numpy.array([chrom_lengths[name] for name in names],
+			dtype=numpy.int64)[codes]
+
+		# Does it fall off the end of a chromosome?
+		keep = (mids - left >= 0) & (mids + right <= lengths)
+
+		# Does it overlap an excluded chunk? The chunks of every chromosome are
+		# placed end to end, so that one sorted array holds every excluded
+		# chunk, and the chunks [s, e) of a window hold one when fewer excluded
+		# chunks come before s than before e.
+		if exclusion_zones is not None:
+			offsets = numpy.cumsum([0] + [len(exclusion_zones[name]) for name
+				in names], dtype=numpy.int64)
+			excluded = numpy.concatenate([numpy.zeros(0, dtype=numpy.int64)] +
+				[numpy.flatnonzero(exclusion_zones[name]) + offsets[k]
+				for k, name in enumerate(names)])
+
+			idxs = numpy.flatnonzero(keep)
+			offsets = offsets[codes[idxs]]
+			s = (mids[idxs] - left) // 100 + offsets
+			e = (mids[idxs] + right - 1) // 100 + 1 + offsets
+			keep[idxs[numpy.searchsorted(excluded, s) <
+				numpy.searchsorted(excluded, e)]] = False
+
+		idxs = numpy.flatnonzero(keep)
+		return idxs, mids[idxs]
+
+	idxs, mids = [], []
+	for i, (chrom, start, end) in enumerate(loci.values):
+		mid = start + (end - start) // 2
+
+		start = mid - left
+		end = mid + right
+
+		# Does it fall off the end of a chromosome?
+		if start < 0 or end > chrom_lengths[str(chrom)]:
+			continue
+
+		if exclusion_zones is not None:
+			s, e = start // 100, (end - 1) // 100 + 1
+			if exclusion_zones[str(chrom)][s:e].any():
+				continue
+
+		idxs.append(i)
+		mids.append(mid)
+
+	return numpy.array(idxs, dtype=numpy.int64), numpy.array(mids)
+
+
 def _load_signals(signals):
 	"""An internal function for loading signals.
 
@@ -355,6 +464,69 @@ _FIGWIG_ABSENT_CHROMS = r"\d+ windows are on chromosomes not in "
 _COUNT_VALUES = 1 << 24
 
 
+# The number of blocks below which `_nan_to_num_rows` runs in the calling
+# thread.
+_NAN_TO_NUM_MIN_BLOCKS = 16
+
+
+def _cpu_count():
+	"""The number of CPUs this process may run on, which `n_jobs=-1` uses,
+	as figwig counts them."""
+
+	if hasattr(os, 'sched_getaffinity'):
+		return len(os.sched_getaffinity(0))
+
+	return os.cpu_count() or 1
+
+
+def _nan_to_num_rows(values, block_size=2**20, n_jobs=1):
+	"""An internal function for applying numpy.nan_to_num in place.
+
+	The rows are processed in blocks of about `block_size` elements, so the
+	masks that numpy.nan_to_num makes stay small, and a block whose values are
+	all finite is skipped because numpy.nan_to_num would leave it unchanged.
+	The blocks do not overlap and numpy releases the GIL while it checks and
+	replaces them, so they are processed on up to `n_jobs` threads when there
+	are at least _NAN_TO_NUM_MIN_BLOCKS, with the same result.
+
+
+	Parameters
+	----------
+	values: numpy.ndarray, shape=(n, ...)
+		The float32 array to modify in place.
+
+	block_size: int, optional
+		The approximate number of elements in each block. Default is 2**20.
+
+	n_jobs: int, optional
+		The largest number of threads to use. Default is 1.
+
+
+	Returns
+	-------
+	values: numpy.ndarray, shape=(n, ...)
+		The same array, with NaN replaced by zero and infinities by the
+		largest finite float32 of the same sign.
+	"""
+
+	step = max(1, block_size // max(1, values[:1].size))
+	blocks = range(0, len(values), step)
+
+	def nan_to_num_block(i):
+		block = values[i:i+step]
+		if not numpy.isfinite(block).all():
+			numpy.nan_to_num(block, copy=False)
+
+	if n_jobs > 1 and len(blocks) >= _NAN_TO_NUM_MIN_BLOCKS:
+		with ThreadPoolExecutor(min(n_jobs, len(blocks))) as pool:
+			list(pool.map(nan_to_num_block, blocks))
+	else:
+		for i in blocks:
+			nan_to_num_block(i)
+
+	return values
+
+
 def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 	"""An internal function for extracting signal from many loci.
 
@@ -409,7 +581,8 @@ def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 			figwig_values = figwig.read_bigwig([signals[j] for j in readers],
 				chroms, starts, width, n_jobs=n_jobs)
 
-		numpy.nan_to_num(figwig_values, copy=False)
+		_nan_to_num_rows(figwig_values, n_jobs=_cpu_count() if n_jobs == -1
+			else int(n_jobs))
 
 	if len(readers) == len(signals):
 		values = figwig_values
@@ -433,6 +606,231 @@ def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 				others], str(chrom), start, start + width)
 
 	return values
+
+
+# A memory map read by at least this many windows has its page table entries
+# dropped on up to n_jobs threads before it is closed. Closing drops them on
+# the calling thread alone, which took 34-45 ms for the 1.8 GB of hg38 pages
+# that the 167,750 windows of the main benchmark map.
+_UNMAP_MIN_WINDOWS = 2048
+
+# The map is split into this many chunks per thread, since the pages that
+# were read are not spread evenly over the file.
+_UNMAP_CHUNKS_PER_JOB = 8
+
+_MADVISE = None
+
+
+def _madvise():
+	"""libc's madvise, called through ctypes, or None when it is not used.
+
+	ctypes releases the GIL during the call, whereas mmap.mmap.madvise holds
+	it, so calls from several threads would run one at a time. It is only used
+	on Linux, where MADV_DONTNEED on a shared file mapping drops the page table
+	entries of the range and leaves the file and the pages it holds as they
+	are.
+	"""
+
+	global _MADVISE
+	if _MADVISE is None:
+		_MADVISE = False
+		if sys.platform.startswith('linux') and hasattr(mmap, 'MADV_DONTNEED'):
+			try:
+				madvise = ctypes.CDLL(None, use_errno=True).madvise
+				madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t,
+					ctypes.c_int]
+				madvise.restype = ctypes.c_int
+				_MADVISE = madvise
+			except (OSError, AttributeError):
+				pass
+
+	return _MADVISE or None
+
+
+def _close_map(fasta_map, address, n_windows, n_jobs=1):
+	"""Close a read-only memory map of a file.
+
+	Closing unmaps the map, and the kernel drops the page table entry of
+	every page that was read, on the calling thread. When the map was read by
+	at least _UNMAP_MIN_WINDOWS windows and n_jobs is above 1, those entries
+	are first dropped with madvise(MADV_DONTNEED) on chunks of the map, on up
+	to n_jobs threads, so that the close has almost nothing left to do. The
+	file is not changed. The map is closed in every case, including when
+	madvise fails or raises.
+
+
+	Parameters
+	----------
+	fasta_map: mmap.mmap
+		The map, opened with access=mmap.ACCESS_READ. Nothing may still hold
+		a buffer of it.
+
+	address: int or None
+		The address of the first byte of the map, or None to close it
+		directly.
+
+	n_windows: int
+		The number of windows read from the map.
+
+	n_jobs: int, optional
+		The largest number of threads to use. Default is 1.
+	"""
+
+	try:
+		madvise = _madvise()
+		if (madvise is not None and address is not None and n_jobs > 1 and
+				n_windows >= _UNMAP_MIN_WINDOWS):
+			size, page = len(fasta_map), mmap.PAGESIZE
+			n_chunks = n_jobs * _UNMAP_CHUNKS_PER_JOB
+			step = -(-size // (n_chunks * page)) * page
+			chunks = [(address + s, min(step, size - s)) for s in range(0,
+				size, step)]
+
+			def drop(chunk):
+				madvise(chunk[0], chunk[1], mmap.MADV_DONTNEED)
+
+			try:
+				with ThreadPoolExecutor(min(n_jobs, len(chunks))) as pool:
+					list(pool.map(drop, chunks))
+			except (OSError, RuntimeError):
+				pass
+	finally:
+		fasta_map.close()
+
+
+def _read_pyfaidx_windows(fasta, windows, alphabet, ignore, n_jobs=1):
+	"""One-hot encode windows read one at a time through pyfaidx.
+
+	`windows` yields a (chrom, start, end) triple for each window. The
+	windows are read and then encoded together by `_one_hot_encode_rows`.
+	When a read raises, the windows read before it are first encoded one at
+	a time, so that the error raised is the one that reading and encoding
+	each window in turn gives: an error from encoding an earlier window,
+	otherwise the read's own error.
+	"""
+
+	seqs, error = [], None
+	try:
+		for chrom, start, end in windows:
+			# A Fasta opened with as_raw=True returns strings rather than
+			# pyfaidx.Sequence objects.
+			seq = fasta[chrom][start:end]
+			if not isinstance(seq, str):
+				seq = seq.seq
+
+			seqs.append(seq)
+	except Exception as e:
+		error = e
+
+	if error is not None:
+		for seq in seqs:
+			one_hot_encode(seq.upper(), alphabet=alphabet, ignore=ignore)
+
+		raise error
+
+	return _one_hot_encode_rows(seqs, alphabet=alphabet, ignore=ignore,
+		n_jobs=n_jobs)
+
+
+def _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
+	names=None, n_jobs=1):
+	"""Encode fasta windows from a memory map of the file, or return None.
+
+	Each window's bytes are gathered through the .fai index that pyfaidx
+	read, skipping the line ends, and encoded straight into the output, on
+	at most `n_jobs` threads, which does not change the result. None
+	is returned, and the caller reads the windows through pyfaidx, when the
+	alphabet is not ASCII, the file is compressed or cannot be mapped, the
+	index describes lines that the file does not have, or a window holds a
+	byte that pyfaidx would remove or decode, so that the result is always
+	the one pyfaidx gives. It is also returned when a character is in both
+	`alphabet` and `ignore`, so that the error is raised where reading the
+	windows with pyfaidx raises it. `windows` is as in _read_fasta_windows.
+	"""
+
+	if any(char in alphabet for char in ignore):
+		return None
+
+	table = _one_hot_rows_mapping(alphabet, ignore)
+	faidx = fasta.faidx
+	if table is None or length <= 0 or faidx._bgzf:
+		return None
+
+	mapping, n_characters = table
+	mapping = mapping.copy()
+	mapping[[ord('\n'), ord('\r')]] = -3
+	mapping[128:] = -3
+
+	if names is None:
+		chroms, starts = zip(*windows)
+		codes, names = pandas.factorize(numpy.array(chroms, dtype=object))
+	else:
+		codes, starts = windows
+
+	records = [faidx.index[name] for name in names]
+
+	starts = numpy.array(starts, dtype=numpy.int64)
+	offsets = numpy.array([r.offset for r in records], dtype=numpy.int64)[codes]
+	line_bases = numpy.array([r.lenc for r in records], dtype=numpy.int64)[codes]
+	line_bytes = numpy.array([r.lenb for r in records], dtype=numpy.int64)[codes]
+
+	if (starts < 0).any() or (offsets < 0).any() or (line_bases < 1).any() or \
+			(line_bytes < line_bases).any():
+		return None
+
+	try:
+		fasta_map = mmap.mmap(faidx.file.fileno(), 0, access=mmap.ACCESS_READ)
+	except (AttributeError, OSError, ValueError):
+		return None
+
+	X = numpy.empty((len(starts), n_characters, length), dtype=numpy.int8)
+	address = None
+	try:
+		data = numpy.frombuffer(fasta_map, dtype=numpy.uint8)
+		try:
+			address = data.ctypes.data
+			status = _one_hot_encode_fasta(X, data, starts, offsets,
+				line_bases, line_bytes, mapping, n_jobs=n_jobs)
+		finally:
+			del data
+	finally:
+		_close_map(fasta_map, address, len(starts), n_jobs=n_jobs)
+
+	if status == -2:
+		return None
+
+	if status >= 0:
+		raise ValueError("Encountered character that is not in " +
+			"`alphabet` or in `ignore`.")
+
+	return X
+
+
+def _read_fasta_windows(fasta, windows, length, alphabet, ignore,
+	names=None, n_jobs=1):
+	"""One-hot encode windows of a pyfaidx.Fasta opened from a path.
+
+	`windows` holds a (chrom, start) pair for each window, each covering
+	`length` bases inside its record. When `names` is given, it is instead a
+	pair of int64 arrays: the index of each window's chromosome into `names`,
+	and each window's start. The result is identical to reading each window
+	with pyfaidx, as `_read_pyfaidx_windows` does, including its errors,
+	which is what is done when the windows cannot be read from a memory map
+	of the file. The windows are encoded on at most `n_jobs` threads.
+	"""
+
+	X = _read_fasta_windows_mmap(fasta, windows, length, alphabet, ignore,
+		names=names, n_jobs=n_jobs)
+	if X is None:
+		if names is not None:
+			codes, starts = windows
+			windows = zip(numpy.array(names, dtype=object)[codes].tolist(),
+				starts.tolist())
+
+		X = _read_pyfaidx_windows(fasta, ((chrom, start, start + length)
+			for chrom, start in windows), alphabet, ignore, n_jobs=n_jobs)
+
+	return X
 
 
 def extract_loci(
@@ -533,9 +931,14 @@ def extract_loci(
 		the values are one-hot encoded sequences of shape (len(alphabet),
 		chromosome length) as numpy arrays, memory maps, or torch tensors. A
 		fasta file opened from a path is closed before returning; a
-		pyfaidx.Fasta object is left open. The keys of a dictionary are
-		coerced to strings, and the returned sequences have the dtype of its
-		values.
+		pyfaidx.Fasta object is left open. The windows of a fasta file given
+		as a path are read from a memory map of the file, using the .fai index
+		that pyfaidx reads or builds. They are read through pyfaidx instead,
+		with the same result, when they cannot be read from the map, such as
+		for a compressed file, a non-ASCII alphabet, or a window holding a
+		byte that pyfaidx would change, like a carriage return inside a line.
+		The keys of a dictionary are coerced to strings, and the
+		returned sequences have the dtype of its values.
 
 	signals: list or None, optional
 		A list whose elements are each a path to a bigwig file, a bigwig file
@@ -636,12 +1039,15 @@ def extract_loci(
 
 	verbose: bool, optional
 		Whether to display a progress bar while loading the sequences of the
-		kept loci. Default is False.
+		kept loci. The windows of a fasta file given as a path are read
+		together, so its bar fills in one step. Default is False.
 
 	n_jobs: int, optional
 		The number of threads that figwig reads the bigwig files given as
-		paths with, or -1 for one per CPU. The returned values do not depend
-		on it. Default is 8.
+		paths with, and that the sequences of a fasta file are read and
+		one-hot encoded with, or -1 for one per CPU. The encoding threads are
+		also capped by numba's NUMBA_NUM_THREADS. The returned values do not
+		depend on it. Default is 8.
 
 
 	Returns
@@ -753,29 +1159,7 @@ def extract_loci(
 	left = max(in_width, out_width) + max_jitter
 	right = max(in_width + in_window % 2, out_width + out_extra) + max_jitter
 
-	# The position in `loci` of each locus whose windows fit on its
-	# chromosome and miss the exclusion zones, and the middle of the locus.
-	idxs, mids = [], []
-	for i, (chrom, start, end) in enumerate(loci.values):
-		mid = start + (end - start) // 2
-
-		start = mid - left
-		end = mid + right
-
-		# Does it fall off the end of a chromosome?
-		if start < 0 or end > chrom_lengths[str(chrom)]:
-			continue
-
-		if exclusion_zones is not None:
-			s, e = start // 100, (end - 1) // 100 + 1
-			if exclusion_zones[str(chrom)][s:e].any():
-				continue
-
-		idxs.append(i)
-		mids.append(mid)
-
-	idxs = numpy.array(idxs, dtype=numpy.int64)
-	mids = numpy.array(mids)
+	idxs, mids = _kept_loci(loci, chrom_lengths, exclusion_zones, left, right)
 	loci_chroms = loci['chrom'].values[idxs].astype(str)
 
 	out_start = out_width + max_jitter
@@ -854,33 +1238,39 @@ def extract_loci(
 		in_signals_ = _extract_signals(in_signals, loci_chroms,
 			mids - in_width - max_jitter, in_window + 2 * max_jitter, n_jobs)
 
-	# Extract a window of sequence using the input size
-	seqs = []
-	for chrom, mid in tqdm(zip(loci_chroms, mids.tolist()), total=len(mids),
-			disable=d, desc=desc):
-		start = mid - in_width - max_jitter
-		end = mid + in_width + max_jitter + (in_window % 2)
-
-		if isinstance(sequences, dict):
-			seq = sequences[str(chrom)][:, start:end]
+	# Extract a window of sequence using the input size. The windows of a
+	# fasta opened from a path are read together, from a memory map of the
+	# file where they can be, and the windows of a pyfaidx.Fasta one at a
+	# time; both are one-hot encoded straight into one C-contiguous array.
+	threads = _cpu_count() if n_jobs == -1 else int(n_jobs)
+	try:
+		if opened_fasta and mids.dtype == numpy.int64:
+			codes, names = pandas.factorize(loci_chroms)
+			with tqdm(total=len(mids), disable=d, desc=desc) as progress:
+				seqs = _read_fasta_windows(sequences, (codes, mids - in_width -
+					max_jitter), in_window + 2 * max_jitter, alphabet, ignore,
+					names=[str(name) for name in names], n_jobs=threads)
+				progress.update(len(mids))
 		else:
-			# A Fasta opened with as_raw=True returns strings rather than
-			# pyfaidx.Sequence objects.
-			seq = sequences[str(chrom)][start:end]
-			if not isinstance(seq, str):
-				seq = seq.seq
+			windows = ((str(chrom), mid - in_width - max_jitter, mid + in_width
+				+ max_jitter + (in_window % 2)) for chrom, mid in tqdm(zip(
+				loci_chroms, mids.tolist()), total=len(mids), disable=d,
+				desc=desc))
 
-			seq = one_hot_encode(seq.upper(), alphabet=alphabet, ignore=ignore)
-
-		seqs.append(seq)
-
-	if opened_fasta:
-		sequences.close()
+			# numpy.stack keeps the memory layout of its inputs, so a stack of
+			# slices of Fortran-ordered arrays is not contiguous by default.
+			if isinstance(sequences, dict):
+				seqs = numpy.ascontiguousarray(numpy.stack([sequences[chrom][:,
+					start:end] for chrom, start, end in windows]))
+			else:
+				seqs = _read_pyfaidx_windows(sequences, windows, alphabet,
+					ignore, n_jobs=threads)
+	finally:
+		if opened_fasta:
+			sequences.close()
 
 	# Figure out how to format the outputs depending on the provided parameters.
-	# numpy.stack keeps the memory layout of its inputs, and one_hot_encode
-	# returns a transposed view, so the stack is not contiguous by default.
-	seqs = torch.from_numpy(numpy.ascontiguousarray(numpy.stack(seqs)))
+	seqs = torch.from_numpy(seqs)
 	y_return = [seqs]
 
 	if signals is not None:
