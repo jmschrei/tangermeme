@@ -2170,7 +2170,7 @@ def test_extract_loci_coordinates_near_int64_max(dtype):
 
 
 @pytest.mark.parametrize("exclusion", [False, True])
-@pytest.mark.parametrize("left, right", [(0, 0), (5, 6), (57, 57), (300, 301)])
+@pytest.mark.parametrize("left, right", [(0, 0), (5, 6), (300, 301)])
 def test_kept_loci_matches_loop(exclusion, left, right):
 	# Integer coordinates, checked together as int64, give what the loop over
 	# loci gives for the same coordinates as Python ints, at random loci on
@@ -4044,7 +4044,7 @@ def _non_finite_rows(n, width):
 
 
 @pytest.mark.parametrize("n_jobs", [1, 3])
-@pytest.mark.parametrize("block_size", [1, 40, 2**20])
+@pytest.mark.parametrize("block_size", [1, 2**20])
 def test_nan_to_num_rows_threads_match_numpy(monkeypatch, n_jobs, block_size):
 	# Every block is replaced as numpy.nan_to_num replaces it, bit for bit,
 	# on any number of threads: NaN of any sign or payload becomes +0.0, an

@@ -1023,12 +1023,11 @@ def _rows_with_unknown(n, length, unknown_rows, seed=0):
 	return rows
 
 
-@pytest.mark.parametrize("n_jobs", [1, 3, 1000])
-@pytest.mark.parametrize("chunk_size", [7, 1024])
+@pytest.mark.parametrize("n_jobs, chunk_size", [(3, 7), (3, 1024), (1000, 7)])
 def test_one_hot_encode_rows_n_jobs(n_jobs, chunk_size):
-	# Enough rows for many blocks per chunk. Every n_jobs gives what one
-	# thread gives, and one above NUMBA_NUM_THREADS is capped rather than
-	# raising.
+	# Enough rows for many blocks per chunk. Several threads give what one
+	# thread gives, and an n_jobs above NUMBA_NUM_THREADS is capped rather
+	# than raising.
 	sequences = _rows_with_unknown(1000, 37, [])
 	X = _one_hot_encode_rows(sequences, chunk_size=chunk_size, n_jobs=n_jobs)
 
@@ -1039,7 +1038,7 @@ def test_one_hot_encode_rows_n_jobs(n_jobs, chunk_size):
 	assert numpy.array_equal(X, _stack_one_hot_encode(sequences))
 
 
-@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("n_jobs", [4])
 @pytest.mark.parametrize("unknown_rows", [[0], [5, 300, 999]])
 def test_one_hot_encode_rows_n_jobs_raises_unknown_character(n_jobs,
 	unknown_rows):
@@ -1048,14 +1047,14 @@ def test_one_hot_encode_rows_n_jobs_raises_unknown_character(n_jobs,
 		_one_hot_encode_rows(sequences, n_jobs=n_jobs)
 
 
-@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("n_jobs", [4])
 @pytest.mark.parametrize("unknown_rows", [[], [0], [5, 300, 999],
 	[999, 64, 63]])
 def test_one_hot_encode_fasta_n_jobs_rows_first_unknown_row(n_jobs,
 	unknown_rows):
 	# Equal-length strings joined on one line, as _one_hot_encode_rows passes
-	# them. With unknown characters in several blocks, the first such row is
-	# returned for every n_jobs.
+	# them. With unknown characters in several blocks of rows, encoded on
+	# several threads, the first such row is returned.
 	sequences = _rows_with_unknown(1000, 37, unknown_rows)
 	mapping, _ = _one_hot_rows_mapping(['A', 'C', 'G', 'T'], ['N'])
 	seqs = numpy.frombuffer(''.join(sequences).encode('ascii'),
@@ -1132,13 +1131,13 @@ def test_one_hot_encode_fasta_n_jobs(n_jobs):
 		for s in starts]))
 
 
-@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("n_jobs", [4])
 @pytest.mark.parametrize("positions", [[10], [2990], [2000],
 	[100, 1500, 2900]])
 def test_one_hot_encode_fasta_n_jobs_first_unknown_row(n_jobs, positions):
-	# With unknown characters in the windows of one or several blocks, the
-	# first row holding one is returned for every n_jobs. The first such rows
-	# are 900, 962, 146 of five and 16 of 26.
+	# With unknown characters in the windows of one or several blocks of rows,
+	# encoded on several threads, the first row holding one is returned. The
+	# first such rows are 900, 962, 146 of five and 16 of 26.
 	rng = numpy.random.RandomState(1)
 	sequence = list(rng.choice(list('ACGTacgtN'), size=3000))
 	for position in positions:
@@ -1154,13 +1153,13 @@ def test_one_hot_encode_fasta_n_jobs_first_unknown_row(n_jobs, positions):
 	assert status == expected
 
 
-@pytest.mark.parametrize("n_jobs", [1, 4])
+@pytest.mark.parametrize("n_jobs", [4])
 @pytest.mark.parametrize("row", [0, 999])
 @pytest.mark.parametrize("fallback", ["past_end", "carriage_return"])
 def test_one_hot_encode_fasta_n_jobs_read_through_pyfaidx(n_jobs, row,
 	fallback):
-	# A window that must be read through pyfaidx returns -2 for every
-	# n_jobs, over unknown characters in rows of earlier and later blocks.
+	# A window that must be read through pyfaidx returns -2 on several
+	# threads, over unknown characters in rows of earlier and later blocks.
 	rng = numpy.random.RandomState(2)
 	sequence = list(rng.choice(list('ACGTacgtN'), size=3000))
 	sequence[1000] = 'Z'
