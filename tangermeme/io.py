@@ -14,7 +14,6 @@ import pandas
 
 import figwig
 import pyfaidx
-import pybigtools
 
 from tqdm import tqdm
 
@@ -173,7 +172,7 @@ def _interleave_loci(loci, chroms=None, summits=False):
 				"DataFrame, or a list/tuple of those.")
 
 		# Chromosome names must be strings so that they match the names used by
-		# pyfaidx/pybigtools. Otherwise, genomes whose chromosomes are named
+		# pyfaidx/figwig. Otherwise, genomes whose chromosomes are named
 		# "1", "2", etc. get read in as integers by pandas and fail to match.
 		df['chrom'] = df['chrom'].astype(str)
 
@@ -204,34 +203,31 @@ def _interleave_loci(loci, chroms=None, summits=False):
 	return loci
 
 
-def _load_signals(signals, use_figwig=False):
+def _load_signals(signals):
 	"""An internal function for loading signals.
 
-	The passed in signals must be a list but each element can be a string,
-	which is interpreted as the filename of a bigwig file to open, a bigwig
-	file already opened with `pybigtools.open`, which is used as is and left
-	open, or a dictionary where the keys are chromosome names and the values
-	are numpy arrays of values across the chromosome. The keys of a dictionary
-	are coerced to strings so that they match the chromosome names of the loci.
+	The passed in signals must be a list but each element can be a string or
+	os.PathLike, which is interpreted as the filename of a bigwig file to open
+	with figwig, a bigwig file already opened with `figwig.BigWigReader`,
+	which is used as is, or a dictionary where the keys are chromosome names
+	and the values are numpy arrays of values across the chromosome. The keys
+	of a dictionary are coerced to strings so that they match the chromosome
+	names of the loci. A bigwig file opened with `pybigtools.open` is used as
+	is, with a FutureWarning, until tangermeme 1.9.0.
 
 
 	Parameters
 	----------
-	signals: list of strings, pybigtools.BBIRead objects, or dicts, or None
+	signals: list of strings, figwig.BigWigReader objects, or dicts, or None
 		A list of filenames of bigwig files, opened bigwig files, or
 		dictionaries of numpy arrays.
-
-	use_figwig: bool, optional
-		Whether to open a local filename with `figwig.BigWigReader` rather
-		than pybigtools. A URL, and a file that figwig does not open, are
-		opened with pybigtools. Default is False.
 
 
 	Returns
 	-------
-	_signals: list of dicts
-		A list of either pointers to opened bigwig files or dictionaries of
-		numpy arrays.
+	_signals: list
+		A list of figwig.BigWigReader objects, bigwig files opened with
+		pybigtools, or dictionaries of numpy arrays.
 	"""
 
 	if signals is None:
@@ -245,37 +241,33 @@ def _load_signals(signals, use_figwig=False):
 	for i, signal in enumerate(signals):
 		if isinstance(signal, (str, os.PathLike)):
 			path = os.fspath(signal)
-			signal = None
+			if "://" in path:
+				raise ValueError("Signal {} is a URL, {}, but bigwig files are "
+					"read from local paths only; download it first.".format(i,
+					path))
 
-			# figwig reads local files only, and raises a ValueError for a
-			# file it does not read, such as a bigBed. pybigtools then opens
-			# the file, or raises its own error for a path that is missing.
-			if use_figwig and "://" not in path:
-				try:
-					signal = figwig.BigWigReader(path)
-				except (ValueError, OSError):
-					pass
-
-			if signal is None:
-				signal = pybigtools.open(path)
-		elif isinstance(signal, pybigtools.BBIRead):
+			signal = figwig.BigWigReader(path)
+		elif isinstance(signal, figwig.BigWigReader):
 			pass
+		elif type(signal).__module__ == "pybigtools":
+			warnings.warn("Signal {} is a bigwig opened with pybigtools, which "
+				"is deprecated and will not be accepted from tangermeme 1.9.0; "
+				"pass its path or a figwig.BigWigReader.".format(i),
+				FutureWarning, stacklevel=3)
+
+			# Reading values from a bigBed panics in pybigtools, which raises
+			# an exception that is not an Exception.
+			if getattr(signal, "is_bigbed", False):
+				raise ValueError("Signals must be bigWig files, but signal {} is "
+					"a bigBed file opened with pybigtools.".format(i))
 		elif not isinstance(signal, dict):
 			raise ValueError("Signals must either be filenames, bigWigs " +
-				"opened with pybigtools, or dictionaries.")
+				"opened with figwig.BigWigReader, or dictionaries.")
 		elif len(signal) > 0 and not isinstance(next(iter(signal.values())),
 				numpy.ndarray):
 			raise ValueError("Values in dictionaries must be numpy.ndarrays.")
 		else:
 			signal = {str(key): value for key, value in signal.items()}
-
-		# pybigtools opens bigBed files too, and reading values from one
-		# panics in Rust, which raises an exception that is not an Exception.
-		if getattr(signal, "is_bigbed", False):
-			raise ValueError("Signals must be bigWig files, but signal {} ({}) "
-				"is a bigBed file.".format(i, os.fspath(signals[i]) if
-				isinstance(signals[i], (str, os.PathLike)) else
-				"opened with pybigtools"))
 
 		_signals.append(signal)
 
@@ -291,10 +283,10 @@ def _extract_locus_signal(signals, chrom, start, end):
 
 	Parameters
 	----------
-	signals: list of pybigtools' BBIRead objects or dictionaries
-		A list of BBIRead objects (as returned by pybigtools.open()) or dictionaries where the keys are
-		chromosomes and the values are the signal at each position in the
-		chromosome.
+	signals: list of dictionaries or bigwig files opened with pybigtools
+		A list of dictionaries where the keys are chromosomes and the values
+		are the signal at each position in the chromosome, or bigwig files
+		opened with `pybigtools.open`, whose `values` method is called.
 
 	chrom: str
 		The name of the chromosome. Must be a key in the signals.
@@ -325,9 +317,9 @@ def _extract_locus_signal(signals, chrom, start, end):
 
 	values = []
 	for i, signal in enumerate(signals):
-		# A dict is zero-filled where it has no values, as pybigtools is:
-		# a missing chromosome gives zeros and a warning, and positions past
-		# the end of the array are NaN in pybigtools and so become zero.
+		# A dict is zero-filled where it has no values, as a bigwig is: a
+		# missing chromosome gives zeros and a warning, and positions past
+		# the end of the array are zero, as past the end of a chromosome.
 		if isinstance(signal, dict):
 			if chrom not in signal:
 				warnings.warn(f"{chrom} is not in the signal dictionary. "
@@ -367,18 +359,16 @@ def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 	"""An internal function for extracting signal from many loci.
 
 	The bigWigs opened with figwig are read together in one call on `n_jobs`
-	threads, and every other signal one locus at a time by
-	`_extract_locus_signal`, and the values are the same either way. A locus
-	on a chromosome that a bigWig does not have is zero and gives a
-	TangermemeWarning, as it does in `_extract_locus_signal`. If figwig raises,
-	for a file it does not read, such as one with a corrupt data block, or for
-	starts that are not integers, the figwig bigWigs are read with pybigtools
-	instead, so that the values or the error are pybigtools'.
+	threads, and dicts and bigWigs opened with pybigtools one locus at a time
+	by `_extract_locus_signal`. A locus on a chromosome that a bigWig does not
+	have is zero and gives a TangermemeWarning, as it does in
+	`_extract_locus_signal`. A file that figwig does not read, such as one
+	with a corrupt data block, raises figwig's ValueError.
 
 
 	Parameters
 	----------
-	signals: list of figwig.BigWigReader, pybigtools.BBIRead or dicts
+	signals: list of figwig.BigWigReader, pybigtools bigwigs or dicts
 		A list of signals as returned by `_load_signals`.
 
 	chroms: numpy.ndarray of str, shape=(n,)
@@ -413,18 +403,12 @@ def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 		if isinstance(signal, figwig.BigWigReader)]
 
 	if len(readers) > 0:
-		try:
-			with warnings.catch_warnings():
-				warnings.filterwarnings("ignore", message=_FIGWIG_ABSENT_CHROMS,
-					category=UserWarning)
-				figwig_values = figwig.read_bigwig([signals[j] for j in readers],
-					chroms, starts, width, n_jobs=n_jobs)
-		except (TypeError, ValueError):
-			signals = [pybigtools.open(signal.path) if j in readers else signal
-				for j, signal in enumerate(signals)]
-			readers = []
+		with warnings.catch_warnings():
+			warnings.filterwarnings("ignore", message=_FIGWIG_ABSENT_CHROMS,
+				category=UserWarning)
+			figwig_values = figwig.read_bigwig([signals[j] for j in readers],
+				chroms, starts, width, n_jobs=n_jobs)
 
-	if len(readers) > 0:
 		numpy.nan_to_num(figwig_values, copy=False)
 
 	if len(readers) == len(signals):
@@ -555,19 +539,20 @@ def extract_loci(
 
 	signals: list or None, optional
 		A list whose elements are each a path to a bigwig file, a bigwig file
-		already opened with `pybigtools.open`, which is left open, or a
-		dictionary where the keys are chromosomes and the values are numpy
-		arrays or memory maps of the signal across each chromosome. The keys of
-		a dictionary are coerced to strings. A chromosome missing from a bigwig
-		or a dictionary gives zeros and a TangermemeWarning, positions past the
-		end of the chromosome or array give zeros, NaN values become zero, and
-		infinities become the largest finite float32 of the same sign. The
-		bigwig files given as local paths are read by figwig on `n_jobs`
-		threads, in one call for the kept loci, or in groups of loci under
-		`min_counts` and `max_counts`. A URL, a file figwig does not read, and
-		a bigwig opened with pybigtools are read with pybigtools one locus at a
-		time, and the values are the same either way. If None, no signal tensor
-		is returned. Default is None.
+		already opened with `figwig.BigWigReader`, or a dictionary where the
+		keys are chromosomes and the values are numpy arrays or memory maps of
+		the signal across each chromosome. The keys of a dictionary are coerced
+		to strings. A chromosome missing from a bigwig or a dictionary gives
+		zeros and a TangermemeWarning, positions past the end of the chromosome
+		or array give zeros, NaN values become zero, and infinities become the
+		largest finite float32 of the same sign. The bigwig files are read by
+		figwig on `n_jobs` threads, in one call for the kept loci, or in groups
+		of loci under `min_counts` and `max_counts`. Only local files are read,
+		so a URL raises a ValueError, and a file figwig does not read, such as
+		a bigBed or a bigwig with unsorted or overlapping intervals, raises
+		figwig's error. A bigwig opened with `pybigtools.open` is deprecated:
+		it is read one locus at a time, with a FutureWarning, until tangermeme
+		1.9.0. If None, no signal tensor is returned. Default is None.
 
 	in_signals: list or None, optional
 		The same as `signals`, but extracted using the input window rather
@@ -708,8 +693,8 @@ def extract_loci(
 		raise ValueError("n_jobs must be at least 1, or -1 for one thread " +
 			"per CPU.")
 
-	signals = _load_signals(signals, use_figwig=True)
-	in_signals = _load_signals(in_signals, use_figwig=True)
+	signals = _load_signals(signals)
+	in_signals = _load_signals(in_signals)
 
 	if min_counts is not None or max_counts is not None:
 		if signals is None:
