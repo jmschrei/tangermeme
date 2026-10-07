@@ -3677,6 +3677,51 @@ def test_read_fasta_windows_names(alphabet):
 	fasta.close()
 
 
+@pytest.mark.parametrize("cause", ["index", "negative_start", "mmap_fails"])
+def test_read_fasta_windows_mmap_declines(tmp_path, monkeypatch, cause):
+	# The memory map is not read, and the windows go to pyfaidx, when the
+	# index gives fewer bytes than bases per line, a window starts before its
+	# record, or the file cannot be mapped. extract_loci then gives what a
+	# pyfaidx.Fasta object gives, here the error for windows of different
+	# lengths that the bad index leads pyfaidx to return.
+	genome = {'chr1': 'ACGTAC' * 4}
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 6)
+	windows = [('chr1', 0), ('chr1', 10)]
+
+	if cause == "index":
+		with open(path + ".fai", "w") as handle:
+			handle.write("chr1\t24\t6\t7\t6\n")
+	elif cause == "negative_start":
+		windows = [('chr1', -1), ('chr1', 10)]
+	else:
+		def no_map(*args, **kwargs):
+			raise OSError("cannot map")
+
+		monkeypatch.setattr(tangermeme.io.mmap, "mmap", no_map)
+
+	fasta = pyfaidx.Fasta(path)
+	assert _read_fasta_windows_mmap(fasta, windows, 4, ['A', 'C', 'G', 'T'],
+		['N']) is None
+	fasta.close()
+
+	loci = pandas.DataFrame([('chr1', mid, mid + 1) for mid in (2, 7, 12)])
+	_same_as_pyfaidx_object(loci, path, in_window=4)
+
+
+def test_extract_loci_fasta_zero_window(tmp_path):
+	# A window of no bases gives a sequence of no positions per locus, from a
+	# path, which the memory map leaves to pyfaidx, as from a pyfaidx.Fasta.
+	genome = _fasta_genome()
+	path = str(tmp_path / "genome.fa")
+	_write_fasta(path, genome, 11)
+	loci = _every_window(genome, 8).iloc[::10]
+
+	X = _same_as_pyfaidx_object(loci, path, in_window=0)
+	assert X.shape == (len(loci), 4, 0)
+	assert X.dtype == torch.int8
+
+
 ###
 # n_jobs: the sequences of a fasta file are one-hot encoded in blocks of
 # rows on numba's threads, which changes no output and no error.
@@ -3795,6 +3840,16 @@ def test_extract_loci_n_jobs_restores_numba_threads(tmp_path):
 		assert numba.get_num_threads() == threads
 	finally:
 		numba.set_num_threads(previous)
+
+
+def test_cpu_count(monkeypatch):
+	# The CPUs this process may run on, or every CPU where the platform does
+	# not say which those are.
+	if hasattr(os, 'sched_getaffinity'):
+		assert tangermeme.io._cpu_count() == len(os.sched_getaffinity(0))
+		monkeypatch.delattr(os, 'sched_getaffinity')
+
+	assert tangermeme.io._cpu_count() == (os.cpu_count() or 1)
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -4008,6 +4063,33 @@ def test_madvise_dontneed_keeps_file_contents(tmp_path):
 		fasta_map.close()
 
 	assert path.read_bytes() == data
+
+
+@pytest.mark.parametrize("cause", ["not_linux", "no_libc_madvise"])
+def test_madvise_unavailable(tmp_path, monkeypatch, cause):
+	# On another platform, or when libc's madvise cannot be loaded, there is
+	# no madvise, and the map is closed directly with the same output.
+	monkeypatch.setattr(tangermeme.io, "_MADVISE", None)
+	with monkeypatch.context() as patch:
+		if cause == "not_linux":
+			patch.setattr(tangermeme.io.sys, "platform", "darwin")
+		else:
+			def no_libc(*args, **kwargs):
+				raise OSError("no libc")
+
+			patch.setattr(tangermeme.io.ctypes, "CDLL", no_libc)
+
+		assert tangermeme.io._madvise() is None
+
+	# The result is kept, so madvise is not looked up again.
+	assert tangermeme.io._madvise() is None
+
+	genome, path, loci = _unmap_genome(tmp_path, "genome_no_madvise.fa")
+	monkeypatch.setattr(tangermeme.io, "_UNMAP_MIN_WINDOWS", 1)
+	X = extract_loci(loci, path, in_window=9, n_jobs=4)
+	assert torch.equal(X, _encode_windows(genome, loci, 9))
+	if pathlib.Path("/proc/self/maps").exists():
+		assert "genome_no_madvise.fa" not in _mapped_paths()
 
 
 ###

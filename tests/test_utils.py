@@ -1000,6 +1000,16 @@ def test_one_hot_encode_rows_non_ascii():
 		_one_hot_encode_rows(['ACGTé'])
 
 
+def test_one_hot_encode_rows_empty_strings():
+	# Strings of no characters give rows of no positions, as one_hot_encode
+	# does for each.
+	X = _one_hot_encode_rows(['', '', ''])
+	assert X.shape == (3, 4, 0)
+	assert X.dtype == numpy.int8
+	assert X.flags['C_CONTIGUOUS']
+	assert numpy.array_equal(X, _stack_one_hot_encode(['', '', '']))
+
+
 def test_one_hot_encode_rows_unequal_lengths():
 	# Rows of different lengths cannot be stacked, as before.
 	with pytest.raises(ValueError):
