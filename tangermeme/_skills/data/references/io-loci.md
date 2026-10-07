@@ -11,9 +11,10 @@ mistake.
 from tangermeme.io import extract_loci
 
 extract_loci(
-    loci,                 # BED/narrowPeak path, DataFrame, or list of them
+    loci,                 # BED/narrowPeak path (track, browser and # lines are
+                          # skipped), DataFrame, or list of them
     sequences,            # FASTA path, pyfaidx.Fasta, or {chrom: tensor} dict
-    signals=None,         # list of bigWig paths/objects -> OUTPUT signal tensor
+    signals=None,         # list of bigWig paths/figwig readers -> OUTPUT signal tensor
     in_signals=None,      # list of bigWig -> INPUT signal tensor (e.g. controls)
     chroms=None,
     in_window=2114,       # input window length (sequence + in_signals)
@@ -25,6 +26,7 @@ extract_loci(
     exclusion_lists=None,  # BED path, DataFrame, or list of them
     return_mask=False,
     verbose=False,
+    n_jobs=8,             # threads figwig reads bigWig paths with; -1 = every CPU
 )
 ```
 
@@ -72,6 +74,18 @@ mismatch; otherwise pass `chroms=` to keep only the chromosomes the FASTA has),
 and no loci remaining after filtering. Exclusion regions on chromosomes absent
 from the FASTA are ignored, so a genome-wide blacklist works with a partial
 FASTA.
+
+### Pass bigWigs as paths or figwig readers
+
+bigWigs given as local paths, or opened with `figwig.BigWigReader`, are read
+by figwig, all kept loci in one call on `n_jobs` threads; a dict is read one
+locus at a time. Only local files are read: a URL raises a `ValueError`, so
+download remote bigWigs first. A file figwig does not read (a bigBed, a bigWig
+with overlapping intervals or unsorted blocks) raises figwig's `ValueError`.
+A bigWig opened with `pybigtools.open` is deprecated, with a `FutureWarning`,
+and will not be accepted from tangermeme 1.9.0. Until then it is read one locus
+at a time: on 167,750 loci with hg38 and one bigWig, the call took 6.9 s with a
+pybigtools object and 3.7 s with the path, at `n_jobs=8`.
 
 ### Multiple loci files are interleaved, not concatenated
 

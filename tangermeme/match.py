@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy
 import pandas
 import pyfaidx
-import pybigtools
+import figwig
 
 from tqdm import tqdm
 from scipy.stats import ks_2samp
@@ -97,53 +97,6 @@ def _perc_generator(sequences, chars):
 	Returns a generator of these percentages."""
 	return (sum(seq.count(c) for c in chars) / len(seq) for seq in sequences)
 
-def _extract_counts(chrom, start, end, bw_stream):
-	"""Extract the signal from the pybigtools `bw_stream` in the provided locus and returns
-	the sum of the base pair values. If the signal cannot be extracted, returns nan."""
-	try:
-		value = bw_stream.values(chrom, start, end, bins=1, summary="sum", exact=True)[0]
-		return value if value is not None else 0
-	except (RuntimeError, ValueError, KeyError, IndexError):
-		return float('nan')
-
-def _count_generator(coords, bw_stream, buffer = False):
-	"""Wrapper function returning the count generator corresponding to the value of `buffer`.
-	If no signal can be extracted from a locus, nan is returned for that locus.
-	Buffer determines whether the signals should be streamed (False) or extracted as slices
-	from a buffered chromosomal signal (True)."""
-	if buffer:
-		return _count_generator_buffered(coords, bw_stream)
-	else:
-		return _count_generator_stream(coords, bw_stream)
-
-def _count_generator_stream(coords, bw_stream):
-	"""Takes a list of locus `coords` and a pybigtools `bw_stream` and returns a generator
-	producing the sum of counts for each locus. The signals are streamed from the locus,
-	such that only one locus signal is kept in memory at a time. As reading from a bigwig
-	is a bit slow, it can be quite time consuming to use this function across an entire
-	chromosome, hence the buffered version should be preferred in that case."""
-	return (_extract_counts(*locus, bw_stream) for locus in coords)
-
-def _count_generator_buffered(coords, bw_stream):
-	"""Takes a list of locus `coords` and a pybigtools `bw_stream` and returns a generator
-	producing the sum of counts for each locus. The signal for an entire chromosome
-	is kept in memory at a time, to speed up the extraction of multiple signals across
-	a chromosome. This function should mainly be used if calculating the counts for
-	densely spaced regions across the chromosomes. In addition, `coords` should be sorted
-	by chromosome, otherwise the function will be very inefficient."""
-	buffer_chrom = ''
-	for chrom, start, end in coords:
-		if buffer_chrom != chrom:
-			buffer_chrom = chrom
-			try:
-				buffer_signal = bw_stream.values(chrom, 0, None)
-			except (RuntimeError, ValueError, KeyError):
-				buffer_signal = None
-		if buffer_signal is not None:
-			yield numpy.nansum(buffer_signal[start:end]).item()
-		else:
-			yield float('nan')
-
 def _char_perc_from_coords(fasta, coords, chars, num_regions=-1, buffer=False, verbose=False):
 	"""This method will take in a `fasta` file and return the percentage of `chars`
 	in the sequences extracted from the fasta file and defined by the list of `coords`.
@@ -198,13 +151,13 @@ def _char_perc_from_coords(fasta, coords, chars, num_regions=-1, buffer=False, v
 
 	return perc
 
-def _counts_from_coords(bigwig, coords, num_regions=-1, buffer=False, verbose=False):
+def _counts_from_coords(bigwig, coords):
 	"""An internal function returning the summed signal in each region of `coords`
 	extracted from the `bigwig` file.
 
-	This method will take in a `bigwig` file and return the summed signal in
-	each region defined by `coords`. If signal cannot be extracted from a
-	region, NaN is returned for that region.
+	The values of each region are summed as float64, skipping the bases where
+	the bigwig has no value or a NaN value, and those past the end of its
+	chromosome. A region on a chromosome the bigwig does not have is NaN.
 
 	Parameters
 	----------
@@ -215,36 +168,39 @@ def _counts_from_coords(bigwig, coords, num_regions=-1, buffer=False, verbose=Fa
 		iterable of tuples formatted like (chr, start, end),
 		where `chr` is a string and `start` and `end` are integers.
 
-	num_regions: int, optional
-		The number of regions given by coords, i.e. the length of coords.
-		Used for efficient construction of the output numpy array, in case
-		coords is given as a generator. If set to -1, the number or regions
-		will automatically be inferred. Default is -1.
-
-	buffer: bool, optional
-		Whether to load the entire chromosomal signal into memory and
-		and extract the locus signals as slices of the entire chromosome.
-		Should only be set to true if there are many regions on the same
-		chromosome. If calculating counts for regions on many chromosomes,
-		the regions should be sorted by chromosome.
-		If set to false, will instead only load the signal for a single
-  		region at a time into memory. Default is False.
-
-	verbose: bool, optional
-		Whether to display a progress bar.
-
 	Returns
 	-------
 	count: numpy.ndarray, shape=(len(list(coords)), )
 	"""
-	desc = "Getting counts"
 
-	with pybigtools.open(bigwig, "r") as bw_stream:
-		generator = _count_generator(coords, bw_stream, buffer=buffer)
-		generator = tqdm(generator, disable=not verbose, desc=desc)
-		count = numpy.fromiter(generator, dtype=float, count=num_regions)
+	coords = list(coords)
+	counts = numpy.full(len(coords), numpy.nan)
+	if len(coords) == 0:
+		return counts
 
-	return count
+	reader = figwig.BigWigReader(bigwig)
+	chroms = numpy.array([str(chrom) for chrom, _, _ in coords])
+	starts = numpy.array([start for _, start, _ in coords])
+	ends = numpy.array([end for _, _, end in coords])
+	sizes = numpy.array([reader.chrom_sizes.get(chrom, -1) for chrom in chroms])
+
+	# The regions of each width are read together. A region that runs past
+	# the end of a chromosome is summed over the bases before it, so that each
+	# sum adds the same bases in the same order as a slice of the chromosome.
+	widths = ends - starts
+	lengths = numpy.minimum(ends, sizes) - starts
+	for width in numpy.unique(widths[sizes >= 0]):
+		idxs = numpy.flatnonzero((sizes >= 0) & (widths == width))
+		if width <= 0:
+			counts[idxs] = 0.0
+			continue
+
+		values = reader.read(chroms[idxs], starts[idxs], int(width))
+		values = values.astype(numpy.float64)
+		for k, i in enumerate(idxs):
+			counts[i] = numpy.nansum(values[k, :max(lengths[i], 0)])
+
+	return counts
 
 def _calculate_char_perc(sequence, width, chars):
 	"""An internal function returning the percentage of `chars` in `sequence`.
@@ -349,13 +305,18 @@ def _extract_and_filter_chrom(fasta, chrom, in_window, out_window,
 		left_flank = (in_window - out_window) // 2
 		right_flank = (in_window - out_window + 1) // 2
 
-		with pybigtools.open(bigwig, "r") as bw:
-			try:
-				values = bw.values(chrom, 0, None)
-			except RuntimeError:
-				return {}
+		reader = figwig.BigWigReader(bigwig)
+		if chrom not in reader.chrom_sizes:
+			return {}
 
-		values = values[:values.shape[0] // in_window * in_window]
+		# The bases of the windows of the FASTA's chromosome, NaN where the
+		# bigwig has no value or a NaN value, and past the end of its
+		# chromosome, which may be shorter or longer than the FASTA's.
+		values = numpy.full(len(gc_perc) * in_window, numpy.nan)
+		if len(gc_perc) > 0:
+			values = reader.read(chrom, [0], len(gc_perc) * in_window,
+				missing=numpy.nan)[0].astype(numpy.float64)
+
 		values = values.reshape(-1, in_window)
 		values = values[:, left_flank:-right_flank]
 		values = numpy.nansum(values, axis=-1)
@@ -480,7 +441,7 @@ def extract_matching_loci(
 		loci.columns = names
 
 	# Chromosome names must be strings so that they match the names used by
-	# pyfaidx/pybigtools. Otherwise, genomes whose chromosomes are named "1",
+	# pyfaidx/figwig. Otherwise, genomes whose chromosomes are named "1",
 	# "2", etc. get read in as integers by pandas and fail to match.
 	loci['chrom'] = loci['chrom'].astype(str)
 
@@ -503,7 +464,7 @@ def extract_matching_loci(
 	threshold = None
 	if bigwig is not None:
 		coords = list(_resize_coords_generator(coords, out_window))
-		loci_count = _counts_from_coords(bigwig, coords, num_regions, buffer=False, verbose=verbose)
+		loci_count = _counts_from_coords(bigwig, coords)
 		robust_min = numpy.nanquantile(loci_count, 0.01).item()
 		threshold = robust_min * signal_beta
 
@@ -627,7 +588,7 @@ def extract_matching_loci(
 			print("Processing matched loci.")
 			coords = _loci_coords_generator(matched_loci, out_window)
 			num_regions = len(matched_loci)
-			matched_count_max = _counts_from_coords(bigwig, coords, num_regions, buffer=False, verbose=verbose).max()
+			matched_count_max = _counts_from_coords(bigwig, coords).max()
 			print("Peak Robust Signal Minimum: {}".format(robust_min))
 			print("Matched Signal Maximum: {}".format(matched_count_max))
 

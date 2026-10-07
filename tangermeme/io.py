@@ -5,14 +5,15 @@
 from __future__ import annotations
 
 import os
+import csv
 import warnings
 
 import numpy
 import torch
 import pandas
 
+import figwig
 import pyfaidx
-import pybigtools
 
 from tqdm import tqdm
 
@@ -47,6 +48,55 @@ def _load_exclusion_zones(chrom_lengths, exclusion_lists):
 			exclusion_zones[chrom][start // 100:(end - 1) // 100 + 1] = True
 		
 		return exclusion_zones
+
+
+# The start of a line of a BED file that holds no interval: a track or a
+# browser line, or a comment.
+_BED_HEADER = r'#|(track|browser)(\s|$)'
+
+
+def _read_bed(filename, cols, names):
+	"""An internal function for reading columns of a BED file.
+
+	Track and browser lines, and lines that start with #, are skipped, as
+	UCSC's tools skip them. A file without them is read once. Otherwise
+	pandas, which takes the number of columns from the first line, reads the
+	columns of the other lines wrongly, so the file is read again without
+	those lines.
+
+
+	Parameters
+	----------
+	filename: str or os.PathLike
+		The BED file, which may be compressed.
+
+	cols: list of int
+		The columns to read.
+
+	names: list of str
+		The names to give the columns.
+
+
+	Returns
+	-------
+	df: pandas.DataFrame
+		The columns of the file's intervals.
+	"""
+
+	df = pandas.read_csv(filename, sep='\t', usecols=cols, header=None,
+		index_col=False, names=names)
+	if not df['chrom'].astype(str).str.match(_BED_HEADER).any():
+		return df
+
+	# One row per line, blank lines included, so that a row's index is its
+	# line number, which is what skiprows takes.
+	lines = pandas.read_csv(filename, sep='\t', usecols=[0], header=None,
+		names=['chrom'], dtype=str, skip_blank_lines=False,
+		quoting=csv.QUOTE_NONE)
+	skip = numpy.flatnonzero(lines['chrom'].fillna('').str.match(_BED_HEADER))
+
+	return pandas.read_csv(filename, sep='\t', usecols=cols, header=None,
+		index_col=False, names=names, skiprows=skip.tolist())
 
 
 def _interleave_loci(loci, chroms=None, summits=False):
@@ -113,8 +163,7 @@ def _interleave_loci(loci, chroms=None, summits=False):
 	for i, df in enumerate(loci):
 		# Extract the relevant columns from the dataframes
 		if isinstance(df, (str, os.PathLike)):
-			df = pandas.read_csv(df, sep='\t', usecols=cols,
-				header=None, index_col=False, names=names)
+			df = _read_bed(df, cols, names)
 		elif isinstance(df, pandas.DataFrame):
 			df = df.iloc[:, cols].copy()
 			df.columns = names
@@ -123,7 +172,7 @@ def _interleave_loci(loci, chroms=None, summits=False):
 				"DataFrame, or a list/tuple of those.")
 
 		# Chromosome names must be strings so that they match the names used by
-		# pyfaidx/pybigtools. Otherwise, genomes whose chromosomes are named
+		# pyfaidx/figwig. Otherwise, genomes whose chromosomes are named
 		# "1", "2", etc. get read in as integers by pandas and fail to match.
 		df['chrom'] = df['chrom'].astype(str)
 
@@ -157,26 +206,28 @@ def _interleave_loci(loci, chroms=None, summits=False):
 def _load_signals(signals):
 	"""An internal function for loading signals.
 
-	The passed in signals must be a list but each element can be a string,
-	which is interpreted as the filename of a bigwig file to open, a bigwig
-	file already opened with `pybigtools.open`, which is used as is and left
-	open, or a dictionary where the keys are chromosome names and the values
-	are numpy arrays of values across the chromosome. The keys of a dictionary
-	are coerced to strings so that they match the chromosome names of the loci.
+	The passed in signals must be a list but each element can be a string or
+	os.PathLike, which is interpreted as the filename of a bigwig file to open
+	with figwig, a bigwig file already opened with `figwig.BigWigReader`,
+	which is used as is, or a dictionary where the keys are chromosome names
+	and the values are numpy arrays of values across the chromosome. The keys
+	of a dictionary are coerced to strings so that they match the chromosome
+	names of the loci. A bigwig file opened with `pybigtools.open` is used as
+	is, with a FutureWarning, until tangermeme 1.9.0.
 
 
 	Parameters
 	----------
-	signals: list of strings, pybigtools.BBIRead objects, or dicts, or None
+	signals: list of strings, figwig.BigWigReader objects, or dicts, or None
 		A list of filenames of bigwig files, opened bigwig files, or
 		dictionaries of numpy arrays.
 
 
 	Returns
 	-------
-	_signals: list of dicts
-		A list of either pointers to opened bigwig files or dictionaries of
-		numpy arrays.
+	_signals: list
+		A list of figwig.BigWigReader objects, bigwig files opened with
+		pybigtools, or dictionaries of numpy arrays.
 	"""
 
 	if signals is None:
@@ -189,13 +240,31 @@ def _load_signals(signals):
 	_signals = []
 	for i, signal in enumerate(signals):
 		if isinstance(signal, (str, os.PathLike)):
-			signal = pybigtools.open(os.fspath(signal))
-		elif isinstance(signal, pybigtools.BBIRead):
+			path = os.fspath(signal)
+			if "://" in path:
+				raise ValueError("Signal {} is a URL, {}, but bigwig files are "
+					"read from local paths only; download it first.".format(i,
+					path))
+
+			signal = figwig.BigWigReader(path)
+		elif isinstance(signal, figwig.BigWigReader):
 			pass
+		elif type(signal).__module__ == "pybigtools":
+			warnings.warn("Signal {} is a bigwig opened with pybigtools, which "
+				"is deprecated and will not be accepted from tangermeme 1.9.0; "
+				"pass its path or a figwig.BigWigReader.".format(i),
+				FutureWarning, stacklevel=3)
+
+			# Reading values from a bigBed panics in pybigtools, which raises
+			# an exception that is not an Exception.
+			if getattr(signal, "is_bigbed", False):
+				raise ValueError("Signals must be bigWig files, but signal {} is "
+					"a bigBed file opened with pybigtools.".format(i))
 		elif not isinstance(signal, dict):
 			raise ValueError("Signals must either be filenames, bigWigs " +
-				"opened with pybigtools, or dictionaries.")
-		elif not isinstance(list(signal.values())[0], numpy.ndarray):
+				"opened with figwig.BigWigReader, or dictionaries.")
+		elif len(signal) > 0 and not isinstance(next(iter(signal.values())),
+				numpy.ndarray):
 			raise ValueError("Values in dictionaries must be numpy.ndarrays.")
 		else:
 			signal = {str(key): value for key, value in signal.items()}
@@ -214,10 +283,10 @@ def _extract_locus_signal(signals, chrom, start, end):
 
 	Parameters
 	----------
-	signals: list of pybigtools' BBIRead objects or dictionaries
-		A list of BBIRead objects (as returned by pybigtools.open()) or dictionaries where the keys are
-		chromosomes and the values are the signal at each position in the
-		chromosome.
+	signals: list of dictionaries or bigwig files opened with pybigtools
+		A list of dictionaries where the keys are chromosomes and the values
+		are the signal at each position in the chromosome, or bigwig files
+		opened with `pybigtools.open`, whose `values` method is called.
 
 	chrom: str
 		The name of the chromosome. Must be a key in the signals.
@@ -248,9 +317,9 @@ def _extract_locus_signal(signals, chrom, start, end):
 
 	values = []
 	for i, signal in enumerate(signals):
-		# A dict is zero-filled where it has no values, as pybigtools is:
-		# a missing chromosome gives zeros and a warning, and positions past
-		# the end of the array are NaN in pybigtools and so become zero.
+		# A dict is zero-filled where it has no values, as a bigwig is: a
+		# missing chromosome gives zeros and a warning, and positions past
+		# the end of the array are zero, as past the end of a chromosome.
 		if isinstance(signal, dict):
 			if chrom not in signal:
 				warnings.warn(f"{chrom} is not in the signal dictionary. "
@@ -277,6 +346,95 @@ def _extract_locus_signal(signals, chrom, start, end):
 	return values
 
 
+# The start of the warning figwig gives for windows on chromosomes that a
+# bigWig does not have, which `_extract_signals` replaces with its own.
+_FIGWIG_ABSENT_CHROMS = r"\d+ windows are on chromosomes not in "
+
+# The number of values of the target signal that `extract_loci` holds at once
+# while it measures counts for `min_counts` and `max_counts`.
+_COUNT_VALUES = 1 << 24
+
+
+def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
+	"""An internal function for extracting signal from many loci.
+
+	The bigWigs opened with figwig are read together in one call on `n_jobs`
+	threads, and dicts and bigWigs opened with pybigtools one locus at a time
+	by `_extract_locus_signal`. A locus on a chromosome that a bigWig does not
+	have is zero and gives a TangermemeWarning, as it does in
+	`_extract_locus_signal`. A file that figwig does not read, such as one
+	with a corrupt data block, raises figwig's ValueError.
+
+
+	Parameters
+	----------
+	signals: list of figwig.BigWigReader, pybigtools bigwigs or dicts
+		A list of signals as returned by `_load_signals`.
+
+	chroms: numpy.ndarray of str, shape=(n,)
+		The chromosome of each locus.
+
+	starts: numpy.ndarray of int, shape=(n,)
+		The start of each window, inclusive and base-0.
+
+	width: int
+		The width of every window.
+
+	n_jobs: int
+		The number of threads figwig reads with, or -1 for one per CPU.
+
+	warn: bool, optional
+		Whether to give the TangermemeWarnings for chromosomes a signal does
+		not have. Default is True.
+
+
+	Returns
+	-------
+	values: numpy.ndarray, dtype=float32, shape=(n, len(signals), width)
+		The extracted signal at each locus from each of the signals.
+	"""
+
+	if not warn:
+		with warnings.catch_warnings():
+			warnings.simplefilter("ignore", TangermemeWarning)
+			return _extract_signals(signals, chroms, starts, width, n_jobs)
+
+	readers = [j for j, signal in enumerate(signals)
+		if isinstance(signal, figwig.BigWigReader)]
+
+	if len(readers) > 0:
+		with warnings.catch_warnings():
+			warnings.filterwarnings("ignore", message=_FIGWIG_ABSENT_CHROMS,
+				category=UserWarning)
+			figwig_values = figwig.read_bigwig([signals[j] for j in readers],
+				chroms, starts, width, n_jobs=n_jobs)
+
+		numpy.nan_to_num(figwig_values, copy=False)
+
+	if len(readers) == len(signals):
+		values = figwig_values
+	else:
+		values = numpy.empty((len(starts), len(signals), width),
+			dtype=numpy.float32)
+		if len(readers) > 0:
+			values[:, readers] = figwig_values
+
+	for j in readers:
+		absent = ~numpy.isin(chroms, list(signals[j].chrom_sizes))
+		for i in numpy.nonzero(absent)[0]:
+			warnings.warn(f"{chroms[i]} {starts[i]} {starts[i] + width} not "
+				"valid bigwig indexes. Using zeros instead.", TangermemeWarning,
+				stacklevel=2)
+
+	others = [j for j in range(len(signals)) if j not in readers]
+	if len(others) > 0:
+		for i, (chrom, start) in enumerate(zip(chroms, starts.tolist())):
+			values[i, others] = _extract_locus_signal([signals[j] for j in
+				others], str(chrom), start, start + width)
+
+	return values
+
+
 def extract_loci(
 	loci: str | os.PathLike | pandas.DataFrame | list,
 	sequences: str | os.PathLike | pyfaidx.Fasta | dict,
@@ -296,6 +454,7 @@ def extract_loci(
 	exclusion_lists: str | os.PathLike | pandas.DataFrame | list | None = None,
 	return_mask: bool = False,
 	verbose: bool = False,
+	n_jobs: int = 8,
 ) -> torch.Tensor | list[torch.Tensor]:
 	"""Extract sequence and signal information for each provided locus.
 
@@ -362,8 +521,9 @@ def extract_loci(
 		three columns: the chromosome, the start, and the end, of each locus
 		to train on. The three columns are taken positionally regardless of
 		what they are named, and the chromosome column is coerced to a string
-		so that it matches the record names used by the sequences.
-		Alternatively, a list or tuple of paths/DataFrames where the
+		so that it matches the record names used by the sequences. The track
+		and browser lines of a bed file, and its lines that start with #, are
+		skipped. Alternatively, a list or tuple of paths/DataFrames where the
 		intention is to train on the interleaved concatenation, i.e., when you
 		want to train on peaks and negatives.
 
@@ -378,16 +538,21 @@ def extract_loci(
 		values.
 
 	signals: list or None, optional
-		A list whose elements are each a path to a bigwig file, which will be
-		read using pybigtools, a bigwig file already opened with
-		`pybigtools.open`, which is left open, or a dictionary where the keys
-		are chromosomes and the values are numpy arrays or memory maps of the
-		signal across each chromosome. The keys of a dictionary are coerced to
-		strings. A chromosome missing from a bigwig or a dictionary gives zeros
-		and a TangermemeWarning, positions past the end of the chromosome or
-		array give zeros, NaN values become zero, and infinities become the
-		largest finite float32 of the same sign. If None, no signal tensor is
-		returned. Default is None.
+		A list whose elements are each a path to a bigwig file, a bigwig file
+		already opened with `figwig.BigWigReader`, or a dictionary where the
+		keys are chromosomes and the values are numpy arrays or memory maps of
+		the signal across each chromosome. The keys of a dictionary are coerced
+		to strings. A chromosome missing from a bigwig or a dictionary gives
+		zeros and a TangermemeWarning, positions past the end of the chromosome
+		or array give zeros, NaN values become zero, and infinities become the
+		largest finite float32 of the same sign. The bigwig files are read by
+		figwig on `n_jobs` threads, in one call for the kept loci, or in groups
+		of loci under `min_counts` and `max_counts`. Only local files are read,
+		so a URL raises a ValueError, and a file figwig does not read, such as
+		a bigBed or a bigwig with unsorted or overlapping intervals, raises
+		figwig's error. A bigwig opened with `pybigtools.open` is deprecated:
+		it is read one locus at a time, with a FutureWarning, until tangermeme
+		1.9.0. If None, no signal tensor is returned. Default is None.
 
 	in_signals: list or None, optional
 		The same as `signals`, but extracted using the input window rather
@@ -470,7 +635,13 @@ def extract_loci(
 		`n_loci` cap. Default is False.
 
 	verbose: bool, optional
-		Whether to display a progress bar while loading. Default is False.
+		Whether to display a progress bar while loading the sequences of the
+		kept loci. Default is False.
+
+	n_jobs: int, optional
+		The number of threads that figwig reads the bigwig files given as
+		paths with, or -1 for one per CPU. The returned values do not depend
+		on it. Default is 8.
 
 
 	Returns
@@ -505,12 +676,22 @@ def extract_loci(
 	ValueError
 		If a locus is on a chromosome that is not in `sequences`, if no loci
 		remain after filtering, if `min_counts` or `max_counts` is given
-		without `signals`, if `target_idx` is out of range, or if `n_loci` is
-		less than 1.
+		without `signals`, if `target_idx` is out of range, if `n_loci` is
+		less than 1, or if `n_jobs` is less than 1 and not -1.
+
+	TypeError
+		If `n_jobs` is not an integer.
 	"""
 
 	if n_loci is not None and n_loci < 1:
 		raise ValueError("n_loci must be at least 1 or None.")
+
+	if isinstance(n_jobs, bool) or not isinstance(n_jobs, (int, numpy.integer)):
+		raise TypeError("n_jobs must be an integer.")
+
+	if n_jobs != -1 and n_jobs < 1:
+		raise ValueError("n_jobs must be at least 1, or -1 for one thread " +
+			"per CPU.")
 
 	signals = _load_signals(signals)
 	in_signals = _load_signals(in_signals)
@@ -524,8 +705,6 @@ def extract_loci(
 			raise ValueError("target_idx {} is out of range for {} signals."
 				.format(target_idx, len(signals)))
 
-	seqs, signals_, in_signals_ = [], [], []
-	kept_mask = []
 	in_width, out_width = in_window // 2, out_window // 2
 	out_extra = out_window % 2
 	if signals is None:
@@ -574,7 +753,10 @@ def extract_loci(
 	left = max(in_width, out_width) + max_jitter
 	right = max(in_width + in_window % 2, out_width + out_extra) + max_jitter
 
-	for chrom, start, end in tqdm(loci.values, disable=d, desc=desc):
+	# The position in `loci` of each locus whose windows fit on its
+	# chromosome and miss the exclusion zones, and the middle of the locus.
+	idxs, mids = [], []
+	for i, (chrom, start, end) in enumerate(loci.values):
 		mid = start + (end - start) // 2
 
 		start = mid - left
@@ -582,41 +764,103 @@ def extract_loci(
 
 		# Does it fall off the end of a chromosome?
 		if start < 0 or end > chrom_lengths[str(chrom)]:
-			kept_mask.append(False)
 			continue
 
 		if exclusion_zones is not None:
 			s, e = start // 100, (end - 1) // 100 + 1
 			if exclusion_zones[str(chrom)][s:e].any():
-				kept_mask.append(False)
 				continue
 
-		# Extract a window of signal using the output size
-		start = mid - out_width - max_jitter
-		end = mid + out_width + max_jitter + (out_window % 2)
+		idxs.append(i)
+		mids.append(mid)
 
-		if signals is not None:
-			signal = _extract_locus_signal(signals, str(chrom), start, end)
+	idxs = numpy.array(idxs, dtype=numpy.int64)
+	mids = numpy.array(mids)
+	loci_chroms = loci['chrom'].values[idxs].astype(str)
 
-			if min_counts is not None and signal[target_idx].sum() < min_counts:
-				kept_mask.append(False)
-				continue
+	out_start = out_width + max_jitter
+	out_length = out_window + 2 * max_jitter
 
-			if max_counts is not None and signal[target_idx].sum() > max_counts:
-				kept_mask.append(False)
-				continue
+	# The counts are measured on groups of loci, so that the windows held at
+	# once stay small, first on the target alone and without warnings. Each
+	# locus is compared as a float32 scalar, as its sum is. Then every signal
+	# is read at each locus examined before n_loci loci are kept, which is
+	# where it was read one locus at a time, so that the warnings for
+	# chromosomes a signal does not have are the same, and the values at the
+	# kept loci are kept.
+	signals_ = None
+	if min_counts is not None or max_counts is not None:
+		keep, kept_values = [], []
+		size = max(1, _COUNT_VALUES // out_length)
+		for c in range(0, len(idxs), size):
+			starts = mids[c:c+size] - out_start
+			counts = _extract_signals([signals[target_idx]],
+				loci_chroms[c:c+size], starts, out_length, n_jobs,
+				warn=False)[:, 0].sum(axis=1)
 
-			signals_.append(signal)
+			kept, n_examined = [], len(counts)
+			for k, count in enumerate(counts):
+				if min_counts is not None and count < min_counts:
+					continue
 
-		# Extract a window of signal using the input size
+				if max_counts is not None and count > max_counts:
+					continue
+
+				kept.append(k)
+				if n_loci is not None and len(keep) + len(kept) == n_loci:
+					n_examined = k + 1
+					break
+
+			values = _extract_signals(signals, loci_chroms[c:c+n_examined],
+				starts[:n_examined], out_length, n_jobs)
+			kept_values.append(values[kept])
+			keep.extend(c + k for k in kept)
+
+			if n_loci is not None and len(keep) == n_loci:
+				break
+
+		keep = numpy.array(keep, dtype=numpy.int64)
+		idxs, mids, loci_chroms = idxs[keep], mids[keep], loci_chroms[keep]
+
+		# Copied group by group, so that the values are not held twice.
+		signals_ = numpy.empty((len(keep), len(signals), out_length),
+			dtype=numpy.float32)
+		k = 0
+		while kept_values:
+			values = kept_values.pop(0)
+			signals_[k:k+len(values)] = values
+			k += len(values)
+
+	if n_loci is not None:
+		idxs, mids = idxs[:n_loci], mids[:n_loci]
+		loci_chroms = loci_chroms[:n_loci]
+
+	if len(idxs) == 0:
+		if opened_fasta:
+			sequences.close()
+
+		raise ValueError("No loci remain after filtering. Loci are removed " +
+			"when they are not on a chromosome in `chroms`, when their windows " +
+			"run off the end of a chromosome, when they overlap an exclusion " +
+			"region, or when their counts fall outside min_counts/max_counts.")
+
+	# Extract a window of signal using the output size
+	if signals is not None and signals_ is None:
+		signals_ = _extract_signals(signals, loci_chroms, mids - out_start,
+			out_length, n_jobs)
+
+	# Extract a window of signal using the input size
+	if in_signals is not None:
+		in_signals_ = _extract_signals(in_signals, loci_chroms,
+			mids - in_width - max_jitter, in_window + 2 * max_jitter, n_jobs)
+
+	# Extract a window of sequence using the input size
+	seqs = []
+	for chrom, mid in tqdm(zip(loci_chroms, mids.tolist()), total=len(mids),
+			disable=d, desc=desc):
 		start = mid - in_width - max_jitter
 		end = mid + in_width + max_jitter + (in_window % 2)
 
-		if in_signals is not None:
-			in_signal = _extract_locus_signal(in_signals, str(chrom), start, end)
-			in_signals_.append(in_signal)
-
-		# Extract a window of sequence using the input size
 		if isinstance(sequences, dict):
 			seq = sequences[str(chrom)][:, start:end]
 		else:
@@ -628,20 +872,10 @@ def extract_loci(
 
 			seq = one_hot_encode(seq.upper(), alphabet=alphabet, ignore=ignore)
 
-		kept_mask.append(True)
 		seqs.append(seq)
-
-		if n_loci is not None and len(seqs) == n_loci:
-			break 
 
 	if opened_fasta:
 		sequences.close()
-
-	if len(seqs) == 0:
-		raise ValueError("No loci remain after filtering. Loci are removed " +
-			"when they are not on a chromosome in `chroms`, when their windows " +
-			"run off the end of a chromosome, when they overlap an exclusion " +
-			"region, or when their counts fall outside min_counts/max_counts.")
 
 	# Figure out how to format the outputs depending on the provided parameters.
 	# numpy.stack keeps the memory layout of its inputs, and one_hot_encode
@@ -650,17 +884,17 @@ def extract_loci(
 	y_return = [seqs]
 
 	if signals is not None:
-		y_return.append(torch.from_numpy(numpy.stack(signals_)))
+		y_return.append(torch.from_numpy(signals_))
 
 	if in_signals is not None:
-		y_return.append(torch.from_numpy(numpy.stack(in_signals_)))
+		y_return.append(torch.from_numpy(in_signals_))
 		
 	if return_mask:
-		# Loci after the n_loci cap was reached were never examined and are
-		# not returned, so they are False.
-		kept_mask += [False] * (len(loci) - len(kept_mask))
-		kept_mask = torch.tensor(kept_mask)
-		y_return.append(kept_mask)
+		# Loci after the n_loci cap was reached are not returned, so they are
+		# False.
+		kept_mask = numpy.zeros(len(loci), dtype=bool)
+		kept_mask[idxs] = True
+		y_return.append(torch.from_numpy(kept_mask))
 
 	return y_return[0] if len(y_return) == 1 else y_return
 

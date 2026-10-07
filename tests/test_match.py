@@ -13,8 +13,11 @@ from tangermeme.utils import random_one_hot
 from tangermeme.io import extract_loci
 
 from tangermeme.match import _calculate_char_perc
+from tangermeme.match import _counts_from_coords
 from tangermeme.match import _extract_and_filter_chrom
 from tangermeme.match import extract_matching_loci
+
+from .bigwig_writer import write_raw_bigwig
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -526,3 +529,201 @@ def test_extract_matching_loci_chroms_none():
 
 	assert isinstance(regions, pandas.DataFrame)
 	assert tuple(regions.columns) == ('chrom', 'start', 'end')
+
+
+##
+# Signal from a bigWig. The bigWig's chr2 is shorter than the FASTA's, its
+# chr3 is absent, and chr6 has a NaN and an infinite interval. Expected
+# values are computed from the bases written, as float64 sums that skip the
+# bases without a value.
+##
+
+
+@pytest.fixture(scope="module")
+def match_bigwig(tmp_path_factory):
+	rng = numpy.random.RandomState(0)
+	sizes = {'chr1': 284, 'chr2': 150, 'chr4': 240, 'chr5': 160, 'chr6': 80}
+
+	tracks, sections = {}, []
+	for chrom, length in sizes.items():
+		track = numpy.full(length, numpy.nan, dtype=numpy.float32)
+		rows, pos = [], 0
+		while True:
+			pos += int(rng.randint(0, 6))
+			width = int(rng.randint(1, 10))
+			if pos + width > length:
+				break
+			rows.append((pos, pos + width, float(numpy.float32(rng.uniform(-2,
+				6)))))
+			pos += width
+
+		if chrom == 'chr6':
+			rows[0] = (rows[0][0], rows[0][1], float('nan'))
+			rows[1] = (rows[1][0], rows[1][1], float('inf'))
+
+		for start, end, value in rows:
+			track[start:end] = value
+
+		sections += [(chrom, 1, 0, 0, rows[k:k+20]) for k in range(0, len(rows),
+			20)]
+		tracks[chrom] = track
+
+	path = str(tmp_path_factory.mktemp("match") / "signal.bw")
+	write_raw_bigwig(path, sizes, sections)
+	return path, tracks
+
+
+def _expected_counts(tracks, coords):
+	return numpy.array([numpy.nansum(tracks[chrom][start:end].astype(
+		numpy.float64)) if chrom in tracks else numpy.nan
+		for chrom, start, end in coords])
+
+
+def test_counts_from_coords(match_bigwig):
+	# The signal summed over each window: zero where there is none, the sum
+	# of the bases that exist where a window runs past the bigWig's end of a
+	# chromosome, NaN on a chromosome the bigWig lacks, and NaN values
+	# skipped. Windows of different widths, and of none, in one call.
+	path, tracks = match_bigwig
+	rng = numpy.random.RandomState(1)
+
+	coords = []
+	for chrom in ['chr1', 'chr2', 'chr3', 'chr4', 'chr6']:
+		for _ in range(40):
+			start = int(rng.randint(0, 200 if chrom != 'chr6' else 70))
+			coords.append((chrom, start, start + int(rng.randint(0, 50))))
+	coords += [('chr2', 140, 170), ('chr2', 150, 160), ('chr2', 155, 156),
+		('chr6', 0, 20)]
+
+	counts = _counts_from_coords(path, coords)
+	expected = _expected_counts(tracks, coords)
+
+	assert counts.dtype == numpy.float64
+	assert counts.shape == (len(coords),)
+	assert counts.tobytes() == expected.tobytes()
+	assert numpy.isnan(counts[[c == 'chr3' for c, _, _ in coords]]).all()
+	assert numpy.isinf(counts[-1])
+
+
+def test_counts_from_coords_past_chrom_end_bitwise(tmp_path):
+	# A long region past the end of a chromosome is summed over the bases
+	# before the end alone, so that the float64 sum adds the same values in
+	# the same order as a slice of the chromosome does. A float64 sum of
+	# float32 values is exact in any order unless they span more than about
+	# 2**29, so these span 24 orders of magnitude, with both signs.
+	import figwig
+
+	rng = numpy.random.RandomState(2)
+	track = (rng.choice([-1, 1], size=1000) * 10 ** rng.uniform(-12, 12,
+		size=1000)).astype(numpy.float32)
+	path = str(tmp_path / "wide.bw")
+	figwig.write_bigwig(path, {'chr1': 1000}, 'chr1', [0], track[None])
+
+	coords = [('chr1', start, start + width) for start in (0, 300, 700, 990)
+		for width in (700, 1500, 2114)]
+	counts = _counts_from_coords(path, coords)
+	expected = _expected_counts({'chr1': track}, coords)
+	assert counts.tobytes() == expected.tobytes()
+
+
+def test_counts_from_coords_generator(match_bigwig):
+	path, tracks = match_bigwig
+	coords = [('chr1', 10, 30), ('chr4', 100, 101), ('chr3', 5, 9)]
+
+	counts = _counts_from_coords(path, (c for c in coords))
+	assert counts.tobytes() == _expected_counts(tracks, coords).tobytes()
+
+
+@pytest.mark.parametrize("chrom", ["chr1", "chr6"])
+@pytest.mark.parametrize("in_window, out_window", [(20, 18), (10, 4), (9, 2)])
+@pytest.mark.parametrize("threshold", [0.0, 10.0])
+def test_extract_and_filter_chrom_bigwig(match_bigwig, chrom, in_window,
+	out_window, threshold):
+	# The windows kept are those without the signal filter whose middle
+	# out_window bases sum to at most the threshold.
+	path, tracks = match_bigwig
+	regions = _extract_and_filter_chrom("tests/data/test.fa", chrom, in_window,
+		out_window, max_n_perc=1.0, bigwig=path, signal_threshold=threshold)
+	unfiltered = _extract_and_filter_chrom("tests/data/test.fa", chrom,
+		in_window, out_window, max_n_perc=1.0)
+
+	left = (in_window - out_window) // 2
+	counts = _expected_counts(tracks, [(chrom, i * in_window + left, i *
+		in_window + left + out_window) for i in range(len(tracks[chrom]) //
+		in_window)])
+
+	expected = {gc: [i for i in idxs if counts[i] <= threshold]
+		for gc, idxs in unfiltered.items()}
+	assert regions == {gc: idxs for gc, idxs in expected.items() if idxs}
+
+
+def test_extract_and_filter_chrom_bigwig_shorter_chrom(match_bigwig):
+	# The bigWig's chr2 is 150 bases and the FASTA's 211: the windows past
+	# 150 have no signal. This used to fail to broadcast the signal of the
+	# bigWig's 150 bases against the FASTA's windows.
+	path, tracks = match_bigwig
+	regions = _extract_and_filter_chrom("tests/data/test.fa", "chr2", 10, 4,
+		max_n_perc=1.0, bigwig=path, signal_threshold=0.0)
+	unfiltered = _extract_and_filter_chrom("tests/data/test.fa", "chr2", 10, 4,
+		max_n_perc=1.0)
+
+	track = numpy.full(211, numpy.nan, dtype=numpy.float32)
+	track[:150] = tracks['chr2']
+	counts = _expected_counts({'chr2': track}, [('chr2', i * 10 + 3, i * 10 + 7)
+		for i in range(21)])
+
+	expected = {gc: [i for i in idxs if counts[i] <= 0.0]
+		for gc, idxs in unfiltered.items()}
+	assert regions == {gc: idxs for gc, idxs in expected.items() if idxs}
+	assert any(i >= 15 for idxs in regions.values() for i in idxs)
+
+
+def test_extract_and_filter_chrom_bigwig_missing_chrom(match_bigwig):
+	# A chromosome the bigWig lacks has no windows to draw from. This used to
+	# raise the KeyError of pybigtools.
+	path, _ = match_bigwig
+	assert _extract_and_filter_chrom("tests/data/test.fa", "chr3", 10, 4,
+		bigwig=path, signal_threshold=1e9) == {}
+
+
+@pytest.mark.parametrize("in_window, out_window", [(10, 4), (20, 18)])
+def test_extract_matching_loci_bigwig_no_filter(tmp_path, in_window,
+	out_window):
+	# With 1.0 at every base, the loci's counts are out_window, so a large
+	# signal_beta puts the threshold above every window's signal, and the
+	# loci drawn are those drawn without a bigWig. With pybigtools 0.2.5,
+	# every locus's count was NaN, so the threshold was NaN and no loci were
+	# returned.
+	import figwig
+
+	sizes = {'chr1': 284, 'chr2': 211, 'chr4': 240, 'chr6': 80}
+	path = str(tmp_path / "ones.bw")
+	figwig.write_bigwig(path, sizes, list(sizes), [0] * len(sizes),
+		numpy.ones(len(sizes)), ends=list(sizes.values()))
+
+	kwargs = dict(in_window=in_window, out_window=out_window, max_n_perc=1.0,
+		chroms=list(sizes), random_state=0)
+
+	expected = extract_matching_loci("tests/data/test.bed", "tests/data/test.fa",
+		**kwargs)
+	result = extract_matching_loci("tests/data/test.bed", "tests/data/test.fa",
+		bigwig=path, signal_beta=2.0, **kwargs)
+
+	assert len(result) > 0
+	pandas.testing.assert_frame_equal(result, expected)
+
+
+def test_extract_matching_loci_bigwig_filter(match_bigwig):
+	# With signal_beta of 0 the threshold is 0, so every locus drawn has no
+	# positive signal in its middle out_window bases.
+	path, tracks = match_bigwig
+	result = extract_matching_loci("tests/data/test.bed", "tests/data/test.fa",
+		in_window=10, out_window=4, max_n_perc=1.0, bigwig=path,
+		signal_beta=0.0, chroms=['chr1', 'chr2', 'chr4', 'chr6'],
+		random_state=0)
+
+	assert len(result) > 0
+	counts = _expected_counts(tracks, [(chrom, start + 3, start + 7)
+		for chrom, start in zip(result['chrom'], result['start'])])
+	assert (counts <= 0).all()
+

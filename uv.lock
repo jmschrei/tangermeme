@@ -827,6 +827,20 @@ wheels = [
 ]
 
 [[package]]
+name = "figwig"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numba" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/28/98cbb17bbd388c0101fc75a3c0e542bb8a4fb44b5caf35dea1726e1b3516/figwig-0.1.0.tar.gz", hash = "sha256:c757ff371b518a815dd81fe2178e36e4eb2c8b9616fb7fd1d4326d484f8b723b", size = 132024, upload-time = "2026-10-04T17:39:57.709Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/d0/b1e0ed480da3eaff0bec35863b96d312ee8a5c144b3c8c70b7d616fb298a/figwig-0.1.0-py3-none-any.whl", hash = "sha256:acb84a2e92c4167c8b9973c25b7e09654d49945f6a7afbab2cb0eb2d8d3ed020", size = 89362, upload-time = "2026-10-04T17:39:56.419Z" },
+]
+
+[[package]]
 name = "filelock"
 version = "3.29.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3871,6 +3885,7 @@ wheels = [
 name = "tangermeme"
 source = { editable = "." }
 dependencies = [
+    { name = "figwig" },
     { name = "joblib" },
     { name = "matplotlib" },
     { name = "memelite" },
@@ -3879,7 +3894,6 @@ dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or python_full_version >= '3.14'" },
     { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and python_full_version < '3.14'" },
-    { name = "pybigtools" },
     { name = "pyfaidx" },
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -3894,6 +3908,7 @@ dev = [
     { name = "build" },
     { name = "captum" },
     { name = "mpld3" },
+    { name = "pybigtools" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "twine" },
@@ -3916,6 +3931,7 @@ interactive = [
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "captum", marker = "extra == 'dev'", specifier = ">=0.5.0" },
+    { name = "figwig", specifier = ">=0.1.0" },
     { name = "jinja2", marker = "extra == 'docs'", specifier = ">=3.1.3" },
     { name = "joblib", specifier = ">=1.3" },
     { name = "jupyter", marker = "extra == 'docs'", specifier = ">=1.0" },
@@ -3928,7 +3944,7 @@ requires-dist = [
     { name = "numba", specifier = ">=0.58" },
     { name = "numpy", specifier = ">=1.23" },
     { name = "pandas", specifier = ">=2.0" },
-    { name = "pybigtools", specifier = ">=0.2" },
+    { name = "pybigtools", marker = "extra == 'dev'", specifier = ">=0.2.5,<0.3" },
     { name = "pyfaidx", specifier = ">=0.7.2.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
