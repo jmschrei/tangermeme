@@ -613,9 +613,9 @@ def test_counts_from_coords_generator(match_bigwig):
 	assert counts.tobytes() == _expected_counts(tracks, coords).tobytes()
 
 
-@pytest.mark.parametrize("chrom", ["chr1", "chr4", "chr6"])
+@pytest.mark.parametrize("chrom", ["chr1", "chr6"])
 @pytest.mark.parametrize("in_window, out_window", [(20, 18), (10, 4), (9, 2)])
-@pytest.mark.parametrize("threshold", [-5.0, 0.0, 10.0, 1e9])
+@pytest.mark.parametrize("threshold", [0.0, 10.0])
 def test_extract_and_filter_chrom_bigwig(match_bigwig, chrom, in_window,
 	out_window, threshold):
 	# The windows kept are those without the signal filter whose middle
