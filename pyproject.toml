@@ -38,7 +38,6 @@ dependencies = [
     "pandas>=2.0",
     "torch>=2.0",
     "pyfaidx>=0.7.2.1",
-    "pybigtools>=0.2",
     "figwig>=0.1.0",
     "tqdm>=4.65",
     "numba>=0.58",
@@ -56,6 +55,7 @@ dev = [
     "build>=1.0",
     "twine>=4.0",
     "mpld3>=0.5",
+    "pybigtools>=0.2.5,<0.3",
 ]
 docs = [
     "sphinx>=7.0",
