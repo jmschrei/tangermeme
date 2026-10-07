@@ -26,7 +26,7 @@ extract_loci(
     exclusion_lists=None,  # BED path, DataFrame, or list of them
     return_mask=False,
     verbose=False,
-    n_jobs=8,             # threads figwig reads bigWig paths with; -1 = every CPU
+    n_jobs=8,             # threads for bigWig paths and FASTA windows; -1 = every CPU
 )
 ```
 
@@ -84,8 +84,24 @@ download remote bigWigs first. A file figwig does not read (a bigBed, a bigWig
 with overlapping intervals or unsorted blocks) raises figwig's `ValueError`.
 A bigWig opened with `pybigtools.open` is deprecated, with a `FutureWarning`,
 and will not be accepted from tangermeme 1.9.0. Until then it is read one locus
-at a time: on 167,750 loci with hg38 and one bigWig, the call took 6.9 s with a
-pybigtools object and 3.7 s with the path, at `n_jobs=8`.
+at a time: on 167,750 loci with hg38 and one bigWig, the call takes 3.7 s with a
+pybigtools object and 0.35 s with the path, at `n_jobs=8`.
+
+### Threads and readers
+
+`n_jobs` (default 8) is the most threads `extract_loci` uses: figwig reads the
+bigWig paths on them, and the windows of a FASTA path are read and one-hot
+encoded on them. The results are identical for every value. Pass `n_jobs=1`
+inside a DataLoader worker or any other process that already runs in
+parallel, so the threads do not multiply.
+
+Pass the FASTA as a path. Its windows are then read from a memory map of the
+file through its `.fai`, where those of a `pyfaidx.Fasta` object are read one
+at a time: on 167,750 loci of hg38 with one bigWig, at `n_jobs=8`, the call
+takes 0.35 s with the path and 1.2 s with a `pyfaidx.Fasta`. A compressed
+FASTA, or one with bytes pyfaidx would change, is read through pyfaidx with
+the same result. The first call in
+a new environment compiles numba kernels, about 2.5 s, once.
 
 ### Multiple loci files are interleaved, not concatenated
 
