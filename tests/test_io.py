@@ -4084,6 +4084,13 @@ def test_nan_to_num_rows_few_blocks_are_serial(monkeypatch):
 		assert _RecordingPool.sizes == sizes
 
 
+def test_nan_to_num_rows_empty():
+	# No rows, and rows of no values, are returned as they are.
+	for shape in [(0, 2, 5), (3, 2, 0)]:
+		values = numpy.zeros(shape, dtype=numpy.float32)
+		assert tangermeme.io._nan_to_num_rows(values, n_jobs=4) is values
+
+
 @pytest.mark.parametrize("n_jobs", [2, -1])
 def test_extract_loci_nan_and_inf_threads(tmp_path, monkeypatch, n_jobs):
 	# extract_loci passes n_jobs, with -1 as the number of CPUs, to

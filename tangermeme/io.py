@@ -509,7 +509,7 @@ def _nan_to_num_rows(values, block_size=2**20, n_jobs=1):
 		largest finite float32 of the same sign.
 	"""
 
-	step = max(1, block_size // max(1, values[0].size))
+	step = max(1, block_size // max(1, values[:1].size))
 	blocks = range(0, len(values), step)
 
 	def nan_to_num_block(i):
