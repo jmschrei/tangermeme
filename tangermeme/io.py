@@ -22,7 +22,7 @@ import pyfaidx
 
 from tqdm import tqdm
 
-from .utils import one_hot_encode
+from .utils import one_hot_encode  # noqa: F401, importable from here
 from .utils import _one_hot_encode_rows
 from .utils import _one_hot_rows_mapping
 from .utils import _one_hot_encode_fasta
@@ -557,6 +557,16 @@ _UNMAP_CHUNKS_PER_JOB = 8
 _MADVISE = None
 
 
+def _cpu_count():
+	"""The number of CPUs this process may run on, which `n_jobs=-1` uses,
+	as figwig counts them."""
+
+	if hasattr(os, 'sched_getaffinity'):
+		return len(os.sched_getaffinity(0))
+
+	return os.cpu_count() or 1
+
+
 def _madvise():
 	"""libc's madvise, called through ctypes, or None when it is not used.
 
@@ -837,9 +847,14 @@ def extract_loci(
 		the values are one-hot encoded sequences of shape (len(alphabet),
 		chromosome length) as numpy arrays, memory maps, or torch tensors. A
 		fasta file opened from a path is closed before returning; a
-		pyfaidx.Fasta object is left open. The keys of a dictionary are
-		coerced to strings, and the returned sequences have the dtype of its
-		values.
+		pyfaidx.Fasta object is left open. The windows of a fasta file given
+		as a path are read from a memory map of the file, using the .fai index
+		that pyfaidx reads or builds. They are read through pyfaidx instead,
+		with the same result, when they cannot be read from the map, such as
+		for a compressed file, a non-ASCII alphabet, or a window holding a
+		byte that pyfaidx would change, like a carriage return inside a line.
+		The keys of a dictionary are coerced to strings, and the
+		returned sequences have the dtype of its values.
 
 	signals: list or None, optional
 		A list whose elements are each a path to a bigwig file, a bigwig file
@@ -940,12 +955,15 @@ def extract_loci(
 
 	verbose: bool, optional
 		Whether to display a progress bar while loading the sequences of the
-		kept loci. Default is False.
+		kept loci. The windows of a fasta file given as a path are read
+		together, so its bar fills in one step. Default is False.
 
 	n_jobs: int, optional
 		The number of threads that figwig reads the bigwig files given as
-		paths with, or -1 for one per CPU. The returned values do not depend
-		on it. Default is 8.
+		paths with, and that the sequences of a fasta file are read and
+		one-hot encoded with, or -1 for one per CPU. The encoding threads are
+		also capped by numba's NUMBA_NUM_THREADS. The returned values do not
+		depend on it. Default is 8.
 
 
 	Returns
@@ -1136,33 +1154,50 @@ def extract_loci(
 		in_signals_ = _extract_signals(in_signals, loci_chroms,
 			mids - in_width - max_jitter, in_window + 2 * max_jitter, n_jobs)
 
-	# Extract a window of sequence using the input size
-	seqs = []
-	for chrom, mid in tqdm(zip(loci_chroms, mids.tolist()), total=len(mids),
-			disable=d, desc=desc):
-		start = mid - in_width - max_jitter
-		end = mid + in_width + max_jitter + (in_window % 2)
-
-		if isinstance(sequences, dict):
-			seq = sequences[str(chrom)][:, start:end]
+	# Extract a window of sequence using the input size. The windows of a
+	# fasta opened from a path are read together, from a memory map of the
+	# file where they can be, and the windows of a pyfaidx.Fasta one at a
+	# time; both are one-hot encoded straight into one C-contiguous array.
+	threads = _cpu_count() if n_jobs == -1 else int(n_jobs)
+	try:
+		if opened_fasta and mids.dtype == numpy.int64:
+			codes, names = pandas.factorize(loci_chroms)
+			with tqdm(total=len(mids), disable=d, desc=desc) as progress:
+				seqs = _read_fasta_windows(sequences, (codes, mids - in_width -
+					max_jitter), in_window + 2 * max_jitter, alphabet, ignore,
+					names=[str(name) for name in names], n_jobs=threads)
+				progress.update(len(mids))
 		else:
-			# A Fasta opened with as_raw=True returns strings rather than
-			# pyfaidx.Sequence objects.
-			seq = sequences[str(chrom)][start:end]
-			if not isinstance(seq, str):
-				seq = seq.seq
+			seqs = []
+			for chrom, mid in tqdm(zip(loci_chroms, mids.tolist()),
+					total=len(mids), disable=d, desc=desc):
+				start = mid - in_width - max_jitter
+				end = mid + in_width + max_jitter + (in_window % 2)
 
-			seq = one_hot_encode(seq.upper(), alphabet=alphabet, ignore=ignore)
+				if isinstance(sequences, dict):
+					seq = sequences[str(chrom)][:, start:end]
+				else:
+					# A Fasta opened with as_raw=True returns strings rather
+					# than pyfaidx.Sequence objects.
+					seq = sequences[str(chrom)][start:end]
+					if not isinstance(seq, str):
+						seq = seq.seq
 
-		seqs.append(seq)
+				seqs.append(seq)
 
-	if opened_fasta:
-		sequences.close()
+			# numpy.stack keeps the memory layout of its inputs, so a stack of
+			# slices of Fortran-ordered arrays is not contiguous by default.
+			if isinstance(sequences, dict):
+				seqs = numpy.ascontiguousarray(numpy.stack(seqs))
+			else:
+				seqs = _one_hot_encode_rows(seqs, alphabet=alphabet,
+					ignore=ignore, n_jobs=threads)
+	finally:
+		if opened_fasta:
+			sequences.close()
 
 	# Figure out how to format the outputs depending on the provided parameters.
-	# numpy.stack keeps the memory layout of its inputs, and one_hot_encode
-	# returns a transposed view, so the stack is not contiguous by default.
-	seqs = torch.from_numpy(numpy.ascontiguousarray(numpy.stack(seqs)))
+	seqs = torch.from_numpy(seqs)
 	y_return = [seqs]
 
 	if signals is not None:
