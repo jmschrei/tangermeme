@@ -464,6 +464,69 @@ _FIGWIG_ABSENT_CHROMS = r"\d+ windows are on chromosomes not in "
 _COUNT_VALUES = 1 << 24
 
 
+# The number of blocks below which `_nan_to_num_rows` runs in the calling
+# thread.
+_NAN_TO_NUM_MIN_BLOCKS = 16
+
+
+def _cpu_count():
+	"""The number of CPUs this process may run on, which `n_jobs=-1` uses,
+	as figwig counts them."""
+
+	if hasattr(os, 'sched_getaffinity'):
+		return len(os.sched_getaffinity(0))
+
+	return os.cpu_count() or 1
+
+
+def _nan_to_num_rows(values, block_size=2**20, n_jobs=1):
+	"""An internal function for applying numpy.nan_to_num in place.
+
+	The rows are processed in blocks of about `block_size` elements, so the
+	masks that numpy.nan_to_num makes stay small, and a block whose values are
+	all finite is skipped because numpy.nan_to_num would leave it unchanged.
+	The blocks do not overlap and numpy releases the GIL while it checks and
+	replaces them, so they are processed on up to `n_jobs` threads when there
+	are at least _NAN_TO_NUM_MIN_BLOCKS, with the same result.
+
+
+	Parameters
+	----------
+	values: numpy.ndarray, shape=(n, ...)
+		The float32 array to modify in place.
+
+	block_size: int, optional
+		The approximate number of elements in each block. Default is 2**20.
+
+	n_jobs: int, optional
+		The largest number of threads to use. Default is 1.
+
+
+	Returns
+	-------
+	values: numpy.ndarray, shape=(n, ...)
+		The same array, with NaN replaced by zero and infinities by the
+		largest finite float32 of the same sign.
+	"""
+
+	step = max(1, block_size // max(1, values[0].size))
+	blocks = range(0, len(values), step)
+
+	def nan_to_num_block(i):
+		block = values[i:i+step]
+		if not numpy.isfinite(block).all():
+			numpy.nan_to_num(block, copy=False)
+
+	if n_jobs > 1 and len(blocks) >= _NAN_TO_NUM_MIN_BLOCKS:
+		with ThreadPoolExecutor(min(n_jobs, len(blocks))) as pool:
+			list(pool.map(nan_to_num_block, blocks))
+	else:
+		for i in blocks:
+			nan_to_num_block(i)
+
+	return values
+
+
 def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 	"""An internal function for extracting signal from many loci.
 
@@ -518,7 +581,8 @@ def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 			figwig_values = figwig.read_bigwig([signals[j] for j in readers],
 				chroms, starts, width, n_jobs=n_jobs)
 
-		numpy.nan_to_num(figwig_values, copy=False)
+		_nan_to_num_rows(figwig_values, n_jobs=_cpu_count() if n_jobs == -1
+			else int(n_jobs))
 
 	if len(readers) == len(signals):
 		values = figwig_values
@@ -555,16 +619,6 @@ _UNMAP_MIN_WINDOWS = 2048
 _UNMAP_CHUNKS_PER_JOB = 8
 
 _MADVISE = None
-
-
-def _cpu_count():
-	"""The number of CPUs this process may run on, which `n_jobs=-1` uses,
-	as figwig counts them."""
-
-	if hasattr(os, 'sched_getaffinity'):
-		return len(os.sched_getaffinity(0))
-
-	return os.cpu_count() or 1
 
 
 def _madvise():

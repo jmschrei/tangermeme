@@ -3976,3 +3976,121 @@ def test_madvise_dontneed_keeps_file_contents(tmp_path):
 		fasta_map.close()
 
 	assert path.read_bytes() == data
+
+
+###
+# The threaded nan_to_num (_nan_to_num_rows)
+###
+
+
+def _non_finite_rows(n, width):
+	# Rows of finite values with NaN of both signs and several payloads,
+	# both infinities and -0.0 scattered through them.
+	rng = numpy.random.default_rng(0)
+	values = rng.normal(size=(n, 2, width)).astype(numpy.float32)
+	bits = values.view(numpy.uint32)
+	flat, flat_bits = values.reshape(-1), bits.reshape(-1)
+	idxs = rng.choice(flat.size, size=flat.size // 5, replace=False)
+	for k, idx in enumerate(idxs):
+		kind = k % 6
+		if kind == 0:
+			flat[idx] = numpy.nan
+		elif kind == 1:
+			flat_bits[idx] = 0xFFC00000
+		elif kind == 2:
+			flat_bits[idx] = 0x7F800001 + k
+		elif kind == 3:
+			flat[idx] = numpy.inf
+		elif kind == 4:
+			flat[idx] = -numpy.inf
+		else:
+			flat[idx] = -0.0
+
+	# The first rows are all finite, so that some blocks are skipped.
+	values[:3] = 1.5
+	return values
+
+
+@pytest.mark.parametrize("n_jobs", [1, 3])
+@pytest.mark.parametrize("block_size", [1, 40, 2**20])
+def test_nan_to_num_rows_threads_match_numpy(monkeypatch, n_jobs, block_size):
+	# Every block is replaced as numpy.nan_to_num replaces it, bit for bit,
+	# on any number of threads: NaN of any sign or payload becomes +0.0, an
+	# infinity the largest finite float32 of its sign, and -0.0 is kept.
+	monkeypatch.setattr(tangermeme.io, "_NAN_TO_NUM_MIN_BLOCKS", 1)
+	monkeypatch.setattr(tangermeme.io, "ThreadPoolExecutor", _RecordingPool)
+	monkeypatch.setattr(_RecordingPool, "sizes", [])
+
+	values = _non_finite_rows(23, 5)
+	expected = numpy.nan_to_num(values.copy())
+	out = tangermeme.io._nan_to_num_rows(values, block_size=block_size,
+		n_jobs=n_jobs)
+
+	assert out is values
+	assert values.tobytes() == expected.tobytes()
+	assert numpy.isfinite(values).all()
+
+	n_blocks = len(range(0, 23, max(1, block_size // 10)))
+	if n_jobs == 1:
+		assert _RecordingPool.sizes == []
+	else:
+		assert _RecordingPool.sizes == [min(n_jobs, n_blocks)]
+
+
+def test_nan_to_num_rows_few_blocks_are_serial(monkeypatch):
+	# Fewer blocks than _NAN_TO_NUM_MIN_BLOCKS are checked without threads.
+	monkeypatch.setattr(tangermeme.io, "ThreadPoolExecutor", _RecordingPool)
+	monkeypatch.setattr(_RecordingPool, "sizes", [])
+
+	n_min = tangermeme.io._NAN_TO_NUM_MIN_BLOCKS
+	for n_blocks, sizes in [(n_min - 1, []), (n_min, [8])]:
+		_RecordingPool.sizes = []
+		values = _non_finite_rows(n_blocks, 5)
+		expected = numpy.nan_to_num(values.copy())
+		tangermeme.io._nan_to_num_rows(values, block_size=10, n_jobs=8)
+		assert values.tobytes() == expected.tobytes()
+		assert _RecordingPool.sizes == sizes
+
+
+@pytest.mark.parametrize("n_jobs", [2, -1])
+def test_extract_loci_nan_and_inf_threads(tmp_path, monkeypatch, n_jobs):
+	# extract_loci passes n_jobs, with -1 as the number of CPUs, to
+	# _nan_to_num_rows for signals and in_signals, and the threaded
+	# replacement, in blocks of one row each, gives the bytes that one thread
+	# gives. chr1 is 50 bp in the bigWig but 284 bp in test.fa, so positions
+	# past base 50 are read as NaN.
+	path = str(tmp_path / "inf.bw")
+	write_raw_bigwig(path, {'chr1': 50, 'chr2': 211}, [('chr1', 1, 0, 0,
+		[(0, 10, 1.0), (10, 12, numpy.inf), (12, 14, -numpy.inf),
+		(14, 50, 2.0)]), ('chr2', 1, 0, 0, [(0, 211, 0.5)])])
+
+	nan_to_num_rows = tangermeme.io._nan_to_num_rows
+	calls = []
+
+	def one_row_blocks(values, n_jobs=1):
+		calls.append(n_jobs)
+		return nan_to_num_rows(values, block_size=1, n_jobs=n_jobs)
+
+	monkeypatch.setattr(tangermeme.io, "_NAN_TO_NUM_MIN_BLOCKS", 1)
+	monkeypatch.setattr(tangermeme.io, "_nan_to_num_rows", one_row_blocks)
+
+	loci = pandas.DataFrame({0: ['chr1'] * 4, 1: [7, 43, 20, 45],
+		2: [17, 53, 30, 55]})
+	X1, y1, y_in1 = extract_loci(loci, "tests/data/test.fa", [path], [path],
+		in_window=6, out_window=10, n_jobs=1)
+	X, y, y_in = extract_loci(loci, "tests/data/test.fa", [path], [path],
+		in_window=6, out_window=10, n_jobs=n_jobs)
+
+	cpus = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') \
+		else os.cpu_count()
+	threads = cpus if n_jobs == -1 else n_jobs
+	assert calls == [1, 1, threads, threads]
+	assert torch.equal(X, X1)
+	assert y.numpy().tobytes() == y1.numpy().tobytes()
+	assert y_in.numpy().tobytes() == y_in1.numpy().tobytes()
+
+	big = numpy.finfo(numpy.float32).max
+	assert_array_almost_equal(y[:2, 0], [[1, 1, 1, big, big, -big, -big, 2, 2,
+		2], [2, 2, 2, 2, 2, 2, 2, 0, 0, 0]])
+	assert numpy.isfinite(y.numpy()).all()
+	assert numpy.isfinite(y_in.numpy()).all()
