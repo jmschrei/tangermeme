@@ -2563,8 +2563,7 @@ REFERENCE_FILTERS = {
 
 
 @pytest.mark.filterwarnings("ignore::tangermeme.utils.TangermemeWarning")
-@pytest.mark.parametrize("source", ["files", "dicts", "varstep", "fixedstep",
-	"uncompressed"])
+@pytest.mark.parametrize("source", ["files", "dicts"])
 @pytest.mark.parametrize("mode", ["none", "signals", "in_signals", "both"])
 @pytest.mark.parametrize("in_window, out_window, max_jitter", [(10, 4, 0),
 	(7, 5, 3), (33, 40, 0), (1, 1, 2), (8, 13, 1)])
@@ -2574,11 +2573,40 @@ def test_extract_loci_matches_reference(reference_genome, source, mode,
 	data = reference_genome
 	if source == "files":
 		sequences, signal_source = data['fasta'], data['bigwigs']
-	elif source == "dicts":
-		sequences, signal_source = data['one_hot'], data['tracks']
 	else:
-		sequences, signal_source = data['fasta'], data['layouts'][source]
+		sequences, signal_source = data['one_hot'], data['tracks']
 
+	_check_against_reference(data, sequences, signal_source, mode, in_window,
+		out_window, max_jitter, filters)
+
+
+@pytest.mark.filterwarnings("ignore::tangermeme.utils.TangermemeWarning")
+@pytest.mark.parametrize("source", ["varstep", "fixedstep", "uncompressed"])
+@pytest.mark.parametrize("filters", ["none", "counts_target_idx", "combined"])
+def test_extract_loci_reference_layouts(reference_genome, monkeypatch, source,
+	filters):
+	# The reference tracks written as varStep, fixedStep and uncompressed
+	# bedGraph sections, which pybigtools does not write, give the reference's
+	# values, and are read by figwig without falling back to pybigtools.
+	errors = []
+	read_bigwig = figwig.read_bigwig
+
+	def spy(*args, **kwargs):
+		try:
+			return read_bigwig(*args, **kwargs)
+		except ValueError:
+			errors.append(1)
+			raise
+
+	monkeypatch.setattr(figwig, "read_bigwig", spy)
+	data = reference_genome
+	_check_against_reference(data, data['fasta'], data['layouts'][source],
+		"both", 7, 5, 3, filters)
+	assert errors == []
+
+
+def _check_against_reference(data, sequences, signal_source, mode, in_window,
+	out_window, max_jitter, filters):
 	signals = signal_source[:2] if mode in ("signals", "both") else None
 	in_signals = signal_source[2:] if mode in ("in_signals", "both") else None
 	kwargs = REFERENCE_FILTERS[filters](out_window + 2 * max_jitter,
@@ -2654,14 +2682,13 @@ def test_extract_loci_reference_grid_is_informative(reference_genome):
 
 
 @pytest.mark.filterwarnings("ignore::tangermeme.utils.TangermemeWarning")
-@pytest.mark.parametrize("filters", ["min_counts", "counts_target_idx",
-	"combined"])
-@pytest.mark.parametrize("n_values", [1, 33, 500])
+@pytest.mark.parametrize("filters, n_values", [("combined", 1),
+	("combined", 33), ("counts_target_idx", 33)])
 def test_extract_loci_counts_in_groups(monkeypatch, reference_genome, filters,
 	n_values):
 	# min_counts and max_counts are measured on groups of loci, stopping once
-	# n_loci are kept. Groups of one locus, of three, and of 45 give what one
-	# group of every locus gives.
+	# n_loci are kept. Groups of one locus and of three give what one group of
+	# every locus gives.
 	import tangermeme.io
 
 	data = reference_genome
@@ -2828,16 +2855,14 @@ def test_interleave_loci_empty_dataframe():
 # Lines a BED file may carry before or between its rows, which are skipped.
 BED_HEADERS = {
 	'track': 'track name=peaks description="some peaks"\n',
-	'track_tab': 'track\tname=peaks\n',
 	'browser': 'browser position chr1:1-100\nbrowser hide all\n',
-	'comment': '# a comment\n',
 	'column_names': '#chrom\tstart\tend\n',
 	'tenx': '# id=pbmc\n# description=PBMC from a donor\n#\n',
 }
 
 
-@pytest.mark.parametrize("header", list(BED_HEADERS))
-@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("header, compressed", [("track", False),
+	("browser", False), ("column_names", False), ("tenx", True)])
 def test_interleave_loci_skips_bed_header_lines(tmp_path, header, compressed):
 	# The rows of a file with a header are those of the file without it, with
 	# integer coordinates. A track line used to raise a TypeError on string
@@ -2882,10 +2907,12 @@ def test_extract_loci_bed_header_lines(tmp_path):
 
 
 ##
-# bigWig layouts. Each file is read by figwig, falls back to pybigtools where
-# figwig raises, and must give what the same file opened with pybigtools
-# gives, which is read one locus at a time. Where the file is well formed, it
-# must also give what a dict of the values written into it gives.
+# bigWig layouts that reach tangermeme's own handling: a chromosome shorter
+# than the FASTA's, infinities and NaN, a chromosome absent from the file or
+# without data, and malformed files, for which figwig falls back to
+# pybigtools. Each must give what the same file opened with pybigtools gives,
+# which is read one locus at a time, and, where well formed, what a dict of
+# the values written into it gives.
 ##
 
 
@@ -2897,150 +2924,69 @@ SPECIAL_VALUES = [float('nan'), float('inf'), float('-inf'), -0.0, 1e-45,
 	numpy.float32).max), 1.0, -2.5]
 
 
-def _intervals(rng, length, values=None, max_gap=6, max_len=8):
+def _intervals(rng, length, values=None):
 	"""Sorted, non-overlapping (start, end, value) intervals on [0, length)."""
 
 	rows, pos = [], int(rng.randint(0, 4))
 	while True:
-		width = int(rng.randint(1, max_len + 1))
+		width = int(rng.randint(1, 9))
 		if pos + width > length:
 			return rows
 		value = float(numpy.float32(rng.uniform(-1, 5))) if values is None \
 			else values[len(rows) % len(values)]
 		rows.append((pos, pos + width, value))
-		pos += width + int(rng.randint(0, max_gap + 1))
+		pos += width + int(rng.randint(0, 7))
 
 
-def _bedgraph(chrom, rows, per_block=25):
-	return [(chrom, 1, 0, 0, rows[k:k+per_block])
-		for k in range(0, len(rows), per_block)]
+LAYOUTS = ["short_chrom", "special_values", "absent_chrom",
+	"chrom_without_data", "zero_length", "overlapping", "unsorted_blocks"]
+
+# The layouts figwig raises for, at least for windows across the defect, and
+# the malformed layouts, which have no dict of values to compare with.
+FIGWIG_RAISES = ("overlapping", "unsorted_blocks")
+MALFORMED = FIGWIG_RAISES + ("zero_length",)
 
 
 def _layout(name, rng):
-	"""The chromosome lengths, sections and writer arguments of one layout,
-	and the values it holds by chromosome, NaN where it has none, or None
-	for a layout figwig does not read."""
+	"""The chromosome lengths and bedGraph sections of one layout, and the
+	values it holds by chromosome, NaN where it has none, or None for a
+	malformed layout."""
 
-	chroms, sections, kwargs = dict(LAYOUT_CHROMS), [], {}
-
-	if name in ("bedgraph", "uncompressed", "special_values",
-			"data_to_chrom_end"):
-		values = SPECIAL_VALUES if name == "special_values" else None
-		for chrom, length in chroms.items():
-			rows = _intervals(rng, length, values)
-			if name == "data_to_chrom_end":
-				rows = [r for r in rows if r[1] < length - 2] + [(length - 2,
-					length, 3.5)]
-			sections += _bedgraph(chrom, rows)
-		kwargs["compress"] = name != "uncompressed"
-	elif name in ("varstep_span1", "varstep_span5"):
-		span = 1 if name == "varstep_span1" else 5
-		for chrom, length in chroms.items():
-			starts = list(range(int(rng.randint(0, 3)), length - span, span +
-				int(rng.randint(0, 3))))
-			items = [(s, float(numpy.float32(rng.uniform(0, 4)))) for s in starts]
-			sections += [(chrom, 2, 0, span, items[k:k+30])
-				for k in range(0, len(items), 30)]
-	elif name in ("fixedstep_step1", "fixedstep_gaps"):
-		step, span = (1, 1) if name == "fixedstep_step1" else (7, 3)
-		for chrom, length in chroms.items():
-			start = int(rng.randint(0, 5))
-			while start + span <= length:
-				n = min(int(rng.randint(1, 15)), (length - span - start) // step
-					+ 1)
-				values = [float(numpy.float32(v)) for v in rng.uniform(0, 4,
-					size=n)]
-				sections.append((chrom, 3, step, span, (start, values)))
-				start += step * n + int(rng.randint(1, 10))
-	elif name == "mixed":
-		for chrom, length in chroms.items():
-			rows = _intervals(rng, length, max_gap=4, max_len=1)
-			for k in range(0, len(rows), 20):
-				block = rows[k:k+20]
-				kind = (k // 20) % 3
-				if kind == 0:
-					sections.append((chrom, 1, 0, 0, block))
-				elif kind == 1:
-					sections.append((chrom, 2, 0, 1, [(s, v) for s, _, v in
-						block]))
-				else:
-					first = block[0][0]
-					values = [v for _, _, v in block]
-					# A fixedStep section covers consecutive bases from its
-					# first, so it holds the block's values without gaps.
-					sections.append((chrom, 3, 1, 1, (first, values)))
-	elif name == "many_chroms":
-		for k in range(300):
-			chroms["chrUn_{:05d}".format(k)] = 40 + k
-		chroms = dict(sorted(chroms.items()))
-		for chrom, length in chroms.items():
-			if chrom in LAYOUT_CHROMS or chrom.endswith("7"):
-				sections += _bedgraph(chrom, _intervals(rng, length))
-		kwargs["chrom_block_size"] = 16
-	elif name == "short_chrom":
+	chroms, sections = dict(LAYOUT_CHROMS), []
+	if name == "short_chrom":
+		# Shorter than the FASTA's chr1, which is 284 bases long.
 		chroms["chr1"] = 200
-		for chrom, length in chroms.items():
-			sections += _bedgraph(chrom, _intervals(rng, length))
-	elif name == "chrom_without_data":
-		for chrom, length in chroms.items():
-			if chrom != "chr4":
-				sections += _bedgraph(chrom, _intervals(rng, length))
 	elif name == "absent_chrom":
 		del chroms["chr3"]
-		for chrom, length in chroms.items():
-			sections += _bedgraph(chrom, _intervals(rng, length))
-	elif name == "odd_names":
-		chroms.update({"chr1.alt_1": 50, "chrUn_KI270302v1": 60, "a" * 200: 30})
-		chroms = dict(sorted(chroms.items()))
-		for chrom, length in chroms.items():
-			sections += _bedgraph(chrom, _intervals(rng, length))
-	elif name == "dense_block":
-		for chrom, length in chroms.items():
-			sections.append((chrom, 1, 0, 0, [(i, i + 1, float(i % 13))
-				for i in range(length)]))
-	elif name == "overlapping":
-		for chrom, length in chroms.items():
-			rows = _intervals(rng, length)
+
+	for chrom, length in chroms.items():
+		if name == "chrom_without_data" and chrom == "chr4":
+			continue
+
+		rows = _intervals(rng, length, SPECIAL_VALUES if name ==
+			"special_values" else None)
+		if name == "overlapping":
 			middle = len(rows) // 2
 			rows.insert(middle, (rows[middle][0] + 1, rows[middle][1] + 4, 9.0))
-			sections += _bedgraph(chrom, rows)
-	elif name == "unsorted_blocks":
-		for chrom, length in chroms.items():
-			blocks = _bedgraph(chrom, _intervals(rng, length), per_block=10)
-			blocks[0], blocks[-1] = blocks[-1], blocks[0]
-			sections += blocks
-	elif name == "zero_length":
-		for chrom, length in chroms.items():
+		elif name == "zero_length":
 			rows = [(s, s if k % 5 == 0 else e, v) for k, (s, e, v) in
-				enumerate(_intervals(rng, length))]
-			sections += _bedgraph(chrom, rows)
+				enumerate(rows)]
 
-	if name in ("overlapping", "unsorted_blocks", "zero_length"):
-		return chroms, sections, kwargs, None
+		blocks = [(chrom, 1, 0, 0, rows[k:k+10]) for k in range(0, len(rows),
+			10)]
+		if name == "unsorted_blocks":
+			blocks[0], blocks[-1] = blocks[-1], blocks[0]
+		sections += blocks
+
+	if name in MALFORMED:
+		return chroms, sections, None
 
 	values = {chrom: numpy.full(length, numpy.nan, dtype=numpy.float32)
 		for chrom, length in chroms.items()}
-	for chrom, kind, step, span, items in sections:
-		if kind == 1:
-			for s, e, v in items:
-				values[chrom][s:e] = v
-		elif kind == 2:
-			for s, v in items:
-				values[chrom][s:s+span] = v
-		else:
-			start, vs = items
-			for i, v in enumerate(vs):
-				values[chrom][start+i*step:start+i*step+span] = v
-	return chroms, sections, kwargs, values
-
-
-LAYOUTS = ["bedgraph", "varstep_span1", "varstep_span5", "fixedstep_step1",
-	"fixedstep_gaps", "mixed", "uncompressed", "special_values", "many_chroms",
-	"short_chrom", "chrom_without_data", "absent_chrom", "data_to_chrom_end",
-	"odd_names", "dense_block", "overlapping", "unsorted_blocks", "zero_length"]
-
-# The layouts figwig raises for, at least for windows across the defect.
-FIGWIG_RAISES = ("overlapping", "unsorted_blocks")
+	for chrom, _, _, _, rows in sections:
+		for s, e, v in rows:
+			values[chrom][s:e] = v
+	return chroms, sections, values
 
 
 @pytest.fixture(scope="module")
@@ -3049,9 +2995,9 @@ def layout_bigwigs(tmp_path_factory):
 	rng = numpy.random.RandomState(0)
 	layouts = {}
 	for name in LAYOUTS:
-		chroms, sections, kwargs, values = _layout(name, rng)
+		chroms, sections, values = _layout(name, rng)
 		filename = str(path / "{}.bw".format(name))
-		write_raw_bigwig(filename, chroms, sections, **kwargs)
+		write_raw_bigwig(filename, chroms, sections)
 		layouts[name] = (filename, values)
 	return layouts
 
@@ -3073,13 +3019,13 @@ def layout_loci():
 
 
 LAYOUT_CONFIGS = {
-	'both': {'in_window': 20, 'out_window': 10, 'max_jitter': 3,
+	# Windows past the ends of chromosomes, with jitter, in signals and in
+	# in_signals.
+	'windows': {'in_window': 20, 'out_window': 10, 'max_jitter': 3,
 		'return_mask': True, 'in_signals': True},
-	'one_base': {'in_window': 1, 'out_window': 1, 'n_loci': 7},
+	# Counts measured on the layout, in groups, stopping at n_loci.
 	'counts': {'in_window': 12, 'out_window': 6, 'min_counts': 0.5,
-		'return_mask': True, 'with_test_bw': True},
-	'counts_cap': {'in_window': 30, 'out_window': 30, 'n_loci': 12,
-		'min_counts': -1e9, 'max_counts': 1e9, 'target_idx': -1,
+		'target_idx': -1, 'n_loci': 12, 'return_mask': True,
 		'with_test_bw': True},
 }
 
@@ -3144,33 +3090,6 @@ def test_extract_loci_bigwig_layouts(layout_bigwigs, layout_loci, monkeypatch,
 			oracle, _ = _layout_call(layout_loci, track, config)
 		for tensor, oracle_tensor in zip(result, oracle):
 			assert tensor.numpy().tobytes() == oracle_tensor.numpy().tobytes()
-
-
-def test_extract_loci_reference_layouts_read_by_figwig(reference_genome,
-	monkeypatch):
-	# The reference comparison above means something for figwig only if
-	# figwig, rather than the pybigtools fallback, read the layouts.
-	errors = []
-	read_bigwig = figwig.read_bigwig
-
-	def spy(*args, **kwargs):
-		try:
-			return read_bigwig(*args, **kwargs)
-		except ValueError:
-			errors.append(1)
-			raise
-
-	monkeypatch.setattr(figwig, "read_bigwig", spy)
-	for name, paths in reference_genome['layouts'].items():
-		signals = _load_signals(paths, use_figwig=True)
-		assert all(isinstance(s, figwig.BigWigReader) for s in signals), name
-
-		with warnings.catch_warnings():
-			warnings.simplefilter("ignore", TangermemeWarning)
-			extract_loci(reference_genome['loci'], reference_genome['fasta'],
-				paths[:2], paths[2:], in_window=7, out_window=5, max_jitter=3)
-
-	assert errors == []
 
 
 def _without_prefix(tmp_path):

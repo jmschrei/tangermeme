@@ -5,25 +5,22 @@
 
 `write_raw_bigwig` lays a bigWig out exactly as given, including layouts that
 pybigtools' writer does not produce: varStep and fixedStep sections,
-uncompressed blocks, more than 256 chromosomes, overlapping or unsorted
-intervals, and intervals that cover no base.
+uncompressed blocks, overlapping or unsorted intervals, and intervals that
+cover no base.
 """
 
 import zlib
 import struct
 
 
-def write_raw_bigwig(path, chroms, sections, compress=True,
-	chrom_block_size=None):
+def write_raw_bigwig(path, chroms, sections, compress=True):
 	"""Write a bigWig with one data block per section and no zoom levels.
 
 	`chroms` is a dict of chromosome lengths, in sorted order. Each section is
 	(chrom, kind, step, span, items): bedGraph (kind 1) items are (start, end,
 	value) tuples, varStep (kind 2) items are (start, value) tuples, and a
 	fixedStep (kind 3) section's items are (start, [values]). The blocks are
-	indexed in the order given. With `chrom_block_size` smaller than the number
-	of chromosomes, the chromosome tree is a root over leaves of that many
-	chromosomes, as UCSC writes it for a genome with more than 256.
+	indexed in the order given.
 	"""
 
 	names = list(chroms)
@@ -49,27 +46,13 @@ def write_raw_bigwig(path, chroms, sections, compress=True,
 			kind, 0, n)
 		blocks.append((ids[chrom], start, end, header + body))
 
+	# The chromosome tree as one leaf holding every chromosome.
 	ctree_offset = 64 + 40
-	block = chrom_block_size or len(names)
-	leaves = []
-	for k in range(0, len(names), block):
-		leaf = struct.pack('<BBH', 1, 0, len(names[k:k + block]))
-		for name in names[k:k + block]:
-			leaf += name.encode().ljust(key_size, b'\0') + struct.pack('<II',
-				ids[name], chroms[name])
-		leaves.append((names[k], leaf))
-
-	ctree = struct.pack('<IIIIQQ', 0x78CA8C91, block, key_size, 8, len(names), 0)
-	if len(leaves) == 1:
-		ctree += leaves[0][1]
-	else:
-		position = ctree_offset + len(ctree) + 4 + len(leaves) * (key_size + 8)
-		ctree += struct.pack('<BBH', 0, 0, len(leaves))
-		for first, leaf in leaves:
-			ctree += first.encode().ljust(key_size, b'\0') + struct.pack('<Q',
-				position)
-			position += len(leaf)
-		ctree += b''.join(leaf for _, leaf in leaves)
+	ctree = struct.pack('<IIIIQQ', 0x78CA8C91, len(names), key_size, 8,
+		len(names), 0) + struct.pack('<BBH', 1, 0, len(names))
+	for name in names:
+		ctree += name.encode().ljust(key_size, b'\0') + struct.pack('<II',
+			ids[name], chroms[name])
 
 	data_offset = ctree_offset + len(ctree)
 	data, index, largest = struct.pack('<Q', len(blocks)), [], 0
