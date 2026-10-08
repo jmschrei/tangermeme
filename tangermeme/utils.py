@@ -449,24 +449,49 @@ def _one_hot_encode_mapping(alphabet, ignore):
 
 @numba.njit(numba.int8(numba.uint32[::1],
 	numba.types.Array(numba.uint8, 1, 'C', readonly=True), numba.int8[::1],
-	numba.uint32[::1]), cache=True)
-def _fast_one_hot_encode_rows4(X_ohe, seq, mapping, patterns):
+	numba.uint32[::1], numba.int64, numba.int64), cache=True)
+def _fast_one_hot_encode_rows4(X_ohe, seq, mapping, patterns, begin, end):
 	"""Write each row of a four-character one-hot encoding as one uint32.
 
 	`X_ohe` is an (n, 4) int8 array viewed as n uint32 values, and row i is
-	`patterns[seq[i]]`, so every element is written. The smallest value of
-	`mapping` over the first n bytes of `seq` is returned, which is -2 when
-	one of them is a character in neither the alphabet nor the ignored
-	characters.
+	`patterns[seq[i]]` for `begin <= i < end`, so every element of those rows
+	is written. The smallest value of `mapping` over those bytes of `seq` is
+	returned, which is -2 when one of them is a character in neither the
+	alphabet nor the ignored characters.
 	"""
 
 	low = numpy.int8(0)
-	for i in range(X_ohe.shape[0]):
+	for i in range(begin, end):
 		byte = seq[i]
 		low = min(low, mapping[byte])
 		X_ohe[i] = patterns[byte]
 
 	return low
+
+
+# The fewest bases one_hot_encode splits across threads. Below it the
+# serial kernel is faster than starting numba's threads.
+_ONE_HOT_PARALLEL_MIN = 2**18
+
+
+# Without a signature this compiles on its first call rather than when
+# tangermeme is imported, as _fast_one_hot_encode_fasta_parallel does.
+@numba.njit(parallel=True, cache=True)
+def _fast_one_hot_encode_rows4_parallel(X_ohe, seq, mapping, patterns,
+	n_chunks):
+	"""`_fast_one_hot_encode_rows4` over every row, in `n_chunks` chunks.
+
+	The chunks are contiguous runs of rows encoded on numba's threads, and
+	the smallest value any of them returns is returned.
+	"""
+
+	n = X_ohe.shape[0]
+	lows = numpy.empty(n_chunks, dtype=numpy.int8)
+	for chunk in numba.prange(n_chunks):
+		lows[chunk] = _fast_one_hot_encode_rows4(X_ohe, seq, mapping, patterns,
+			chunk * n // n_chunks, (chunk + 1) * n // n_chunks)
+
+	return lows.min()
 
 
 @numba.njit("void(int8[:, :], int8[:], int8[:])", cache=True)
@@ -492,6 +517,7 @@ def one_hot_encode(
 	ignore: list[str] = ['N'],
 	desc: str | None = None,
 	verbose: bool = False,
+	n_jobs: int = 1,
 	**kwargs: Any,
 ) -> torch.Tensor:
 	"""Converts a string or list of characters into a one-hot encoding.
@@ -525,6 +551,13 @@ def one_hot_encode(
 		are set to 1 in the returned one-hot encoding. Put another way, the
 		sum across characters is equal to 1 for all positions except those
 		where the original sequence is in this list. Default is ['N'].
+
+	n_jobs: int, optional
+		The number of threads a long sequence is encoded with, or -1 for one
+		per CPU, capped by numba's NUMBA_NUM_THREADS. Only an alphabet of four
+		ASCII characters, such as the default, is split across threads, and
+		only for sequences of at least 262,144 characters. The returned
+		encoding does not depend on it. Default is 1.
 
 
 	Returns
@@ -571,10 +604,23 @@ def one_hot_encode(
 			seq_bytes = None
 
 		one_hot_encoding = numpy.empty((n, m), dtype=numpy.int8)
-		if seq_bytes is None or _fast_one_hot_encode_rows4(
-				one_hot_encoding.reshape(-1).view(numpy.uint32),
-				numpy.frombuffer(seq_bytes, dtype=numpy.uint8),
-				one_hot_mapping, patterns) == -2:
+		if seq_bytes is None:
+			low = -2
+		else:
+			X32 = one_hot_encoding.reshape(-1).view(numpy.uint32)
+			seq_idxs = numpy.frombuffer(seq_bytes, dtype=numpy.uint8)
+
+			n_threads = numba.config.NUMBA_NUM_THREADS if n_jobs == -1 \
+				else min(int(n_jobs), numba.config.NUMBA_NUM_THREADS)
+			if n >= _ONE_HOT_PARALLEL_MIN and n_threads > 1:
+				with _numba_threads(n_threads):
+					low = _fast_one_hot_encode_rows4_parallel(X32, seq_idxs,
+						one_hot_mapping, patterns, n_threads)
+			else:
+				low = _fast_one_hot_encode_rows4(X32, seq_idxs,
+					one_hot_mapping, patterns, 0, n)
+
+		if low == -2:
 			raise ValueError("Encountered character that is not in " +
 				"`alphabet` or in `ignore`.")
 	else:
