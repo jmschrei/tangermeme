@@ -413,12 +413,15 @@ def characters(
 
 @functools.lru_cache(maxsize=64)
 def _one_hot_encode_mapping(alphabet, ignore):
-	"""The byte lookup table of one_hot_encode, built once per alphabet.
+	"""The byte lookup tables of one_hot_encode, built once per alphabet.
 
 	`alphabet` and `ignore` are the joined strings. Each UTF-8 byte of a
 	character in `alphabet` maps to that character's index, each byte of a
-	character in `ignore` to -1, and every other byte to -2. The table is
-	shared between calls and must not be written to.
+	character in `ignore` to -1, and every other byte to -2. When `alphabet`
+	is four ASCII characters and `ignore` is ASCII, the second table holds,
+	for each byte, the four int8 values of its row read as one uint32;
+	otherwise it is None. The tables are shared between calls and must not
+	be written to.
 	"""
 
 	e = "utf8"
@@ -432,7 +435,37 @@ def _one_hot_encode_mapping(alphabet, ignore):
 	for i, idx in enumerate(ignore_idxs):
 		one_hot_mapping[idx] = -1
 
-	return one_hot_mapping
+	patterns = None
+	if len(alphabet) == 4 and alphabet.isascii() and ignore.isascii():
+		rows = numpy.zeros((256, 4), dtype=numpy.int8)
+		for byte in range(256):
+			if one_hot_mapping[byte] >= 0:
+				rows[byte, one_hot_mapping[byte]] = 1
+
+		patterns = rows.view(numpy.uint32).reshape(256)
+
+	return one_hot_mapping, patterns
+
+
+@numba.njit("int8(uint32[::1], int8[::1], int8[::1], uint32[::1])",
+	cache=True)
+def _fast_one_hot_encode_rows4(X_ohe, seq, mapping, patterns):
+	"""Write each row of a four-character one-hot encoding as one uint32.
+
+	`X_ohe` is an (n, 4) int8 array viewed as n uint32 values, and row i is
+	`patterns[seq[i]]`, so every element is written. The smallest value of
+	`mapping` over the first n bytes of `seq` is returned, which is -2 when
+	one of them is a character in neither the alphabet nor the ignored
+	characters.
+	"""
+
+	low = numpy.int8(0)
+	for i in range(X_ohe.shape[0]):
+		byte = numba.uint8(seq[i])
+		low = min(low, mapping[byte])
+		X_ohe[i] = patterns[byte]
+
+	return low
 
 
 @numba.njit("void(int8[:, :], int8[:], int8[:])", cache=True)
@@ -516,14 +549,25 @@ def one_hot_encode(
 
 	# Only strings are cached; any other alphabet raises as it always has.
 	if isinstance(alphabet, str):
-		one_hot_mapping = _one_hot_encode_mapping(alphabet, ignore)
+		one_hot_mapping, patterns = _one_hot_encode_mapping(alphabet, ignore)
 	else:
-		one_hot_mapping = _one_hot_encode_mapping.__wrapped__(alphabet, ignore)
+		one_hot_mapping, patterns = _one_hot_encode_mapping.__wrapped__(
+			alphabet, ignore)
 
 	n, m = len(sequence), len(alphabet)
 
-	one_hot_encoding = numpy.zeros((n, m), dtype=numpy.int8)
-	_fast_one_hot_encode(one_hot_encoding, seq_idxs, one_hot_mapping)
+	# With an ASCII alphabet and ignore list, the first byte that is not
+	# ASCII is among the first n, so checking n bytes finds it.
+	if patterns is not None:
+		one_hot_encoding = numpy.empty((n, m), dtype=numpy.int8)
+		if _fast_one_hot_encode_rows4(one_hot_encoding.reshape(-1).view(
+				numpy.uint32), seq_idxs, one_hot_mapping, patterns) == -2:
+			raise ValueError("Encountered character that is not in " +
+				"`alphabet` or in `ignore`.")
+	else:
+		one_hot_encoding = numpy.zeros((n, m), dtype=numpy.int8)
+		_fast_one_hot_encode(one_hot_encoding, seq_idxs, one_hot_mapping)
+
 	return torch.from_numpy(one_hot_encoding).type(dtype).T
 
 
