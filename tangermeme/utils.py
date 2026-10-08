@@ -447,8 +447,9 @@ def _one_hot_encode_mapping(alphabet, ignore):
 	return one_hot_mapping, patterns
 
 
-@numba.njit("int8(uint32[::1], int8[::1], int8[::1], uint32[::1])",
-	cache=True)
+@numba.njit(numba.int8(numba.uint32[::1],
+	numba.types.Array(numba.uint8, 1, 'C', readonly=True), numba.int8[::1],
+	numba.uint32[::1]), cache=True)
 def _fast_one_hot_encode_rows4(X_ohe, seq, mapping, patterns):
 	"""Write each row of a four-character one-hot encoding as one uint32.
 
@@ -461,7 +462,7 @@ def _fast_one_hot_encode_rows4(X_ohe, seq, mapping, patterns):
 
 	low = numpy.int8(0)
 	for i in range(X_ohe.shape[0]):
-		byte = numba.uint8(seq[i])
+		byte = seq[i]
 		low = min(low, mapping[byte])
 		X_ohe[i] = patterns[byte]
 
@@ -544,8 +545,11 @@ def one_hot_encode(
 
 	ignore = ''.join(ignore)
 
+	# Anything but a str raises bytearray's TypeError here, before the
+	# alphabet is read, as it always has.
 	e = "utf8"
-	seq_idxs = numpy.frombuffer(bytearray(sequence, e), dtype=numpy.int8)
+	if not isinstance(sequence, str):
+		bytearray(sequence, e)
 
 	# Only strings are cached; any other alphabet raises as it always has.
 	if isinstance(alphabet, str):
@@ -556,15 +560,25 @@ def one_hot_encode(
 
 	n, m = len(sequence), len(alphabet)
 
-	# With an ASCII alphabet and ignore list, the first byte that is not
-	# ASCII is among the first n, so checking n bytes finds it.
+	# With an ASCII alphabet and ignore list, a character that is not ASCII
+	# is in neither, so a sequence that is not ASCII raises the error of the
+	# byte-wise path, after the same UTF-8 encoding.
 	if patterns is not None:
+		try:
+			seq_bytes = sequence.encode('ascii')
+		except UnicodeEncodeError:
+			bytearray(sequence, e)
+			seq_bytes = None
+
 		one_hot_encoding = numpy.empty((n, m), dtype=numpy.int8)
-		if _fast_one_hot_encode_rows4(one_hot_encoding.reshape(-1).view(
-				numpy.uint32), seq_idxs, one_hot_mapping, patterns) == -2:
+		if seq_bytes is None or _fast_one_hot_encode_rows4(
+				one_hot_encoding.reshape(-1).view(numpy.uint32),
+				numpy.frombuffer(seq_bytes, dtype=numpy.uint8),
+				one_hot_mapping, patterns) == -2:
 			raise ValueError("Encountered character that is not in " +
 				"`alphabet` or in `ignore`.")
 	else:
+		seq_idxs = numpy.frombuffer(bytearray(sequence, e), dtype=numpy.int8)
 		one_hot_encoding = numpy.zeros((n, m), dtype=numpy.int8)
 		_fast_one_hot_encode(one_hot_encoding, seq_idxs, one_hot_mapping)
 
