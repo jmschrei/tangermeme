@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import random
 import warnings
+import functools
 import contextlib
 from typing import Any
 
@@ -410,6 +411,30 @@ def characters(
 	return ''.join(dna_chars)
 
 
+@functools.lru_cache(maxsize=64)
+def _one_hot_encode_mapping(alphabet, ignore):
+	"""The byte lookup table of one_hot_encode, built once per alphabet.
+
+	`alphabet` and `ignore` are the joined strings. Each UTF-8 byte of a
+	character in `alphabet` maps to that character's index, each byte of a
+	character in `ignore` to -1, and every other byte to -2. The table is
+	shared between calls and must not be written to.
+	"""
+
+	e = "utf8"
+	alpha_idxs = numpy.frombuffer(bytearray(alphabet, e), dtype=numpy.int8)
+	ignore_idxs = numpy.frombuffer(bytearray(ignore, e), dtype=numpy.int8)
+
+	one_hot_mapping = numpy.zeros(256, dtype=numpy.int8) - 2
+	for i, idx in enumerate(alpha_idxs):
+		one_hot_mapping[idx] = i
+
+	for i, idx in enumerate(ignore_idxs):
+		one_hot_mapping[idx] = -1
+
+	return one_hot_mapping
+
+
 @numba.njit("void(int8[:, :], int8[:], int8[:])", cache=True)
 def _fast_one_hot_encode(X_ohe, seq, mapping):
 	"""An internal function for quickly converting bytes to one-hot indexes."""
@@ -488,16 +513,12 @@ def one_hot_encode(
 
 	e = "utf8"
 	seq_idxs = numpy.frombuffer(bytearray(sequence, e), dtype=numpy.int8)
-	alpha_idxs = numpy.frombuffer(bytearray(alphabet, e), dtype=numpy.int8)
-	ignore_idxs = numpy.frombuffer(bytearray(ignore, e), dtype=numpy.int8)
 
-	one_hot_mapping = numpy.zeros(256, dtype=numpy.int8) - 2
-	for i, idx in enumerate(alpha_idxs):
-		one_hot_mapping[idx] = i
-
-	for i, idx in enumerate(ignore_idxs):
-		one_hot_mapping[idx] = -1
-
+	# Only strings are cached; any other alphabet raises as it always has.
+	if isinstance(alphabet, str):
+		one_hot_mapping = _one_hot_encode_mapping(alphabet, ignore)
+	else:
+		one_hot_mapping = _one_hot_encode_mapping.__wrapped__(alphabet, ignore)
 
 	n, m = len(sequence), len(alphabet)
 
