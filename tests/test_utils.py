@@ -720,6 +720,50 @@ def test_fast_one_hot_encode_raises():
 		_fast_one_hot_encode(X, seq, mapping)
 
 
+@pytest.mark.parametrize("n_jobs", [1, 2, 3, 4, -1, 1000])
+@pytest.mark.parametrize("length", [10, 2**18 - 1, 2**18 + 7])
+def test_one_hot_encode_n_jobs(n_jobs, length):
+	# The result does not depend on n_jobs, which only splits sequences of
+	# at least 2**18 characters across threads.
+	seq = _random_sequence(length, seed=10)
+	X = one_hot_encode(seq, n_jobs=n_jobs)
+
+	assert X.dtype == torch.int8
+	assert X.stride() == (1, 4)
+	assert numpy.array_equal(X.numpy(), _one_hot_reference(seq))
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bool])
+def test_one_hot_encode_n_jobs_dtype(dtype):
+	seq = _random_sequence(2**18 + 7, seed=11)
+	X = one_hot_encode(seq, dtype=dtype, n_jobs=4)
+
+	assert X.dtype == dtype
+	assert torch.equal(X, one_hot_encode(seq, dtype=dtype))
+
+
+def test_one_hot_encode_n_jobs_other_alphabets():
+	seq = _random_sequence(2**18 + 7, ''.join(_PROTEIN), seed=12)
+	X = one_hot_encode(seq, alphabet=_PROTEIN, ignore=[], n_jobs=4)
+	assert numpy.array_equal(X.numpy(), _one_hot_reference(seq, _PROTEIN, []))
+
+
+@pytest.mark.parametrize("position", [0, 2**17, 2**18 + 6])
+@pytest.mark.parametrize("char", ['Z', 'a', 'é'])
+def test_one_hot_encode_n_jobs_raises_unknown_character(position, char):
+	seq = list(_random_sequence(2**18 + 7, seed=13))
+	seq[position] = char
+
+	with pytest.raises(ValueError, match=_UNKNOWN):
+		one_hot_encode(''.join(seq), n_jobs=4)
+
+
+def test_one_hot_encode_n_jobs_restores_threads():
+	threads = numba.get_num_threads()
+	one_hot_encode(_random_sequence(2**18 + 7, seed=14), n_jobs=2)
+	assert numba.get_num_threads() == threads
+
+
 ###
 
 
