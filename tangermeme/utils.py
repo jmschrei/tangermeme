@@ -420,11 +420,13 @@ def _one_hot_encode_mapping(alphabet, ignore):
 	character in `ignore` to -1, and every other byte to -2. When `alphabet`
 	is four ASCII characters and `ignore` is ASCII, the second table holds,
 	for each byte, the four int8 values of its row read as one uint32, and
-	0xFFFFFFFF for a byte that maps to -2; otherwise it is None. A row of a
-	character has no bit set above the lowest bit of each byte, so OR-ing
-	the values of a sequence sets the highest bit only when one of its bytes
-	maps to -2. The tables are shared between calls and must not be written
-	to.
+	0xFFFFFFFF for a byte that maps to -2, and the third table holds, for
+	each pair of bytes read as the uint16 they make in memory, the eight
+	values of their two rows read as one uint64; otherwise both are None. A
+	row of a character has no bit set above the lowest bit of each byte, so
+	OR-ing the values of a sequence sets the highest bit of a row only when
+	one of its bytes maps to -2. The tables are shared between calls and
+	must not be written to.
 	"""
 
 	e = "utf8"
@@ -438,7 +440,7 @@ def _one_hot_encode_mapping(alphabet, ignore):
 	for i, idx in enumerate(ignore_idxs):
 		one_hot_mapping[idx] = -1
 
-	patterns = None
+	patterns, pairs = None, None
 	if len(alphabet) == 4 and alphabet.isascii() and ignore.isascii():
 		rows = numpy.zeros((256, 4), dtype=numpy.int8)
 		for byte in range(256):
@@ -448,7 +450,15 @@ def _one_hot_encode_mapping(alphabet, ignore):
 		patterns = rows.view(numpy.uint32).reshape(256).copy()
 		patterns[one_hot_mapping == -2] = 0xFFFFFFFF
 
-	return one_hot_mapping, patterns
+		# Byte k of the key is the k-th base in memory, whichever the byte
+		# order of the machine.
+		keys = numpy.arange(65536, dtype=numpy.uint16).view(numpy.uint8)
+		keys = keys.reshape(65536, 2)
+		rows = patterns.view(numpy.uint8).reshape(256, 4)
+		pairs = numpy.concatenate([rows[keys[:, 0]], rows[keys[:, 1]]],
+			axis=1).view(numpy.uint64).reshape(65536)
+
+	return one_hot_mapping, patterns, pairs
 
 
 @numba.njit(numba.uint32(numba.uint32[::1],
@@ -476,6 +486,33 @@ def _fast_one_hot_encode_rows4(X_ohe, seq, patterns, begin, end):
 	return seen
 
 
+@numba.njit(numba.uint64(numba.uint64[::1],
+	numba.types.Array(numba.uint16, 1, 'C', readonly=True), numba.uint64[::1],
+	numba.int64, numba.int64), cache=True)
+def _fast_one_hot_encode_pairs4(X_ohe, seq, pairs, begin, end):
+	"""Write two rows of a four-character one-hot encoding as one uint64.
+
+	`X_ohe` holds rows 2i and 2i + 1 of an (n, 4) int8 array as its value i,
+	and `seq` the bytes of bases 2i and 2i + 1 as its value i, and value i is
+	`pairs[seq[i]]` for `begin <= i < end`. The OR of those values is
+	returned, as `_fast_one_hot_encode_rows4` returns it for each half.
+	"""
+
+	seen = numba.uint64(0)
+	for i in range(begin, end):
+		i = numba.uint64(i)
+		row = pairs[seq[i]]
+		X_ohe[i] = row
+		seen |= row
+
+	return seen
+
+
+# The fewest bases one_hot_encode encodes two at a time. Below it the views
+# the pairs need cost more than they save: about 0.65 us per call, and the
+# two paths took the same time near 9,000 bases.
+_ONE_HOT_PAIRS_MIN = 2**13
+
 # The fewest bases one_hot_encode splits across threads. Below it the
 # serial kernel is faster than starting numba's threads.
 _ONE_HOT_PARALLEL_MIN = 2**18
@@ -484,20 +521,20 @@ _ONE_HOT_PARALLEL_MIN = 2**18
 # Without a signature this compiles on its first call rather than when
 # tangermeme is imported, as _fast_one_hot_encode_fasta_parallel does.
 @numba.njit(parallel=True, cache=True)
-def _fast_one_hot_encode_rows4_parallel(X_ohe, seq, patterns, n_chunks):
-	"""`_fast_one_hot_encode_rows4` over every row, in `n_chunks` chunks.
+def _fast_one_hot_encode_pairs4_parallel(X_ohe, seq, pairs, n_chunks):
+	"""`_fast_one_hot_encode_pairs4` over every value, in `n_chunks` chunks.
 
-	The chunks are contiguous runs of rows encoded on numba's threads, and
+	The chunks are contiguous runs of values encoded on numba's threads, and
 	the OR of what they return is returned.
 	"""
 
 	n = X_ohe.shape[0]
-	seen = numpy.empty(n_chunks, dtype=numpy.uint32)
+	seen = numpy.empty(n_chunks, dtype=numpy.uint64)
 	for chunk in numba.prange(n_chunks):
-		seen[chunk] = _fast_one_hot_encode_rows4(X_ohe, seq, patterns,
+		seen[chunk] = _fast_one_hot_encode_pairs4(X_ohe, seq, pairs,
 			chunk * n // n_chunks, (chunk + 1) * n // n_chunks)
 
-	out = numba.uint32(0)
+	out = numba.uint64(0)
 	for chunk in range(n_chunks):
 		out |= seen[chunk]
 
@@ -596,9 +633,10 @@ def one_hot_encode(
 
 	# Only strings are cached; any other alphabet raises as it always has.
 	if isinstance(alphabet, str):
-		one_hot_mapping, patterns = _one_hot_encode_mapping(alphabet, ignore)
+		one_hot_mapping, patterns, pairs = _one_hot_encode_mapping(alphabet,
+			ignore)
 	else:
-		one_hot_mapping, patterns = _one_hot_encode_mapping.__wrapped__(
+		one_hot_mapping, patterns, pairs = _one_hot_encode_mapping.__wrapped__(
 			alphabet, ignore)
 
 	n, m = len(sequence), len(alphabet)
@@ -620,15 +658,29 @@ def one_hot_encode(
 			X32 = one_hot_encoding.reshape(-1).view(numpy.uint32)
 			seq_idxs = numpy.frombuffer(seq_bytes, dtype=numpy.uint8)
 
-			n_threads = numba.config.NUMBA_NUM_THREADS if n_jobs == -1 \
-				else min(int(n_jobs), numba.config.NUMBA_NUM_THREADS)
-			if n >= _ONE_HOT_PARALLEL_MIN and n_threads > 1:
-				with _numba_threads(n_threads):
-					seen = _fast_one_hot_encode_rows4_parallel(X32, seq_idxs,
-						patterns, n_threads)
-			else:
+			if n < _ONE_HOT_PAIRS_MIN:
 				seen = _fast_one_hot_encode_rows4(X32, seq_idxs, patterns, 0,
 					n)
+			else:
+				n_pairs = n // 2
+				X64 = X32[:2 * n_pairs].view(numpy.uint64)
+				seq16 = numpy.frombuffer(seq_bytes, dtype=numpy.uint16,
+					count=n_pairs)
+
+				n_threads = numba.config.NUMBA_NUM_THREADS if n_jobs == -1 \
+					else min(int(n_jobs), numba.config.NUMBA_NUM_THREADS)
+				if n >= _ONE_HOT_PARALLEL_MIN and n_threads > 1:
+					with _numba_threads(n_threads):
+						seen = _fast_one_hot_encode_pairs4_parallel(X64, seq16,
+							pairs, n_threads)
+				else:
+					seen = _fast_one_hot_encode_pairs4(X64, seq16, pairs, 0,
+						n_pairs)
+
+				seen = (seen | seen >> 32) & 0xFFFFFFFF
+				if n % 2 == 1:
+					seen |= _fast_one_hot_encode_rows4(X32, seq_idxs, patterns,
+						n - 1, n)
 
 		if seen & 0x80000000:
 			raise ValueError("Encountered character that is not in " +
