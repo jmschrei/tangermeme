@@ -419,9 +419,12 @@ def _one_hot_encode_mapping(alphabet, ignore):
 	character in `alphabet` maps to that character's index, each byte of a
 	character in `ignore` to -1, and every other byte to -2. When `alphabet`
 	is four ASCII characters and `ignore` is ASCII, the second table holds,
-	for each byte, the four int8 values of its row read as one uint32;
-	otherwise it is None. The tables are shared between calls and must not
-	be written to.
+	for each byte, the four int8 values of its row read as one uint32, and
+	0xFFFFFFFF for a byte that maps to -2; otherwise it is None. A row of a
+	character has no bit set above the lowest bit of each byte, so OR-ing
+	the values of a sequence sets the highest bit only when one of its bytes
+	maps to -2. The tables are shared between calls and must not be written
+	to.
 	"""
 
 	e = "utf8"
@@ -442,34 +445,35 @@ def _one_hot_encode_mapping(alphabet, ignore):
 			if one_hot_mapping[byte] >= 0:
 				rows[byte, one_hot_mapping[byte]] = 1
 
-		patterns = rows.view(numpy.uint32).reshape(256)
+		patterns = rows.view(numpy.uint32).reshape(256).copy()
+		patterns[one_hot_mapping == -2] = 0xFFFFFFFF
 
 	return one_hot_mapping, patterns
 
 
-@numba.njit(numba.int8(numba.uint32[::1],
-	numba.types.Array(numba.uint8, 1, 'C', readonly=True), numba.int8[::1],
-	numba.uint32[::1], numba.int64, numba.int64), cache=True)
-def _fast_one_hot_encode_rows4(X_ohe, seq, mapping, patterns, begin, end):
+@numba.njit(numba.uint32(numba.uint32[::1],
+	numba.types.Array(numba.uint8, 1, 'C', readonly=True), numba.uint32[::1],
+	numba.int64, numba.int64), cache=True)
+def _fast_one_hot_encode_rows4(X_ohe, seq, patterns, begin, end):
 	"""Write each row of a four-character one-hot encoding as one uint32.
 
 	`X_ohe` is an (n, 4) int8 array viewed as n uint32 values, and row i is
 	`patterns[seq[i]]` for `begin <= i < end`, so every element of those rows
-	is written. The smallest value of `mapping` over those bytes of `seq` is
-	returned, which is -2 when one of them is a character in neither the
-	alphabet nor the ignored characters.
+	is written. The OR of those values is returned; its highest bit is set
+	when one of the bytes is a character in neither the alphabet nor the
+	ignored characters, and the rows are then not an encoding.
 	"""
 
 	# Unsigned indices: with the signed loop over (begin, end) a call took
 	# 1.6 times as long.
-	low = numpy.int8(0)
+	seen = numba.uint32(0)
 	for i in range(begin, end):
 		i = numba.uint64(i)
-		byte = seq[i]
-		low = min(low, mapping[byte])
-		X_ohe[i] = patterns[byte]
+		row = patterns[seq[i]]
+		X_ohe[i] = row
+		seen |= row
 
-	return low
+	return seen
 
 
 # The fewest bases one_hot_encode splits across threads. Below it the
@@ -480,21 +484,24 @@ _ONE_HOT_PARALLEL_MIN = 2**18
 # Without a signature this compiles on its first call rather than when
 # tangermeme is imported, as _fast_one_hot_encode_fasta_parallel does.
 @numba.njit(parallel=True, cache=True)
-def _fast_one_hot_encode_rows4_parallel(X_ohe, seq, mapping, patterns,
-	n_chunks):
+def _fast_one_hot_encode_rows4_parallel(X_ohe, seq, patterns, n_chunks):
 	"""`_fast_one_hot_encode_rows4` over every row, in `n_chunks` chunks.
 
 	The chunks are contiguous runs of rows encoded on numba's threads, and
-	the smallest value any of them returns is returned.
+	the OR of what they return is returned.
 	"""
 
 	n = X_ohe.shape[0]
-	lows = numpy.empty(n_chunks, dtype=numpy.int8)
+	seen = numpy.empty(n_chunks, dtype=numpy.uint32)
 	for chunk in numba.prange(n_chunks):
-		lows[chunk] = _fast_one_hot_encode_rows4(X_ohe, seq, mapping, patterns,
+		seen[chunk] = _fast_one_hot_encode_rows4(X_ohe, seq, patterns,
 			chunk * n // n_chunks, (chunk + 1) * n // n_chunks)
 
-	return lows.min()
+	out = numba.uint32(0)
+	for chunk in range(n_chunks):
+		out |= seen[chunk]
+
+	return out
 
 
 @numba.njit("void(int8[:, :], int8[:], int8[:])", cache=True)
@@ -608,7 +615,7 @@ def one_hot_encode(
 
 		one_hot_encoding = numpy.empty((n, m), dtype=numpy.int8)
 		if seq_bytes is None:
-			low = -2
+			seen = 0x80000000
 		else:
 			X32 = one_hot_encoding.reshape(-1).view(numpy.uint32)
 			seq_idxs = numpy.frombuffer(seq_bytes, dtype=numpy.uint8)
@@ -617,13 +624,13 @@ def one_hot_encode(
 				else min(int(n_jobs), numba.config.NUMBA_NUM_THREADS)
 			if n >= _ONE_HOT_PARALLEL_MIN and n_threads > 1:
 				with _numba_threads(n_threads):
-					low = _fast_one_hot_encode_rows4_parallel(X32, seq_idxs,
-						one_hot_mapping, patterns, n_threads)
+					seen = _fast_one_hot_encode_rows4_parallel(X32, seq_idxs,
+						patterns, n_threads)
 			else:
-				low = _fast_one_hot_encode_rows4(X32, seq_idxs,
-					one_hot_mapping, patterns, 0, n)
+				seen = _fast_one_hot_encode_rows4(X32, seq_idxs, patterns, 0,
+					n)
 
-		if low == -2:
+		if seen & 0x80000000:
 			raise ValueError("Encountered character that is not in " +
 				"`alphabet` or in `ignore`.")
 	else:
