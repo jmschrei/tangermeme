@@ -690,7 +690,13 @@ def one_hot_encode(
 		one_hot_encoding = numpy.zeros((n, m), dtype=numpy.int8)
 		_fast_one_hot_encode(one_hot_encoding, seq_idxs, one_hot_mapping)
 
-	return torch.from_numpy(one_hot_encoding).type(dtype).T
+	# Wrapping the transpose has the layout of transposing the wrapped array,
+	# stride (1, m), and .type() keeps it, and is the identity for int8.
+	one_hot_encoding = torch.from_numpy(one_hot_encoding.T)
+	if dtype is torch.int8:
+		return one_hot_encoding
+
+	return one_hot_encoding.type(dtype)
 
 
 @contextlib.contextmanager
