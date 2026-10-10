@@ -26,6 +26,8 @@ Claude Code skill
 
 	- ``references/io-loci.md`` says that ``n_jobs`` also sets the threads that read and encode the windows of a FASTA path, to pass ``n_jobs=1`` inside processes that already run in parallel, and to pass the FASTA as a path rather than a ``pyfaidx.Fasta``, with the timings of both. Its timing of a bigWig opened with pybigtools follows the change below.
 
+	- ``SKILL.md`` gives ``one_hot_encode``'s new ``n_jobs`` keyword, and that more than one thread helped only for sequences of about 8Mbp or more.
+
 	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
 
 deep_lift_shap
@@ -91,6 +93,10 @@ pisa
 
 utils
 -----
+
+	- ``one_hot_encode`` is faster, most of all for an alphabet of four ASCII characters such as the default. Its byte lookup table is built once per alphabet and ignore list rather than on every call, and the result is wrapped as the transpose of a numpy array rather than transposed in torch, with ``.type`` skipped for int8. For four ASCII characters, the sequence is copied with ``str.encode('ascii')`` rather than into a UTF-8 ``bytearray``, and each base's row is written as one 32-bit value, two bases at a time from 8,192 bases on, into an array that is not zeroed first. An unknown character is caught through the same lookup. On upper-cased hg38, each in a fresh process on one thread, a 10bp call took 1.36 us against 4.14 us, a 2,114bp window 2.45 us against 6.66 us, a 2Mbp region 0.24 ms against 2.02 ms, and chr1 0.12 s against 0.38 s. A 20-letter protein alphabet gains only on short calls: 300 amino acids took 2.44 us against 5.80 us. The returned values, dtypes and strides, and the errors raised, are unchanged, on 88 configurations of input, dtype and thread count and on every sequence of hg38. A sequence with many unknown characters uses more memory than before: the array was zero-filled, and the pages of rows with no 1 were never written, while every row is now written. An all-N 10Mbp sequence peaked at 38 MiB against 10 MiB, and chr1 at 1,177 MiB against 1,111 MiB. The first call in a new environment compiles more numba kernels: importing ``tangermeme.utils`` and encoding 10bp took 0.70 s against 0.48 s, once.
+
+	- ``one_hot_encode`` takes ``n_jobs``, 1 by default, or -1 for one thread per CPU, capped by numba's ``NUMBA_NUM_THREADS``. A sequence of 262,144 characters or more, in an alphabet of four ASCII characters, is encoded in one chunk per thread. On the machine measured, one thread was faster than 2 to 16 threads for 2Mbp and 4Mbp, at 0.24 ms against 0.37-0.49 ms for 2Mbp, and threads were faster from 8Mbp, at 1.7-2.4 ms against 2.6 ms. chr1 took 0.08 s at 8 threads against 0.12 s at one. The result does not depend on ``n_jobs``. The first call that uses threads compiles one more kernel: importing and encoding 1Mbp at 8 threads took 1.07 s against 0.51 s, once.
 
 	- ``one_hot_encode`` accepts a tuple ``alphabet``, which its signature already allowed and which raised ``TypeError: encoding without a string argument``. Its docstring no longer lists a set, whose characters have no order, and says that a character in neither ``alphabet`` nor ``ignore`` raises a ``ValueError`` rather than being ignored.
 

@@ -17,6 +17,7 @@ from tangermeme.utils import entropy
 from tangermeme.utils import information_content
 from tangermeme.utils import characters
 from tangermeme.utils import one_hot_encode
+from tangermeme.utils import _fast_one_hot_encode
 from tangermeme.utils import _one_hot_encode_rows
 from tangermeme.utils import _one_hot_rows_mapping
 from tangermeme.utils import _one_hot_encode_fasta
@@ -452,6 +453,315 @@ def test_one_hot_encode_lower_raises():
 	])
 
 	assert_raises(ValueError, one_hot_encode, seq)
+
+
+def _one_hot_reference(sequence, alphabet=('A', 'C', 'G', 'T'), ignore=('N',)):
+	"""A slow pure-Python one-hot encoding to compare one_hot_encode against.
+
+	Returns an int8 array of shape (len(alphabet), len(sequence)), and raises
+	a ValueError for a character in neither `alphabet` nor `ignore`.
+	"""
+
+	alphabet = ''.join(alphabet)
+	X = numpy.zeros((len(alphabet), len(sequence)), dtype=numpy.int8)
+	for j, char in enumerate(sequence):
+		if char in ignore:
+			continue
+
+		if char not in alphabet:
+			raise ValueError(char)
+
+		X[alphabet.index(char), j] = 1
+
+	return X
+
+
+def _random_sequence(length, chars='ACGTN', seed=0):
+	# Characters are drawn by index, because a numpy string array drops a
+	# trailing NUL character.
+	rng = numpy.random.default_rng(seed)
+	return ''.join([chars[i] for i in rng.integers(len(chars), size=length)])
+
+
+_PROTEIN = list('ACDEFGHIKLMNPQRSTVWY')
+_ASCII = [chr(i) for i in range(128)]
+
+
+@pytest.mark.parametrize("length", [0, 1, 2, 7, 63, 64, 65, 1000, 100003])
+def test_one_hot_encode_matches_reference_length(length):
+	seq = _random_sequence(length, seed=length)
+	X = one_hot_encode(seq)
+
+	assert isinstance(X, torch.Tensor)
+	assert X.dtype == torch.int8
+	assert X.shape == (4, length)
+	assert X.device.type == 'cpu'
+	assert numpy.array_equal(X.numpy(), _one_hot_reference(seq))
+
+
+@pytest.mark.parametrize("alphabet, ignore", [
+	(['A', 'C', 'G', 'T'], ['N']),
+	(['A', 'C', 'G', 'U'], ['N']),
+	(['A', 'B'], []),
+	(['A'], ['N']),
+	(_PROTEIN, ['X', '-']),
+	([chr(i) for i in range(33, 127)], [' ']),
+	(_ASCII, []),
+])
+def test_one_hot_encode_matches_reference_alphabet(alphabet, ignore):
+	seq = _random_sequence(5000, ''.join(alphabet) + ''.join(ignore), seed=1)
+	X = one_hot_encode(seq, alphabet=alphabet, ignore=ignore)
+
+	assert X.dtype == torch.int8
+	assert X.shape == (len(alphabet), 5000)
+	assert numpy.array_equal(X.numpy(), _one_hot_reference(seq, alphabet,
+		ignore))
+
+
+def test_one_hot_encode_matches_reference_large():
+	# An independent, vectorized reference: compare every character of the
+	# sequence against every character of the alphabet.
+	seq = _random_sequence(1000003, seed=2)
+	X = one_hot_encode(seq)
+
+	chars = numpy.frombuffer(seq.encode('ascii'), dtype='S1')
+	X_ref = chars[None, :] == numpy.array([b'A', b'C', b'G', b'T'])[:, None]
+	assert numpy.array_equal(X.numpy(), X_ref.astype(numpy.int8))
+
+
+def test_one_hot_encode_column_sums():
+	# Each column of a character in the alphabet has exactly one 1, and each
+	# column of an ignored character is all zeros.
+	seq = _random_sequence(10000, 'ACGTN', seed=3)
+	X = one_hot_encode(seq)
+
+	is_n = numpy.array([char == 'N' for char in seq])
+	sums = X.sum(dim=0).numpy()
+	assert (sums[is_n] == 0).all()
+	assert (sums[~is_n] == 1).all()
+	assert set(numpy.unique(X.numpy())) <= {0, 1}
+
+
+def test_one_hot_encode_characters_round_trip():
+	seq = _random_sequence(500, 'ACGT', seed=4)
+	assert characters(one_hot_encode(seq)) == seq
+
+	seq = _random_sequence(500, 'ACGTN', seed=5)
+	assert characters(one_hot_encode(seq), allow_N=True) == seq
+
+	alphabet = _PROTEIN
+	seq = _random_sequence(500, ''.join(alphabet), seed=6)
+	assert characters(one_hot_encode(seq, alphabet=alphabet, ignore=[]),
+		alphabet=alphabet) == seq
+
+
+@pytest.mark.parametrize("alphabet", [
+	['A', 'C', 'G', 'T'],
+	('A', 'C', 'G', 'T'),
+	'ACGT',
+])
+def test_one_hot_encode_alphabet_containers(alphabet):
+	seq = 'ACGTNNTGCA'
+	X = one_hot_encode(seq, alphabet=alphabet)
+
+	assert X.shape == (4, 10)
+	assert numpy.array_equal(X.numpy(), _one_hot_reference(seq))
+
+
+@pytest.mark.parametrize("ignore", [
+	['N', 'X'],
+	('N', 'X'),
+	'NX',
+	{'N', 'X'},
+])
+def test_one_hot_encode_ignore_containers(ignore):
+	seq = 'ACGTNXXNTGCA'
+	X = one_hot_encode(seq, ignore=ignore)
+
+	assert X.shape == (4, 12)
+	assert numpy.array_equal(X.numpy(), _one_hot_reference(seq,
+		ignore=('N', 'X')))
+
+
+def test_one_hot_encode_ignore_empty_raises_N():
+	assert_raises(ValueError, one_hot_encode, 'ACGN', ignore=[])
+	assert one_hot_encode('ACGT', ignore=[]).shape == (4, 4)
+
+
+@pytest.mark.parametrize("dtype", [torch.int8, torch.uint8, torch.int16,
+	torch.int32, torch.int64, torch.float16, torch.bfloat16, torch.float32,
+	torch.float64, torch.bool])
+def test_one_hot_encode_dtypes(dtype):
+	seq = _random_sequence(1000, seed=7)
+	X = one_hot_encode(seq, dtype=dtype)
+
+	assert X.dtype == dtype
+	assert X.shape == (4, 1000)
+
+	X_ref = torch.from_numpy(_one_hot_reference(seq)).type(dtype)
+	assert torch.equal(X, X_ref)
+
+
+def test_one_hot_encode_dtype_string():
+	# A tensor type name, as torch.Tensor.type accepts.
+	X = one_hot_encode('ACGTN', dtype='torch.FloatTensor')
+
+	assert X.dtype == torch.float32
+	assert numpy.array_equal(X.numpy(), _one_hot_reference('ACGTN'))
+
+
+@pytest.mark.parametrize("dtype", [torch.int8, torch.float32, torch.bool])
+@pytest.mark.parametrize("alphabet", [['A', 'C', 'G', 'T'], _PROTEIN])
+def test_one_hot_encode_layout(dtype, alphabet):
+	# Pins the current layout: the result is the transpose of a C-contiguous
+	# (length, len(alphabet)) array.
+	m = len(alphabet)
+	X = one_hot_encode(''.join(alphabet) * 3, alphabet=alphabet, ignore=[],
+		dtype=dtype)
+
+	assert X.shape == (m, 3 * m)
+	assert X.stride() == (1, m)
+	assert X.storage_offset() == 0
+	assert X.T.is_contiguous()
+
+
+def test_one_hot_encode_returns_new_memory():
+	X1 = one_hot_encode('ACGT')
+	X2 = one_hot_encode('ACGT')
+	X1[:] = 0
+
+	assert X2.sum() == 4
+	assert one_hot_encode('ACGT').sum() == 4
+
+
+def test_one_hot_encode_does_not_mutate_arguments():
+	alphabet = ['A', 'C', 'G', 'T']
+	ignore = ['N']
+	one_hot_encode('ACGTN', alphabet=alphabet, ignore=ignore)
+
+	assert alphabet == ['A', 'C', 'G', 'T']
+	assert ignore == ['N']
+
+
+def test_one_hot_encode_str_subclass():
+	class Sequence(str):
+		pass
+
+	X = one_hot_encode('ACGTN')
+	assert torch.equal(one_hot_encode(numpy.str_('ACGTN')), X)
+	assert torch.equal(one_hot_encode(Sequence('ACGTN')), X)
+
+
+def test_one_hot_encode_ignores_extra_kwargs(capsys):
+	# greedy_marginalize passes allow_N=True, which is absorbed by **kwargs.
+	seq = 'ACGTNACGT'
+	X = one_hot_encode(seq)
+
+	assert torch.equal(one_hot_encode(seq, desc='encoding', verbose=True), X)
+	assert torch.equal(one_hot_encode(seq, allow_N=True), X)
+	assert capsys.readouterr().out == ''
+
+
+_UNKNOWN = "Encountered character that is not in `alphabet` or in `ignore`."
+
+
+@pytest.mark.parametrize("char", ['a', 'n', '1', ' ', '\n', '\r', '\t', '-',
+	'.', '\x00', '\x7f', 'é', 'Ñ', '\U0001F9EC'])
+def test_one_hot_encode_raises_unknown_character(char):
+	with pytest.raises(ValueError, match=_UNKNOWN):
+		one_hot_encode('ACGT' + char + 'ACGT')
+
+
+@pytest.mark.parametrize("position", [0, 1, 4999, 9998, 9999])
+def test_one_hot_encode_raises_unknown_character_position(position):
+	seq = list(_random_sequence(10000, seed=8))
+	seq[position] = 'Z'
+
+	with pytest.raises(ValueError, match=_UNKNOWN):
+		one_hot_encode(''.join(seq))
+
+
+@pytest.mark.parametrize("alphabet, ignore", [
+	(['A', 'C', 'G', 'T', 'N'], ['N']),
+	('ACGTN', ('N',)),
+	(['A', 'C', 'G', 'T'], ['X', 'G']),
+])
+def test_one_hot_encode_raises_ignore_in_alphabet_message(alphabet, ignore):
+	char = [c for c in ignore if c in alphabet][0]
+	message = ("Character {} in the alphabet and also in the list of ignored "
+		"characters.".format(char))
+
+	with pytest.raises(ValueError, match=message):
+		one_hot_encode('ACGT', alphabet=alphabet, ignore=ignore)
+
+
+def test_fast_one_hot_encode():
+	mapping = numpy.zeros(256, dtype=numpy.int8) - 2
+	for i, char in enumerate(b'ACGT'):
+		mapping[char] = i
+	mapping[ord('N')] = -1
+
+	seq = _random_sequence(1000, seed=9)
+	X = numpy.zeros((1000, 4), dtype=numpy.int8)
+	_fast_one_hot_encode(X, numpy.frombuffer(bytearray(seq, 'ascii'),
+		dtype=numpy.int8), mapping)
+
+	assert numpy.array_equal(X.T, _one_hot_reference(seq))
+
+
+def test_fast_one_hot_encode_raises():
+	mapping = numpy.zeros(256, dtype=numpy.int8) - 2
+	for i, char in enumerate(b'ACGT'):
+		mapping[char] = i
+
+	X = numpy.zeros((5, 4), dtype=numpy.int8)
+	seq = numpy.frombuffer(bytearray(b'ACZGT'), dtype=numpy.int8)
+	with pytest.raises(ValueError, match=_UNKNOWN):
+		_fast_one_hot_encode(X, seq, mapping)
+
+
+@pytest.mark.parametrize("n_jobs", [1, 2, 3, 4, -1, 1000])
+@pytest.mark.parametrize("length", [10, 2**18 - 1, 2**18 + 7])
+def test_one_hot_encode_n_jobs(n_jobs, length):
+	# The result does not depend on n_jobs, which only splits sequences of
+	# at least 2**18 characters across threads.
+	seq = _random_sequence(length, seed=10)
+	X = one_hot_encode(seq, n_jobs=n_jobs)
+
+	assert X.dtype == torch.int8
+	assert X.stride() == (1, 4)
+	assert numpy.array_equal(X.numpy(), _one_hot_reference(seq))
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bool])
+def test_one_hot_encode_n_jobs_dtype(dtype):
+	seq = _random_sequence(2**18 + 7, seed=11)
+	X = one_hot_encode(seq, dtype=dtype, n_jobs=4)
+
+	assert X.dtype == dtype
+	assert torch.equal(X, one_hot_encode(seq, dtype=dtype))
+
+
+def test_one_hot_encode_n_jobs_other_alphabets():
+	seq = _random_sequence(2**18 + 7, ''.join(_PROTEIN), seed=12)
+	X = one_hot_encode(seq, alphabet=_PROTEIN, ignore=[], n_jobs=4)
+	assert numpy.array_equal(X.numpy(), _one_hot_reference(seq, _PROTEIN, []))
+
+
+@pytest.mark.parametrize("position", [0, 2**17, 2**18 + 6])
+@pytest.mark.parametrize("char", ['Z', 'a', 'é'])
+def test_one_hot_encode_n_jobs_raises_unknown_character(position, char):
+	seq = list(_random_sequence(2**18 + 7, seed=13))
+	seq[position] = char
+
+	with pytest.raises(ValueError, match=_UNKNOWN):
+		one_hot_encode(''.join(seq), n_jobs=4)
+
+
+def test_one_hot_encode_n_jobs_restores_threads():
+	threads = numba.get_num_threads()
+	one_hot_encode(_random_sequence(2**18 + 7, seed=14), n_jobs=2)
+	assert numba.get_num_threads() == threads
 
 
 ###
