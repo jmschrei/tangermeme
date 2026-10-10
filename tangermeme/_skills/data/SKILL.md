@@ -69,7 +69,8 @@ no dedicated reference file, but here is where to look:
   dinucleotide shuffles accept unknown characters in `X` as all-zero columns;
   `dinucleotide_shuffle` does with `allow_N=True`, shuffling each as a fifth
   character.
-- `tangermeme.utils` — `one_hot_encode` (returns int8), `characters`,
+- `tangermeme.utils` — `one_hot_encode` (returns int8; `n_jobs` > 1
+  helped only for sequences of about 8 Mbp or more), `characters`,
   `random_one_hot`, `reverse_complement` (single sequence), `pwm_consensus`,
   `set_seed`, `gc_content`, etc.
 - `tangermeme.pisa.pisa` — per-position (PISA) attribution reusing the DLS hooks.

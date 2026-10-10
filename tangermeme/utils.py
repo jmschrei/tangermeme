@@ -513,8 +513,7 @@ def _fast_one_hot_encode_pairs4(X_ohe, seq, pairs, begin, end):
 # two paths took the same time near 9,000 bases.
 _ONE_HOT_PAIRS_MIN = 2**13
 
-# The fewest bases one_hot_encode splits across threads. Below it the
-# serial kernel is faster than starting numba's threads.
+# The fewest bases one_hot_encode splits across threads.
 _ONE_HOT_PARALLEL_MIN = 2**18
 
 
