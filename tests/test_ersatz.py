@@ -171,6 +171,22 @@ def test_insert_raises_ohe_X(X):
 	assert_raises(ValueError, insert, torch.randn(1, 4, 68), 'CATCAG')
 
 
+def test_insert_str_alphabet():
+	alphabet = ['A', 'C', 'G', 'U']
+	X = one_hot_encode('ACGUACGU', alphabet=alphabet).unsqueeze(0)
+	X_insert = insert(X, 'UUU', start=2, alphabet=alphabet)
+
+	assert X_insert.shape == (1, 4, 11)
+	assert characters(X_insert[0], alphabet=alphabet) == 'ACUUUGUACGU'
+
+
+def test_insert_str_raises_N(X):
+	# A string motif is encoded with N ignored, and insert rejects the
+	# resulting all-zero column.
+	with pytest.raises(ValueError, match="cannot have unknown characters"):
+		insert(X, 'CANTG')
+
+
 ###
 
 
@@ -400,6 +416,23 @@ def test_substitute_raises_ohe_X(X):
 
 	assert_raises(ValueError, substitute, torch.clone(X) * 2, 'CATCAG')
 	assert_raises(ValueError, substitute, torch.randn(1, 4, 68), 'CATCAG')
+
+
+def test_substitute_str_ignore_keeps_sequence(X):
+	# The N positions of a string motif keep the original sequence.
+	seq = characters(X[0])
+	X_substitute = substitute(X, 'ACNNGT', start=5)
+
+	assert characters(X_substitute[0]) == (seq[:5] + 'AC' + seq[7:9] + 'GT' +
+		seq[11:])
+
+
+def test_substitute_str_ignore_set(X):
+	seq = characters(X[0])
+	X_substitute = substitute(X, 'ACXNGT', start=5, ignore={'N', 'X'})
+
+	assert characters(X_substitute[0]) == (seq[:5] + 'AC' + seq[7:9] + 'GT' +
+		seq[11:])
 
 
 ###
