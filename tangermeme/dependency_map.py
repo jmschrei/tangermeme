@@ -13,6 +13,9 @@ from tqdm import trange
 from ._compat import _preserve_model_state
 from ._compat import _resolve_device
 from .saliency import saliency
+from .saturation_mutagenesis import _check_span
+from .saturation_mutagenesis import _edited_inputs
+from .saturation_mutagenesis import _single_edits
 from .utils import _validate_input
 
 
@@ -161,14 +164,7 @@ def dependency_map(
 
 	X = X.type(torch.int8).cpu()
 	n, n_chars, length = X.shape
-
-	if end < 0:
-		end = length + 1 + end
-
-	if start < 0 or end > length or start >= end:
-		raise ValueError("start and end must satisfy "
-			"0 <= start < end <= length; got start={}, end={} for length "
-			"{}.".format(start, end, length))
+	end = _check_span(start, end, length)
 
 	def _attributions(X_, args_):
 		X_attr = func(model, X_, args=args_, device=device, **kwargs,
@@ -189,26 +185,11 @@ def dependency_map(
 			args_ = None if args is None else tuple(a[i:i+1] for a in args)
 			attr0 = _attributions(X[i:i+1], args_)[0]
 
-			# Build only the substitutions that actually change a base. A column
-			# that is a clean one-hot has one identity edit, which is dropped;
-			# an all-zero ('N') or multi-hot column has none, so all of its
-			# characters are kept. This mirrors `saturation_mutagenesis`.
-			ref = X[i, :, start:end]
-			identity = (ref == 1) & (ref.sum(dim=0, keepdim=True) == 1)
-
-			edit_chars, edit_positions = torch.where(~identity)
-			n_edits = edit_chars.shape[0]
-
-			X_edits = X[i].repeat(n_edits, 1, 1)
-			rows = torch.arange(n_edits)
-			X_edits[rows, :, edit_positions + start] = 0
-			X_edits[rows, edit_chars, edit_positions + start] = 1
-
-			if args is None:
-				args_ = None
-			else:
-				args_ = tuple(a[i].repeat(n_edits, *(1 for _ in a[i].shape))
-					for a in args)
+			# Only the substitutions that change a base are made, using the
+			# same helpers as `saturation_mutagenesis`.
+			edits, edit_chars, edit_positions = _single_edits(X[i], start, end)
+			X_edits, args_ = _edited_inputs(X, args, i, edit_chars,
+				edit_positions)
 
 			attr = _attributions(X_edits, args_)
 			attr = attr.sub_(attr0).abs_()
@@ -216,9 +197,9 @@ def dependency_map(
 			# Sum the absolute differences into the substituted positions and
 			# divide by how many substitutions each position actually had.
 			totals = torch.zeros(end - start, length, dtype=torch.float32)
-			totals.index_add_(0, edit_positions, attr)
+			totals.index_add_(0, edit_positions - start, attr)
 
-			counts = (~identity).sum(dim=0).type(torch.float32)
+			counts = edits.reshape(n_chars, end - start).sum(dim=0)
 			dmap[i] = (totals / counts.unsqueeze(-1)).T
 
 	return dmap
