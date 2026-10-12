@@ -25,6 +25,7 @@ saturation_mutagenesis(
     dtype=None, device=None,        # device None -> CUDA if available else CPU
     verbose=False,
     func=None,                      # POST-PROCESSING hook, not the func= plug-point
+    fast=True,                      # fastISM; see below
 )
 ```
 
@@ -52,11 +53,43 @@ the region being mutated (≈ `(end - start) * (len(alphabet) - 1)` perturbed
 sequences per example). Restrict it to the region of interest with `start`/`end`
 rather than scanning a whole long input.
 
-Windowed ISM is **bit-identical** to running the full sequence and slicing (edits
-are independent), so there is no accuracy cost — only speed (~15× faster for ~5% of
-the sequence). Triage pattern: loop windowed ISM over a list of motif-hit
+Windowed ISM matches running the full sequence and slicing (edits are
+independent) up to floating-point rounding, so there is no accuracy cost — only
+speed (~15× faster for ~5% of the sequence). Triage pattern: loop windowed ISM over a list of motif-hit
 coordinates and sum `(X_ism * X)` over each window to rank which hits actually drive
 the prediction.
+
+## `fast=True` (fastISM, the default)
+
+A one-base edit changes only the positions of each convolutional layer whose
+receptive field covers it, so `fast=True` captures the model with
+`torch.export`, caches the activations of each original sequence, and computes
+each edit only over those positions (convolutions, pooling, padding, cropping,
+flips, elementwise ops, and ops over the channel axis). Everything else (flatten
+into a dense layer, a mean or norm over the length, attention) runs at full
+length on the cached activations with the changed positions written in. Results
+match `fast=False` **up to floating-point rounding, not bit for bit**.
+
+- **Small jobs skip it silently.** The first batch runs with `fast=False` and is
+  timed; if the whole job would finish in under thirty seconds that way, the model
+  is never captured. So toy models and a few short sequences behave exactly as
+  `fast=False`.
+- **Otherwise it is verified, then used or dropped with a `TangermemeWarning`.**
+  One batch of edits (including both ends of the span) is computed both ways and
+  timed. A model `torch.export` cannot capture (value-dependent Python control
+  flow), a model with forward hooks, a disagreement beyond rounding, or a fast
+  path that is not faster all fall back to `fast=False` with the reason in the
+  warning. Pass `fast=False` to skip the attempt.
+- **Gains depend on how far locality reaches.** Convolutional towers with a dense
+  or pooled head gain most: about 2x for ChromBPNet and 4x for Beluga. A model
+  that normalizes or pools over the whole length early has almost nothing to
+  window: LegNet's squeeze-excitation blocks average over the length, and its
+  fast path was slower, so it fell back. Cherimoya normalizes every block over
+  the whole length, so nothing after its first block's normalization can be
+  windowed.
+- **On a GPU, use a larger `batch_size`** (e.g. 256). The fast path runs many
+  small operations per batch, and at the default of 32 it is often not faster
+  than `fast=False`; the call then falls back with a warning that says so.
 
 ## Footgun: `X` is cast to int8, so soft one-hots are truncated
 
