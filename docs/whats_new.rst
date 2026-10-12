@@ -184,6 +184,10 @@ dependency_map
 	  the direct effect of a substitution on its own attribution, is
 	  non-zero even for a linear model, and is typically several times
 	  larger than the off-diagonal entries. Mask it before plotting.
+	- ``device`` is forwarded to ``func``, and the model is moved there once
+	  for the whole call, so the two calls to ``func`` per sequence do not
+	  each move it. The model's original device and training mode are
+	  restored afterward.
 
 
 Version 1.5.0

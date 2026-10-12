@@ -60,8 +60,9 @@ dependency_map(
     start=0, end=-1,                # which positions get substituted
     func=saliency,                  # THE PLUG-POINT func, not post-processing
     additional_func_kwargs=None,
+    device=None,                    # forwarded to func; the model moves there once
     verbose=False,
-    **kwargs,                       # forwarded to func: target, batch_size, device, ...
+    **kwargs,                       # forwarded to func: target, batch_size, dtype, ...
 )                                   # -> (-1, length, end-start), on CPU
 ```
 

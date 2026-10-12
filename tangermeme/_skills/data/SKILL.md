@@ -91,8 +91,8 @@ no dedicated reference file, but here is where to look:
 - Variable naming: `X`/`y` observed, `X_bar`/`y_bar` designed/target,
   `y_hat` predictions, `X_attr` attributions.
 - Device defaults: `predict`, `deep_lift_shap`, `pisa`, `design.*`,
-  `saturation_mutagenesis`, `saliency`, `product.*` take `device=None` → CUDA if
-  available else CPU; the model's original device + training mode are restored
-  afterward. `dependency_map` has no `device` of its own — it forwards to `func`.
+  `saturation_mutagenesis`, `saliency`, `dependency_map`, `product.*` take
+  `device=None` → CUDA if available else CPU; the model's original device +
+  training mode are restored afterward.
 - Perturbation functions return NamedTuples (`PerturbationResult`, etc.) — unpack
   positionally or by attribute; `isinstance(result, tuple)` is True.

@@ -60,6 +60,24 @@ def test_dependency_map(X, device):
 		[0.0000, 0.0000, 0.0066, 0.0043, 0.0057]], 4)
 
 
+def test_dependency_map_holds_model_on_device(cuda_device):
+	# The model is moved to the device once for the whole call, so every
+	# call to func finds it there, and it is moved back afterward.
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	X = random_one_hot((2, 4, 12), random_state=0).type(torch.float32)
+	devices = []
+
+	def func(model, X, args=None, **kwargs):
+		devices.append(next(model.parameters()).device.type)
+		return saliency(model, X, args=args, **kwargs)
+
+	dependency_map(model, X, func=func, device=cuda_device)
+
+	assert devices == ["cuda"] * 4
+	assert next(model.parameters()).device.type == "cpu"
+
+
 def test_dependency_map_non_negative(X, device):
 	# The map is an average of absolute differences.
 	torch.manual_seed(0)

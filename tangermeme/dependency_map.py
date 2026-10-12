@@ -10,6 +10,8 @@ import torch
 
 from tqdm import trange
 
+from ._compat import _preserve_model_state
+from ._compat import _resolve_device
 from .saliency import saliency
 from .utils import _validate_input
 
@@ -22,6 +24,7 @@ def dependency_map(
 	end: int = -1,
 	func: Callable[..., Any] = saliency,
 	additional_func_kwargs: dict | None = None,
+	device: str | torch.device | None = None,
 	verbose: bool = False,
 	**kwargs: Any,
 ) -> torch.Tensor:
@@ -114,6 +117,13 @@ def dependency_map(
 		argument in `saliency` and `saturation_mutagenesis`. The dict is
 		copied, so the caller's object is not mutated. Default is None.
 
+	device: str or torch.device or None, optional
+		The device to run `func` on, forwarded to it as `device`. The model is
+		moved there once for the whole call rather than by every call to
+		`func`, and its original device and training mode are restored
+		afterward. If None, use CUDA when available and fall back to CPU
+		otherwise. Default is None.
+
 	verbose: bool, optional
 		Whether to display a progress bar over the sequences in `X`. This is
 		not forwarded to `func`; pass `verbose` through
@@ -122,7 +132,7 @@ def dependency_map(
 
 	kwargs: optional
 		Additional arguments forwarded to `func`, e.g. `target`,
-		`batch_size`, `dtype`, and `device`.
+		`batch_size`, and `dtype`.
 
 
 	Returns
@@ -147,6 +157,7 @@ def dependency_map(
 					"dimension as X")
 
 	additional_func_kwargs = dict(additional_func_kwargs or {})
+	device = _resolve_device(device)
 
 	X = X.type(torch.int8).cpu()
 	n, n_chars, length = X.shape
@@ -160,7 +171,8 @@ def dependency_map(
 			"{}.".format(start, end, length))
 
 	def _attributions(X_, args_):
-		X_attr = func(model, X_, args=args_, **kwargs, **additional_func_kwargs)
+		X_attr = func(model, X_, args=args_, device=device, **kwargs,
+			**additional_func_kwargs)
 
 		if not isinstance(X_attr, torch.Tensor) or X_attr.ndim != 3:
 			raise ValueError("func must return a single tensor of shape "
@@ -172,40 +184,41 @@ def dependency_map(
 
 	dmap = torch.empty(n, length, end - start, dtype=torch.float32)
 
-	for i in trange(n, disable=not verbose):
-		args_ = None if args is None else tuple(a[i:i+1] for a in args)
-		attr0 = _attributions(X[i:i+1], args_)[0]
+	with _preserve_model_state(model, device):
+		for i in trange(n, disable=not verbose):
+			args_ = None if args is None else tuple(a[i:i+1] for a in args)
+			attr0 = _attributions(X[i:i+1], args_)[0]
 
-		# Build only the substitutions that actually change a base. A column
-		# that is a clean one-hot has one identity edit, which is dropped;
-		# an all-zero ('N') or multi-hot column has none, so all of its
-		# characters are kept. This mirrors `saturation_mutagenesis`.
-		ref = X[i, :, start:end]
-		identity = (ref == 1) & (ref.sum(dim=0, keepdim=True) == 1)
+			# Build only the substitutions that actually change a base. A column
+			# that is a clean one-hot has one identity edit, which is dropped;
+			# an all-zero ('N') or multi-hot column has none, so all of its
+			# characters are kept. This mirrors `saturation_mutagenesis`.
+			ref = X[i, :, start:end]
+			identity = (ref == 1) & (ref.sum(dim=0, keepdim=True) == 1)
 
-		edit_chars, edit_positions = torch.where(~identity)
-		n_edits = edit_chars.shape[0]
+			edit_chars, edit_positions = torch.where(~identity)
+			n_edits = edit_chars.shape[0]
 
-		X_edits = X[i].repeat(n_edits, 1, 1)
-		rows = torch.arange(n_edits)
-		X_edits[rows, :, edit_positions + start] = 0
-		X_edits[rows, edit_chars, edit_positions + start] = 1
+			X_edits = X[i].repeat(n_edits, 1, 1)
+			rows = torch.arange(n_edits)
+			X_edits[rows, :, edit_positions + start] = 0
+			X_edits[rows, edit_chars, edit_positions + start] = 1
 
-		if args is None:
-			args_ = None
-		else:
-			args_ = tuple(a[i].repeat(n_edits, *(1 for _ in a[i].shape))
-				for a in args)
+			if args is None:
+				args_ = None
+			else:
+				args_ = tuple(a[i].repeat(n_edits, *(1 for _ in a[i].shape))
+					for a in args)
 
-		attr = _attributions(X_edits, args_)
-		attr = attr.sub_(attr0).abs_()
+			attr = _attributions(X_edits, args_)
+			attr = attr.sub_(attr0).abs_()
 
-		# Sum the absolute differences into the substituted positions and
-		# divide by how many substitutions each position actually had.
-		totals = torch.zeros(end - start, length, dtype=torch.float32)
-		totals.index_add_(0, edit_positions, attr)
+			# Sum the absolute differences into the substituted positions and
+			# divide by how many substitutions each position actually had.
+			totals = torch.zeros(end - start, length, dtype=torch.float32)
+			totals.index_add_(0, edit_positions, attr)
 
-		counts = (~identity).sum(dim=0).type(torch.float32)
-		dmap[i] = (totals / counts.unsqueeze(-1)).T
+			counts = (~identity).sum(dim=0).type(torch.float32)
+			dmap[i] = (totals / counts.unsqueeze(-1)).T
 
 	return dmap
