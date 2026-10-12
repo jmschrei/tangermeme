@@ -22,6 +22,7 @@ def saliency(
 	target: int = 0,
 	batch_size: int = 32,
 	hypothetical: bool = False,
+	gradient_correction: bool = True,
 	func: Callable[..., Any] | None = None,
 	dtype: str | torch.dtype | None = None,
 	device: str | torch.device | None = None,
@@ -51,6 +52,19 @@ def saliency(
 	registered, or as the inner attribution step of `dependency_map`, which
 	calls it once per single-base substitution and so is highly sensitive to
 	the cost of a single attribution.
+
+	By default the gradient is corrected before it is used, following
+	Majdandzic et al. (Genome Biology 2023). A one-hot sequence has exactly
+	one character present at each position, so it lies on a simplex, but the
+	gradient is taken in the full space around it and so includes a component
+	that points off that simplex: the change in the output from adding the
+	same amount of every character at a position at once. No sequence can
+	move in that direction, the model never sees inputs that do, and so the
+	component is unconstrained by training and shows up as spurious
+	attribution. Subtracting the mean gradient across the alphabet at each
+	position removes it. `deep_lift_shap` and `saturation_mutagenesis` do not
+	need this step, because the former multiplies by differences between
+	one-hot sequences and the latter subtracts the mean across the alphabet.
 
 	Attributions are calculated for a whole batch at a time. The examples in a
 	batch do not interact during the forward pass, so a single `backward()`
@@ -100,12 +114,20 @@ def saliency(
 
 	hypothetical: bool, optional
 		Whether to return attributions for all possible characters at each
-		position, i.e. the raw gradient, or only for the characters that are
+		position, i.e. the gradient, or only for the characters that are
 		actually present, i.e. the gradient projected onto `X`. Note that the
 		gradient is a local quantity evaluated at the observed sequence, so a
 		hypothetical saliency value is the effect of infinitesimally adding a
 		character that is not there rather than of substituting it in; use
 		`saturation_mutagenesis` if you need the latter. Default is False.
+
+	gradient_correction: bool, optional
+		Whether to subtract the mean gradient across the alphabet at each
+		position before the gradient is projected onto `X`, which removes the
+		component of the gradient that points off the one-hot simplex
+		(Majdandzic et al., Genome Biology 2023). With `hypothetical=True` the
+		corrected values at each position sum to zero. Set to False for the
+		uncorrected input times gradient. Default is True.
 
 	func: function or None, optional
 		A function to apply to the output of the model before the `target`-th
@@ -137,7 +159,8 @@ def saliency(
 		The attribution values for each example, on the CPU. If
 		`hypothetical=False` these are the gradient multiplied by `X`, so
 		every position that is not the observed character is zero; if
-		`hypothetical=True` these are the raw gradients. The values are
+		`hypothetical=True` these are the gradients. In both cases the
+		gradient is corrected first unless `gradient_correction=False`. The values are
 		signed -- a negative attribution means the character pushes the
 		`target`-th output down.
 	"""
@@ -208,6 +231,9 @@ def saliency(
 							type(y_)))
 
 				grad, = torch.autograd.grad(y_[:, target].sum(), X_)
+
+			if gradient_correction:
+				grad = grad - grad.mean(dim=1, keepdim=True)
 
 			if not hypothetical:
 				grad = grad * X_

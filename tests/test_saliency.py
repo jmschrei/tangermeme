@@ -32,9 +32,11 @@ def X():
 
 
 def test_saliency(X, device):
+	# These values are the uncorrected input times gradient; the corrected
+	# default is checked against its closed form further down.
 	torch.manual_seed(0)
 	model = FlattenDense()
-	X_attr = saliency(model, X, device=device)
+	X_attr = saliency(model, X, gradient_correction=False, device=device)
 
 	assert isinstance(X_attr, torch.Tensor)
 	assert X_attr.shape == X.shape
@@ -55,7 +57,8 @@ def test_saliency(X, device):
 def test_saliency_hypothetical(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	X_attr = saliency(model, X, hypothetical=True, device=device)
+	X_attr = saliency(model, X, hypothetical=True, gradient_correction=False,
+		device=device)
 
 	assert X_attr.shape == X.shape
 
@@ -103,7 +106,7 @@ def test_saliency_matches_closed_form_linear(device):
 	model = FlattenDense(seq_len=6, n_outputs=1)
 	X = random_one_hot((5, 4, 6), random_state=2).type(torch.float32)
 
-	X_attr = saliency(model, X, device=device)
+	X_attr = saliency(model, X, gradient_correction=False, device=device)
 
 	W = model.dense.weight.detach().reshape(4, 6)
 	assert_array_almost_equal(X_attr, W.unsqueeze(0) * X, 5)
@@ -117,7 +120,7 @@ def test_saliency_matches_autograd(device):
 	model.eval()
 
 	X = random_one_hot((6, 4, 15), random_state=4).type(torch.float32)
-	X_attr = saliency(model, X, device=device)
+	X_attr = saliency(model, X, gradient_correction=False, device=device)
 
 	X_ = X.clone().to(device).requires_grad_()
 	y = model(X_)
@@ -296,6 +299,75 @@ def test_saliency_raises_bad_input(device):
 		device=device)
 	assert_raises(ValueError, saliency, model, [[0, 1, 0, 0]], device=device)
 
+
+##
+
+
+@pytest.mark.parametrize("hypothetical", [False, True])
+def test_saliency_gradient_correction_closed_form_linear(hypothetical, device):
+	# For a single Linear layer the gradient is the weight matrix, so the
+	# corrected gradient is the weight matrix minus its mean over the
+	# alphabet at each position.
+	torch.manual_seed(1)
+	model = FlattenDense(seq_len=6, n_outputs=1)
+	X = random_one_hot((5, 4, 6), random_state=2).type(torch.float32)
+
+	X_attr = saliency(model, X, hypothetical=hypothetical, device=device)
+
+	W = model.dense.weight.detach().reshape(4, 6)
+	W = (W - W.mean(dim=0, keepdim=True)).unsqueeze(0)
+	expected = W.expand(5, -1, -1) if hypothetical else W * X
+
+	assert_array_almost_equal(X_attr, expected, 5)
+
+
+def test_saliency_gradient_correction_matches_autograd(device):
+	torch.manual_seed(3)
+	model = ConvAvgDense(n_outputs=1).to(device)
+	model.eval()
+
+	X = random_one_hot((6, 4, 15), random_state=4).type(torch.float32)
+	X_attr = saliency(model, X, device=device)
+
+	X_ = X.clone().to(device).requires_grad_()
+	y = model(X_)
+	grad, = torch.autograd.grad(y[:, 0].sum(), X_)
+	grad = grad - grad.mean(dim=1, keepdim=True)
+
+	assert_array_almost_equal(X_attr, (grad * X_).detach().cpu(), 5)
+
+
+def test_saliency_gradient_correction_ignores_off_simplex(device):
+	# Adding the same weight to every character at a position changes the
+	# model only off the one-hot simplex, where every position sums to one.
+	# On one-hot input it adds a constant to the output, so the corrected
+	# attributions must not move, while the uncorrected ones do.
+	torch.manual_seed(1)
+	model = FlattenDense(seq_len=6, n_outputs=1)
+	X = random_one_hot((5, 4, 6), random_state=2).type(torch.float32)
+
+	X_attr = saliency(model, X, device=device)
+	X_attr_raw = saliency(model, X, gradient_correction=False, device=device)
+
+	with torch.no_grad():
+		W = model.dense.weight.reshape(4, 6)
+		W += torch.randn(1, 6)
+
+	assert_array_almost_equal(saliency(model, X, device=device), X_attr, 5)
+	assert not torch.allclose(saliency(model, X, gradient_correction=False,
+		device=device), X_attr_raw)
+
+
+def test_saliency_gradient_correction_sums_to_zero(X, device):
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+
+	X_attr = saliency(model, X, hypothetical=True, device=device)
+	assert_array_almost_equal(X_attr.sum(dim=1), torch.zeros(64, 100), 6)
+
+	X_attr = saliency(model, X, hypothetical=True, gradient_correction=False,
+		device=device)
+	assert X_attr.sum(dim=1).abs().max() > 1e-3
 
 ##
 

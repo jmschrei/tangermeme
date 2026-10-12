@@ -170,7 +170,7 @@ Note that for multi-task models a target must be set to calculate attributions f
 
 #### Saliency
 
-DeepLIFT/SHAP and saturation mutagenesis both cost far more than a single forward pass. When you have more sequences than either can afford, or your model uses an op that has no DeepLIFT rule registered, `saliency` gives you input times gradient attributions for one backward pass per batch. It returns the same shape and sign convention as the other two, so it plots and composes identically.
+DeepLIFT/SHAP and saturation mutagenesis both cost far more than a single forward pass. When you have more sequences than either can afford, or your model uses an op that has no DeepLIFT rule registered, `saliency` gives you input times gradient attributions for one backward pass per batch. It returns the same shape and sign convention as the other two, so it plots and composes identically. By default the mean gradient across the alphabet at each position is subtracted first, following Majdandzic et al. (Genome Biology 2023); pass `gradient_correction=False` for the uncorrected values.
 
 ```python
 from tangermeme.saliency import saliency

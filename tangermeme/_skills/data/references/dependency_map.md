@@ -17,6 +17,7 @@ saliency(
     target=0,                       # indexes dim 1 of the model output
     batch_size=32,
     hypothetical=False,
+    gradient_correction=True,       # subtract the per-position mean gradient
     func=None,                      # POST-PROCESSING hook, as in predict
     dtype=None, device=None,        # device None -> CUDA if available else CPU
     verbose=False,
@@ -36,6 +37,14 @@ tangent at the observed sequence, so it saturates. A base the model is already
 certain about can carry a near-zero gradient despite being essential. Prefer
 `deep_lift_shap` when you can afford it; see
 `references/deep_lift_shap.md`.
+
+**The gradient is corrected by default**: the mean gradient across the
+alphabet at each position is subtracted before projecting onto `X`
+(Majdandzic et al., Genome Biology 2023), which removes the off-simplex
+component that `deep_lift_shap` and ISM already exclude. With
+`hypothetical=True` each position then sums to zero. Pass
+`gradient_correction=False` for raw input × gradient, including through
+`dependency_map(..., gradient_correction=False)`.
 
 `func=` here is the `predict`-style post-processing hook (pick a head, reduce a
 profile), **not** the `func(model, X)` plug-point — see

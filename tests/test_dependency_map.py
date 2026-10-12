@@ -34,9 +34,11 @@ def X():
 
 
 def test_dependency_map(X, device):
+	# These values use uncorrected saliency; the corrected default is checked
+	# against a brute force in test_dependency_map_matches_brute_force.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
-	dmap = dependency_map(model, X, device=device)
+	dmap = dependency_map(model, X, gradient_correction=False, device=device)
 
 	assert isinstance(dmap, torch.Tensor)
 	assert dmap.shape == (4, 12, 12)
@@ -78,17 +80,21 @@ def test_dependency_map_receptive_field(X, device):
 	assert dmap[:, (j - i).abs() <= 2].max() > 1e-3
 
 
-def test_dependency_map_matches_brute_force(device):
+@pytest.mark.parametrize("gradient_correction", [True, False])
+def test_dependency_map_matches_brute_force(gradient_correction, device):
 	# For each position, the column must be the mean absolute change in the
 	# summed attributions over exactly the substitutions that change a base.
+	# `gradient_correction` is forwarded to `saliency` through kwargs.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
 	model.eval()
 
 	X = one_hot_encode('ACGTAC').unsqueeze(0).type(torch.float32)
-	dmap = dependency_map(model, X, device=device)[0]
+	dmap = dependency_map(model, X, gradient_correction=gradient_correction,
+		device=device)[0]
 
-	attr0 = saliency(model, X, device=device).sum(dim=1)[0]
+	attr0 = saliency(model, X, gradient_correction=gradient_correction,
+		device=device).sum(dim=1)[0]
 
 	expected = numpy.zeros((6, 6))
 	for i in range(6):
@@ -101,7 +107,8 @@ def test_dependency_map_matches_brute_force(device):
 			X_[0, :, i] = 0
 			X_[0, c, i] = 1
 
-			attr = saliency(model, X_, device=device).sum(dim=1)[0]
+			attr = saliency(model, X_, gradient_correction=gradient_correction,
+				device=device).sum(dim=1)[0]
 			diffs.append((attr - attr0).abs().numpy())
 
 		expected[:, i] = numpy.mean(diffs, axis=0)

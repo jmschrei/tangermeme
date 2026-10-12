@@ -103,7 +103,9 @@ def dependency_map(
 		of shape `(-1, len(alphabet), length)`, which is summed over the
 		alphabet axis to give one value per position. `saliency`,
 		`deep_lift_shap`, and `saturation_mutagenesis` all satisfy this.
-		Default is `saliency`.
+		`saliency` corrects its gradients by default; pass
+		`gradient_correction=False` here to forward it and use the
+		uncorrected input times gradient instead. Default is `saliency`.
 
 	additional_func_kwargs: dict or None, optional
 		Arguments to pass to `func` that would otherwise collide with the

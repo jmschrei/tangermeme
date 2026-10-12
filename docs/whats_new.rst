@@ -143,6 +143,18 @@ saliency
 	  satisfies the ``func=`` contract and can be passed to ``ablate``,
 	  ``marginalize``, ``space``, and the ``variant_effect`` functions.
 	  Thanks @cyborgdnx!
+	- ``saliency`` subtracts the mean gradient across the alphabet at each
+	  position before projecting it onto the sequence, following Majdandzic
+	  et al. (Genome Biology 2023). A one-hot sequence lies on a simplex, and
+	  the component of the gradient that points off it describes inputs the
+	  model never saw, which adds noise to the attributions. On Beluga, for
+	  targets 214 and 267 at 25 hg38 loci (24 random cCREs and the Tutorial
+	  A6 locus), the correction raised the Pearson correlation between
+	  saliency and ``deep_lift_shap`` over the central 100bp at 22 of 25 loci
+	  for both targets, by 0.026 in median r. ``deep_lift_shap`` and
+	  ``saturation_mutagenesis`` already remove this component. Pass
+	  ``gradient_correction=False`` for the uncorrected input times
+	  gradient. ``dependency_map`` uses the corrected values by default.
 
 dependency_map
 --------------
