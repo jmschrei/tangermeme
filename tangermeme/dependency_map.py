@@ -43,6 +43,16 @@ def dependency_map(
 	motif pairs show up as blocks, and the flanks a motif depends on show up
 	as stripes leading into it.
 
+	Dependency maps were introduced by Tomaz da Silva et al. (Nature
+	Genetics 2025) for genomic language models, where the dependency of a
+	target position j on a query position i is the largest absolute log-odds
+	ratio of the predicted nucleotide at j, over the substitutions at i and
+	the four nucleotides at j. This function adapts the idea to
+	sequence-to-function models by measuring attributions instead of
+	predicted nucleotide probabilities. It also averages over the
+	substitutions at i rather than taking the largest, and puts the
+	substituted position on the columns where the paper puts it on the rows.
+
 	This is in-silico saturation mutagenesis lifted one level up. Where
 	`saturation_mutagenesis` asks how a single substitution changes the
 	model's scalar prediction, this asks how that same substitution changes

@@ -183,7 +183,7 @@ The trade-off is the linearity assumption: gradients saturate, so a nucleotide t
 
 #### Dependency Maps
 
-Attributions say which bases matter; a dependency map says which bases decide whether the other bases matter. It substitutes every base at every position and records how far the attributions *elsewhere* in the sequence move, so a model with no interactions gives a purely diagonal map and any off-diagonal structure is evidence of epistasis the model learned -- cooperating motifs appear as blocks, and the flanks a motif depends on appear as stripes.
+Attributions say which bases matter; a dependency map, adapted from [Tomaz da Silva et al. (Nature Genetics 2025)](https://doi.org/10.1038/s41588-025-02347-3), says which bases decide whether the other bases matter. It substitutes every base at every position and records how far the attributions *elsewhere* in the sequence move, so a model with no interactions gives a purely diagonal map and any off-diagonal structure is evidence of epistasis the model learned -- cooperating motifs appear as blocks, and the flanks a motif depends on appear as stripes.
 
 ```python
 from tangermeme.dependency_map import dependency_map

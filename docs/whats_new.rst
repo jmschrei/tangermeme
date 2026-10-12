@@ -171,7 +171,11 @@ dependency_map
 	  passed in when their accuracy is worth the cost. ``start`` and ``end``
 	  restrict which positions are substituted, following the same
 	  convention as ``saturation_mutagenesis``, since substituting every
-	  position of a full-length locus is rarely what you want. Thanks
+	  position of a full-length locus is rarely what you want. Dependency
+	  maps were introduced by Tomaz da Silva et al. (Nature Genetics 2025)
+	  for genomic language models; this adapts them to attributions,
+	  averages over the substitutions at a position rather than taking the
+	  largest, and puts the substituted position on the columns. Thanks
 	  @cyborgdnx!
 	- Substitutions that re-apply the base already present are skipped
 	  rather than computed, because their attributions are unchanged and

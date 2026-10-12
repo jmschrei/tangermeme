@@ -74,6 +74,10 @@ says which bases decide whether the other bases matter. A model that treats
 positions independently produces a **purely diagonal** map, so off-diagonal
 structure is direct evidence of epistasis the model learned — cooperative motif
 pairs show up as blocks, and the flanks a motif depends on show up as stripes.
+Adapted from Tomaz da Silva et al. (Nature Genetics 2025), who define it for
+genomic language models as the largest |log-odds ratio| over substitutions; this
+one averages |Δ attribution| over substitutions and puts the substituted position
+on the columns (`dmap[:, j, i]`), where the paper puts it on the rows.
 
 ### Three footguns
 
