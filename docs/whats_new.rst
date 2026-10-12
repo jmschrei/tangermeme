@@ -129,6 +129,8 @@ Documentation
 
 	- The first ``dinucleotide_shuffle`` example in the README printed two shuffles that ``dinucleotide_shuffle(seq, random_state=0)`` does not return. It now shows the two it does.
 
+	- The README is rewritten. It links the paper in Nature Methods and gives its citation, opens with an image of a workflow map of every public function that links to an interactive version, and adds a Speed section comparing one-hot encoding, saturation mutagenesis and DeepLIFT/SHAP with other packages, giving the machine, versions and settings of each measurement. The Usage examples form one walkthrough that defines a small model, run as written, and show their printed output, and they gain sections on ``extract_loci``, PISA, ``local_dinucleotide_shuffle``, the other design methods and plotting. The roadmap is removed, the note that FIMO and Tomtom moved to memesuite-lite is now part of a Related Packages section, and the ``interactive`` extra is listed. The ``space`` example passed ``spacing=10``, which raises ``ValueError: spacing has shape torch.Size([]) but must have shape (-1, 1)``; it now passes a tensor with one row per spacing.
+
 
 Version 1.5.0
 =============
