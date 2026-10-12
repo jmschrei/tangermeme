@@ -695,6 +695,65 @@ def test_one_hot_encode_raises_ignore_in_alphabet_message(alphabet, ignore):
 		one_hot_encode('ACGT', alphabet=alphabet, ignore=ignore)
 
 
+@pytest.mark.parametrize("alphabet", [
+	['A', 'C', 'G', 'é'],
+	['é', 'A', 'C', 'G', 'T'],
+	['A', 'C', 'G', 'T', 'é'],
+	('A', 'C', 'G', 'é'),
+	'ACGé',
+	['A', 'C', 'G', '\U0001F9EC'],
+])
+@pytest.mark.parametrize("in_sequence", [False, True])
+def test_one_hot_encode_raises_non_ascii_alphabet(alphabet, in_sequence):
+	# Characters are looked up by their UTF-8 bytes, and each byte of a
+	# non-ASCII character in the alphabet took a column. A character after
+	# it was encoded one or more columns too far right, even when the
+	# non-ASCII character was not in the sequence, and one in the sequence
+	# wrote past the end of the encoding (#111).
+	char = [c for c in alphabet if not c.isascii()][0]
+	sequence = 'GCA' + char if in_sequence else 'GCA'
+	message = "Character {} in the alphabet is not ASCII".format(char)
+
+	# A call that raises leaves nothing in the cache of lookup tables, so the
+	# second call raises too.
+	for _ in range(2):
+		with pytest.raises(ValueError, match=message):
+			one_hot_encode(sequence, alphabet=alphabet)
+
+
+@pytest.mark.parametrize("ignore", [
+	['N', 'é'],
+	['é'],
+	('N', 'é'),
+	'Né',
+	['N', '\U0001F9EC'],
+])
+@pytest.mark.parametrize("alphabet", [['A', 'C', 'G', 'T'],
+	['A', 'C', 'G', 'T', 'Z']])
+@pytest.mark.parametrize("repeats", [0, 1, 5000])
+def test_one_hot_encode_raises_non_ascii_ignore(ignore, alphabet, repeats):
+	# Each byte of a non-ASCII character in `ignore` was skipped as a
+	# character of its own, so every character after it in the sequence was
+	# encoded one position further along for each extra byte, and the last
+	# ones past the end of the encoding. 5,000 of them aborted the
+	# interpreter with a corrupted heap (#111).
+	char = [c for c in ignore if not c.isascii()][0]
+	sequence = 'GCAT' + (char + 'ACGT') * repeats
+	message = "Character {} in the list of ignored characters is not ASCII"
+
+	with pytest.raises(ValueError, match=message.format(char)):
+		one_hot_encode(sequence, alphabet=alphabet, ignore=ignore)
+
+
+@pytest.mark.parametrize("sequence", [['A', 'C', 'G', 'T'],
+	('A', 'C', 'G', 'T'), b'ACGT'])
+def test_one_hot_encode_raises_not_str(sequence):
+	# Only a string is encoded. The docstring said a list was accepted, which
+	# has not been true since 0.2.2 (#111).
+	with pytest.raises(TypeError):
+		one_hot_encode(sequence)
+
+
 def test_fast_one_hot_encode():
 	mapping = numpy.zeros(256, dtype=numpy.int8) - 2
 	for i, char in enumerate(b'ACGT'):
@@ -1308,6 +1367,16 @@ def test_one_hot_encode_rows_non_ascii():
 
 	with pytest.raises(ValueError, match="Encountered character"):
 		_one_hot_encode_rows(['ACGTé'])
+
+
+def test_one_hot_encode_rows_raises_non_ascii_alphabet():
+	# Such rows go to one_hot_encode, which raises for the alphabet or ignore
+	# list rather than writing past the end of the row (#111).
+	with pytest.raises(ValueError, match="Character É in the alphabet is not"):
+		_one_hot_encode_rows(['GCAÉ', 'acgé'], alphabet=['A', 'C', 'G', 'É'])
+
+	with pytest.raises(ValueError, match="Character é in the list of"):
+		_one_hot_encode_rows(['ACGT', 'acgt'], ignore=['N', 'é'])
 
 
 def test_one_hot_encode_rows_empty_strings():

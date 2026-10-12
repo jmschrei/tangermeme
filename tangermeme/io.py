@@ -935,8 +935,8 @@ def extract_loci(
 		as a path are read from a memory map of the file, using the .fai index
 		that pyfaidx reads or builds. They are read through pyfaidx instead,
 		with the same result, when they cannot be read from the map, such as
-		for a compressed file, a non-ASCII alphabet, or a window holding a
-		byte that pyfaidx would change, like a carriage return inside a line.
+		for a compressed file or a window holding a byte that pyfaidx would
+		change, like a carriage return inside a line.
 		The keys of a dictionary are coerced to strings, and the
 		returned sequences have the dtype of its values.
 
@@ -1016,14 +1016,16 @@ def extract_loci(
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
 		the returned tensor will have a 1 at index 0 if the character was 'A'.
 		The fasta sequence is upper-cased before encoding. A character that is
-		in neither `alphabet` nor `ignore` raises a ValueError. Only used when
-		`sequences` is a fasta file. Default is ['A', 'C', 'G', 'T'].
+		in neither `alphabet` nor `ignore` raises a ValueError, as does a
+		character of `alphabet` that is not ASCII. Only used when `sequences`
+		is a fasta file. Default is ['A', 'C', 'G', 'T'].
 
 	ignore: list, optional
 		A list of characters to ignore in the sequence, meaning that no bits
 		are set to 1 in the returned one-hot encoding. Put another way, the
 		sum across characters is equal to 1 for all positions except those
-		where the original sequence is in this list. Default is ['N'].
+		where the original sequence is in this list. Every character of
+		`ignore` must be ASCII, as in `alphabet`. Default is ['N'].
 
 	exclusion_lists: str, os.PathLike, pandas.DataFrame, list, or None, optional
 		Regions where overlapping loci should be filtered out, given either as a
