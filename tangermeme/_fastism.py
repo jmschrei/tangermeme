@@ -28,6 +28,7 @@ without a rule is computed at full length rather than approximated.
 from __future__ import annotations
 
 import contextlib
+import io
 import logging
 import operator
 import warnings
@@ -48,8 +49,10 @@ _GLOBAL = 3
 
 _INF = 1 << 40
 
-# Loggers that print a traceback when torch.export fails. The failure is
-# reported to the user as the reason fast=True was not used.
+# Loggers that print a traceback when torch.export fails. torch.export also
+# prints the partial graph to stderr itself, so stderr is redirected during
+# the capture too. The failure is reported to the user as the reason fast=True
+# was not used.
 _EXPORT_LOGGERS = ("torch._subclasses.fake_tensor",
 	"torch.fx.experimental.symbolic_shapes", "torch._export",
 	"torch.export", "torch._dynamo")
@@ -519,7 +522,8 @@ class _FastISM:
 			for logger in loggers:
 				logger.setLevel(logging.CRITICAL)
 
-			with warnings.catch_warnings():
+			with warnings.catch_warnings(), contextlib.redirect_stderr(
+				io.StringIO()):
 				# Raised from within torch.export's own copy of its graph.
 				warnings.filterwarnings("ignore", category=FutureWarning,
 					message=r".*isinstance\(treespec, LeafSpec\)")
