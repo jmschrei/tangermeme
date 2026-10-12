@@ -199,6 +199,13 @@ dependency_map
 	  each move it. The model's original device and training mode are
 	  restored afterward. The map is float64 when ``func`` returns float64,
 	  and float32 otherwise, including for half-precision attributions.
+	- An attribution function that draws random references, as
+	  ``deep_lift_shap`` does by default, draws new ones for every
+	  substituted copy, so the map also contains the change of references.
+	  On the Tutorial B8 sequence, holding three shuffles of the original
+	  sequence fixed lowered the cross-motif value from 0.0607 to 0.0152
+	  and the background from 0.0129 to 0.0029. The docstring, the skill and
+	  Tutorial B8 hold the references fixed with a wrapper.
 
 
 Version 1.5.0

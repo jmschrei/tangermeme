@@ -122,7 +122,12 @@ def dependency_map(
 		`deep_lift_shap`, and `saturation_mutagenesis` all satisfy this.
 		`saliency` corrects its gradients by default; pass
 		`gradient_correction=False` here to forward it and use the
-		uncorrected input times gradient instead. Default is `saliency`.
+		uncorrected input times gradient instead. An attribution function
+		that draws random references, as `deep_lift_shap` does by default,
+		draws new ones for every substituted copy, so the differences also
+		contain the change of references; hold the references fixed with a
+		wrapper, one sequence at a time, as Tutorial B8 does. Default is
+		`saliency`.
 
 	additional_func_kwargs: dict or None, optional
 		Arguments to pass to `func` that would otherwise collide with the

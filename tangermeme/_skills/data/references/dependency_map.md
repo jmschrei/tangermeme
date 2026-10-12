@@ -79,7 +79,7 @@ genomic language models as the largest |log-odds ratio| over substitutions; this
 one averages |Δ attribution| over substitutions and puts the substituted position
 on the columns (`dmap[:, j, i]`), where the paper puts it on the rows.
 
-### Three footguns
+### Four footguns
 
 1. **The diagonal is not comparable to the rest of the map.** It measures the
    direct effect of a substitution on its own attribution, is non-zero even for
@@ -99,6 +99,22 @@ on the columns (`dmap[:, j, i]`), where the paper puts it on the rows.
    ```python
    dependency_map(model, X, func=saliency,
        additional_func_kwargs={'func': lambda y: y[:, :1]})
+   ```
+
+4. **Hold `deep_lift_shap`'s references fixed.** By default it shuffles each
+   sequence it is given, so every substituted copy is compared against new
+   references and the map absorbs that change; on Tutorial B8 it made up about
+   three-quarters of the values. Pass the same references for every copy, one
+   sequence at a time, since they are shuffles of that sequence:
+
+   ```python
+   refs = dinucleotide_shuffle(X[i:i+1], n=10, random_state=0)  # (1, 10, 4, L)
+
+   def dls_fixed(model, X_, args=None, **kwargs):
+       return deep_lift_shap(model, X_, args=args,
+           references=refs.expand(X_.shape[0], -1, -1, -1), **kwargs)
+
+   dmap = dependency_map(model, X[i:i+1], func=dls_fixed)
    ```
 
 `func` must return `(-1, len(alphabet), length)`; the alphabet axis is summed to
