@@ -10,13 +10,36 @@ from tangermeme.predict import predict
 from tangermeme.utils import random_one_hot
 from tangermeme.utils import TangermemeWarning
 
+from tangermeme._fastism import _FastISM
 from tangermeme.saturation_mutagenesis import _attribution_score
 from tangermeme.saturation_mutagenesis import saturation_mutagenesis
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense
+from .toy_models import Conv1
+from .toy_models import Scatter
 from .toy_models import ConvDense
+from .toy_models import ConvPoolDense
 from .toy_models import SmallDeepSEA
+from .toy_models import ResidualConv
+from .toy_models import DilatedConv
+from .toy_models import ConvBatchNorm
+from .toy_models import ConvLayerNorm
+from .toy_models import ConvGLU
+from .toy_models import ConvSoftmax
+from .toy_models import MultiHeadAttention
+from .toy_models import Conv2DExpand
+from .toy_models import ProfileCount
+from .toy_models import StridedPoolConv
+from .toy_models import Conv2DLayouts
+from .toy_models import ChannelsLastConv
+from .toy_models import ReverseComplementAverage
+from .toy_models import InceptionConv
+from .toy_models import PadCropConv
+from .toy_models import MixedOps
+from .toy_models import ConvWithArgs
+from .toy_models import DataDependentConv
+from .toy_models import MergedBatchLength
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -810,3 +833,349 @@ def test_saturation_mutagenesis_skips_identity_forward_passes(X0, device):
 	n, length = X0.shape[0], X0.shape[-1]
 	# n reference rows + 3 true edits per position per example.
 	assert model.rows == n + 3 * length * n
+
+
+###
+
+
+FAST_MODELS = {
+	"SumModel": SumModel,
+	"FlattenDense": FlattenDense,
+	"Conv1": Conv1,
+	"Scatter": Scatter,
+	"ConvDense": ConvDense,
+	"ConvPoolDense": ConvPoolDense,
+	"SmallDeepSEA": SmallDeepSEA,
+	"ResidualConv": ResidualConv,
+	"DilatedConv": DilatedConv,
+	"ConvBatchNorm": ConvBatchNorm,
+	"ConvLayerNorm": ConvLayerNorm,
+	"ConvGLU": ConvGLU,
+	"ConvSoftmax": ConvSoftmax,
+	"MultiHeadAttention": MultiHeadAttention,
+	"Conv2DExpand": Conv2DExpand,
+	"ProfileCount": ProfileCount,
+	"StridedPoolConv": StridedPoolConv,
+	"Conv2DLayouts": Conv2DLayouts,
+	"ChannelsLastConv": ChannelsLastConv,
+	"ReverseComplementAverage": lambda: ReverseComplementAverage(Conv1()),
+	"InceptionConv": InceptionConv,
+	"PadCropConv": PadCropConv,
+	"MixedOps": MixedOps,
+	"MergedBatchLength": MergedBatchLength,
+}
+
+
+@pytest.fixture
+def force_fast(monkeypatch):
+	# Attempt the fast path however small the job, and keep it however slow
+	# it is, so that a toy model exercises it.
+	monkeypatch.setattr(
+		"tangermeme.saturation_mutagenesis._FAST_MIN_SECONDS", 0)
+	monkeypatch.setattr(
+		"tangermeme.saturation_mutagenesis._FAST_MAX_RELATIVE_TIME",
+		float("inf"))
+
+
+def _fast_and_slow(model, X, **kwargs):
+	"""Run with fast=True, failing if it falls back, and with fast=False."""
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", TangermemeWarning)
+		y_fast = saturation_mutagenesis(model, X, fast=True, **kwargs)
+
+	y_slow = saturation_mutagenesis(model, X, fast=False, **kwargs)
+	return y_fast, y_slow
+
+
+def _assert_close(a, b, rtol=1e-4, atol=1e-5):
+	if isinstance(a, torch.Tensor):
+		assert a.dtype == b.dtype
+		torch.testing.assert_close(a, b, rtol=rtol, atol=atol)
+	else:
+		assert type(a) is type(b) and len(a) == len(b)
+		for a_, b_ in zip(a, b):
+			_assert_close(a_, b_, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize("name", FAST_MODELS)
+def test_saturation_mutagenesis_fast_matches(X0, device, force_fast, name):
+	torch.manual_seed(0)
+	model = FAST_MODELS[name]()
+
+	y_fast, y_slow = _fast_and_slow(model, X0, raw_outputs=True,
+		batch_size=17, device=device)
+	_assert_close(y_fast, y_slow)
+
+
+@pytest.mark.parametrize("name, ops", [
+	("SmallDeepSEA", ["aten.conv1d.padding", "aten.max_pool1d.default"]),
+	("ConvBatchNorm", ["aten._native_batch_norm_legit_no_training.default"]),
+	("ProfileCount", ["aten.add.Tensor", "aten.slice.Tensor"]),
+	("StridedPoolConv", ["aten.max_pool1d.default",
+		"aten.avg_pool1d.default"]),
+	("Conv2DLayouts", ["aten.conv2d.default", "aten.max_pool2d.default",
+		"aten.squeeze.dim", "aten.unsqueeze.default"]),
+	("ChannelsLastConv", ["aten.layer_norm.default", "aten.linear.default",
+		"aten.softmax.int", "aten.transpose.int"]),
+	("ReverseComplementAverage", ["aten.flip.default"]),
+	("InceptionConv", ["aten.cat.default", "aten.add.Tensor"]),
+	("PadCropConv", ["aten.pad.default", "aten.slice.Tensor"]),
+	("MixedOps", ["aten.embedding.default", "aten.argmax.default",
+		"aten.split.Tensor", "aten.view.default", "aten.max.dim",
+		"aten.expand.default", "aten.sum.dim_IntList"]),
+	("MergedBatchLength", ["aten.rms_norm.default"]),
+])
+def test_saturation_mutagenesis_fast_local_ops(X0, name, ops):
+	# Each rule is exercised by at least one model, so that an equivalence
+	# test cannot pass by computing everything at full length.
+	torch.manual_seed(0)
+	model = FAST_MODELS[name]().eval()
+	X = X0.type(torch.int8)
+
+	with torch.no_grad():
+		fast = _FastISM(model, X, None, 0, 100, torch.device('cpu'),
+			torch.float32, False)
+
+	for op in ops:
+		assert op in fast.local_ops
+
+
+def test_saturation_mutagenesis_fast_global_ops(X0):
+	# A layer norm over the length axis and a flatten into a dense layer
+	# change every position, so they are computed at full length.
+	torch.manual_seed(0)
+	X = X0.type(torch.int8)
+
+	with torch.no_grad():
+		fast = _FastISM(ConvLayerNorm().eval(), X, None, 0, 100,
+			torch.device('cpu'), torch.float32, False)
+	assert fast.local_ops == ["aten.conv1d.padding"]
+
+	with torch.no_grad():
+		fast = _FastISM(FlattenDense().eval(), X, None, 0, 100,
+			torch.device('cpu'), torch.float32, False)
+	assert fast.local_ops == []
+
+
+@pytest.mark.parametrize("start, end", [(0, 10), (90, -1), (40, 41),
+	(0, 1), (99, 100), (5, 95)])
+def test_saturation_mutagenesis_fast_start_end(X0, device, force_fast, start,
+	end):
+	torch.manual_seed(0)
+	model = ProfileCount()
+
+	y_fast, y_slow = _fast_and_slow(model, X0, start=start, end=end,
+		raw_outputs=True, device=device)
+	_assert_close(y_fast, y_slow)
+
+
+@pytest.mark.parametrize("batch_size", [1, 2, 7, 1000])
+def test_saturation_mutagenesis_fast_batch_size(X0, device, force_fast,
+	batch_size):
+	torch.manual_seed(0)
+	model = StridedPoolConv()
+
+	y_fast, y_slow = _fast_and_slow(model, X0, batch_size=batch_size,
+		raw_outputs=True, device=device)
+	_assert_close(y_fast, y_slow)
+
+
+@pytest.mark.parametrize("target, hypothetical", [(None, False), (0, False),
+	(slice(1, 3), True), (2, True)])
+def test_saturation_mutagenesis_fast_attributions(X0, device, force_fast,
+	target, hypothetical):
+	torch.manual_seed(0)
+	model = SmallDeepSEA(n_outputs=3)
+
+	X_attr_fast, X_attr_slow = _fast_and_slow(model, X0, target=target,
+		hypothetical=hypothetical, device=device)
+	assert X_attr_fast.shape == (2, 4, 100)
+	_assert_close(X_attr_fast, X_attr_slow)
+
+
+def test_saturation_mutagenesis_fast_func(X0, device, force_fast):
+	torch.manual_seed(0)
+	model = ProfileCount()
+
+	X_attr_fast, X_attr_slow = _fast_and_slow(model, X0,
+		func=lambda y: y[0].sum(dim=-1), device=device)
+	_assert_close(X_attr_fast, X_attr_slow)
+
+
+def test_saturation_mutagenesis_fast_args(X0, device, force_fast):
+	torch.manual_seed(0)
+	X_ctl = torch.rand(2, 2, 100)
+
+	y_fast, y_slow = _fast_and_slow(ProfileCount(n_control_tracks=2), X0,
+		args=(X_ctl,), raw_outputs=True, batch_size=13, device=device)
+	_assert_close(y_fast, y_slow)
+
+	scale = torch.rand(2, 5)
+	y_fast, y_slow = _fast_and_slow(ConvWithArgs(), X0, args=(X_ctl, scale),
+		raw_outputs=True, device=device)
+	_assert_close(y_fast, y_slow)
+
+
+def test_saturation_mutagenesis_fast_irregular_columns(X0, device,
+	force_fast):
+	# An all-zero (N) column and a multi-hot column have no identity edit,
+	# so all four of their edits are run.
+	torch.manual_seed(0)
+	X = X0.clone()
+	X[0, :, 0] = 0
+	X[0, :, 50] = 0
+	X[1, :, 99] = 1
+
+	y_fast, y_slow = _fast_and_slow(ProfileCount(), X, raw_outputs=True,
+		device=device)
+	_assert_close(y_fast, y_slow)
+
+
+def test_saturation_mutagenesis_fast_int8(X0, device, force_fast):
+	torch.manual_seed(0)
+	model = InceptionConv()
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", TangermemeWarning)
+		y_int8 = saturation_mutagenesis(model, X0.type(torch.int8),
+			raw_outputs=True, device=device)
+		y_float = saturation_mutagenesis(model, X0, raw_outputs=True,
+			device=device)
+
+	_assert_close(y_int8, y_float, rtol=0, atol=0)
+
+
+def test_saturation_mutagenesis_fast_float64(X0, force_fast):
+	torch.manual_seed(0)
+	model = ProfileCount().double()
+
+	y_fast, y_slow = _fast_and_slow(model, X0, raw_outputs=True,
+		dtype=torch.float64, device='cpu')
+	_assert_close(y_fast, y_slow, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_saturation_mutagenesis_fast_autocast(X0, cuda_device, force_fast,
+	dtype):
+	torch.manual_seed(0)
+	model = ProfileCount()
+
+	y_fast, y_slow = _fast_and_slow(model, X0, raw_outputs=True, dtype=dtype,
+		device=cuda_device)
+	_assert_close(y_fast, y_slow, rtol=5e-2, atol=5e-2)
+
+
+def test_saturation_mutagenesis_fast_restores_model(X0, device, force_fast):
+	torch.manual_seed(0)
+	model = MixedOps().train()
+	state = {k: v.clone() for k, v in model.state_dict().items()}
+
+	_fast_and_slow(model, X0, raw_outputs=True, device=device)
+
+	assert model.training
+	for k, v in model.state_dict().items():
+		assert v.device.type == 'cpu'
+		assert torch.equal(v, state[k])
+
+
+def test_saturation_mutagenesis_fast_verbose(X0, force_fast):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+
+	y_fast, y_slow = _fast_and_slow(model, X0, verbose=True, device='cpu')
+	_assert_close(y_fast, y_slow)
+
+
+##
+
+
+def _raises_on_capture(*args, **kwargs):
+	raise AssertionError("_FastISM should not be constructed")
+
+
+def test_saturation_mutagenesis_fast_skips_small_jobs(X0, device,
+	monkeypatch):
+	# A job that fast=False finishes in well under _FAST_MIN_SECONDS is not
+	# worth capturing the model for, so it runs with fast=False, silently.
+	monkeypatch.setattr("tangermeme.saturation_mutagenesis._FastISM",
+		_raises_on_capture)
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", TangermemeWarning)
+		y_fast = saturation_mutagenesis(model, X0, raw_outputs=True,
+			device=device)
+
+	y_slow = saturation_mutagenesis(model, X0, raw_outputs=True, fast=False,
+		device=device)
+	_assert_close(y_fast, y_slow, rtol=0, atol=0)
+
+
+def test_saturation_mutagenesis_fast_false_never_captures(X0, device,
+	force_fast, monkeypatch):
+	monkeypatch.setattr("tangermeme.saturation_mutagenesis._FastISM",
+		_raises_on_capture)
+	torch.manual_seed(0)
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", TangermemeWarning)
+		saturation_mutagenesis(SmallDeepSEA(), X0, fast=False, device=device)
+
+
+def _assert_falls_back(model, X, match, device):
+	with pytest.warns(TangermemeWarning, match=match):
+		y_fast = saturation_mutagenesis(model, X, raw_outputs=True,
+			device=device)
+
+	y_slow = saturation_mutagenesis(model, X, raw_outputs=True, fast=False,
+		device=device)
+	_assert_close(y_fast, y_slow, rtol=0, atol=0)
+
+
+def test_saturation_mutagenesis_fast_fallback_capture(X0, device,
+	force_fast):
+	torch.manual_seed(0)
+	_assert_falls_back(DataDependentConv(), X0,
+		"torch.export could not capture the model", device)
+
+
+def test_saturation_mutagenesis_fast_fallback_hooks(X0, device, force_fast):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	model.conv1.register_forward_hook(lambda module, inputs, output:
+		output * 2)
+
+	_assert_falls_back(model, X0, "forward hooks", device)
+
+
+def test_saturation_mutagenesis_fast_fallback_slower(X0, device, force_fast,
+	monkeypatch):
+	monkeypatch.setattr(
+		"tangermeme.saturation_mutagenesis._FAST_MAX_RELATIVE_TIME", 0)
+	torch.manual_seed(0)
+
+	_assert_falls_back(SmallDeepSEA(), X0, "fast=True took", device)
+
+
+def test_saturation_mutagenesis_fast_fallback_mismatch(X0, device,
+	force_fast, monkeypatch):
+	predict_edits = _FastISM.predict_edits
+	monkeypatch.setattr(_FastISM, "predict_edits", lambda *args, **kwargs:
+		predict_edits(*args, **kwargs) + 1e-2)
+	torch.manual_seed(0)
+
+	_assert_falls_back(SmallDeepSEA(), X0, "differed by up to", device)
+
+
+def test_saturation_mutagenesis_fast_fallback_error(X0, device, force_fast,
+	monkeypatch):
+	def predict_edits(*args, **kwargs):
+		raise RuntimeError("an unexpected failure")
+
+	monkeypatch.setattr(_FastISM, "predict_edits", predict_edits)
+	torch.manual_seed(0)
+
+	_assert_falls_back(SmallDeepSEA(), X0,
+		"raised RuntimeError: an unexpected failure", device)

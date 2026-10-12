@@ -1052,3 +1052,207 @@ class SharedRuleSeq(torch.nn.Module):
 		# `pisa` indexes the output as (example, position), so the channel axis
 		# is squeezed out the same way ConvRuleSeq does it.
 		return self.out(h)[:, 0]
+
+
+class ProfileCount(torch.nn.Module):
+	"""A BPNet-shaped model: dilated residual convolutions, a profile head
+	cropped to the output window and a count head averaged over it, with
+	optional control tracks concatenated before the heads."""
+
+	def __init__(self, n_filters=8, n_layers=3, trimming=12,
+		n_control_tracks=0):
+		super(ProfileCount, self).__init__()
+		self.trimming = trimming
+		self.iconv = torch.nn.Conv1d(4, n_filters, 9, padding=4)
+		self.rconvs = torch.nn.ModuleList([torch.nn.Conv1d(n_filters,
+			n_filters, 3, padding=2**i, dilation=2**i)
+			for i in range(1, n_layers+1)])
+		self.fconv = torch.nn.Conv1d(n_filters + n_control_tracks, 2, 11,
+			padding=5)
+		self.linear = torch.nn.Linear(n_filters + (n_control_tracks > 0), 1)
+
+	def forward(self, X, X_ctl=None):
+		start, end = self.trimming, X.shape[2] - self.trimming
+		X = torch.relu(self.iconv(X))
+		for conv in self.rconvs:
+			X = torch.add(X, torch.relu(conv(X)))
+
+		X_w_ctl = X if X_ctl is None else torch.cat([X, X_ctl], dim=1)
+		y_profile = self.fconv(X_w_ctl)[:, :, start:end]
+
+		X = torch.mean(X[:, :, start-3:end+3], dim=2)
+		if X_ctl is not None:
+			X_ctl = torch.sum(X_ctl[:, :, start:end], dim=(1, 2)).unsqueeze(-1)
+			X = torch.cat([X, torch.log(X_ctl + 1)], dim=-1)
+		return y_profile, self.linear(X)
+
+
+class StridedPoolConv(torch.nn.Module):
+	"""Strided and padded convolutions, max pooling with ceil_mode and
+	dilation, and padded average pooling."""
+
+	def __init__(self):
+		super(StridedPoolConv, self).__init__()
+		self.c1 = torch.nn.Conv1d(4, 6, 4, stride=2, padding=1)
+		self.p1 = torch.nn.MaxPool1d(3, stride=2, padding=1, ceil_mode=True)
+		self.c2 = torch.nn.Conv1d(6, 5, 3, stride=3)
+		self.p2 = torch.nn.AvgPool1d(2, padding=1)
+		self.p3 = torch.nn.MaxPool1d(2, dilation=2)
+		self.linear = torch.nn.Linear(5, 2)
+
+	def forward(self, X):
+		X = self.p1(torch.relu(self.c1(X)))
+		X = self.p3(self.p2(torch.tanh(self.c2(X))))
+		return self.linear(X.amax(dim=-1))
+
+
+class Conv2DLayouts(torch.nn.Module):
+	"""Two-dimensional convolution and pooling over a (batch, 4, 1, length)
+	and a (batch, 1, 4, length) view of the sequence."""
+
+	def __init__(self):
+		super(Conv2DLayouts, self).__init__()
+		self.a = torch.nn.Conv2d(4, 6, (1, 5), padding=(0, 2))
+		self.b = torch.nn.Conv2d(1, 6, (4, 3), padding=(0, 1))
+		self.pool = torch.nn.MaxPool2d((1, 2))
+		self.linear = torch.nn.Linear(6, 3)
+
+	def forward(self, X):
+		a = self.pool(torch.relu(self.a(X.unsqueeze(2)))).squeeze(2)
+		b = self.pool(torch.relu(self.b(X.unsqueeze(1)))).squeeze(2)
+		return self.linear((a * b).sum(dim=-1))
+
+
+class ChannelsLastConv(torch.nn.Module):
+	"""A convolution followed by layers over a (batch, length, channels)
+	layout: layer norm, dense layers and a softmax over channels."""
+
+	def __init__(self):
+		super(ChannelsLastConv, self).__init__()
+		self.conv = torch.nn.Conv1d(4, 8, 5, padding=2)
+		self.norm = torch.nn.LayerNorm(8)
+		self.linear = torch.nn.Linear(8, 8)
+		self.out = torch.nn.Linear(8, 2)
+
+	def forward(self, X):
+		X = self.conv(X).transpose(1, 2)
+		X = torch.nn.functional.gelu(self.linear(self.norm(X))) + X
+		X = torch.softmax(X, dim=-1) * X
+		return self.out(X).permute(0, 2, 1)
+
+
+class ReverseComplementAverage(torch.nn.Module):
+	"""Average a per-position model's output over a sequence and its reverse
+	complement."""
+
+	def __init__(self, model):
+		super(ReverseComplementAverage, self).__init__()
+		self.model = model
+
+	def forward(self, X):
+		y = self.model(X)
+		y_rc = self.model(torch.flip(X, dims=(1, 2)))
+		return (y + torch.flip(y_rc, dims=(-1,))) / 2
+
+
+class InceptionConv(torch.nn.Module):
+	"""Parallel convolutions of different widths concatenated along channels,
+	and a learned per-position bias."""
+
+	def __init__(self, length=100):
+		super(InceptionConv, self).__init__()
+		self.b1 = torch.nn.Conv1d(4, 3, 1)
+		self.b3 = torch.nn.Conv1d(4, 3, 3, padding=1)
+		self.b9 = torch.nn.Conv1d(4, 3, 9, padding=4)
+		self.mix = torch.nn.Conv1d(9, 4, 5, padding='same')
+		self.position = torch.nn.Parameter(torch.randn(1, 4, length))
+
+	def forward(self, X):
+		X = torch.cat([self.b1(X), self.b3(X), self.b9(X)], dim=1)
+		return torch.relu(self.mix(X)) + self.position
+
+
+class PadCropConv(torch.nn.Module):
+	"""Explicit constant padding, unpadded convolutions, and strided crops."""
+
+	def __init__(self):
+		super(PadCropConv, self).__init__()
+		self.c1 = torch.nn.Conv1d(4, 6, 7)
+		self.c2 = torch.nn.Conv1d(6, 2, 4, padding='same')
+
+	def forward(self, X):
+		X = torch.relu(self.c1(torch.nn.functional.pad(X, (3, 3))))
+		X = torch.nn.functional.pad(X, (2, 1), value=0.5)[:, :, 1:-2]
+		return self.c2(X)[:, :, 10:-10:2]
+
+
+class MixedOps(torch.nn.Module):
+	"""An embedding of the argmax, a gated split, batch norm, reshapes that
+	split the channels, reductions over channels, and an expand."""
+
+	def __init__(self):
+		super(MixedOps, self).__init__()
+		self.embedding = torch.nn.Embedding(4, 6)
+		self.conv = torch.nn.Conv1d(6, 8, 3, padding=1)
+		self.norm = torch.nn.BatchNorm1d(4)
+		self.dropout = torch.nn.Dropout(0.3)
+		self.linear = torch.nn.Linear(2, 3)
+
+		with torch.no_grad():
+			self.norm.running_mean.uniform_(-1, 1)
+			self.norm.running_var.uniform_(0.5, 2)
+
+	def forward(self, X):
+		X = self.embedding(X.argmax(dim=1)).transpose(1, 2)
+		a, b = self.conv(X).chunk(2, dim=1)
+		X = self.dropout(self.norm(a * torch.sigmoid(b)))
+		X = X.reshape(X.shape[0], 2, 2, X.shape[-1])
+		X = X.max(dim=1).values + X.mean(dim=1, keepdim=True).squeeze(1)
+		X = X.unsqueeze(-1).expand(-1, -1, -1, 3).sum(dim=-1)
+		return self.linear(X.transpose(1, 2)).transpose(1, 2).flatten(1)
+
+
+class ConvWithArgs(torch.nn.Module):
+	"""A model taking per-position control tracks and a per-example scale as
+	additional inputs."""
+
+	def __init__(self):
+		super(ConvWithArgs, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 5, 5, padding=2)
+		self.conv2 = torch.nn.Conv1d(7, 3, 3, padding=1)
+
+	def forward(self, X, X_ctl, scale):
+		X = torch.relu(self.conv1(X)) * scale[:, :, None]
+		X = torch.cat([X, X_ctl], dim=1)
+		return self.conv2(X) + X_ctl[:, :1]
+
+
+class DataDependentConv(torch.nn.Module):
+	"""A model whose control flow depends on the values it computes, which
+	`torch.export` cannot capture."""
+
+	def __init__(self):
+		super(DataDependentConv, self).__init__()
+		self.conv = torch.nn.Conv1d(4, 3, 5, padding=2)
+
+	def forward(self, X):
+		X = self.conv(X)
+		if X.sum() > 0:
+			return X.mean(dim=-1)
+		return X.amax(dim=-1)
+
+
+class MergedBatchLength(torch.nn.Module):
+	"""RMS norm over channels, then a dense layer applied after merging the
+	batch and length axes, whose merged size also enters the output."""
+
+	def __init__(self):
+		super(MergedBatchLength, self).__init__()
+		self.conv = torch.nn.Conv1d(4, 6, 3, padding=1)
+		self.norm = torch.nn.RMSNorm(6)
+		self.linear = torch.nn.Linear(6, 2)
+
+	def forward(self, X):
+		X_flat = self.norm(self.conv(X).transpose(1, 2)).reshape(-1, 6)
+		y = self.linear(X_flat).reshape(X.shape[0], -1, 2).sum(dim=1)
+		return y + X_flat.shape[0]

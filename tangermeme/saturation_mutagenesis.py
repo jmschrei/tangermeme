@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import time
 import warnings
 from collections.abc import Callable
 from typing import Any
@@ -12,8 +14,36 @@ import torch
 
 from tqdm import trange
 
+from ._compat import _autocast_supported
+from ._compat import _preserve_model_state
+from ._compat import _resolve_device
+from ._fastism import _FastISM
+from ._fastism import _Unsupported
 from .predict import predict
 from .utils import TangermemeWarning
+
+
+# fast=True is not attempted for a job that fast=False would finish in less
+# time than this, in seconds, because capturing the model could take longer
+# than it saves.
+_FAST_MIN_SECONDS = 10.0
+
+# fast=True is used only when it takes at most this fraction of the time
+# fast=False takes on the same batch of edits.
+_FAST_MAX_RELATIVE_TIME = 1.0
+
+# The largest difference between fast=True and fast=False, relative to the
+# largest output, that verification accepts, by the dtype the model runs in.
+# Each is set above the rounding differences of that dtype. On CUDA, float32
+# convolutions run in TF32 by default, so float32 gets a looser tolerance
+# there than on the CPU.
+_FAST_TOLERANCE = {
+	torch.float64: 1e-10,
+	torch.float32: 1e-5,
+	torch.float16: 1e-2,
+	torch.bfloat16: 5e-2,
+}
+_FAST_TOLERANCE_CUDA_FLOAT32 = 1e-3
 
 
 class SaturationMutagenesisRawResult(NamedTuple):
@@ -192,6 +222,154 @@ def _stack_y_hat(y_hat, n_examples, n_chars, width):
 	]
 
 
+def _timed(fn, device):
+	"""Call `fn` and return its result and the wall-clock seconds it took."""
+
+	if device.type == 'cuda':
+		torch.cuda.synchronize(device)
+	tic = time.perf_counter()
+	result = fn()
+	if device.type == 'cuda':
+		torch.cuda.synchronize(device)
+	return result, time.perf_counter() - tic
+
+
+def _verify_fast(fast, model, X, args, start, end, batch_size, dtype, device,
+	func):
+	"""Compare the fast path with `predict` on one batch of edits.
+
+	The batch holds every edit at the first and last edited positions of the
+	first example, where padding is read, and edits spread evenly over the
+	rest. The two must agree to within a tolerance, relative to the largest
+	output, set by the dtype, and the fast path must not take longer. Each is
+	timed twice after a first, untimed call, alternating between them, and the
+	faster time of each is compared.
+
+
+	Returns
+	-------
+	reason: str or None
+		Why the fast path should not be used, or None if it should.
+	"""
+
+	_, chars, positions = _single_edits(X[0], start, end)
+	edge = torch.where((positions == start) | (positions == end - 1))[0]
+	spread = torch.linspace(0, chars.shape[0] - 1, min(batch_size,
+		chars.shape[0])).round().long()
+	keep = torch.unique(torch.cat([edge, spread]))
+	chars, positions = chars[keep], positions[keep]
+	X_, args_ = _edited_inputs(X, args, 0, chars, positions)
+
+	def run_fast():
+		return fast.predict_edits(0, chars, positions, batch_size, func)
+
+	def run_slow():
+		return predict(model, X_, args=args_, func=func,
+			batch_size=batch_size, dtype=dtype, device=device)
+
+	y_fast, y_slow = run_fast(), run_slow()
+	if isinstance(y_slow, torch.Tensor):
+		y_fast, y_slow = [y_fast], [y_slow]
+
+	err, scale = 0.0, 0.0
+	for a, b in zip(y_fast, y_slow):
+		if a.shape != b.shape:
+			return ("fast=True returned an output of shape {} where fast=False "
+				"returned {}".format(tuple(a.shape), tuple(b.shape)))
+
+		a, b = a.double(), b.double()
+		err = max(err, (a - b).abs().max().item())
+		scale = max(scale, b.abs().max().item())
+
+	tolerance = _FAST_TOLERANCE.get(dtype, _FAST_TOLERANCE[torch.float32])
+	if dtype == torch.float32 and device.type == 'cuda':
+		tolerance = _FAST_TOLERANCE_CUDA_FLOAT32
+	tolerance *= scale if scale > 0 else 1
+	if not err <= tolerance:
+		return ("fast=True and fast=False differed by up to {:.3g} on a batch "
+			"of edits, more than the tolerance of {:.3g}".format(err, tolerance))
+
+	t_fast, t_slow = float("inf"), float("inf")
+	for _ in range(2):
+		t_fast = min(t_fast, _timed(run_fast, device)[1])
+		t_slow = min(t_slow, _timed(run_slow, device)[1])
+
+	if t_fast > t_slow * _FAST_MAX_RELATIVE_TIME:
+		return ("fast=True took {:.3g}s on a batch of edits and fast=False "
+			"took {:.3g}s".format(t_fast, t_slow))
+	return None
+
+
+def _fast_path(model, X, args, start, end, batch_size, dtype, device, func):
+	"""Decide whether to use fast=True, and capture and verify the model if so.
+
+	The first batch of edits of the first example is run with fast=False and
+	timed. When the whole job would then take less than `_FAST_MIN_SECONDS`
+	with fast=False, capturing the model could cost more than it saves, so
+	fast=False is used without a warning. Otherwise the model is captured and
+	verified, and a failure of either is reported with a warning.
+
+	The caller must keep the model on `device` and in evaluation mode while
+	the returned object is used, because it holds the model's parameters.
+
+
+	Returns
+	-------
+	fast: _FastISM or None
+		The verified fast path, or None to use fast=False.
+
+	y_first: torch.Tensor or list of torch.Tensors
+		The predictions for the first `n_first` edits of the first example.
+
+	n_first: int
+		The number of edits `y_first` holds.
+	"""
+
+	device = _resolve_device(device)
+
+	_, chars, positions = _single_edits(X[0], start, end)
+	n_first = min(batch_size, chars.shape[0])
+	X_, args_ = _edited_inputs(X, args, 0, chars[:n_first],
+		positions[:n_first])
+
+	y_first, t_first = _timed(lambda: predict(model, X_, args=args_,
+		func=func, batch_size=batch_size, dtype=dtype, device=device), device)
+
+	n_edits = X.shape[0] * chars.shape[0]
+	if t_first * n_edits / n_first < _FAST_MIN_SECONDS:
+		return None, y_first, n_first
+
+	if dtype is None:
+		try:
+			dtype = next(model.parameters()).dtype
+		except (StopIteration, AttributeError):
+			dtype = torch.float32
+	elif isinstance(dtype, str):
+		dtype = getattr(torch, dtype)
+
+	use_autocast = _autocast_supported(device, dtype)
+
+	try:
+		with torch.no_grad():
+			fast = _FastISM(model, X, args, start, end, device, dtype,
+				use_autocast)
+		reason = _verify_fast(fast, model, X, args, start, end, batch_size,
+			dtype, device, func)
+	except _Unsupported as e:
+		reason = str(e)
+	except Exception as e:
+		reason = "fast=True raised {}: {}".format(type(e).__name__,
+			str(e).strip().split("\n")[0])
+
+	if reason is None:
+		return fast, y_first, n_first
+
+	warnings.warn("saturation_mutagenesis is using fast=False because {}. "
+		"Pass fast=False to skip this attempt.".format(reason),
+		TangermemeWarning)
+	return None, y_first, n_first
+
+
 
 def saturation_mutagenesis(
 	model: torch.nn.Module,
@@ -207,6 +385,7 @@ def saturation_mutagenesis(
 	device: str | torch.device | None = None,
 	verbose: bool = False,
 	func: Callable[..., Any] | None = None,
+	fast: bool = True,
 ) -> torch.Tensor | SaturationMutagenesisRawResult:
 	"""Performs in-silico saturation mutagenesis on a set of sequences.
 	
@@ -230,8 +409,32 @@ def saturation_mutagenesis(
 	If you simply want the predictions before and after the substitutions
 	without the method turning those into attributions because, perhaps, you
 	want to define your own aggregation method, you can use `raw_outputs=True`.
-	
-	
+
+	By default, the predictions for the edited sequences are computed with
+	fastISM (Nair et al., Bioinformatics 2022). A single-base edit changes
+	only the positions of each convolutional layer whose receptive field
+	includes the edit, so most of the computation in a full forward pass on
+	each edited sequence repeats the forward pass on the original. With
+	`fast=True` the model is captured with `torch.export`, the activations of
+	each original sequence are cached, and for each edit an operation such as
+	a convolution, pooling, cropping or an elementwise function is computed
+	only over the positions the edit can change. Any other operation, such as
+	a dense layer over the flattened sequence, a mean over the length or
+	attention, is computed in full on the cached activations with the changed
+	positions written in, so models of any architecture give the same results
+	with either setting, while convolutional models also run faster. The
+	results match `fast=False` up to floating-point rounding rather than bit
+	for bit.
+
+	Before it is used, the fast path is checked on one batch of edits from the
+	first example against `fast=False`. When the model cannot be captured,
+	the two disagree by more than rounding, or the fast path is slower, a
+	`TangermemeWarning` gives the reason and the function continues with
+	`fast=False`. Capturing the model takes a fraction of a second to a few
+	seconds, which can outweigh the gain when only a few short sequences are
+	being scored.
+
+
 	Parameters
 	----------
 	model: torch.nn.Module
@@ -298,6 +501,14 @@ def saturation_mutagenesis(
 		the post-processed values. Use it to, e.g., select a single output head
 		or apply a final non-linearity. If None, do nothing. Default is None.
 
+	fast: bool, optional
+		Whether to compute the predictions for the edited sequences with
+		fastISM, recomputing only the positions of each layer that an edit can
+		change. The model is captured with `torch.export` and checked against
+		`fast=False` on one batch of edits; if that fails, a `TangermemeWarning`
+		gives the reason and `fast=False` is used. Results match `fast=False` up
+		to floating-point rounding. Default is True.
+
 
 	Returns
 	-------
@@ -326,15 +537,43 @@ def saturation_mutagenesis(
 
 	end = _check_span(start, end, X.shape[-1])
 
-	y_hat = []
-	for i in trange(X.shape[0], disable=not verbose):
-		edits, edit_chars, edit_positions = _single_edits(X[i], start, end)
-		X_, args_ = _edited_inputs(X, args, i, edit_chars, edit_positions)
+	with contextlib.ExitStack() as stack:
+		fast_path, y_first, n_first = None, None, 0
+		if fast:
+			# The fast path holds the model's parameters, so the model stays
+			# on the device for the whole call rather than for each batch.
+			stack.enter_context(_preserve_model_state(model,
+				_resolve_device(device)))
+			fast_path, y_first, n_first = _fast_path(model, X, args, start,
+				end, batch_size, dtype, device, func)
 
-		y_edits = predict(model, X_, args=args_, func=func,
-			batch_size=batch_size, dtype=dtype, device=device)
+		y_hat = []
+		for i in trange(X.shape[0], disable=not verbose):
+			edits, edit_chars, edit_positions = _single_edits(X[i], start, end)
 
-		y_hat.append(_fill_identity(y0, i, edits, y_edits))
+			# The first edits of the first example were already predicted
+			# while deciding whether to use the fast path.
+			k = n_first if i == 0 else 0
+			edit_chars, edit_positions = edit_chars[k:], edit_positions[k:]
+
+			if edit_chars.shape[0] == 0:
+				y_edits = y_first
+			elif fast_path is not None:
+				y_edits = fast_path.predict_edits(i, edit_chars, edit_positions,
+					batch_size, func)
+			else:
+				X_, args_ = _edited_inputs(X, args, i, edit_chars,
+					edit_positions)
+				y_edits = predict(model, X_, args=args_, func=func,
+					batch_size=batch_size, dtype=dtype, device=device)
+
+			if k > 0 and edit_chars.shape[0] > 0:
+				if isinstance(y_edits, torch.Tensor):
+					y_edits = torch.cat([y_first, y_edits])
+				else:
+					y_edits = [torch.cat(y_) for y_ in zip(y_first, y_edits)]
+
+			y_hat.append(_fill_identity(y0, i, edits, y_edits))
 
 	y_hat = _stack_y_hat(y_hat, X.shape[0], X.shape[1], end-start)
 
