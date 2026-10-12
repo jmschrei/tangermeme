@@ -19,6 +19,7 @@ from tangermeme.product import apply_product
 from tangermeme.saliency import saliency
 
 from .toy_models import SumModel
+from .toy_models import Conv
 from .toy_models import FlattenDense
 from .toy_models import ConvAvgDense
 from .toy_models import ConvDense
@@ -334,6 +335,16 @@ def test_saliency_raises_multi_output_model(X, device):
 	model = ConvDense()
 
 	with pytest.raises(ValueError, match="single tensor"):
+		saliency(model, X, device=device)
+
+
+def test_saliency_raises_profile_output(X, device):
+	# Conv returns (batch, 12, length - 2). Indexing it by `target` would
+	# attribute the sum of a whole profile, so it raises instead, as
+	# deep_lift_shap does.
+	model = Conv()
+
+	with pytest.raises(ValueError, match="saliency requires the model"):
 		saliency(model, X, device=device)
 
 

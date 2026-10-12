@@ -12,6 +12,7 @@ import torch
 from tqdm import trange
 
 from ._compat import _autocast_supported, _preserve_model_state, _resolve_device
+from .deep_lift_shap import _squeeze_output
 from .utils import _validate_input
 
 
@@ -77,10 +78,11 @@ def saliency(
 	point.
 
 	NOTE: after `func` is applied, predictions MUST yield a
-	`(batch_size, n_targets)` tensor, even if n_targets is 1. A model that
-	returns a profile of shape `(batch_size, n_tasks, length)` will have
-	`target` silently select an entire task rather than a single output, so
-	pass a `func` that reduces the profile, or wrap the model.
+	`(batch_size, n_targets)` tensor, even if n_targets is 1, optionally
+	followed by axes of length 1, which are dropped. Any other axis after the
+	targets, such as the length axis of a profile, raises a ValueError, as
+	in `deep_lift_shap`; pass a `func` that reduces the profile, or wrap the
+	model.
 
 
 	Parameters
@@ -230,6 +232,7 @@ def saliency(
 						"reduces the output or wrap the model.".format(
 							type(y_)))
 
+				y_ = _squeeze_output(y_, "saliency")
 				grad, = torch.autograd.grad(y_[:, target].sum(), X_)
 
 			if gradient_correction:

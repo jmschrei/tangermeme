@@ -155,6 +155,12 @@ saliency
 	  ``saturation_mutagenesis`` already remove this component. Pass
 	  ``gradient_correction=False`` for the uncorrected input times
 	  gradient. ``dependency_map`` uses the corrected values by default.
+	- ``saliency`` reads one value per target from the model's output, as
+	  ``deep_lift_shap`` does: trailing axes of length 1 are dropped, and
+	  any other axis after the targets, such as the length axis of a
+	  profile, raises a ``ValueError`` rather than having ``target``
+	  attribute the sum of a whole profile. Pass a ``func`` that reduces the
+	  profile, or wrap the model.
 
 dependency_map
 --------------
