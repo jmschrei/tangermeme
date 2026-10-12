@@ -18,6 +18,9 @@ effect = y_after - y_before
   preserved). `start=` is the **first position** of the substitution (not the
   center); the default centers the motif.
 - `X` should be background sequences so the delta reflects the motif "in isolation".
+- `X` may carry unknown characters as all-zero columns, as `extract_loci` returns for
+  a locus over an assembly gap; they survive the substitution unless the motif covers
+  them. Multi-hot columns are still rejected.
 
 ### Choosing backgrounds — the GC mirage (important)
 
@@ -28,9 +31,13 @@ motif. In order of preference:
 
 1. Real inactive regions matched on GC/dinucleotide content (best).
 2. `random_one_hot(..., probs=...)` with genomic base frequencies (e.g. hg38
-   ≈ `[0.291, 0.209, 0.209, 0.291]`), or `dinucleotide_shuffle` of real sequences.
-   `probs` must sum to exactly 1 — numpy raises otherwise, so don't round the
-   frequencies independently.
+   ≈ `[0.291, 0.209, 0.209, 0.291]`), or `dinucleotide_shuffle` /
+   `local_dinucleotide_shuffle` of real sequences. `probs` must sum to exactly
+   1 — numpy raises otherwise, so don't round the frequencies independently.
+   The two shuffles differ in scale: `dinucleotide_shuffle` conserves
+   composition across the whole window, `local_dinucleotide_shuffle` within
+   consecutive bins, which matters when GC or repeat content drifts across the
+   window.
 3. Uniform random — prototyping only.
 
 Returns diminish past ~100 backgrounds.
@@ -48,6 +55,11 @@ y_before, y_after = ablate(model, X, start=990, end=1010, n=20, random_state=0)
   pass a seed when you need reproducible / regression values.
 - Conceptual opposite of marginalize: ablate removes signal from real sequences;
   marginalize adds signal into backgrounds.
+- `X` may carry unknown characters, as with marginalize. `dinucleotide_shuffle`
+  rejects them unless bound with `allow_N=True`, which shuffles each as a fifth
+  character: `shuffle_fn=partial(dinucleotide_shuffle, allow_N=True)`.
+  `local_dinucleotide_shuffle` has no such flag, and `deep_lift_shap` and `pisa`
+  reject them in `X` itself (Footgun #3 in `references/deep_lift_shap.md`).
 
 ## space — distance dependence between motifs
 
@@ -99,14 +111,14 @@ axis** and the second axis differs between them:
 - `marginalize_annotations` → `(n_annotations, len(X0), ...)` for both, since each
   annotation's span is substituted into every background in `X0`.
 
-Index carefully before taking deltas. See [annotate.md](annotate.md) for building
+Index carefully before taking deltas. See `references/annotate.md` for building
 the annotation tensor.
 
 ## Attributions instead of predictions
 
 All three take `func=`. Swap in `deep_lift_shap` to see the effect on
 attributions rather than predictions; route attribution kwargs through
-`additional_func_kwargs=` (see [func-pattern.md](func-pattern.md)):
+`additional_func_kwargs=` (see `references/func-pattern.md`):
 
 ```python
 from tangermeme.deep_lift_shap import deep_lift_shap
@@ -125,6 +137,6 @@ attr_before, attr_after = marginalize(model, X, "CTCAGTGATG", func=deep_lift_sha
 
 ## Related references
 
-[func-pattern.md](func-pattern.md), [deep_lift_shap.md](deep_lift_shap.md),
-[saturation_mutagenesis.md](saturation_mutagenesis.md),
-[model-wrapping.md](model-wrapping.md).
+`references/func-pattern.md`, `references/deep_lift_shap.md`,
+`references/saturation_mutagenesis.md`,
+`references/model-wrapping.md`.

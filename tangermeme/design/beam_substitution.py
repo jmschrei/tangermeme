@@ -150,13 +150,13 @@ def beam_substitution(
 		None, no additional arguments are passed into the forward function.
 		Default is None.
 
-	alphabet : set or tuple or list, optional
+	alphabet : list or tuple, optional
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
 		the returned tensor will have a 1 at index 0 if the character was 'A'.
-		Characters outside the alphabet are ignored and none of the indexes are
-		set to 1. This is not necessary or used if a one-hot encoded tensor is
-		provided for the motif. Default is ['A', 'C', 'G', 'T'].
+		The motifs are one-hot encoded with it, and a character of a motif
+		that is in neither the alphabet nor N raises a ValueError. Default is
+		['A', 'C', 'G', 'T'].
 
 	batch_size: int, optional
 		The number of examples to make predictions for at a time. Default is 32.

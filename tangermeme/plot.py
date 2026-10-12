@@ -902,7 +902,7 @@ def plot_categorical_scatter(
 		The axes to plot on. If None, use the current axes via `plt.gca()`.
 		Default is None.
 
-	**kwargs: any additional arguments
+	``**kwargs``: any additional arguments
 
 
 	Returns

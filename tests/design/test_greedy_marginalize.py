@@ -8,7 +8,7 @@ from tangermeme.utils import random_one_hot
 from tangermeme.design import greedy_marginalize
 from tangermeme.io import read_meme
 from tangermeme.utils import characters
-from .toy_models import SmallDeepSEA
+from ..toy_models import SmallDeepSEA
 
 
 torch.manual_seed(0)

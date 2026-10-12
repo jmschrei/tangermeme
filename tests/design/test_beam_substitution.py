@@ -10,7 +10,7 @@ from tangermeme.design import greedy_substitution
 from tangermeme.design import beam_substitution
 from tangermeme.io import read_meme
 from tangermeme.utils import characters
-from .toy_models import SmallDeepSEA
+from ..toy_models import SmallDeepSEA
 from numpy.testing import assert_array_almost_equal
 
 

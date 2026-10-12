@@ -528,11 +528,26 @@ def test_ablate_raises_args(X, alpha, beta, device):
 	assert_raises(ValueError, ablate, model, X, 5, 10, args=alpha, device=device)
 	assert_raises(ValueError, ablate, model, X, 5, 10, args=(alpha[:5],), 
 		device=device)
-	assert_raises(ValueError, ablate, model, X, 5, 10, args=(alpha, beta[:5]), 
+	assert_raises(ValueError, ablate, model, X, 5, 10, args=(alpha, beta[:5]),
 		device=device)
 
 
-###
+def test_ablate_accepts_N(X, device):
+	# `ablate` validates X with allow_N and then shuffles it, so the
+	# shuffle has to accept unknown characters too. Sequence extracted
+	# across an assembly gap is all-zeros there and used to raise from
+	# ersatz.shuffle().
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X_n = torch.clone(X)
+	X_n[:, :, 10:14] = 0
+
+	y_before, y_after = ablate(model, X_n, 46, 54, random_state=0,
+		device=device)
+
+	assert y_before.shape == (64, 3)
+	assert y_after.shape == (64, 20, 3)
+	assert y_before.dtype == torch.float32
 
 
 def test_ablate_deep_lift_shap(X, device):

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import random
 import warnings
+import functools
+import contextlib
 from typing import Any
 
 import numpy
@@ -128,13 +130,14 @@ def _validate_input(
 	
 	if ohe:
 		values = torch.unique(X)
-		msg = "{} must be one-hot encoded.".format(name)
+		# No trailing period; the clauses below extend the sentence.
+		msg = "{} must be one-hot encoded".format(name)
 
 		# Values must be a subset of {0, 1}. Previously this enforced
 		# `len(unique) == 2`, which incorrectly rejected all-zero
 		# (all-N) inputs that contain only the value 0.
 		if not torch.all((values == 0) | (values == 1)):
-			_warn_or_raise(ValueError, msg, only_warn)
+			_warn_or_raise(ValueError, msg + ".", only_warn)
 
 		if allow_N:
 			if not torch.all(torch.sum(X, axis=ohe_dim) <= 1):
@@ -355,7 +358,7 @@ def characters(
 		or contain numeric values. These numerics can be probabilities but can
 		also be frequencies.
 
-	alphabet : set or tuple or list
+	alphabet : list or tuple
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor. This is used to determine the
 		letters in the returned sequence. Default is the DNA alphabet.
@@ -408,6 +411,135 @@ def characters(
 	return ''.join(dna_chars)
 
 
+@functools.lru_cache(maxsize=64)
+def _one_hot_encode_mapping(alphabet, ignore):
+	"""The byte lookup tables of one_hot_encode, built once per alphabet.
+
+	`alphabet` and `ignore` are the joined strings. Each UTF-8 byte of a
+	character in `alphabet` maps to that character's index, each byte of a
+	character in `ignore` to -1, and every other byte to -2. When `alphabet`
+	is four ASCII characters and `ignore` is ASCII, the second table holds,
+	for each byte, the four int8 values of its row read as one uint32, and
+	0xFFFFFFFF for a byte that maps to -2, and the third table holds, for
+	each pair of bytes read as the uint16 they make in memory, the eight
+	values of their two rows read as one uint64; otherwise both are None. A
+	row of a character has no bit set above the lowest bit of each byte, so
+	OR-ing the values of a sequence sets the highest bit of a row only when
+	one of its bytes maps to -2. The tables are shared between calls and
+	must not be written to.
+	"""
+
+	e = "utf8"
+	alpha_idxs = numpy.frombuffer(bytearray(alphabet, e), dtype=numpy.int8)
+	ignore_idxs = numpy.frombuffer(bytearray(ignore, e), dtype=numpy.int8)
+
+	one_hot_mapping = numpy.zeros(256, dtype=numpy.int8) - 2
+	for i, idx in enumerate(alpha_idxs):
+		one_hot_mapping[idx] = i
+
+	for i, idx in enumerate(ignore_idxs):
+		one_hot_mapping[idx] = -1
+
+	patterns, pairs = None, None
+	if len(alphabet) == 4 and alphabet.isascii() and ignore.isascii():
+		rows = numpy.zeros((256, 4), dtype=numpy.int8)
+		for byte in range(256):
+			if one_hot_mapping[byte] >= 0:
+				rows[byte, one_hot_mapping[byte]] = 1
+
+		patterns = rows.view(numpy.uint32).reshape(256).copy()
+		patterns[one_hot_mapping == -2] = 0xFFFFFFFF
+
+		# Byte k of the key is the k-th base in memory, whichever the byte
+		# order of the machine.
+		keys = numpy.arange(65536, dtype=numpy.uint16).view(numpy.uint8)
+		keys = keys.reshape(65536, 2)
+		rows = patterns.view(numpy.uint8).reshape(256, 4)
+		pairs = numpy.concatenate([rows[keys[:, 0]], rows[keys[:, 1]]],
+			axis=1).view(numpy.uint64).reshape(65536)
+
+	return one_hot_mapping, patterns, pairs
+
+
+@numba.njit(numba.uint32(numba.int8[:, ::1],
+	numba.types.Bytes(numba.uint8, 1, 'C', readonly=True), numba.uint32[::1]),
+	cache=True)
+def _fast_one_hot_encode_rows4(X_ohe, seq, patterns):
+	"""Write each row of a four-character one-hot encoding as one uint32.
+
+	Row i of the (n, 4) int8 array `X_ohe`, read as one uint32, is
+	`patterns[seq[i]]` for every row, where `seq` holds at least n bytes, so
+	every element is written. The OR of those values is returned; its
+	highest bit is set when one of the bytes is a character in neither the
+	alphabet nor the ignored characters, and the rows are then not an
+	encoding. Taking the bytes and the array themselves saves the views a
+	caller would make, which cost more than encoding a short sequence.
+	"""
+
+	X32 = X_ohe.view(numpy.uint32)
+	seen = numba.uint32(0)
+	for i in range(X_ohe.shape[0]):
+		row = patterns[seq[i]]
+		X32[i, 0] = row
+		seen |= row
+
+	return seen
+
+
+@numba.njit(numba.uint64(numba.uint64[::1],
+	numba.types.Array(numba.uint16, 1, 'C', readonly=True), numba.uint64[::1],
+	numba.int64, numba.int64), cache=True)
+def _fast_one_hot_encode_pairs4(X_ohe, seq, pairs, begin, end):
+	"""Write two rows of a four-character one-hot encoding as one uint64.
+
+	`X_ohe` holds rows 2i and 2i + 1 of an (n, 4) int8 array as its value i,
+	and `seq` the bytes of bases 2i and 2i + 1 as its value i, and value i is
+	`pairs[seq[i]]` for `begin <= i < end`. The OR of those values is
+	returned, as `_fast_one_hot_encode_rows4` returns it for each half.
+	"""
+
+	seen = numba.uint64(0)
+	for i in range(begin, end):
+		i = numba.uint64(i)
+		row = pairs[seq[i]]
+		X_ohe[i] = row
+		seen |= row
+
+	return seen
+
+
+# The fewest bases one_hot_encode encodes two at a time. Below it the views
+# the pairs need cost more than they save: about 0.65 us per call, and the
+# two paths took the same time near 9,000 bases.
+_ONE_HOT_PAIRS_MIN = 2**13
+
+# The fewest bases one_hot_encode splits across threads.
+_ONE_HOT_PARALLEL_MIN = 2**18
+
+
+# Without a signature this compiles on its first call rather than when
+# tangermeme is imported, as _fast_one_hot_encode_fasta_parallel does.
+@numba.njit(parallel=True, cache=True)
+def _fast_one_hot_encode_pairs4_parallel(X_ohe, seq, pairs, n_chunks):
+	"""`_fast_one_hot_encode_pairs4` over every value, in `n_chunks` chunks.
+
+	The chunks are contiguous runs of values encoded on numba's threads, and
+	the OR of what they return is returned.
+	"""
+
+	n = X_ohe.shape[0]
+	seen = numpy.empty(n_chunks, dtype=numpy.uint64)
+	for chunk in numba.prange(n_chunks):
+		seen[chunk] = _fast_one_hot_encode_pairs4(X_ohe, seq, pairs,
+			chunk * n // n_chunks, (chunk + 1) * n // n_chunks)
+
+	out = numba.uint64(0)
+	for chunk in range(n_chunks):
+		out |= seen[chunk]
+
+	return out
+
+
 @numba.njit("void(int8[:, :], int8[:], int8[:])", cache=True)
 def _fast_one_hot_encode(X_ohe, seq, mapping):
 	"""An internal function for quickly converting bytes to one-hot indexes."""
@@ -431,6 +563,7 @@ def one_hot_encode(
 	ignore: list[str] = ['N'],
 	desc: str | None = None,
 	verbose: bool = False,
+	n_jobs: int = 1,
 	**kwargs: Any,
 ) -> torch.Tensor:
 	"""Converts a string or list of characters into a one-hot encoding.
@@ -449,12 +582,12 @@ def one_hot_encode(
 	sequence : str or list
 		The sequence to convert to a one-hot encoding.
 
-	alphabet : set or tuple or list
+	alphabet : list, tuple, or str
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
 		the returned tensor will have a 1 at index 0 if the character was 'A'.
-		Characters outside the alphabet are ignored and none of the indexes are
-		set to 1. Default is ['A', 'C', 'G', 'T'].
+		A character that is in neither `alphabet` nor `ignore` raises a
+		ValueError. Default is ['A', 'C', 'G', 'T'].
 
 	dtype : str or torch.dtype, optional
 		The data type of the returned encoding. Default is int8.
@@ -464,6 +597,13 @@ def one_hot_encode(
 		are set to 1 in the returned one-hot encoding. Put another way, the
 		sum across characters is equal to 1 for all positions except those
 		where the original sequence is in this list. Default is ['N'].
+
+	n_jobs: int, optional
+		The number of threads a long sequence is encoded with, or -1 for one
+		per CPU, capped by numba's NUMBA_NUM_THREADS. Only an alphabet of four
+		ASCII characters, such as the default, is split across threads, and
+		only for sequences of at least 262,144 characters. The returned
+		encoding does not depend on it. Default is 1.
 
 
 	Returns
@@ -479,29 +619,404 @@ def one_hot_encode(
 			raise ValueError("Character {} in the alphabet ".format(char) + 
 				"and also in the list of ignored characters.")
 
-	if isinstance(alphabet, list):
+	if isinstance(alphabet, (list, tuple)):
 		alphabet = ''.join(alphabet)
 
 	ignore = ''.join(ignore)
 
+	# Anything but a str raises bytearray's TypeError here, before the
+	# alphabet is read, as it always has.
 	e = "utf8"
-	seq_idxs = numpy.frombuffer(bytearray(sequence, e), dtype=numpy.int8)
-	alpha_idxs = numpy.frombuffer(bytearray(alphabet, e), dtype=numpy.int8)
-	ignore_idxs = numpy.frombuffer(bytearray(ignore, e), dtype=numpy.int8)
+	if not isinstance(sequence, str):
+		bytearray(sequence, e)
 
-	one_hot_mapping = numpy.zeros(256, dtype=numpy.int8) - 2
-	for i, idx in enumerate(alpha_idxs):
-		one_hot_mapping[idx] = i
-
-	for i, idx in enumerate(ignore_idxs):
-		one_hot_mapping[idx] = -1
-
+	# Only strings are cached; any other alphabet raises as it always has.
+	if isinstance(alphabet, str):
+		one_hot_mapping, patterns, pairs = _one_hot_encode_mapping(alphabet,
+			ignore)
+	else:
+		one_hot_mapping, patterns, pairs = _one_hot_encode_mapping.__wrapped__(
+			alphabet, ignore)
 
 	n, m = len(sequence), len(alphabet)
 
-	one_hot_encoding = numpy.zeros((n, m), dtype=numpy.int8)
-	_fast_one_hot_encode(one_hot_encoding, seq_idxs, one_hot_mapping)
-	return torch.from_numpy(one_hot_encoding).type(dtype).T
+	# With an ASCII alphabet and ignore list, a character that is not ASCII
+	# is in neither, so a sequence that is not ASCII raises the error of the
+	# byte-wise path, after the same UTF-8 encoding.
+	if patterns is not None:
+		try:
+			seq_bytes = sequence.encode('ascii')
+		except UnicodeEncodeError:
+			bytearray(sequence, e)
+			seq_bytes = None
+
+		one_hot_encoding = numpy.empty((n, m), dtype=numpy.int8)
+		if seq_bytes is None:
+			seen = 0x80000000
+		elif n < _ONE_HOT_PAIRS_MIN:
+			seen = _fast_one_hot_encode_rows4(one_hot_encoding, seq_bytes,
+				patterns)
+		else:
+			n_pairs = n // 2
+			X64 = one_hot_encoding.reshape(-1)[:8 * n_pairs].view(
+				numpy.uint64)
+			seq16 = numpy.frombuffer(seq_bytes, dtype=numpy.uint16,
+				count=n_pairs)
+
+			n_threads = numba.config.NUMBA_NUM_THREADS if n_jobs == -1 \
+				else min(int(n_jobs), numba.config.NUMBA_NUM_THREADS)
+			if n >= _ONE_HOT_PARALLEL_MIN and n_threads > 1:
+				with _numba_threads(n_threads):
+					seen = _fast_one_hot_encode_pairs4_parallel(X64, seq16,
+						pairs, n_threads)
+			else:
+				seen = _fast_one_hot_encode_pairs4(X64, seq16, pairs, 0,
+					n_pairs)
+
+			seen = (seen | seen >> 32) & 0xFFFFFFFF
+			if n % 2 == 1:
+				seen |= _fast_one_hot_encode_rows4(one_hot_encoding[n - 1:],
+					seq_bytes[n - 1:], patterns)
+
+		if seen & 0x80000000:
+			raise ValueError("Encountered character that is not in " +
+				"`alphabet` or in `ignore`.")
+	else:
+		seq_idxs = numpy.frombuffer(bytearray(sequence, e), dtype=numpy.int8)
+		one_hot_encoding = numpy.zeros((n, m), dtype=numpy.int8)
+		_fast_one_hot_encode(one_hot_encoding, seq_idxs, one_hot_mapping)
+
+	# Wrapping the transpose has the layout of transposing the wrapped array,
+	# stride (1, m), and .type() keeps it, and is the identity for int8.
+	one_hot_encoding = torch.from_numpy(one_hot_encoding.T)
+	if dtype is torch.int8:
+		return one_hot_encoding
+
+	return one_hot_encoding.type(dtype)
+
+
+@contextlib.contextmanager
+def _numba_threads(n_jobs):
+	"""Run numba's parallel kernels on at most `n_jobs` threads.
+
+	The count is capped by NUMBA_NUM_THREADS, above which numba raises, and
+	the caller's count is restored afterwards, including when the body
+	raises.
+	"""
+
+	previous = numba.get_num_threads()
+	numba.set_num_threads(max(1, min(int(n_jobs),
+		numba.config.NUMBA_NUM_THREADS)))
+	try:
+		yield
+	finally:
+		numba.set_num_threads(previous)
+
+
+# The rows each thread of the parallel one-hot kernel takes at a time. A call
+# on fewer rows, or with one thread, runs the serial kernel directly.
+_ROWS_PER_TASK = 64
+
+
+@numba.njit(numba.int64(numba.int8[:, :, ::1],
+	numba.types.Array(numba.uint8, 1, 'C', readonly=True),
+	numba.int64[::1], numba.int64[::1], numba.int64[::1], numba.int64[::1],
+	numba.int8[::1], numba.int64, numba.int64), cache=True)
+def _fast_one_hot_encode_fasta(X_ohe, fasta, starts, offsets, line_bases,
+	line_bytes, mapping, begin, end):
+	"""An internal function that one-hot encodes windows of a fasta file.
+
+	`fasta` holds the bytes of an uncompressed fasta file. Row i of `X_ohe`,
+	shape (n_characters, length), receives bases `[starts[i], starts[i] +
+	length)` of a record whose first base is at byte `offsets[i]` and whose
+	lines each hold `line_bases[i]` bases followed by `line_bytes[i] -
+	line_bases[i]` line-end bytes, as in a .fai index, for rows `begin <= i <
+	end`. The line ends are skipped and each base byte is looked up in
+	`mapping`.
+
+	A window's bases are what pyfaidx returns for it only when every line-end
+	byte that pyfaidx reads, including the one before a window that starts a
+	line and the one after a window that ends a line, is a newline or a
+	carriage return, and no base byte is, since pyfaidx removes both from
+	what it reads. It also reads bytes outside ASCII as UTF-8. So `mapping`
+	gives -3 for newlines, carriage returns and bytes of 128 or more, and -2
+	is returned as soon as a window breaks one of these conditions or runs
+	past the end of `fasta`, and nothing that was written can be used.
+	Otherwise the index of the first row with a byte that maps to -2, a
+	character in neither the alphabet nor the ignored characters, is
+	returned, or -1 when there is none. Every element of every other row is
+	written, so `X_ohe` does not need to be zeroed beforehand.
+
+	Equal-length strings joined into `fasta` are encoded as the windows of a
+	record on one line, with a `mapping` that has no -3.
+	"""
+
+	m, length = X_ohe.shape[1], X_ohe.shape[2]
+	size = fasta.shape[0]
+	idxs = numpy.empty(length, dtype=numpy.int8)
+	first_invalid = -1
+
+	for i in range(begin, end):
+		start = starts[i]
+		lenc = line_bases[i]
+		lenb = line_bytes[i]
+		n_end = lenb - lenc
+
+		line = start // lenc
+		col = start - line * lenc
+		pos = offsets[i] + line * lenb + col
+
+		last = start + length - 1
+		if offsets[i] + (last // lenc) * lenb + last % lenc >= size:
+			return -2
+
+		if col == 0 and start > 0:
+			for k in range(pos - n_end, pos):
+				if fasta[k] != 10 and fasta[k] != 13:
+					return -2
+
+		# An int8 minimum and unsigned indices: an int64 minimum and signed
+		# indices made this loop five times slower.
+		low = numpy.int8(0)
+		j = 0
+		while j < length:
+			width = min(lenc - col, length - j)
+			for t in range(width):
+				idx = mapping[fasta[numba.uint64(pos + t)]]
+				low = min(low, idx)
+				idxs[numba.uint64(j + t)] = idx
+
+			j += width
+			pos += width
+			col += width
+			if col == lenc:
+				for k in range(pos, min(pos + n_end, size)):
+					if fasta[k] != 10 and fasta[k] != 13:
+						return -2
+
+				pos += n_end
+				col = 0
+
+		if low == -3:
+			return -2
+
+		if low == -2:
+			if first_invalid < 0:
+				first_invalid = i
+			continue
+
+		for k in range(m):
+			for j in range(length):
+				X_ohe[i, k, j] = idxs[j] == k
+
+	return first_invalid
+
+
+# Without a signature this compiles on its first call, which only
+# _one_hot_encode_fasta makes, always with the argument types of
+# _fast_one_hot_encode_fasta. With one, importing tangermeme loaded it and
+# started numba's thread pool, which slowed calls on one thread.
+@numba.njit(parallel=True, cache=True)
+def _fast_one_hot_encode_fasta_parallel(X_ohe, fasta, starts, offsets,
+	line_bases, line_bytes, mapping):
+	"""`_fast_one_hot_encode_fasta` over every row, on numba's threads.
+
+	Each thread encodes blocks of `_ROWS_PER_TASK` rows. The result is the
+	one a single call over every row returns: -2 when any window must be read
+	through pyfaidx, and otherwise the first row with a character that maps
+	to -2, or -1.
+	"""
+
+	n = X_ohe.shape[0]
+	n_tasks = (n + _ROWS_PER_TASK - 1) // _ROWS_PER_TASK
+	statuses = numpy.empty(n_tasks, dtype=numpy.int64)
+
+	for task in numba.prange(n_tasks):
+		statuses[task] = _fast_one_hot_encode_fasta(X_ohe, fasta, starts,
+			offsets, line_bases, line_bytes, mapping, task * _ROWS_PER_TASK,
+			min(n, (task + 1) * _ROWS_PER_TASK))
+
+	first_invalid = -1
+	for task in range(n_tasks):
+		if statuses[task] == -2:
+			return -2
+
+		if statuses[task] >= 0 and first_invalid == -1:
+			first_invalid = statuses[task]
+
+	return first_invalid
+
+
+def _one_hot_encode_fasta(X_ohe, fasta, starts, offsets, line_bases,
+	line_bytes, mapping, n_jobs=1):
+	"""`_fast_one_hot_encode_fasta` over every row, on up to `n_jobs` threads.
+
+	The result, and every row that is written, are the same for every
+	`n_jobs`.
+	"""
+
+	n = X_ohe.shape[0]
+	if n <= _ROWS_PER_TASK or min(int(n_jobs),
+			numba.config.NUMBA_NUM_THREADS) <= 1:
+		return _fast_one_hot_encode_fasta(X_ohe, fasta, starts, offsets,
+			line_bases, line_bytes, mapping, 0, n)
+
+	with _numba_threads(n_jobs):
+		return _fast_one_hot_encode_fasta_parallel(X_ohe, fasta, starts,
+			offsets, line_bases, line_bytes, mapping)
+
+
+def _one_hot_rows_mapping(
+	alphabet: list[str] | tuple[str, ...] | str,
+	ignore: list[str],
+) -> tuple[numpy.ndarray, int] | None:
+	"""The byte lookup table of the upper-casing row encoders, or None.
+
+	A byte maps to its character's index in `alphabet`, to -1 when it is in
+	`ignore`, and to -2 otherwise, and a lower-case ASCII byte takes the entry
+	of its upper-case form, so that looking up a byte of a string gives the
+	encoding of the upper-cased string. The ValueError of one_hot_encode for
+	a character that is in both `alphabet` and `ignore` is raised here. None
+	is returned when `alphabet` or `ignore` is not an ASCII string, where
+	`str.upper` is not a byte-wise map.
+
+
+	Parameters
+	----------
+	alphabet : list, tuple, or str
+		The characters that map to each index of the second axis.
+
+	ignore: list
+		The characters that set no bit.
+
+
+	Returns
+	-------
+	table: tuple of (numpy.ndarray, int) or None
+		The int8 table of 256 entries and the number of characters in the
+		joined alphabet, or None.
+	"""
+
+	for char in ignore:
+		if char in alphabet:
+			raise ValueError("Character {} in the alphabet ".format(char) +
+				"and also in the list of ignored characters.")
+
+	alphabet_ = ''.join(alphabet) if isinstance(alphabet, (list, tuple)) \
+		else alphabet
+	ignore_ = ''.join(ignore)
+
+	if not (isinstance(alphabet_, str) and alphabet_.isascii() and
+			ignore_.isascii()):
+		return None
+
+	alpha_idxs = numpy.frombuffer(alphabet_.encode('ascii'), dtype=numpy.uint8)
+	ignore_idxs = numpy.frombuffer(ignore_.encode('ascii'), dtype=numpy.uint8)
+
+	mapping = numpy.zeros(256, dtype=numpy.int8) - 2
+	for i, idx in enumerate(alpha_idxs):
+		mapping[idx] = i
+
+	for i, idx in enumerate(ignore_idxs):
+		mapping[idx] = -1
+
+	# Fold str.upper into the table: a lower-case ASCII byte takes the
+	# entry of its upper-case form. Only ASCII rows are looked up.
+	lower = numpy.arange(ord('a'), ord('z') + 1)
+	mapping[lower] = mapping[lower - 32]
+	return mapping, len(alphabet_)
+
+
+def _one_hot_encode_rows(
+	sequences: list[str],
+	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
+	ignore: list[str] = ['N'],
+	chunk_size: int = 1024,
+	n_jobs: int = 1,
+) -> numpy.ndarray:
+	"""One-hot encode upper-cased strings into one C-contiguous int8 array.
+
+	The result is identical to `numpy.ascontiguousarray(numpy.stack(
+	[one_hot_encode(s.upper(), alphabet, ignore=ignore) for s in sequences]))`,
+	including the ValueError for a character in neither `alphabet` nor
+	`ignore`, but each row is written straight into a preallocated array of
+	shape (len(sequences), len(alphabet), length). Upper-casing is folded into
+	the byte lookup table. When the strings differ in length, or the
+	sequences, `alphabet` or `ignore` contain a non-ASCII character, where
+	`str.upper` is not a byte-wise map, the expression above is evaluated
+	instead.
+
+
+	Parameters
+	----------
+	sequences: list of str
+		The strings to encode, which are expected to be of equal length.
+
+	alphabet : list, tuple, or str
+		The characters that map to each index of the second axis. Default is
+		['A', 'C', 'G', 'T'].
+
+	ignore: list, optional
+		The characters that set no bit. Default is ['N'].
+
+	chunk_size: int, optional
+		The number of strings joined into one buffer per kernel call, which
+		bounds the temporary memory. Default is 1024.
+
+	n_jobs: int, optional
+		The largest number of threads each buffer is encoded with, capped by
+		numba's NUMBA_NUM_THREADS. The result is the same for every value.
+		Default is 1.
+
+
+	Returns
+	-------
+	ohe: numpy.ndarray, shape=(len(sequences), len(alphabet), length)
+		The one-hot encodings as a C-contiguous int8 array.
+	"""
+
+	table = _one_hot_rows_mapping(alphabet, ignore)
+
+	n = len(sequences)
+	length = len(sequences[0]) if n > 0 else 0
+
+	fast = table is not None and set(map(len, sequences)) <= {length}
+
+	if fast:
+		mapping, n_characters = table
+		X_ohe = numpy.empty((n, n_characters, length), dtype=numpy.int8)
+		for start in range(0, n, chunk_size):
+			end = min(start + chunk_size, n)
+
+			try:
+				seqs = ''.join(sequences[start:end]).encode('ascii')
+			except UnicodeEncodeError:
+				fast = False
+				break
+
+			if length == 0:
+				continue
+
+			# The strings are the windows of a record written on one line.
+			# The mapping has no -3, so the kernel returns -1 or the first
+			# row with an unknown character.
+			seqs = numpy.frombuffer(seqs, dtype=numpy.uint8)
+			n_rows = end - start
+			starts = numpy.arange(n_rows, dtype=numpy.int64) * length
+			offsets = numpy.zeros(n_rows, dtype=numpy.int64)
+			line = numpy.full(n_rows, len(seqs), dtype=numpy.int64)
+
+			if _one_hot_encode_fasta(X_ohe[start:end], seqs, starts, offsets,
+					line, line, mapping, n_jobs=n_jobs) >= 0:
+				raise ValueError("Encountered character that is not in " +
+					"`alphabet` or in `ignore`.")
+
+	if not fast:
+		X_ohe = numpy.ascontiguousarray(numpy.stack([one_hot_encode(
+			sequence.upper(), alphabet=alphabet, ignore=ignore).numpy()
+				for sequence in sequences]))
+
+	return X_ohe
 
 
 def reverse_complement(
@@ -716,11 +1231,11 @@ def unchunk(
 	The overlap value should be the same as when the sequence was chunked, and
 	should correspond to the number of positions that are shared across adjacent
 	examples. When overlap is set to a value greater than 0, half of the overlap
-	goes to the elements as follows:
+	goes to the elements as follows::
 
 		<------------*    |
-				  overlap 
-				|    *-----------> 
+		                overlap
+		                |    *----------->
 
 
 	Parameters

@@ -122,9 +122,9 @@ seq = one_hot_encode('CATCGACAGACTACGCTAC').unsqueeze(0)
 shuf = dinucleotide_shuffle(seq, random_state=0)
 
 print(characters(shuf[0, 0]))
-# CAGACACGATACGCTCTAC
+# CAGATACACGACGCTCTAC
 print(characters(shuf[0, 1]))
-# CGACATACGAGCTCACTAC
+# CGATAGACACGCTCACTAC
 ```
 
 Both shuffling and dinucleotide shuffling can be applied to entire sequence, but they can also be applied to *portions* of the sequence by supplying `start` and `end` parameters if you want to, for instance, eliminate a motif by shuffling the nucleotides.
@@ -256,6 +256,8 @@ from tangermeme.saturation_mutagenesis import saturation_mutagenesis
 
 X_attr = saturation_mutagenesis(model, X)
 ```
+
+For a job that would take more than thirty seconds, `saturation_mutagenesis` computes these predictions with fastISM, which recomputes only the part of each layer that an edit can change, after checking it against the direct computation on one batch of edits. Pass `fast=False` to compute every edited sequence in full.
 
 This yields a tensor of a similar shape as the original sequence `X` where each value contains the predicted value (or values) for making the associated substitution. There are numerous ways to combine the predictions of each variant with the predictions on the original sequence and tangermeme allows you to use whichever approach you would like. However, a common one is the Euclidean distance followed by mean-subtracting to get the influence that each <i>observed</i> nucleotide has on the prediction. See the tutorial for more details.
 

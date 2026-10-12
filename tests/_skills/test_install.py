@@ -1,4 +1,4 @@
-# test_install_skills.py
+# test_install.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import re
@@ -18,10 +18,16 @@ from tangermeme._skills.install import install_skill
 # Helpers
 
 
-def _link_targets(text):
-	"""Return the basenames of every Markdown link to a .md file in `text`."""
+def _ref_mentions(text):
+	"""Return the basenames of every backticked reference path in `text`.
 
-	return [m.split("/")[-1] for m in re.findall(r'\]\(([^)]+\.md)\)', text)]
+	The skill writes cross-references as backticked paths, ``references/x.md``,
+	rather than as Markdown links, because nothing that reads a skill renders
+	Markdown and a link spends twice the characters on the same path.
+	"""
+
+	return [m.split("/")[-1]
+		for m in re.findall(r'`(references/[\w.-]+\.md)`', text)]
 
 
 def _seed_fake_skill(root):
@@ -54,22 +60,47 @@ def test_skill_frontmatter():
 	fields = dict(re.findall(r'^(\w+):\s*(.*)$', frontmatter, flags=re.MULTILINE))
 
 	assert fields.get("name") == "tangermeme"
-	# Claude Code caps the description (combined with when_to_use) at 1536 chars.
-	assert 0 < len(fields.get("description", "")) <= 1536
+	# 1024 is the spec maximum for a description, and the limit enforced by
+	# skill-creator's quick_validate.py. This asserted 1536 until 2026-09-10,
+	# so a description between the two passed here and failed validation.
+	assert 0 < len(fields.get("description", "")) <= 1024
 
 
-def test_internal_links_all_resolve():
+def test_internal_references_all_resolve():
 	data = _bundled_skill_dir()
 	refs = data / "references"
 	existing = {p.name for p in refs.glob("*.md")}
 
 	broken = []
 	for f in [data / "SKILL.md", *refs.glob("*.md")]:
-		for target in _link_targets(f.read_text()):
+		for target in _ref_mentions(f.read_text()):
 			if target not in existing:
 				broken.append("{} -> {}".format(f.name, target))
 
-	assert broken == [], "broken internal links: {}".format(broken)
+	assert broken == [], "broken internal references: {}".format(broken)
+
+
+def test_no_markdown_links_to_reference_files():
+	# Backticked paths only. A Markdown link would also make the resolution and
+	# orphan checks above pass vacuously, since neither one looks for links.
+	data = _bundled_skill_dir()
+
+	found = []
+	for f in [data / "SKILL.md", *(data / "references").glob("*.md")]:
+		for m in re.findall(r'\[[^\]]*\]\([^)]*\.md\)', f.read_text()):
+			found.append("{}: {}".format(f.name, m))
+
+	assert found == [], "use `references/x.md`, not a link: {}".format(found)
+
+
+def test_every_reference_is_linked_from_the_router():
+	data = _bundled_skill_dir()
+	refs = data / "references"
+
+	routed = set(_ref_mentions((data / "SKILL.md").read_text()))
+	orphans = sorted(p.name for p in refs.glob("*.md") if p.name not in routed)
+
+	assert orphans == [], "not reachable from SKILL.md: {}".format(orphans)
 
 
 ###

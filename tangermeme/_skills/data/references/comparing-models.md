@@ -6,7 +6,7 @@ fine-tuning sweep) is mostly "loop the single-model calls" — `predict` and
 iterating is safe. The traps are not in the looping; they are in making the
 results **comparable**. This file covers the four that bite.
 
-Start from the single-model flow in [notebook-walkthrough.md](notebook-walkthrough.md);
+Start from the single-model flow in `references/notebook-walkthrough.md`;
 everything here assumes you already know how to run one model.
 
 ## 1. Fair attribution comparison needs shared references (the big one)
@@ -31,7 +31,7 @@ attrs = {
 
 A fixed `random_state=0` on each call is the lighter-weight alternative, but
 explicit shared `references=` is unambiguous and also lets `only_warn=True` paths
-work (see [deep_lift_shap.md](deep_lift_shap.md)).
+work (see `references/deep_lift_shap.md`).
 
 ## 2. Harmonize outputs before correlating
 
@@ -43,7 +43,7 @@ Models rarely agree on shape. Before any concordance metric:
   different models — map by name, don't assume aligned columns.
 - **Input length:** if input windows differ, re-`extract_loci` per model at its own
   `in_window` from the *same loci* rather than reusing one `X`
-  (see [io-loci.md](io-loci.md)).
+  (see `references/io-loci.md`).
 
 ```python
 preds = {name: predict(m, X, batch_size=64, device=device)
@@ -85,7 +85,7 @@ models = {name: torch.load(p, weights_only=False) for name, p in paths.items()}
 This is the *across-models* half of memory management. The *within-call* half —
 lowering `batch_size` (which counts example×reference pairs) or `n_shuffles` when a
 single `deep_lift_shap` call OOMs — is in
-[deep_lift_shap.md](deep_lift_shap.md), under "`batch_size` counts example-reference
+`references/deep_lift_shap.md`, under "`batch_size` counts example-reference
 pairs".
 
 ## Concordance / ensembling (generic — brief)
@@ -97,7 +97,7 @@ use whatever you normally would (`scipy.stats`, `numpy`).
 
 ## Related references
 
-[notebook-walkthrough.md](notebook-walkthrough.md) (the single-model spine),
-[deep_lift_shap.md](deep_lift_shap.md) (references / `random_state`),
-[io-loci.md](io-loci.md) (per-model windows),
-[model-wrapping.md](model-wrapping.md) (aligning heterogeneous model outputs).
+`references/notebook-walkthrough.md` (the single-model spine),
+`references/deep_lift_shap.md` (references / `random_state`),
+`references/io-loci.md` (per-model windows),
+`references/model-wrapping.md` (aligning heterogeneous model outputs).

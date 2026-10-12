@@ -18,10 +18,15 @@ from tangermeme.ersatz import dinucleotide_shuffle
 
 from tangermeme.deep_lift_shap import deep_lift_shap
 from tangermeme.deep_lift_shap import hypothetical_attributions
+from tangermeme.deep_lift_shap import integrated_gradients_op
 
 from tangermeme.pisa import pisa
 
 from .toy_models import SumModel
+from .toy_models import ConvBilinear
+from .toy_models import ConvRuleSeq
+from .toy_models import SharedRuleSeq
+from .toy_models import TransformerBlock
 from .toy_models import FlattenDense
 from .toy_models import Conv1
 from .toy_models import Scatter
@@ -484,6 +489,51 @@ def test_pisa_args_preserved_across_shuffles(X, device):
 	assert X_attr.shape == (X.shape[0], 1, X.shape[1], X.shape[2])
 
 
+def test_pisa_args_batch_axis(X, references, device):
+	"""Each argument reaches the model with the batch axis of `X_`.
+
+	`pisa` used to pass `a[i]`, which drops the batch axis, and concatenate it
+	with itself, which then doubled the feature axis. An argument of shape
+	`(n, 3)` reached the model as `(6,)`, so a model adding it to a
+	`(batch_size, 3)` output raised a RuntimeError.
+	"""
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=3)
+	alpha = torch.randn(X.shape[0], 3)
+	beta = torch.randn(X.shape[0], 3)
+
+	X_attr = pisa(model, X, args=(alpha, beta), references=references,
+		device=device)
+	assert X_attr.shape == (X.shape[0], 3, X.shape[1], X.shape[2])
+
+	for k in range(3):
+		X_attr_k = deep_lift_shap(model, X, args=(alpha, beta), target=k,
+			references=references, device=device)
+		assert_array_almost_equal(X_attr[:, k], X_attr_k)
+
+
+def test_pisa_args_one_dimensional(X, references, device):
+	"""An argument of shape `(n,)` reaches the model as `(batch_size,)`.
+
+	`a[i]` made it a zero-dimensional tensor, which `torch.cat` rejects.
+	"""
+
+	torch.manual_seed(0)
+	model = LambdaWrapper(FlattenDense(n_outputs=3), lambda model, X, alpha:
+		model(X) * alpha[:, None])
+	alpha = torch.randn(X.shape[0])
+
+	X_attr = pisa(model, X, args=(alpha,), references=references,
+		device=device)
+	assert X_attr.shape == (X.shape[0], 3, X.shape[1], X.shape[2])
+
+	for k in range(3):
+		X_attr_k = deep_lift_shap(model, X, args=(alpha,), target=k,
+			references=references, device=device)
+		assert_array_almost_equal(X_attr[:, k], X_attr_k)
+
+
 def test_pisa_preserves_model_state(X, device):
 	# After pisa returns the model should be back on its original device
 	# and in its original training mode, with no _NON_LINEAR_OPS attributes
@@ -591,6 +641,55 @@ def test_pisa_flattendense_n_outputs(X, device):
 	model = FlattenDense(n_outputs=12)
 	X_attr = pisa(model, X, device=device)
 	assert X_attr.shape == (2, 12, 4, 100)
+
+
+@pytest.mark.parametrize("n_trailing", [1, 2])
+def test_pisa_trailing_singleton_output(X, device, n_trailing, capsys):
+	"""Trailing output axes of length 1 are dropped.
+
+	`n_outputs` used to be read from the last axis of the output, so a model
+	returning `(batch_size, n_outputs, 1)`, such as one ending in a global
+	pool, was attributed for its first output only (#106).
+	"""
+
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=3)
+
+	def unsqueeze(model, X):
+		y = model(X)
+		return y.reshape(*y.shape, *([1] * n_trailing))
+
+	X_attr0 = pisa(model, X, n_shuffles=3, device=device, random_state=0,
+		print_convergence_deltas=True)
+	deltas0 = capsys.readouterr().out
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+		X_attr1 = pisa(LambdaWrapper(model, unsqueeze), X, n_shuffles=3,
+			device=device, random_state=0, print_convergence_deltas=True)
+	deltas1 = capsys.readouterr().out
+
+	assert X_attr1.shape == (2, 3, 4, 100)
+	assert deltas1 == deltas0
+	assert_array_almost_equal(X_attr1, X_attr0)
+
+
+@pytest.mark.parametrize("shape", [(3, 2), (3, 1, 2), (3, 2, 1)])
+def test_pisa_multidimensional_output_raises(X, device, shape):
+	"""An output axis longer than 1 after the outputs raises a ValueError.
+
+	`n_outputs` used to be read from the last axis while the outputs were
+	indexed on the second, so a profile `(batch_size, n_tasks, length)`
+	raised an IndexError or, with at least as many tasks as positions, was
+	attributed for the wrong outputs.
+	"""
+
+	torch.manual_seed(0)
+	model = LambdaWrapper(FlattenDense(n_outputs=6), lambda model, X: model(
+		X).reshape(X.shape[0], *shape))
+
+	assert_raises(ValueError, pisa, model, X, n_shuffles=2, device=device,
+		random_state=0)
 
 
 def test_pisa_convdense_dense_wrapper(X, references, device):
@@ -1074,6 +1173,194 @@ def test_pisa_verbose(X, device):
 	assert_array_almost_equal(X_quiet, X_loud)
 
 
+###
+# Basic coverage for the rules `pisa` registers alongside `deep_lift_shap`.
+# The rule table is duplicated in this module, so a rule can be correct there
+# and missing here.
+###
+
+
+PISA_RULES = ["layernorm", "rmsnorm", "softmax", "glu", "bilinear"]
+
+# First example, first two output positions, first four input positions.
+PISA_REGRESSION = {
+	"layernorm": [
+		[[ 0.0000,  0.0000, -0.0000, -0.1357],
+		 [ 0.0000, -0.0000,  0.0350,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000, -0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0211],
+		 [ 0.0000, -0.0000, -0.0829,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0000]]],
+	"rmsnorm": [
+		[[ 0.0000,  0.0000, -0.0000, -0.1420],
+		 [ 0.0000, -0.0000,  0.0290,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000, -0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0143],
+		 [ 0.0000, -0.0000, -0.0881,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0000]]],
+	"softmax": [
+		[[ 0.0000,  0.0000, -0.0000, -0.0039],
+		 [-0.0000, -0.0000,  0.0008,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000, -0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0008],
+		 [ 0.0000, -0.0000, -0.0027,  0.0000],
+		 [ 0.0000, -0.0000, -0.0000,  0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0000]]],
+	"glu": [
+		[[ 0.0000, -0.0000,  0.0000, -0.0194],
+		 [ 0.0000, -0.0000, -0.0073, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000],
+		 [ 0.0000,  0.0000,  0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0039],
+		 [ 0.0000,  0.0000, -0.0152, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0000,  0.0000, -0.0000]]],
+
+	"bilinear": [
+		[[ 0.0000,  0.0000,  0.0000,  0.0139],
+		 [ 0.0000,  0.0000, -0.0080, -0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0000]],
+
+		[[ 0.0000,  0.0000, -0.0000,  0.0133],
+		 [ 0.0000, -0.0000,  0.0243, -0.0000],
+		 [-0.0000, -0.0000, -0.0000, -0.0000],
+		 [-0.0000,  0.0000, -0.0000, -0.0000]]]
+}
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_rules_convergence(X, device, rule):
+	torch.manual_seed(0)
+	model = ConvRuleSeq(rule=rule)
+	X = X[:, :, :15]
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		X_attr = pisa(model, X, device=device, n_shuffles=3, random_state=0,
+			batch_size=4,
+			warning_threshold=1e-4 if device == "cpu" else 1e-2)
+
+	assert X_attr.shape == (2, 13, 4, 15)
+	assert X_attr.dtype == torch.float32
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_rules_regression(X, device, rule):
+	torch.manual_seed(0)
+	model = ConvRuleSeq(rule=rule)
+	X = X[:, :, :15]
+
+	X_attr = pisa(model, X, device=device, n_shuffles=3, random_state=0,
+		batch_size=4)
+
+	assert_array_almost_equal(X_attr[0, :2, :, :4], PISA_REGRESSION[rule], 4)
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_rules_batch_size(X, device, rule):
+	torch.manual_seed(0)
+	model = ConvRuleSeq(rule=rule, seq_len=12)
+
+	# batch_size=1 runs one output position per pass, so the window is kept
+	# short and the shuffle count at one to stay inside the runtime budget. A
+	# shorter window than this makes dinucleotide_shuffle raise for lack of
+	# distinct shuffles.
+	X = X[:, :, :12]
+
+	# `pisa` batches over output positions rather than examples, so the rules
+	# have to give the same answer however those positions are grouped.
+	X_attr0 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=4)
+	X_attr1 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=1)
+	X_attr2 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=100000)
+
+	assert_array_almost_equal(X_attr0, X_attr1, 4)
+	assert_array_almost_equal(X_attr0, X_attr2, 4)
+
+
+@pytest.mark.parametrize("pre_norm", [False, True])
+def test_pisa_transformer_block(X, device, pre_norm):
+	"""The rules must also compose through `pisa`, not only one at a time.
+
+	`ConvRuleSeq` puts one rule in a model; a transformer block chains all
+	four through each other, and `pisa` batches over output positions rather
+	than over examples, so the composition is a separate path from the one
+	`deep_lift_shap` exercises.
+	"""
+
+	torch.manual_seed(0)
+	model = TransformerBlock(seq_len=15, n_outputs=13, n_blocks=2,
+		pre_norm=pre_norm)
+	X = X[:, :, :15]
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		X_attr = pisa(model, X, device=device, n_shuffles=3, random_state=0,
+			batch_size=4,
+			warning_threshold=1e-4 if device == "cpu" else 1e-2)
+
+	assert X_attr.shape == (2, 13, 4, 15)
+	assert X_attr.dtype == torch.float32
+
+	if pre_norm:
+		# First example, first two output positions, first four positions.
+		assert_array_almost_equal(X_attr[0, :2, :, :4], [
+		[[ 0.0000, -0.0000, -0.0000, -0.0733],
+		 [ 0.0000, -0.0000, -0.0210,  0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000,  0.0000,  0.0000]],
+
+		[[ 0.0000, -0.0000,  0.0000,  0.0195],
+		 [ 0.0000,  0.0000, -0.0165, -0.0000],
+		 [-0.0000, -0.0000, -0.0000,  0.0000],
+		 [ 0.0000,  0.0000,  0.0000, -0.0000]]], 4)
+
+
+@pytest.mark.parametrize("batch_size", [1, 4, 100000])
+def test_pisa_integrated_gradients_op(X, device, batch_size):
+	"""`integrated_gradients_op` re-runs its module from inside a backward pass.
+
+	`pisa` takes one backward pass per block of output positions over a
+	single forward graph, so that inner pass happens repeatedly against
+	activations an earlier block has already read. It must neither disturb
+	them nor make the answer depend on how the output positions are grouped.
+	"""
+
+	torch.manual_seed(0)
+	model = ConvRuleSeq(rule="rmsnorm", seq_len=12)
+	X = X[:, :, :12]
+	ops = {torch.nn.RMSNorm: integrated_gradients_op(K=8, name="rmsnorm")}
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", category=RuntimeWarning)
+
+		X_attr = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+			batch_size=batch_size, additional_nonlinear_ops=ops,
+			warning_threshold=1e-4 if device == "cpu" else 1e-2)
+
+	assert X_attr.shape == (2, 10, 4, 12)
+	assert X_attr.dtype == torch.float32
+
+	# Every grouping of the output positions has to give the same answer.
+	X_attr_ = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=2, additional_nonlinear_ops=ops)
+	assert_array_almost_equal(X_attr, X_attr_, 4)
+
+
 def test_pisa_clears_hook_caches(X, device):
 	torch.manual_seed(0)
 	model = torch.nn.Sequential(
@@ -1091,3 +1378,72 @@ def test_pisa_clears_hook_caches(X, device):
 	for module in model.modules():
 		assert "input" not in module.__dict__
 		assert "output" not in module.__dict__
+
+
+def test_pisa_clears_bilinear_caches(X, device):
+	torch.manual_seed(0)
+	model = ConvBilinear(seq_len=X.shape[-1])
+
+	pisa(model, X[:1], n_shuffles=2, device=device, random_state=0)
+
+	# `pisa` registers BilinearOp in its own rule table, so the two cached
+	# operands must not outlive the call here either.
+	for module in model.modules():
+		assert "left" not in module.__dict__
+		assert "right" not in module.__dict__
+
+
+###
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_shared_rules(X, device, rule):
+	torch.manual_seed(0)
+	shared = SharedRuleSeq(rule=rule, share=True)
+	separate = SharedRuleSeq(rule=rule, share=False)
+	separate.load_state_dict(shared.state_dict())
+
+	X = X[:1, :, :15]
+
+	X_attr = pisa(shared, X, device=device, n_shuffles=3, random_state=0,
+		batch_size=4)
+	X_attr_ = pisa(separate, X, device=device, n_shuffles=3, random_state=0,
+		batch_size=4)
+
+	# The two models are the same function, differing only in whether the
+	# operation is one module called twice or two modules called once.
+	assert_array_almost_equal(X_attr, X_attr_, 5)
+
+
+@pytest.mark.parametrize("rule", PISA_RULES)
+def test_pisa_shared_rules_batch_size(X, device, rule):
+	torch.manual_seed(0)
+	model = SharedRuleSeq(rule=rule, share=True, seq_len=12)
+	X = X[:1, :, :12]
+
+	# `pisa` takes one backward pass per block of output positions over a
+	# single forward graph, so the activations a reused module caches have to
+	# survive every pass rather than only the first. When they did not, the
+	# rule was skipped from the second block on and the answer depended on
+	# how the output positions happened to be grouped.
+	X_attr0 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=1)
+	X_attr1 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=4)
+	X_attr2 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
+		batch_size=100000)
+
+	assert_array_almost_equal(X_attr0, X_attr1, 4)
+	assert_array_almost_equal(X_attr0, X_attr2, 4)
+
+
+def test_pisa_shared_module_cleanup(X):
+	torch.manual_seed(0)
+	model = SharedRuleSeq(rule="bilinear", share=True, seq_len=12)
+
+	pisa(model, X[:1, :, :12], device='cpu', n_shuffles=1, random_state=0)
+
+	for module in model.modules():
+		for name in ("handles", "_caches", "_fwd_counter", "_bw_idx",
+			"_staged", "input", "output", "left", "right"):
+			assert name not in module.__dict__

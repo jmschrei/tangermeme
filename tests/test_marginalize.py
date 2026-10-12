@@ -370,6 +370,22 @@ def test_marginalize_rejects_empty_X():
 		marginalize(model, X, "ACGTC")
 
 
+def test_marginalize_accepts_N(X, device):
+	# `marginalize` validates X with allow_N, so the substitution it runs
+	# has to accept unknown characters too. Sequence extracted across an
+	# assembly gap is all-zeros there and used to raise from substitute().
+	model = FlattenDense()
+	X_n = torch.clone(X)
+	X_n[:, :, 10:14] = 0
+
+	y_before, y_after = marginalize(model, X_n, "ACGTC", device=device)
+
+	assert y_before.shape == (64, 3)
+	assert y_after.shape == (64, 3)
+	assert y_before.dtype == torch.float32
+	assert_raises(AssertionError, assert_array_almost_equal, y_before, y_after)
+
+
 def test_marginalize_accepts_fp64(X, device):
 	# X passed in as fp64 should be accepted (predict casts internally).
 	model = FlattenDense()

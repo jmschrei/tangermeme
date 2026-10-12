@@ -76,13 +76,15 @@ def marginalize(
 		motif into the middle of the sequence such that the middle of the motif
 		occurs at the middle of the sequence. Default is None.
 
-	alphabet : set or tuple or list, optional
+	alphabet : list or tuple, optional
 		A pre-defined alphabet where the ordering of the symbols is the same
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
 		the returned tensor will have a 1 at index 0 if the character was 'A'.
-		Characters outside the alphabet are ignored and none of the indexes are
-		set to 1. This is not necessary or used if a one-hot encoded tensor is
-		provided for the motif. Default is ['A', 'C', 'G', 'T'].
+		An N in a string motif keeps the original base at that position, as
+		in `ersatz.substitute`, and any other character not in the alphabet
+		raises a ValueError. Its length is checked against the second axis
+		of `X` whether the motif is a string or a one-hot encoded tensor.
+		Default is ['A', 'C', 'G', 'T'].
 
 	func: function, optional
 		A function to apply before and after making the substitution. Default 

@@ -61,7 +61,7 @@ def annotate_seqlets(
 		The number of threads to run TOMTOM on in parallel. -1 means use all
 		available threads. Default is -1.
 
-	**kwargs: arguments, optional
+	``**kwargs``: arguments, optional
 		Any other arguments to pass into the TOMTOM algorithm.
 
 

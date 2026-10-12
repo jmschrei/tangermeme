@@ -11,9 +11,10 @@ mistake.
 from tangermeme.io import extract_loci
 
 extract_loci(
-    loci,                 # BED/narrowPeak path, DataFrame, or list of them
+    loci,                 # BED/narrowPeak path (track, browser and # lines are
+                          # skipped), DataFrame, or list of them
     sequences,            # FASTA path, pyfaidx.Fasta, or {chrom: tensor} dict
-    signals=None,         # list of bigWig paths/objects -> OUTPUT signal tensor
+    signals=None,         # list of bigWig paths/figwig readers -> OUTPUT signal tensor
     in_signals=None,      # list of bigWig -> INPUT signal tensor (e.g. controls)
     chroms=None,
     in_window=2114,       # input window length (sequence + in_signals)
@@ -22,9 +23,10 @@ extract_loci(
     min_counts=None, max_counts=None, target_idx=0,
     n_loci=None, summits=False,
     alphabet=['A','C','G','T'], ignore=['N'],
-    exclusion_lists=None,
+    exclusion_lists=None,  # BED path, DataFrame, or list of them
     return_mask=False,
     verbose=False,
+    n_jobs=8,             # threads for bigWig paths and FASTA windows; -1 = every CPU
 )
 ```
 
@@ -61,9 +63,45 @@ Get the count wrong and you will silently bind a tensor to the wrong variable.
 
 Loci are dropped when they fall off chromosome ends (after jitter), sit on
 chromosomes not in `chroms`, fail `min_counts`/`max_counts` (measured on
-`signals[target_idx]`), or hit an `exclusion_lists` region. **Use
-`return_mask=True` whenever you need to align results back to the input rows** —
-the mask tells you which loci survived.
+`signals[target_idx]`, both inclusive, and requiring `signals`), or share a
+100bp chunk with an `exclusion_lists` region. **Use `return_mask=True` whenever
+you need to align results back to the input rows** — the mask has one entry per
+locus left after `chroms` filtering, and loci past an `n_loci` cap are `False`.
+
+Two situations raise `ValueError` rather than dropping loci: a locus on a
+chromosome that is not in `sequences` (usually a `chr1` vs `1` naming
+mismatch; otherwise pass `chroms=` to keep only the chromosomes the FASTA has),
+and no loci remaining after filtering. Exclusion regions on chromosomes absent
+from the FASTA are ignored, so a genome-wide blacklist works with a partial
+FASTA.
+
+### Pass bigWigs as paths or figwig readers
+
+bigWigs given as local paths, or opened with `figwig.BigWigReader`, are read
+by figwig, all kept loci in one call on `n_jobs` threads; a dict is read one
+locus at a time. Only local files are read: a URL raises a `ValueError`, so
+download remote bigWigs first. A file figwig does not read (a bigBed, a bigWig
+with overlapping intervals or unsorted blocks) raises figwig's `ValueError`.
+A bigWig opened with `pybigtools.open` is deprecated, with a `FutureWarning`,
+and will not be accepted from tangermeme 1.9.0. Until then it is read one locus
+at a time: on 167,750 loci with hg38 and one bigWig, the call takes 3.7 s with a
+pybigtools object and 0.35 s with the path, at `n_jobs=8`.
+
+### Threads and readers
+
+`n_jobs` (default 8) is the most threads `extract_loci` uses: figwig reads the
+bigWig paths on them, and the windows of a FASTA path are read and one-hot
+encoded on them. The results are identical for every value. Pass `n_jobs=1`
+inside a DataLoader worker or any other process that already runs in
+parallel, so the threads do not multiply.
+
+Pass the FASTA as a path. Its windows are then read from a memory map of the
+file through its `.fai`, where those of a `pyfaidx.Fasta` object are read one
+at a time: on 167,750 loci of hg38 with one bigWig, at `n_jobs=8`, the call
+takes 0.35 s with the path and 1.2 s with a `pyfaidx.Fasta`. A compressed
+FASTA, or one with bytes pyfaidx would change, is read through pyfaidx with
+the same result. The first call in
+a new environment compiles numba kernels, about 2.5 s, once.
 
 ### Multiple loci files are interleaved, not concatenated
 
@@ -73,13 +111,22 @@ order. `n_loci` then truncates that interleaved list. Useful for mixing a
 locus-of-interest with genomic background; surprising if you expected file-order
 concatenation.
 
+### Chromosome names are always strings
+
+Chromosome names from BED files and DataFrames are coerced to strings, so genomes
+that name their chromosomes `1`, `2`, ... (Ensembl-style) match the FASTA/bigWig
+names instead of being read in as integers by pandas. `chroms=[1, 2]` and
+`chroms=['1', '2']` are equivalent.
+
 ### Window semantics
 
 `in_window` (sequence + `in_signals`) and `out_window` (`signals`) are centered on
-each locus, independent of the locus's own width. `summits=True` centers on the
-narrowPeak summit instead of the region midpoint. `max_jitter` *expands* both
-windows so a downstream data generator can jitter cheaply — it does not jitter the
-returned data itself.
+each locus, independent of the locus's own width: a window of size `w` is
+`[mid - w//2, mid + w//2 + w%2)` with `mid = start + (end - start)//2`, so an odd
+window has its extra base on the right. `out_window` has no effect when
+`signals` is None. `summits=True` centers on the narrowPeak summit instead of
+the region midpoint. `max_jitter` *expands* both windows so a downstream data
+generator can jitter cheaply — it does not jitter the returned data itself.
 
 ## read_meme — motif PWMs
 
@@ -103,7 +150,7 @@ Feed variants into `tangermeme.variant_effect.*` to score substitution / deletio
 
 ## Related references
 
-[notebook-walkthrough.md](notebook-walkthrough.md) (loading is step 3 of the
-end-to-end flow), [model-wrapping.md](model-wrapping.md) (the
+`references/notebook-walkthrough.md` (loading is step 3 of the
+end-to-end flow), `references/model-wrapping.md` (the
 `(batch, channels, length)` layout the loaded `X` follows),
-[motif-effects.md](motif-effects.md) (consuming the loaded sequences).
+`references/motif-effects.md` (consuming the loaded sequences).

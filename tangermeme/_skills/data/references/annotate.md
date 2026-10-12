@@ -9,7 +9,7 @@ Two conventions show up:
 
 - **Region annotations** `(n, 3)` = `(example_idx, start, end)` (0-indexed, end
   exclusive). This is what `ablate_annotations` / `marginalize_annotations` consume
-  (see [motif-effects.md](motif-effects.md)).
+  (see `references/motif-effects.md`).
 - **Counting input** `(n, 2)` = `(example_idx, annotation_idx)` for `count_annotations`
   / `pairwise_annotations`, or `(n, 4)` = `(example_idx, annotation_idx, start, end)`
   for spacing.
@@ -102,7 +102,7 @@ sp = pairwise_annotations_spacing(df4, max_distance=100)   # (n_motifs, n_motifs
 
 ## The discovery pipeline
 
-attributions → [seqlets.md](seqlets.md) (`recursive_seqlets`) →
+attributions → `references/seqlets.md` (`recursive_seqlets`) →
 `annotate_seqlets` → `count_annotations` / `pairwise_annotations` /
 `pairwise_annotations_spacing`. For a method-selection view (TF-MoDISco vs
 marginalize vs seqlet+TOMTOM vs FIMO), see the "Inspecting what cis-regulatory
@@ -110,6 +110,6 @@ features a model has learned" vignette.
 
 ## Related references
 
-[seqlets.md](seqlets.md) (producing the spans), [io-loci.md](io-loci.md)
-(`read_meme`), [motif-effects.md](motif-effects.md) (the `*_annotations`
-perturbation variants), [plot.md](plot.md) (drawing annotations on logos).
+`references/seqlets.md` (producing the spans), `references/io-loci.md`
+(`read_meme`), `references/motif-effects.md` (the `*_annotations`
+perturbation variants), `references/plot.md` (drawing annotations on logos).
