@@ -40,6 +40,7 @@ from .toy_models import MixedOps
 from .toy_models import ConvWithArgs
 from .toy_models import DataDependentConv
 from .toy_models import MergedBatchLength
+from .toy_models import ReorderedChannels
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -863,6 +864,7 @@ FAST_MODELS = {
 	"PadCropConv": PadCropConv,
 	"MixedOps": MixedOps,
 	"MergedBatchLength": MergedBatchLength,
+	"ReorderedChannels": ReorderedChannels,
 }
 
 
@@ -925,6 +927,8 @@ def test_saturation_mutagenesis_fast_matches(X0, device, force_fast, name):
 		"aten.split.Tensor", "aten.view.default", "aten.max.dim",
 		"aten.expand.default", "aten.sum.dim_IntList"]),
 	("MergedBatchLength", ["aten.rms_norm.default"]),
+	("ReorderedChannels", ["aten.index.Tensor", "aten.zeros_like.default",
+		"aten.conv1d.default"]),
 ])
 def test_saturation_mutagenesis_fast_local_ops(X0, name, ops):
 	# Each rule is exercised by at least one model, so that an equivalence
@@ -1056,10 +1060,13 @@ def test_saturation_mutagenesis_fast_float64(X0, force_fast):
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("name", ["ProfileCount", "ReorderedChannels"])
 def test_saturation_mutagenesis_fast_autocast(X0, cuda_device, force_fast,
-	dtype):
+	dtype, name):
+	# ReorderedChannels casts its input to float32, a cast that only shows up
+	# in the captured graph when it is captured in the dtype autocast uses.
 	torch.manual_seed(0)
-	model = ProfileCount()
+	model = FAST_MODELS[name]()
 
 	y_fast, y_slow = _fast_and_slow(model, X0, raw_outputs=True, dtype=dtype,
 		device=cuda_device)

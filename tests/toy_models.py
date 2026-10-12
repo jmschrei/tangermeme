@@ -1256,3 +1256,18 @@ class MergedBatchLength(torch.nn.Module):
 		X_flat = self.norm(self.conv(X).transpose(1, 2)).reshape(-1, 6)
 		y = self.linear(X_flat).reshape(X.shape[0], -1, 2).sum(dim=1)
 		return y + X_flat.shape[0]
+
+
+class ReorderedChannels(torch.nn.Module):
+	"""Cast the input to float32, index its channels into another order, and
+	concatenate zeros made with zeros_like, as some models' first lines do."""
+
+	def __init__(self):
+		super(ReorderedChannels, self).__init__()
+		self.order = [0, 2, 1, 3]
+		self.conv = torch.nn.Conv1d(8, 4, 5, padding=2)
+
+	def forward(self, X):
+		X = X.float()[:, self.order]
+		X = torch.cat([X, torch.zeros_like(X)], dim=1)
+		return self.conv(X)

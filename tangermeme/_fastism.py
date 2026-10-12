@@ -84,7 +84,8 @@ _ELEMENTWISE = {
 	"aten.bitwise_not.default", "aten.isnan.default", "aten.isinf.default",
 	"aten._to_copy.default", "aten.to.dtype", "aten.to.dtype_layout",
 	"aten.clone.default", "aten.alias.default", "aten.detach.default",
-	"aten.lift_fresh_copy.default",
+	"aten.lift_fresh_copy.default", "aten.zeros_like.default",
+	"aten.ones_like.default", "aten.full_like.default",
 	"aten.add.Tensor", "aten.add.Scalar", "aten.sub.Tensor",
 	"aten.sub.Scalar", "aten.rsub.Tensor", "aten.rsub.Scalar",
 	"aten.mul.Tensor", "aten.mul.Scalar", "aten.div.Tensor",
@@ -497,23 +498,19 @@ class _FastISM:
 		"""Capture the model as a functional graph of ATen operations with a
 		dynamic batch dimension.
 
-		Under autocast the graph is captured at the model's own dtype and
-		later replayed one operation at a time under autocast, which casts each
-		operation's inputs as the eager forward pass would.
+		The graph is captured with the inputs in the dtype they are given to the
+		model, and under autocast when the model runs under it, so that the
+		casts autocast and the model make are recorded in it. A graph captured
+		in another dtype would hold the dtype checks of that dtype instead, and
+		decomposing it outside autocast would trace operations on mismatched
+		dtypes.
 		"""
-
-		export_dtype = self.dtype
-		if self.use_autocast:
-			try:
-				export_dtype = next(model.parameters()).dtype
-			except StopIteration:
-				export_dtype = torch.float32
 
 		inputs = [self.X[:1].repeat(2, 1, 1)]
 		if self.args is not None:
 			inputs += [a[:1].repeat(2, *(1 for _ in a.shape[1:]))
 				for a in self.args]
-		inputs = tuple(x.type(export_dtype).to(self.device) for x in inputs)
+		inputs = tuple(self._cast(x) for x in inputs)
 		dynamic = tuple({0: torch.export.Dim.AUTO} for _ in inputs)
 
 		loggers = [logging.getLogger(name) for name in _EXPORT_LOGGERS]
@@ -527,9 +524,10 @@ class _FastISM:
 				warnings.filterwarnings("ignore", category=FutureWarning,
 					message=r".*isinstance\(treespec, LeafSpec\)")
 
-				ep = torch.export.export(model, inputs, dynamic_shapes=dynamic,
-					strict=False)
-				ep = ep.run_decompositions(decomp_table={})
+				with self._autocast():
+					ep = torch.export.export(model, inputs,
+						dynamic_shapes=dynamic, strict=False)
+					ep = ep.run_decompositions(decomp_table={})
 		except Exception as e:
 			message = str(e).strip().split("\n")[0]
 			raise _Unsupported("torch.export could not capture the model "
@@ -1020,6 +1018,19 @@ class _FastISM:
 
 			return self._single_output(node, source,
 				lax - sum(d < lax for d in dims), call=call)
+
+		if name == "aten.index.Tensor":
+			# Indexing one axis other than the length, such as reordering the
+			# channels with X[:, order].
+			indices = [(d, t) for d, t in enumerate(bound["indices"])
+				if t is not None]
+			if len(indices) != 1 or indices[0][0] in (0, lax):
+				return None
+			dim, index = indices[0]
+			if _meta(index).dtype == torch.bool:
+				return None
+			k = _meta(index).dim()
+			return self._single_output(node, source, lax + (k - 1) * (dim < lax))
 
 		if name == "aten.select.int":
 			dim = _norm(bound["dim"], ndim)
