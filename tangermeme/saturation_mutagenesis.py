@@ -62,6 +62,136 @@ def _attribution_score(y0, y_hat, target):
 	return attr
 
 
+def _to_int8(X):
+	"""Cast a one-hot encoding to int8 on the CPU, warning on soft values.
+
+	The int8 cast truncates toward zero, so a soft encoding would silently lose
+	every value with magnitude below one.
+	"""
+
+	if X.is_floating_point() and not torch.equal(X, X.round()):
+		warnings.warn("X contains non-integer values which will be truncated "
+			"toward zero by the int8 cast; values with magnitude < 1 become 0. "
+			"Pass a hard one-hot encoding to avoid silently zeroing positions.",
+			TangermemeWarning)
+
+	return X.type(torch.int8).cpu()
+
+
+def _check_span(start, end, length):
+	"""Resolve a negative `end` and check that the span is non-empty.
+
+	A negative `end` is remapped to `length + 1 + end`, so `end=-1` includes
+	the last position.
+	"""
+
+	if end < 0:
+		end = length + 1 + end
+
+	if start < 0 or end > length or start >= end:
+		raise ValueError("start and end must satisfy "
+			"0 <= start < end <= length; got start={}, end={} for length "
+			"{}.".format(start, end, length))
+
+	return end
+
+
+def _single_edits(X_i, start, end):
+	"""List the true single-base edits of one sequence within [start, end).
+
+	One substitution per position would re-apply the base already there (an
+	identity edit whose prediction equals y0); it is left out here and filled
+	from y0 by `_fill_identity`, saving up to 25% of the forward passes. A
+	column that is all-zero (an `N`) or multi-hot is not a clean one-hot of any
+	character, so it has no identity row and all of its edits are kept. The
+	edits are laid out in [character, position] order to match the
+	reconstruction.
+
+
+	Parameters
+	----------
+	X_i: torch.Tensor, shape=(len(alphabet), length)
+		One one-hot encoded sequence.
+
+	start: int
+		The first position to edit.
+
+	end: int
+		The position after the last one to edit.
+
+
+	Returns
+	-------
+	edits: torch.Tensor, shape=(len(alphabet) * (end - start),)
+		A boolean mask over the flattened [character, position] grid that is
+		True for each edit that is made.
+
+	edit_chars: torch.Tensor, shape=(n_edits,)
+		The character each edit substitutes in.
+
+	edit_positions: torch.Tensor, shape=(n_edits,)
+		The position of each edit in the full sequence.
+	"""
+
+	ref = X_i[:, start:end]
+	identity = (ref == 1) & (ref.sum(dim=0, keepdim=True) == 1)
+	edits = ~identity.reshape(-1)
+
+	edit_chars, edit_positions = torch.where(~identity)
+	return edits, edit_chars, edit_positions + start
+
+
+def _edited_inputs(X, args, i, edit_chars, edit_positions):
+	"""Build one copy of sequence i per edit, and repeat its `args` to
+	match."""
+
+	n_edits = edit_chars.shape[0]
+
+	X_ = X[i].repeat(n_edits, 1, 1)
+	rows = torch.arange(n_edits)
+	X_[rows, :, edit_positions] = 0
+	X_[rows, edit_chars, edit_positions] = 1
+
+	if args is not None:
+		args_ = tuple(a[i].repeat(n_edits, *(1 for _ in a[i].shape))
+			for a in args)
+	else:
+		args_ = None
+
+	return X_, args_
+
+
+def _fill_identity(y0, i, edits, y_edits):
+	"""Scatter the predictions for one sequence's edits into the full
+	[character, position] grid, filling the identity slots with y0[i]."""
+
+	if isinstance(y_edits, torch.Tensor):
+		y_hat_ = y0[i].unsqueeze(0).repeat(edits.shape[0],
+			*(1 for _ in y0[i].shape))
+		y_hat_[edits] = y_edits
+	else:
+		y_hat_ = [y0_[i].unsqueeze(0).repeat(edits.shape[0],
+			*(1 for _ in y0_[i].shape)) for y0_ in y0]
+		for y_hat_h, y_edit in zip(y_hat_, y_edits):
+			y_hat_h[edits] = y_edit
+
+	return y_hat_
+
+
+def _stack_y_hat(y_hat, n_examples, n_chars, width):
+	"""Stack per-sequence grids into (n_examples, n_chars, width, ...)
+	tensors, one per model output."""
+
+	if isinstance(y_hat[0], torch.Tensor):
+		return torch.stack(y_hat).reshape(n_examples, n_chars, width,
+			*y_hat[0].shape[1:])
+
+	return [
+		torch.stack(y_).reshape(n_examples, n_chars, width,
+			*y_[0].shape[1:]) for y_ in zip(*y_hat)
+	]
+
+
 
 def saturation_mutagenesis(
 	model: torch.nn.Module,
@@ -186,13 +316,7 @@ def saturation_mutagenesis(
 		The outputs from the model for each of the perturbed sequences.
 	"""
 
-	if X.is_floating_point() and not torch.equal(X, X.round()):
-		warnings.warn("X contains non-integer values which will be truncated "
-			"toward zero by the int8 cast; values with magnitude < 1 become 0. "
-			"Pass a hard one-hot encoding to avoid silently zeroing positions.",
-			TangermemeWarning)
-
-	X = X.type(torch.int8).cpu()
+	X = _to_int8(X)
 	y0 = predict(model, X, args=args, func=func, dtype=dtype, device=device)
 
 	if not raw_outputs and not isinstance(y0, torch.Tensor):
@@ -200,69 +324,20 @@ def saturation_mutagenesis(
 			"multiple output tensors; the attribution aggregation assumes a "
 			"single output tensor.")
 
-	length = X.shape[-1]
-	if end < 0:
-		end = length + 1 + end
-
-	if start < 0 or end > length or start >= end:
-		raise ValueError("start and end must satisfy "
-			"0 <= start < end <= length; got start={}, end={} for length "
-			"{}.".format(start, end, length))
+	end = _check_span(start, end, X.shape[-1])
 
 	y_hat = []
 	for i in trange(X.shape[0], disable=not verbose):
-		# Build only the true single-base edits. One substitution per position
-		# would re-apply the base already there (an identity edit whose
-		# prediction equals y0); it is skipped here and filled from y0 below,
-		# saving up to 25% of the forward passes. A column that is all-zero (an
-		# `N`) or multi-hot is not a clean one-hot of any character, so it has
-		# no identity row and all four of its edits are kept. The kept rows are
-		# laid out in [character, position] order to match the reconstruction.
-		ref = X[i, :, start:end]
-		identity = (ref == 1) & (ref.sum(dim=0, keepdim=True) == 1)
-		edits = ~identity.reshape(-1)
-
-		edit_chars, edit_positions = torch.where(~identity)
-		edit_positions = edit_positions + start
-		n_edits = edit_chars.shape[0]
-
-		X_ = X[i].repeat(n_edits, 1, 1)
-		rows = torch.arange(n_edits)
-		X_[rows, :, edit_positions] = 0
-		X_[rows, edit_chars, edit_positions] = 1
-
-		if args is not None:
-			args_ = tuple(a[i].repeat(n_edits, *(1 for _ in a[i].shape))
-				for a in args)
-		else:
-			args_ = None
+		edits, edit_chars, edit_positions = _single_edits(X[i], start, end)
+		X_, args_ = _edited_inputs(X, args, i, edit_chars, edit_positions)
 
 		y_edits = predict(model, X_, args=args_, func=func,
 			batch_size=batch_size, dtype=dtype, device=device)
 
-		# Scatter the edit predictions back into the full [character, position]
-		# grid, filling the identity slots with the reference prediction y0.
-		if isinstance(y_edits, torch.Tensor):
-			y_hat_ = y0[i].unsqueeze(0).repeat(edits.shape[0],
-				*(1 for _ in y0[i].shape))
-			y_hat_[edits] = y_edits
-		else:
-			y_hat_ = [y0_[i].unsqueeze(0).repeat(edits.shape[0],
-				*(1 for _ in y0_[i].shape)) for y0_ in y0]
-			for y_hat_h, y_edit in zip(y_hat_, y_edits):
-				y_hat_h[edits] = y_edit
+		y_hat.append(_fill_identity(y0, i, edits, y_edits))
 
-		y_hat.append(y_hat_)
+	y_hat = _stack_y_hat(y_hat, X.shape[0], X.shape[1], end-start)
 
-	if isinstance(y_hat[0], torch.Tensor):
-		y_hat = torch.stack(y_hat).reshape(X.shape[0], X.shape[1], end-start, 
-			*y_hat_.shape[1:])
-	else:
-		y_hat = [
-			torch.stack(y_).reshape(X.shape[0], X.shape[1], end-start,
-				*y_[0].shape[1:]) for y_ in zip(*y_hat)
-		]
-	
 	if not raw_outputs:
 		attr = _attribution_score(y0, y_hat, target)
 		return X[:, :, start:end] * attr if not hypothetical else attr
