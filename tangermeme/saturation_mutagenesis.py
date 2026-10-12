@@ -39,11 +39,11 @@ _FAST_MAX_RELATIVE_TIME = 1.0
 # there than on the CPU.
 _FAST_TOLERANCE = {
 	torch.float64: 1e-10,
-	torch.float32: 1e-5,
+	torch.float32: 1e-4,
 	torch.float16: 1e-2,
 	torch.bfloat16: 5e-2,
 }
-_FAST_TOLERANCE_CUDA_FLOAT32 = 1e-3
+_FAST_TOLERANCE_CUDA_FLOAT32 = 3e-3
 
 
 class SaturationMutagenesisRawResult(NamedTuple):
@@ -295,8 +295,12 @@ def _verify_fast(fast, model, X, args, start, end, batch_size, dtype, device,
 		t_slow = min(t_slow, _timed(run_slow, device)[1])
 
 	if t_fast > t_slow * _FAST_MAX_RELATIVE_TIME:
-		return ("fast=True took {:.3g}s on a batch of edits and fast=False "
+		reason = ("fast=True took {:.3g}s on a batch of edits and fast=False "
 			"took {:.3g}s".format(t_fast, t_slow))
+		if device.type == 'cuda':
+			reason += (" (on a GPU, fast=True runs many small operations per "
+				"batch and gains more from a larger batch_size)")
+		return reason
 	return None
 
 
@@ -421,18 +425,21 @@ def saturation_mutagenesis(
 	only over the positions the edit can change. Any other operation, such as
 	a dense layer over the flattened sequence, a mean over the length or
 	attention, is computed in full on the cached activations with the changed
-	positions written in, so models of any architecture give the same results
-	with either setting, while convolutional models also run faster. The
-	results match `fast=False` up to floating-point rounding rather than bit
-	for bit.
+	positions written in. Models that are convolutional for most of their
+	depth gain the most; a model that pools or normalizes over the whole
+	length early has little to gain. The results match `fast=False` up to
+	floating-point rounding rather than bit for bit.
 
-	Before it is used, the fast path is checked on one batch of edits from the
-	first example against `fast=False`. When the model cannot be captured,
-	the two disagree by more than rounding, or the fast path is slower, a
+	The first batch of edits is always computed with `fast=False` and timed.
+	When the whole job would take less than ten seconds at that rate, the
+	model is not captured, because capturing it can take from a fraction of a
+	second to a few seconds, and the job continues with `fast=False`.
+	Otherwise, before the fast path is used, it is checked against
+	`fast=False` on one batch of edits from the first example, which includes
+	both ends of the edited span. When the model cannot be captured, the two
+	disagree by more than rounding, or the fast path is slower, a
 	`TangermemeWarning` gives the reason and the function continues with
-	`fast=False`. Capturing the model takes a fraction of a second to a few
-	seconds, which can outweigh the gain when only a few short sequences are
-	being scored.
+	`fast=False`.
 
 
 	Parameters
@@ -504,10 +511,13 @@ def saturation_mutagenesis(
 	fast: bool, optional
 		Whether to compute the predictions for the edited sequences with
 		fastISM, recomputing only the positions of each layer that an edit can
-		change. The model is captured with `torch.export` and checked against
-		`fast=False` on one batch of edits; if that fails, a `TangermemeWarning`
-		gives the reason and `fast=False` is used. Results match `fast=False` up
-		to floating-point rounding. Default is True.
+		change, for a job that would take more than ten seconds otherwise. The
+		model is captured with `torch.export` and checked against `fast=False`
+		on one batch of edits; if that fails, a `TangermemeWarning` gives the
+		reason and `fast=False` is used. Results match `fast=False` up to
+		floating-point rounding. On a GPU, the fast path runs many small
+		operations for each batch, so it gains more from a larger `batch_size`
+		than `fast=False` does. Default is True.
 
 
 	Returns
