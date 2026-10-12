@@ -60,6 +60,21 @@ def test_dependency_map(X, device):
 		[0.0000, 0.0000, 0.0066, 0.0043, 0.0057]], 4)
 
 
+def test_dependency_map_float64(device):
+	# A float64 attribution function gives a float64 map, so the map can be
+	# checked against a float64 reference at full precision.
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1).double()
+	X = random_one_hot((2, 4, 12), random_state=0).type(torch.float64)
+
+	dmap = dependency_map(model, X, device=device)
+	assert dmap.dtype == torch.float64
+
+	dmap32 = dependency_map(model.float(), X.float(), device=device)
+	assert dmap32.dtype == torch.float32
+	assert_array_almost_equal(dmap, dmap32, 5)
+
+
 def test_dependency_map_holds_model_on_device(cuda_device):
 	# The model is moved to the device once for the whole call, so every
 	# call to func finds it there, and it is moved back afterward.

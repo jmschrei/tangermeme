@@ -152,7 +152,8 @@ def dependency_map(
 	Returns
 	-------
 	dmap: torch.Tensor, shape=(-1, length, end-start)
-		The dependency map for each sequence, on the CPU. `dmap[:, j, i]` is
+		The dependency map for each sequence, on the CPU, in float64 when
+		`func` returns float64 and in float32 otherwise. `dmap[:, j, i]` is
 		the average absolute change in the attribution at position `j` caused
 		by substituting the base at position `start + i`, averaged over the
 		substitutions that actually changed that base.
@@ -187,10 +188,11 @@ def dependency_map(
 					type(X_attr) if not isinstance(X_attr, torch.Tensor)
 					else tuple(X_attr.shape)))
 
-		return X_attr.type(torch.float32).sum(dim=1)
+		# Half-precision attributions are accumulated in float32.
+		dtype = torch.promote_types(X_attr.dtype, torch.float32)
+		return X_attr.type(dtype).sum(dim=1)
 
-	dmap = torch.empty(n, length, end - start, dtype=torch.float32)
-
+	dmap = None
 	with _preserve_model_state(model, device):
 		for i in trange(n, disable=not verbose):
 			args_ = None if args is None else tuple(a[i:i+1] for a in args)
@@ -207,10 +209,13 @@ def dependency_map(
 
 			# Sum the absolute differences into the substituted positions and
 			# divide by how many substitutions each position actually had.
-			totals = torch.zeros(end - start, length, dtype=torch.float32)
+			totals = torch.zeros(end - start, length, dtype=attr.dtype)
 			totals.index_add_(0, edit_positions - start, attr)
 
 			counts = edits.reshape(n_chars, end - start).sum(dim=0)
+			if dmap is None:
+				dmap = torch.empty(n, length, end - start, dtype=attr.dtype)
+
 			dmap[i] = (totals / counts.unsqueeze(-1)).T
 
 	return dmap

@@ -197,7 +197,8 @@ dependency_map
 	- ``device`` is forwarded to ``func``, and the model is moved there once
 	  for the whole call, so the two calls to ``func`` per sequence do not
 	  each move it. The model's original device and training mode are
-	  restored afterward.
+	  restored afterward. The map is float64 when ``func`` returns float64,
+	  and float32 otherwise, including for half-precision attributions.
 
 
 Version 1.5.0
