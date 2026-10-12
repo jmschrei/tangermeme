@@ -570,7 +570,7 @@ def _fast_one_hot_encode(X_ohe, seq, mapping):
 
 
 def one_hot_encode(
-	sequence: str | list[str],
+	sequence: str,
 	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
 	dtype: str | torch.dtype = torch.int8,
 	ignore: list[str] = ['N'],
@@ -579,12 +579,11 @@ def one_hot_encode(
 	n_jobs: int = 1,
 	**kwargs: Any,
 ) -> torch.Tensor:
-	"""Converts a string or list of characters into a one-hot encoding.
+	"""Converts a string into a one-hot encoding.
 
-	This function will take in either a string or a list and convert it into a
-	one-hot encoding. If the input is a string, each character is assumed to be
-	a different symbol, e.g. 'ACGT' is assumed to be a sequence of four 
-	characters. If the input is a list, the elements can be any size.
+	This function will take in a string and convert it into a one-hot
+	encoding. Each character is assumed to be a different symbol, e.g. 'ACGT'
+	is assumed to be a sequence of four characters.
 
 	Although this function will be used here primarily to convert nucleotide
 	sequences into one-hot encoding with an alphabet of size 4, in principle
@@ -592,8 +591,9 @@ def one_hot_encode(
 
 	Parameters
 	----------
-	sequence : str or list
-		The sequence to convert to a one-hot encoding.
+	sequence : str
+		The sequence to convert to a one-hot encoding. Anything other than a
+		string, such as a list of characters, raises a TypeError.
 
 	alphabet : list, tuple, or str
 		A pre-defined alphabet where the ordering of the symbols is the same

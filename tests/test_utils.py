@@ -745,6 +745,15 @@ def test_one_hot_encode_raises_non_ascii_ignore(ignore, alphabet, repeats):
 		one_hot_encode(sequence, alphabet=alphabet, ignore=ignore)
 
 
+@pytest.mark.parametrize("sequence", [['A', 'C', 'G', 'T'],
+	('A', 'C', 'G', 'T'), b'ACGT'])
+def test_one_hot_encode_raises_not_str(sequence):
+	# Only a string is encoded. The docstring said a list was accepted, which
+	# has not been true since 0.2.2 (#111).
+	with pytest.raises(TypeError):
+		one_hot_encode(sequence)
+
+
 def test_fast_one_hot_encode():
 	mapping = numpy.zeros(256, dtype=numpy.int8) - 2
 	for i, char in enumerate(b'ACGT'):
