@@ -47,10 +47,11 @@ def dependency_map(
 	`saturation_mutagenesis` asks how a single substitution changes the
 	model's scalar prediction, this asks how that same substitution changes
 	the model's entire explanation of the sequence. The cost follows: for an
-	alphabet of size A and a substituted window of size W it runs A * W
-	attributions per sequence, so the attribution function should be a cheap
-	one. That is why `saliency` is the default -- a single backward pass --
-	but `deep_lift_shap` and `saturation_mutagenesis` both satisfy the same
+	alphabet of size A and a substituted window of size W it runs
+	(A - 1) * W + 1 attributions per sequence, one more for each position
+	holding an `N`, so the attribution function should be a cheap one. That
+	is why `saliency` is the default -- a single backward pass -- but
+	`deep_lift_shap` and `saturation_mutagenesis` both satisfy the same
 	contract and can be passed in when their accuracy is worth the cost.
 
 	Substitutions that re-apply the base already present are skipped rather
