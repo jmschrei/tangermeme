@@ -1142,10 +1142,16 @@ def _assert_falls_back(model, X, match, device):
 
 
 def test_saturation_mutagenesis_fast_fallback_capture(X0, device,
-	force_fast):
+	force_fast, capsys):
 	torch.manual_seed(0)
 	_assert_falls_back(DataDependentConv(), X0,
 		"torch.export could not capture the model", device)
+
+	# torch.export prints the partial graph of a failed capture, which the
+	# warning replaces.
+	captured = capsys.readouterr()
+	assert "def forward" not in captured.err
+	assert "def forward" not in captured.out
 
 
 def test_saturation_mutagenesis_fast_fallback_hooks(X0, device, force_fast):
