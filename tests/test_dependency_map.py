@@ -255,6 +255,50 @@ def test_dependency_map_raises_bad_start_end(X, device):
 ##
 
 
+def _deep_lift_shap_fixed(model, X, args=None, **kwargs):
+	# The same three references for every sequence, so that attributions
+	# before and after a substitution differ only through the substitution.
+	references = random_one_hot((3, 4, 8), random_state=1).type(
+		torch.float32).unsqueeze(0).expand(X.shape[0], -1, -1, -1)
+
+	return deep_lift_shap(model, X, args=args, references=references,
+		warning_threshold=1e9, **kwargs)
+
+
+@pytest.mark.parametrize("func", [_deep_lift_shap_fixed,
+	saturation_mutagenesis], ids=["deep_lift_shap", "saturation_mutagenesis"])
+def test_dependency_map_func_matches_brute_force(func, device):
+	# The same mean of absolute differences as with saliency, computed by
+	# substituting each base by hand and calling func on every copy.
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	model.eval()
+
+	X = random_one_hot((1, 4, 8), random_state=0).type(torch.float32)
+	dmap = dependency_map(model, X, func=func, device=device)[0]
+
+	attr0 = func(model, X, device=device).sum(dim=1)[0]
+
+	expected = numpy.zeros((8, 8))
+	for i in range(8):
+		diffs = []
+		for c in range(4):
+			if X[0, c, i] == 1:
+				continue
+
+			X_ = X.clone()
+			X_[0, :, i] = 0
+			X_[0, c, i] = 1
+
+			attr = func(model, X_, device=device).sum(dim=1)[0]
+			diffs.append((attr - attr0).abs().numpy())
+
+		expected[:, i] = numpy.mean(diffs, axis=0)
+
+	assert dmap.sum() > 0
+	assert_array_almost_equal(dmap, expected, 5)
+
+
 def test_dependency_map_func_deep_lift_shap(device):
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)

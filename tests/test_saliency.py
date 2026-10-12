@@ -6,9 +6,19 @@ import pytest
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.ersatz import shuffle
+from tangermeme.ersatz import substitute
+from tangermeme.ersatz import multisubstitute
+from tangermeme.ablate import ablate
+from tangermeme.marginalize import marginalize
+from tangermeme.space import space
+from tangermeme.variant_effect import substitution_effect
+from tangermeme.product import apply_pairwise
+from tangermeme.product import apply_product
 
 from tangermeme.saliency import saliency
 
+from .toy_models import SumModel
 from .toy_models import FlattenDense
 from .toy_models import ConvAvgDense
 from .toy_models import ConvDense
@@ -231,6 +241,59 @@ def test_saliency_dtype(X, cuda_device):
 	assert X_attr.dtype == torch.float16
 
 
+def test_saliency_autocast_bfloat16(X, device):
+	# An fp32 model run under bf16 autocast returns bf16 attributions, as
+	# predict and deep_lift_shap do, close to the fp32 ones.
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	X = X[:8]
+
+	X_attr = saliency(model, X, dtype=torch.bfloat16, device=device)
+	X_attr32 = saliency(model, X, device=device)
+
+	assert X_attr.dtype == torch.bfloat16
+	assert X_attr.shape == X.shape
+	assert_array_almost_equal(X_attr.float(), X_attr32, 3)
+
+
+def test_saliency_autocast_float16(X, cuda_device):
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	X = X[:8]
+
+	X_attr = saliency(model, X, dtype=torch.float16, device=cuda_device)
+	X_attr32 = saliency(model, X, device=cuda_device)
+
+	assert X_attr.dtype == torch.float16
+	assert_array_almost_equal(X_attr.float(), X_attr32, 3)
+
+
+def test_saliency_dtype_string(X, device):
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	X = X[:8]
+
+	# numpy has no bfloat16, so compare the tensors in torch.
+	assert torch.equal(saliency(model, X, dtype="bfloat16", device=device),
+		saliency(model, X, dtype=torch.bfloat16, device=device))
+
+
+def test_saliency_model_without_parameters(device):
+	# SumModel has no parameters to take a dtype from, so float32 is used.
+	# Its output c is the count of character c, so the gradient is one at c
+	# and zero elsewhere, and the corrected gradient is 0.75 and -0.25.
+	model = SumModel()
+	X = random_one_hot((3, 4, 10), random_state=0).type(torch.float32)
+
+	X_attr = saliency(model, X, target=2, hypothetical=True, device=device)
+
+	expected = torch.full((3, 4, 10), -0.25)
+	expected[:, 2] = 0.75
+
+	assert X_attr.dtype == torch.float32
+	assert_array_almost_equal(X_attr, expected, 6)
+
+
 def test_saliency_preserves_model_state(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
@@ -301,6 +364,108 @@ def test_saliency_raises_bad_input(device):
 
 
 ##
+
+
+def test_saliency_marginalize(X, device):
+	# saliency satisfies the func= contract, so marginalize returns the
+	# attributions of X and of X with the motif substituted in.
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	X = X[:4]
+
+	y_before, y_after = marginalize(model, X, "ACGTGT", func=saliency,
+		device=device)
+
+	assert_array_almost_equal(y_before, saliency(model, X, device=device), 5)
+	assert_array_almost_equal(y_after, saliency(model,
+		substitute(X, "ACGTGT"), device=device), 5)
+
+
+def test_saliency_ablate(X, device):
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	X = X[:4]
+
+	y_before, y_after = ablate(model, X, 40, 60, n=3, func=saliency,
+		random_state=0, device=device)
+
+	X_perturb = shuffle(X, start=40, end=60, n=3, random_state=0)
+
+	assert y_after.shape == (4, 3, 4, 100)
+	assert_array_almost_equal(y_before, saliency(model, X, device=device), 5)
+	assert_array_almost_equal(y_after.reshape(12, 4, 100), saliency(model,
+		X_perturb.reshape(12, 4, 100), device=device), 5)
+
+
+def test_saliency_space(X, device):
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	X = X[:4]
+	motifs, spacing = ["ACG", "TTT"], [[2], [5]]
+
+	y_before, y_afters = space(model, X, motifs, spacing, func=saliency,
+		device=device)
+
+	assert y_afters.shape == (4, 2, 4, 100)
+	assert_array_almost_equal(y_before, saliency(model, X, device=device), 5)
+
+	for k, s in enumerate(spacing):
+		assert_array_almost_equal(y_afters[:, k], saliency(model,
+			multisubstitute(X, motifs, s), device=device), 5)
+
+
+def test_saliency_substitution_effect(X, device):
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	X = X[:4]
+	substitutions = torch.tensor([[0, 10, 1], [2, 50, 3], [2, 51, 0]])
+
+	y_before, y_after = substitution_effect(model, X, substitutions,
+		func=saliency, device=device)
+
+	X_sub = X.clone()
+	for i, position, character in substitutions:
+		X_sub[i, :, position] = 0
+		X_sub[i, character, position] = 1
+
+	assert_array_almost_equal(y_before, saliency(model, X, device=device), 5)
+	assert_array_almost_equal(y_after, saliency(model, X_sub,
+		device=device), 5)
+
+
+def test_saliency_apply_pairwise(X, device):
+	# FlattenDense(X, alpha, beta) scales its output by beta, so each paired
+	# (alpha, beta) gives the attributions of the sequence scaled by beta.
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	X = X[:3]
+	alpha = torch.tensor([[0.0], [1.0]])
+	beta = torch.tensor([[2.0], [-1.0]])
+
+	X_attr = apply_pairwise(saliency, model, X, args=(alpha, beta),
+		device=device)
+	X_attr0 = saliency(model, X, device=device)
+
+	assert X_attr.shape == (3, 2, 4, 100)
+	assert_array_almost_equal(X_attr[:, 0], X_attr0 * 2, 5)
+	assert_array_almost_equal(X_attr[:, 1], -X_attr0, 5)
+
+
+def test_saliency_apply_product(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+	X = X[:3]
+	alpha = torch.tensor([[0.0], [1.0]])
+	beta = torch.tensor([[2.0], [-1.0], [0.5]])
+
+	X_attr = apply_product(saliency, model, X, args=(alpha, beta),
+		device=device)
+	X_attr0 = saliency(model, X, device=device)
+
+	assert X_attr.shape == (3, 2, 3, 4, 100)
+	for j in range(2):
+		for k, b in enumerate(beta[:, 0]):
+			assert_array_almost_equal(X_attr[:, j, k], X_attr0 * b, 5)
 
 
 @pytest.mark.parametrize("hypothetical", [False, True])
