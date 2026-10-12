@@ -142,6 +142,7 @@ saliency
 	  ``saturation_mutagenesis`` and plots directly with ``plot_logo``. It
 	  satisfies the ``func=`` contract and can be passed to ``ablate``,
 	  ``marginalize``, ``space``, and the ``variant_effect`` functions.
+	  Thanks @cyborgdnx!
 
 dependency_map
 --------------
@@ -158,7 +159,8 @@ dependency_map
 	  passed in when their accuracy is worth the cost. ``start`` and ``end``
 	  restrict which positions are substituted, following the same
 	  convention as ``saturation_mutagenesis``, since substituting every
-	  position of a full-length locus is rarely what you want.
+	  position of a full-length locus is rarely what you want. Thanks
+	  @cyborgdnx!
 	- Substitutions that re-apply the base already present are skipped
 	  rather than computed, because their attributions are unchanged and
 	  their difference is exactly zero, and each position is averaged over
