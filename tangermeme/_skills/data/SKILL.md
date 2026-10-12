@@ -40,7 +40,7 @@ reproducibility traps).
 |---|---|
 | **starting from scratch** — set up a notebook to load a model and run predictions → attributions → seqlets → motif tests, end to end | `references/notebook-walkthrough.md` |
 | attribution via **DeepLIFT/SHAP** — "which bases drive this prediction", attribution logos, hypothetical contributions for CWMs | `references/deep_lift_shap.md` |
-| attribution via **ISM / saturation mutagenesis** — the forward-pass alternative; use it when DeepLIFT/SHAP convergence deltas are too high, an op can't be registered, or the model is massively multi-task | `references/saturation_mutagenesis.md` |
+| attribution via **ISM / saturation mutagenesis** — the forward-pass alternative; use it when DeepLIFT/SHAP convergence deltas are too high, an op can't be registered, or the model is massively multi-task; `fast=True` (fastISM) is the default | `references/saturation_mutagenesis.md` |
 | comparing predictions/attributions **across N models** (replicates, architectures, ensembles) | `references/comparing-models.md` |
 | effect of a motif / region: marginalize, ablate, spacing between motifs | `references/motif-effects.md` |
 | scoring **variant effects** (substitution / deletion / insertion, from a VCF) | `references/variant-effect.md` |
