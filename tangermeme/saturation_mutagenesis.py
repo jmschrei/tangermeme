@@ -24,9 +24,9 @@ from .utils import TangermemeWarning
 
 
 # fast=True is not attempted for a job that fast=False would finish in less
-# time than this, in seconds, because capturing the model could take longer
-# than it saves.
-_FAST_MIN_SECONDS = 10.0
+# time than this, in seconds, because capturing and checking the model could
+# take longer than it saves, and does when the check then fails.
+_FAST_MIN_SECONDS = 30.0
 
 # fast=True is used only when it takes at most this fraction of the time
 # fast=False takes on the same batch of edits.
@@ -431,9 +431,9 @@ def saturation_mutagenesis(
 	floating-point rounding rather than bit for bit.
 
 	The first batch of edits is always computed with `fast=False` and timed.
-	When the whole job would take less than ten seconds at that rate, the
-	model is not captured, because capturing it can take from a fraction of a
-	second to a few seconds, and the job continues with `fast=False`.
+	When the whole job would take less than thirty seconds at that rate, the
+	model is not captured, because capturing and checking it can take several
+	seconds, and the job continues with `fast=False`.
 	Otherwise, before the fast path is used, it is checked against
 	`fast=False` on one batch of edits from the first example, which includes
 	both ends of the edited span. When the model cannot be captured, the two
@@ -511,7 +511,7 @@ def saturation_mutagenesis(
 	fast: bool, optional
 		Whether to compute the predictions for the edited sequences with
 		fastISM, recomputing only the positions of each layer that an edit can
-		change, for a job that would take more than ten seconds otherwise. The
+		change, for a job that would take more than thirty seconds otherwise. The
 		model is captured with `torch.export` and checked against `fast=False`
 		on one batch of edits; if that fails, a `TangermemeWarning` gives the
 		reason and `fast=False` is used. Results match `fast=False` up to
