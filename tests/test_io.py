@@ -3435,7 +3435,12 @@ def test_extract_loci_fasta_alphabet_and_ignore(tmp_path):
 	with pytest.raises(ValueError, match="in the alphabet and also"):
 		extract_loci(loci, path, in_window=6, ignore=['A'])
 
-	# A non-ASCII alphabet is encoded by one_hot_encode after pyfaidx reads.
+	# A non-ASCII alphabet raises the ValueError of one_hot_encode, from a
+	# path as from a pyfaidx.Fasta object (#111).
+	with pytest.raises(ValueError, match="Character é in the alphabet is not"):
+		extract_loci(loci, path, in_window=6, alphabet=['A', 'C', 'G', 'T',
+			'Z', 'é'])
+
 	_same_as_pyfaidx_object(loci, path, in_window=6, alphabet=['A', 'C', 'G',
 		'T', 'Z', 'é'])
 
@@ -3648,12 +3653,18 @@ def test_extract_loci_fasta_unmapped(tmp_path):
 	assert "genome_unmapped.fa" not in _mapped_paths()
 
 
-@pytest.mark.parametrize("alphabet", [['A', 'C', 'G', 'T'],
-	['A', 'C', 'G', 'T', 'é']])
-def test_read_fasta_windows_names(alphabet):
+@pytest.mark.parametrize("mapped", [True, False])
+def test_read_fasta_windows_names(monkeypatch, mapped):
 	# Chromosomes given as indices into names read what the names do, from
-	# the memory map and, with an alphabet that is not ASCII, through pyfaidx.
+	# the memory map and, when the file cannot be mapped, through pyfaidx.
 	# One name is not used.
+	if not mapped:
+		def no_map(*args, **kwargs):
+			raise OSError("cannot map")
+
+		monkeypatch.setattr(tangermeme.io.mmap, "mmap", no_map)
+
+	alphabet = ['A', 'C', 'G', 'T']
 	fasta = pyfaidx.Fasta("tests/data/test.fa")
 	rng = numpy.random.default_rng(3)
 	names = ['chr4', 'chr1', 'chr3', 'chr7']
@@ -3669,7 +3680,7 @@ def test_read_fasta_windows_names(alphabet):
 
 	X = _read_fasta_windows_mmap(fasta, (codes, starts), 20, alphabet, ['N'],
 		names=names)
-	if len(alphabet) == 4:
+	if mapped:
 		numpy.testing.assert_array_equal(X, expected)
 	else:
 		assert X is None

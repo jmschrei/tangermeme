@@ -427,7 +427,20 @@ def _one_hot_encode_mapping(alphabet, ignore):
 	OR-ing the values of a sequence sets the highest bit of a row only when
 	one of its bytes maps to -2. The tables are shared between calls and
 	must not be written to.
+
+	The tables map one byte to one character, which holds only for ASCII, so
+	a character of `alphabet` or `ignore` that is not ASCII raises a
+	ValueError. Checking here rather than in one_hot_encode means the check
+	runs only when the tables are built. A call that raises is not cached,
+	so the error is raised on every call.
 	"""
+
+	for chars, name in ((alphabet, "the alphabet"),
+			(ignore, "the list of ignored characters")):
+		if isinstance(chars, str) and not chars.isascii():
+			char = next(char for char in chars if not char.isascii())
+			raise ValueError("Character {} in {} is not ASCII.".format(char,
+				name))
 
 	e = "utf8"
 	alpha_idxs = numpy.frombuffer(bytearray(alphabet, e), dtype=numpy.int8)
@@ -587,7 +600,8 @@ def one_hot_encode(
 		as the index into the returned tensor, i.e., for the alphabet ['A', 'B']
 		the returned tensor will have a 1 at index 0 if the character was 'A'.
 		A character that is in neither `alphabet` nor `ignore` raises a
-		ValueError. Default is ['A', 'C', 'G', 'T'].
+		ValueError. Every character of `alphabet` must be ASCII, and one that
+		is not raises a ValueError. Default is ['A', 'C', 'G', 'T'].
 
 	dtype : str or torch.dtype, optional
 		The data type of the returned encoding. Default is int8.
@@ -596,7 +610,8 @@ def one_hot_encode(
 		A list of characters to ignore in the sequence, meaning that no bits
 		are set to 1 in the returned one-hot encoding. Put another way, the
 		sum across characters is equal to 1 for all positions except those
-		where the original sequence is in this list. Default is ['N'].
+		where the original sequence is in this list. Every character of
+		`ignore` must be ASCII, as in `alphabet`. Default is ['N'].
 
 	n_jobs: int, optional
 		The number of threads a long sequence is encoded with, or -1 for one

@@ -111,6 +111,8 @@ utils
 
 	- ``one_hot_encode`` accepts a tuple ``alphabet``, which its signature already allowed and which raised ``TypeError: encoding without a string argument``. Its docstring no longer lists a set, whose characters have no order, and says that a character in neither ``alphabet`` nor ``ignore`` raises a ``ValueError`` rather than being ignored.
 
+	- ``one_hot_encode`` raises a ``ValueError`` when a character in ``alphabet`` or ``ignore`` is not ASCII. Since 0.2.2, characters have been looked up by their UTF-8 bytes, and each byte of such a character was treated as a character of its own. In ``alphabet``, every later character was encoded one column further right for each extra byte, whether or not the non-ASCII character was in the sequence. Where such a character was in the sequence, every later character was encoded one position further along for each extra byte. Characters moved past the end of the encoding were written out of bounds, and encoding ``'ACGTé' * 5000`` with ``ignore=['N', 'é']`` aborted Python with ``malloc(): corrupted top size``. A non-ASCII character at the end of ``alphabet``, or in ``ignore``, that is not in the sequence moved nothing and gave the right encoding, and it now raises as well. ``extract_loci`` reading a FASTA file, and the ``ersatz`` functions given a string motif, raise the same error for such an ``alphabet`` or ``ignore``. A non-ASCII character in the sequence, with ``alphabet`` and ``ignore`` ASCII, still raises the ``ValueError`` for a character in neither. The check runs only when the lookup tables for an ``alphabet`` and ``ignore`` are built. The tables are cached, so a call that reuses them runs the same code as before (#111).
+
 variant_effect
 --------------
 
