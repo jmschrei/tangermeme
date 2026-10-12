@@ -34,7 +34,7 @@ product.apply_product(func, model, X, ...)
 `func` defaults to `predict` on `ablate`, `marginalize`, `space` and the three
 `variant_effect` functions, and to `saliency` on `dependency_map` — which also
 requires that `func` return `(-1, len(alphabet), length)`, so `predict` is not a
-valid choice there; see [dependency_map.md](dependency_map.md).
+valid choice there; see `references/dependency_map.md`.
 On `product.apply_pairwise` / `apply_product` it is a
 **required first positional argument** with no default — and because of that
 position they do **not** themselves satisfy the contract; see

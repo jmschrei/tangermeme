@@ -35,11 +35,11 @@ registered. **The trade-off is the linearity assumption** — a gradient is the
 tangent at the observed sequence, so it saturates. A base the model is already
 certain about can carry a near-zero gradient despite being essential. Prefer
 `deep_lift_shap` when you can afford it; see
-[deep_lift_shap.md](deep_lift_shap.md).
+`references/deep_lift_shap.md`.
 
 `func=` here is the `predict`-style post-processing hook (pick a head, reduce a
 profile), **not** the `func(model, X)` plug-point — see
-[func-pattern.md](func-pattern.md). It runs inside the autograd graph, so it
+`references/func-pattern.md`. It runs inside the autograd graph, so it
 must be differentiable.
 
 ## dependency_map
