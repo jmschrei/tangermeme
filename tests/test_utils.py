@@ -167,6 +167,69 @@ def test_validate_input_all_zero_with_allow_N(device):
 	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1)
 
 
+def test_validate_input_ohe_values_only(device):
+	# A column of [0.5, 0.5, 0, 0] sums to 1, so only the check that every
+	# value is 0 or 1 can reject it.
+	X = random_one_hot((2, 4, 10), random_state=0).float().to(device)
+	X[0, :, 3] = torch.tensor([0.5, 0.5, 0.0, 0.0], device=device)
+
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1)
+	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1,
+		allow_N=True)
+
+	with pytest.warns(TangermemeWarning, match="one-hot encoded\\."):
+		_validate_input(X, "X", ohe=True, ohe_dim=1, only_warn=True)
+
+
+def test_validate_input_ohe_nonfinite(device):
+	X = random_one_hot((2, 4, 10), random_state=0).float().to(device)
+
+	for value in (float('nan'), float('inf'), -float('inf')):
+		X_ = X.clone()
+		X_[1, 2, 5] = value
+
+		assert_raises(ValueError, _validate_input, X_, "X", ohe=True,
+			ohe_dim=1)
+		assert_raises(ValueError, _validate_input, X_, "X", ohe=True,
+			ohe_dim=1, allow_N=True)
+
+
+def test_validate_input_ohe_dtypes(device):
+	X = random_one_hot((2, 4, 10), random_state=0).to(device)
+
+	for dtype in (torch.bool, torch.uint8, torch.int64, torch.float16,
+		torch.bfloat16):
+		_validate_input(X.type(dtype), "X", ohe=True, ohe_dim=1)
+		_validate_input(X.type(dtype), "X", ohe=True, ohe_dim=1,
+			allow_N=True)
+
+	# -0.0 compares equal to 0.
+	X_ = X.float()
+	X_[X_ == 0] = -0.0
+	_validate_input(X_, "X", ohe=True, ohe_dim=1)
+
+
+def test_validate_input_ohe_empty(device):
+	for shape in ((0, 4, 10), (2, 4, 0)):
+		X = torch.zeros(*shape, device=device)
+
+		_validate_input(X, "X", ohe=True, ohe_dim=1)
+		_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
+
+
+def test_validate_input_ohe_noncontiguous(device):
+	X = random_one_hot((2, 4, 10), random_state=0).float().to(device)
+
+	_validate_input(X.permute(0, 2, 1).contiguous().permute(0, 2, 1), "X",
+		ohe=True, ohe_dim=1)
+	_validate_input(X[:1].expand(3, -1, -1), "X", ohe=True, ohe_dim=1)
+
+	X_ = X.permute(0, 2, 1).contiguous()
+	X_[0, 3] = torch.tensor([0.5, 0.5, 0.0, 0.0], device=device)
+	assert_raises(ValueError, _validate_input, X_.permute(0, 2, 1), "X",
+		ohe=True, ohe_dim=1)
+
+
 def test_public_validate_input_wrapper(device):
 	# The public validate_input forwards to the internal helper.
 	X = random_one_hot((2, 4, 10), random_state=0).to(device)

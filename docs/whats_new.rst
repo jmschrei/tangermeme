@@ -115,6 +115,8 @@ utils
 
 	- The docstring of ``one_hot_encode`` no longer says that the sequence can be a list, and its type hint no longer allows one. A list has raised ``TypeError: encoding without a string argument`` since 0.2.2, and still does (#111).
 
+	- The check that an input is one-hot encoded, which ``validate_input`` runs with ``ohe=True`` and most functions that take sequences run on them, compares every value with 0 and 1, rather than collecting the unique values with ``torch.unique``, which sorts all of ``X``. On 1,024 hg38 sequences of 2,114bp on one CPU thread, the check took 0.023 s against 0.20 s for float32 and 0.033 s against 0.11 s for int8, and on 10,000 sequences its peak memory fell from 1,603 MB to 223 MB. Functions that run the check on every call gain the most. On 512 sequences, ``ersatz.substitute``, ``insert`` and ``delete`` took 9 ms against 93 ms, and ``gc_content`` is 9x faster. With DeepSEA Beluga on a GPU, ``marginalize`` on 128 sequences took 0.024 s against 0.056 s, ``space`` over 10 spacings 0.041 s against 0.124 s, and ``deep_lift_shap`` on 8 sequences with 20 given references each 0.074 s against 0.096 s. Which real-valued inputs pass and which raise is unchanged, including those with NaN or infinite values, booleans, half precision and empty tensors. A complex tensor, for which ``torch.unique`` raised ``NotImplementedError``, now passes the check when ``allow_N=False``.
+
 variant_effect
 --------------
 

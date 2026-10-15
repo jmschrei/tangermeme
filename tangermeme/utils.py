@@ -129,14 +129,13 @@ def _validate_input(
 			name, max_value), only_warn)
 	
 	if ohe:
-		values = torch.unique(X)
 		# No trailing period; the clauses below extend the sentence.
 		msg = "{} must be one-hot encoded".format(name)
 
-		# Values must be a subset of {0, 1}. Previously this enforced
-		# `len(unique) == 2`, which incorrectly rejected all-zero
-		# (all-N) inputs that contain only the value 0.
-		if not torch.all((values == 0) | (values == 1)):
+		# Values must be a subset of {0, 1}, so an all-zero (all-N) input
+		# passes. Compared elementwise because `torch.unique` sorts all of X,
+		# which is roughly ten times slower on a large batch.
+		if not torch.all((X == 0) | (X == 1)):
 			_warn_or_raise(ValueError, msg + ".", only_warn)
 
 		if allow_N:
