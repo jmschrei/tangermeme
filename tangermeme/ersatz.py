@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 
 import numba
 import numpy
@@ -516,32 +517,105 @@ def shuffle(
 	return torch.stack(X_shufs).permute(1, 0, 2, 3)
 
 
-params = 'void(int64, int64, int32[:], int32[:, :], int32[:], '
-params += 'int32[:, :], float32[:, :, :], int32)'
-@numba.jit(params, nopython=False, cache=True)
-def _fast_shuffle(n_shuffles, n_chars, idxs, next_idxs, next_idxs_counts, 
-	counters, shuffled_sequences, random_state):
-	"""An internal function for fast dinucleotide shuffling using numba."""
+@numba.njit(nogil=True, cache=True)
+def _fast_shuffle(idxs, n_chars, n_shuffles, random_states, shuffled):
+	"""An internal function for fast dinucleotide shuffling using numba.
 
-	numpy.random.seed(random_state)
+	Each row of `idxs` holds the character indices of one sequence. The row
+	is shuffled `n_shuffles` times into `shuffled` after the generator is
+	seeded with its own entry of `random_states`, so the shuffles of a row
+	do not depend on the other rows in the call. The GIL is released.
+	"""
 
-	for i in range(n_shuffles):
-		for char in range(n_chars):
-			n = next_idxs_counts[char]
+	n_seqs, seq_len = idxs.shape
+	if seq_len == 0:
+		return
 
-			next_idxs_ = numpy.arange(n)
-			next_idxs_[:-1] = numpy.random.permutation(n-1)  # Keep last index
-			next_idxs[char, :n] = next_idxs[char, :n][next_idxs_]
+	for k in range(n_seqs):
+		numpy.random.seed(random_states[k])
 
-		idx = 0
-		shuffled_sequences[i, idxs[idx], 0] = 1
-		for j in range(1, len(idxs)):
-			char = idxs[idx]
-			count = counters[i, char]
-			idx = next_idxs[char, count]
+		next_idxs = numpy.zeros((n_chars, seq_len), dtype=numpy.int32)
+		next_idxs_counts = numpy.zeros(n_chars, dtype=numpy.int32)
+		for j in range(seq_len - 1):
+			char = idxs[k, j]
+			next_idxs[char, next_idxs_counts[char]] = j + 1
+			next_idxs_counts[char] += 1
 
-			counters[i, char] += 1
-			shuffled_sequences[i, idxs[idx], j] = 1
+		for i in range(n_shuffles):
+			for char in range(n_chars):
+				n = next_idxs_counts[char]
+
+				next_idxs_ = numpy.arange(n)
+				next_idxs_[:-1] = numpy.random.permutation(n-1)  # Keep last index
+				next_idxs[char, :n] = next_idxs[char, :n][next_idxs_]
+
+			counters = numpy.zeros(n_chars, dtype=numpy.int32)
+			idx = 0
+			shuffled[k, i, 0] = idxs[k, idx]
+			for j in range(1, seq_len):
+				char = idxs[k, idx]
+				idx = next_idxs[char, counters[char]]
+
+				counters[char] += 1
+				shuffled[k, i, j] = idxs[k, idx]
+
+
+def _random_states(random_state, n):
+	"""The seed of each of `n` sequences: `random_state + i` for sequence i
+	when `random_state` is an integer, a new random base seed when it is
+	None, and its own entry when it holds one seed per sequence."""
+
+	if random_state is None:
+		random_state = numpy.random.randint(0, 9999999)
+
+	random_states = numpy.asarray(random_state)
+	if not numpy.issubdtype(random_states.dtype, numpy.integer):
+		raise ValueError("random_state must be None, an integer, or one "
+			"integer per sequence.")
+
+	if random_states.ndim == 0:
+		random_states = random_states + numpy.arange(n)
+	elif random_states.shape != (n,):
+		raise ValueError("random_state must hold one seed per sequence, {}, "
+			"but has shape {}.".format(n, random_states.shape))
+
+	# The kernel seeds with 32-bit integers, and a larger seed wraps around,
+	# as it did when the kernel took a single int32 seed.
+	return random_states.astype(numpy.int64).astype(numpy.int32)
+
+
+def _shuffle_characters(X, n_shuffles, random_states, verbose=False):
+	"""Dinucleotide shuffle each sequence of X, shape (n, len(alphabet),
+	length), `n_shuffles` times, seeding sequence i with random_states[i].
+
+	Returns the character index of every position of every shuffle, shape
+	(n, n_shuffles, length), on the CPU. An unknown character, an all-zero
+	column, is shuffled as a character of its own, with index len(alphabet),
+	since argmax would read it as the first character.
+	"""
+
+	idxs = X.argmax(dim=1)
+	idxs[X.sum(dim=1) == 0] = X.shape[1]
+	idxs = idxs.cpu().numpy().astype(numpy.int32)
+
+	shuffled = numpy.empty((X.shape[0], n_shuffles, X.shape[-1]),
+		dtype=numpy.int32)
+	_fast_shuffle(idxs, X.shape[1] + 1, n_shuffles, random_states, shuffled)
+	shuffled = torch.from_numpy(shuffled)
+
+	# The first and last characters are always kept. `conserved` marks the
+	# positions between them where every shuffle of a sequence agrees.
+	interior = shuffled[:, :, 1:-1]
+	conserved = (interior == interior[:, :1]).all(dim=1)
+	if verbose and conserved.any():
+		warnings.warn("At least one position in dinucleotide shuffle is "
+			"identical across all positions.", TangermemeWarning, stacklevel=3)
+
+	if n_shuffles > 1 and conserved.all(dim=1).any():
+		raise ValueError("All dinucleotide shuffles yield identical " +
+			"sequences, potentially due to a lack of diversity in sequence.")
+
+	return shuffled
 
 
 def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
@@ -586,45 +660,11 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 		The shuffled sequences.
 	"""
 
-	if random_state is None:
-		random_state = numpy.random.randint(0, 9999999)
+	shuffled = _shuffle_characters(X.unsqueeze(0), n_shuffles,
+		_random_states(random_state, 1), verbose=verbose)[0]
 
-	# argmax would read an unknown character, an all-zero column, as the
-	# first character. Shuffle it on a channel of its own, dropped below.
-	X = torch.cat([X, (X.sum(dim=0, keepdim=True) == 0).to(X.dtype)])
-	n_chars, seq_len = X.shape
-	idxs = X.argmax(axis=0).cpu().numpy().astype(numpy.int32)
-
-	next_idxs = numpy.zeros((n_chars, seq_len), dtype=numpy.int32)
-	next_idxs_counts = numpy.zeros(n_chars, dtype=numpy.int32)
-
-	for char in range(n_chars):
-		next_idxs_ = numpy.where(idxs[:-1] == char)[0]
-		n = len(next_idxs_)
-
-		next_idxs[char][:n] = next_idxs_ + 1
-		next_idxs_counts[char] = n
-
-	shuffled_sequences = numpy.zeros((n_shuffles, *X.shape), 
-		dtype=numpy.float32)
-	counters = numpy.zeros((n_shuffles, n_chars), dtype=numpy.int32)
-
-	_fast_shuffle(n_shuffles, n_chars, idxs, next_idxs, next_idxs_counts, 
-		counters, shuffled_sequences, random_state)
-
-	shuffled_sequences = torch.from_numpy(shuffled_sequences)
-
-	conserved = shuffled_sequences[:, :, 1:-1].sum(dim=0)
-	if conserved.max() == n_shuffles:
-		if verbose:
-			warnings.warn(
-				"At least one position in dinucleotide shuffle is identical "
-				"across all positions.", TangermemeWarning, stacklevel=2)
-	if conserved.max(dim=0).values.min() == n_shuffles and n_shuffles > 1:
-		raise ValueError("All dinucleotide shuffles yield identical " +
-			"sequences, potentially due to a lack of diversity in sequence.")
-
-	return shuffled_sequences[:, :-1]
+	alphabet = torch.arange(X.shape[0])
+	return (shuffled.unsqueeze(1) == alphabet[:, None]).to(torch.float32)
 
 
 def dinucleotide_shuffle(
@@ -632,7 +672,7 @@ def dinucleotide_shuffle(
 	start: int = 0,
 	end: int = -1,
 	n: int = 20,
-	random_state: int | None = None,
+	random_state: int | Sequence[int] | None = None,
 	verbose: bool = False,
 	allow_N: bool = False,
 ) -> torch.Tensor:
@@ -671,7 +711,7 @@ def dinucleotide_shuffle(
 	n: int, optional
 		The number of times to shuffle that region. Default is 20.
 
-	random_state: int or None, optional
+	random_state: int or sequence of int or None, optional
 		Whether to use a specific random seed when generating the shuffle,
 		to ensure reproducibility. If None, do not use a reproducible seed.
 		Unlike other methods, cannot be a numpy.random.RandomState object.
@@ -681,8 +721,11 @@ def dinucleotide_shuffle(
 		sizes will agree on the leading prefix of sequences (positions where
 		both batches contain that index) but diverge otherwise; this also
 		means sequence 0 of one batch is reproduced as sequence 0 of any
-		other batch that uses the same `random_state`.
-		Default is None.
+		other batch that uses the same `random_state`. A sequence of
+		`len(X)` integers instead gives each sequence its own seed, so
+		sequence i is shuffled as `dinucleotide_shuffle(X[i:i+1], ...,
+		random_state=random_state[i])` would shuffle it, whatever else is in
+		the batch. Default is None.
 
 	allow_N: bool, optional
 		Whether to accept unknown characters, encoded as all-zero columns, in
@@ -696,9 +739,7 @@ def dinucleotide_shuffle(
 	Returns
 	-------
 	shuffled_sequences: torch.tensor, shape=(-1, n, len(alphabet), length)
-		The shuffled sequences. Dtype and device match the input `X` (the
-		internal float32 buffer is cast on assignment back into a clone of
-		`X`).
+		The shuffled sequences. Dtype and device match the input `X`.
 	"""
 
 	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1,
@@ -707,19 +748,14 @@ def dinucleotide_shuffle(
 	if end < 0:
 		end = X.shape[-1] + 1 + end
 
-	if random_state is None:
-		random_state = numpy.random.randint(0, 9999999)
+	shuffled = _shuffle_characters(X[:, :, start:end], n,
+		_random_states(random_state, X.shape[0]), verbose=verbose)
 
-	X_shufs = []
-	for i in range(X.shape[0]):
-		insert_ = _dinucleotide_shuffle(X[i, :, start:end], n_shuffles=n,
-			random_state=random_state+i, verbose=verbose)
-
-		X_shuf = torch.clone(X[i:i+1]).repeat(n, 1, 1)
-		X_shuf[:, :, start:end] = insert_.to(X.device)
-		X_shufs.append(X_shuf)
-
-	return torch.stack(X_shufs)
+	X_shufs = X.unsqueeze(1).repeat(1, n, 1, 1)
+	alphabet = torch.arange(X.shape[1], device=X.device)
+	X_shufs[:, :, :, start:end] = (shuffled.to(X.device).unsqueeze(2) ==
+		alphabet[:, None]).to(X.dtype)
+	return X_shufs
 
 
 def local_dinucleotide_shuffle(
