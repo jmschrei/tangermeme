@@ -361,6 +361,21 @@ def test_deep_lift_shap_random_state(X, device):
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr2)
 
 
+def test_deep_lift_shap_random_state_references(X, device):
+	# Reference k of example e is the shuffle seeded with random_state + k,
+	# however the batches split an example's references.
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	expected = torch.stack([torch.cat([dinucleotide_shuffle(X[e:e+1], n=1,
+		random_state=5+k)[:, 0] for k in range(6)]) for e in range(len(X))])
+
+	for batch_size in 1, 4, 6, 7, 32:
+		_, refs = deep_lift_shap(model, X, n_shuffles=6, random_state=5,
+			batch_size=batch_size, return_references=True, device=device)
+		assert (refs == expected).all()
+
+
 def test_deep_lift_shap_reference_tensor(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
