@@ -913,9 +913,14 @@ def _assert_same(y, y_packed):
 			_assert_same(y_, y_packed_)
 
 
+# The dtypes a function not marked as taking a PackedSequence was given.
+_SEEN = []
+
+
 def _predict_one_hot(model, X, **kwargs):
 	# A function not marked as taking a PackedSequence gets int8 one-hot.
 	assert isinstance(X, torch.Tensor)
+	_SEEN.append(X.dtype)
 	return predict(model, X, **kwargs)
 
 
@@ -936,8 +941,10 @@ def test_marginalize_packed(X, func, device):
 		X[2] = random_one_hot((1, 4, 100), random_state=1)[0]
 
 	y = marginalize(model, X, "ACGTACGT", device=device, **kwargs)
+	_SEEN.clear()
 	y_packed = marginalize(model, PackedSequence.from_one_hot(X), "ACGTACGT",
 		device=device, **kwargs)
+	assert all(dtype == torch.int8 for dtype in _SEEN)
 	_assert_same(y.y_before, y_packed.y_before)
 	_assert_same(y.y_after, y_packed.y_after)
 

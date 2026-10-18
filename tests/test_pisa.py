@@ -1496,3 +1496,21 @@ def test_pisa_packed_soft_references(X, device):
 	assert torch.equal(X_attr_packed, X_attr)
 	assert isinstance(refs_packed, torch.Tensor)
 	assert torch.equal(refs_packed, refs)
+
+
+def test_pisa_packed_references_N(X, references, device):
+	# Packed references with unknown characters in several examples come
+	# back with each run at its own sequence.
+	torch.manual_seed(0)
+	model = FlattenDense()
+	references = references.clone()
+	references[0, 4, :, 50:53] = 0
+	references[1, 2, :, 10:15] = 0
+	refs_packed = PackedSequence.from_one_hot(references)
+
+	X_attr = pisa(model, X, references=references, device=device)
+	X_attr_packed, refs_back = pisa(model, PackedSequence.from_one_hot(X),
+		references=refs_packed, return_references=True, device=device)
+	assert torch.equal(X_attr_packed.cpu(), X_attr.cpu())
+	assert torch.equal(refs_back.data, refs_packed.data)
+	assert torch.equal(refs_back.n_runs, refs_packed.n_runs)

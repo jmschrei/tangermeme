@@ -1409,7 +1409,7 @@ def one_hot_to_fasta(
 		_check_one_batch_axis(X)
 		chars = numpy.frombuffer((''.join(X.alphabet) + 'N').encode('ascii'),
 			dtype=numpy.uint8)
-		step = max(1, 2 ** 24 // max(1, X.length))
+		step = max(1, _PACKED_CHUNK_POSITIONS // max(1, X.length))
 		sequences = (chars[codes].tobytes().decode('ascii') for start in range(
 			0, len(X), step) for codes in X[start:start+step].to_codes().numpy())
 	else:

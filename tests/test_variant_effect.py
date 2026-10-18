@@ -497,8 +497,14 @@ def _assert_same(y, y_packed):
 	assert torch.equal(y_packed, y)
 
 
+# The dtypes a function not marked as taking a PackedSequence was given.
+_SEEN = []
+
+
 def _predict_one_hot(model, X, **kwargs):
+	# A function not marked as taking a PackedSequence gets int8 one-hot.
 	assert isinstance(X, torch.Tensor)
+	_SEEN.append(X.dtype)
 	return predict(model, X, **kwargs)
 
 
@@ -513,8 +519,10 @@ def test_substitution_effect_packed(X, substitutions, func, chunk, device,
 	model = SmallDeepSEA()
 	y, y_var = substitution_effect(model, X, substitutions, func=func,
 		device=device)
+	_SEEN.clear()
 	y_packed, y_var_packed = substitution_effect(model,
 		PackedSequence.from_one_hot(X), substitutions, func=func, device=device)
+	assert all(dtype == torch.int8 for dtype in _SEEN)
 	_assert_same(y, y_packed)
 	_assert_same(y_var, y_var_packed)
 
@@ -531,9 +539,11 @@ def test_deletion_effect_packed(X_del, deletions, func, left, chunk, device,
 	model = SmallDeepSEA()
 	y, y_var = deletion_effect(model, X_del, deletions, left=left, func=func,
 		device=device)
+	_SEEN.clear()
 	y_packed, y_var_packed = deletion_effect(model,
 		PackedSequence.from_one_hot(X_del), deletions, left=left, func=func,
 		device=device)
+	assert all(dtype == torch.int8 for dtype in _SEEN)
 	_assert_same(y, y_packed)
 	_assert_same(y_var, y_var_packed)
 
@@ -550,9 +560,11 @@ def test_insertion_effect_packed(X, substitutions, func, left, chunk, device,
 	model = SmallDeepSEA()
 	y, y_var = insertion_effect(model, X.float(), substitutions, left=left,
 		func=func, device=device)
+	_SEEN.clear()
 	y_packed, y_var_packed = insertion_effect(model,
 		PackedSequence.from_one_hot(X), substitutions, left=left, func=func,
 		device=device)
+	assert all(dtype == torch.int8 for dtype in _SEEN)
 	_assert_same(y, y_packed)
 	_assert_same(y_var, y_var_packed)
 

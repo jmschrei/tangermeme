@@ -4379,6 +4379,23 @@ def test_extract_loci_packed_raises():
 			alphabet=list("ACGTN"), ignore=[], return_packed=True)
 
 
+@pytest.mark.parametrize("chunk", [1, 250, 10 ** 6])
+def test_one_hot_to_fasta_packed_chunks_alphabet(chunk, tmp_path, monkeypatch):
+	# A PackedSequence is written a chunk of sequences at a time, with its
+	# own alphabet: every chunk is written, and in order.
+	monkeypatch.setattr("tangermeme.io._PACKED_CHUNK_POSITIONS", chunk)
+	X = tangermeme.utils.random_one_hot((7, 4, 100), random_state=2)
+	X[3, :, 10:20] = 0
+
+	one_hot_to_fasta(X, str(tmp_path / "one_hot.fa"), alphabet=['A', 'C',
+		'G', 'U'])
+	one_hot_to_fasta(PackedSequence.from_one_hot(X, alphabet=('A', 'C', 'G',
+		'U')), str(tmp_path / "packed.fa"))
+	assert (tmp_path / "packed.fa").read_text() == (tmp_path /
+		"one_hot.fa").read_text()
+	assert (tmp_path / "packed.fa").read_text().count(">") == 7
+
+
 def test_one_hot_to_fasta_packed_raises_batch_axes(tmp_path):
 	X = PackedSequence.from_one_hot(tangermeme.utils.random_one_hot((6, 4, 40),
 		random_state=1)).reshape(2, 3)

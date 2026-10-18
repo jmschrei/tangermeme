@@ -797,3 +797,26 @@ def test_space_packed(X, device):
 		device=device)
 	assert torch.equal(y_packed.y_before, y.y_before)
 	assert torch.equal(y_packed.y_afters, y.y_afters)
+
+
+def test_space_packed_func_int8(X, device):
+	# A function of the user's is given the int8 one-hot encoding of the
+	# packed copies that space makes.
+	from tangermeme.predict import predict
+
+	seen = []
+
+	def func(model, X, **kwargs):
+		seen.append(X.dtype)
+		return predict(model, X, **kwargs)
+
+	torch.manual_seed(0)
+	model = FlattenDense()
+	y = space(model, X, ["ACG", "TT"], [[2], [5]], func=func, device=device)
+	seen.clear()
+	y_packed = space(model, PackedSequence.from_one_hot(X), ["ACG", "TT"],
+		[[2], [5]], func=func, device=device)
+
+	assert len(seen) > 0 and all(dtype == torch.int8 for dtype in seen)
+	assert torch.equal(y_packed.y_before, y.y_before)
+	assert torch.equal(y_packed.y_afters, y.y_afters)

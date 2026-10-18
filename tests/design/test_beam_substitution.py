@@ -174,6 +174,8 @@ def test_beam_substitution_packed(X, motifs, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [[10]]
+	X = X.clone()
+	X[..., 5:9] = 0
 
 	X_hat = beam_substitution(model, X, y, motifs, device=device, max_iter=2)
 	X_hat_packed = beam_substitution(model, PackedSequence.from_one_hot(X), y, motifs,

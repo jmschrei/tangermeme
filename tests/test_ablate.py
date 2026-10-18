@@ -1233,14 +1233,20 @@ def _assert_same(y, y_packed):
 			_assert_same(y_, y_packed_)
 
 
+# The dtypes a function not marked as taking a PackedSequence was given.
+_SEEN = []
+
+
 def _shuffle_one_hot(X, **kwargs):
 	# A shuffle not marked as taking a PackedSequence gets int8 one-hot.
 	assert isinstance(X, torch.Tensor)
+	_SEEN.append(X.dtype)
 	return shuffle(X, **kwargs)
 
 
 def _predict_one_hot(model, X, **kwargs):
 	assert isinstance(X, torch.Tensor)
+	_SEEN.append(X.dtype)
 	return predict(model, X, **kwargs)
 
 
@@ -1253,8 +1259,10 @@ def test_ablate_packed(X, shuffle_fn, func, device):
 
 	y = ablate(model, X, 20, 60, n=4, shuffle_fn=shuffle_fn, func=func,
 		random_state=0, device=device)
+	_SEEN.clear()
 	y_packed = ablate(model, PackedSequence.from_one_hot(X), 20, 60, n=4,
 		shuffle_fn=shuffle_fn, func=func, random_state=0, device=device)
+	assert all(dtype == torch.int8 for dtype in _SEEN)
 	_assert_same(y.y_before, y_packed.y_before)
 	_assert_same(y.y_after, y_packed.y_after)
 
@@ -1270,3 +1278,24 @@ def test_ablate_annotations_packed(X, device):
 		annotations, n=3, random_state=0, device=device)
 	_assert_same(y.y_befores, y_packed.y_befores)
 	_assert_same(y.y_afters, y_packed.y_afters)
+
+
+@pytest.mark.parametrize("shuffle_fn", ["shuffle", "dinucleotide_shuffle"])
+def test_ablate_packed_N(X, shuffle_fn, device):
+	# Unknown characters inside and outside the shuffled region.
+	import functools
+
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X = X.clone()
+	X[0, :, 30:35] = 0
+	X[3, :, 70:75] = 0
+	shuffle_fn = shuffle if shuffle_fn == "shuffle" else functools.partial(
+		dinucleotide_shuffle, allow_N=True)
+
+	y = ablate(model, X, 20, 60, n=4, shuffle_fn=shuffle_fn, random_state=0,
+		device=device)
+	y_packed = ablate(model, PackedSequence.from_one_hot(X), 20, 60, n=4,
+		shuffle_fn=shuffle_fn, random_state=0, device=device)
+	_assert_same(y.y_before, y_packed.y_before)
+	_assert_same(y.y_after, y_packed.y_after)

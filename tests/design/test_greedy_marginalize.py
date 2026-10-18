@@ -48,6 +48,9 @@ def test_greedy_marginalize_packed(X_marg, motifs, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [[10.0]]
+	X_marg = X_marg.clone()
+	X_marg[0, :, 5:9] = 0
+	X_marg[-1, :, -3:] = 0
 
 	X_hat = greedy_marginalize(model, X_marg, y, motifs, device=device,
 		max_iter=2)

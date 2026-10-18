@@ -503,3 +503,22 @@ def test_dependency_map_packed_raises(X, device):
 		device=device)
 	assert_raises(ValueError, dependency_map, model, X_packed,
 		args=(torch.zeros(3, 1),), device=device)
+
+
+def test_dependency_map_packed_func_int8(X, device):
+	# A function of the user's is given int8 one-hot sequences.
+	seen = []
+
+	def func(model, X, **kwargs):
+		seen.append(X.dtype)
+		return saliency(model, X, **kwargs)
+
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	dmap = dependency_map(model, X, func=func, device=device)
+	seen.clear()
+	dmap_packed = dependency_map(model, PackedSequence.from_one_hot(X),
+		func=func, device=device)
+
+	assert len(seen) > 0 and all(dtype == torch.int8 for dtype in seen)
+	assert torch.equal(dmap_packed, dmap)

@@ -953,3 +953,24 @@ def test_apply_packed_raises_batch_axes():
 
 	with pytest.raises(ValueError, match="must have shape"):
 		apply_product(predict, model, X, args=(alpha, beta), device='cpu')
+
+
+def test_apply_pairwise_packed_func_int8(X, alpha, device):
+	# A function of the user's is given the int8 one-hot encoding of each
+	# packed batch.
+	seen = []
+
+	def func(model, X, **kwargs):
+		seen.append(X.dtype)
+		return predict(model, X, **kwargs)
+
+	torch.manual_seed(0)
+	model = FlattenDense()
+	y = apply_pairwise(func, model, X[:5], args=(alpha[:5],), batch_size=3,
+		device=device)
+	seen.clear()
+	y_packed = apply_pairwise(func, model, PackedSequence.from_one_hot(X[:5]),
+		args=(alpha[:5],), batch_size=3, device=device)
+
+	assert len(seen) > 0 and all(dtype == torch.int8 for dtype in seen)
+	assert torch.equal(y_packed, y)

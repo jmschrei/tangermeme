@@ -1823,6 +1823,24 @@ def test_packed_sequence_reshape():
 	assert_raises(RuntimeError, X_packed.reshape, 4)
 
 
+def _is_mapped(tensor, path):
+	# Whether the memory of `tensor` lies in a mapping of the file `path`,
+	# from /proc/self/maps, which is Linux only.
+	if not os.path.exists("/proc/self/maps"):
+		pytest.skip("needs /proc/self/maps")
+
+	address, path = tensor.data_ptr(), os.path.realpath(path)
+	with open("/proc/self/maps") as infile:
+		for line in infile:
+			fields = line.split(maxsplit=5)
+			start, end = (int(x, 16) for x in fields[0].split("-"))
+			if (start <= address < end and len(fields) == 6 and
+				fields[5].strip() == path):
+				return True
+
+	return False
+
+
 @pytest.mark.parametrize("mmap", [False, True])
 def test_packed_sequence_save_load(tmp_path, mmap):
 	X = _packed_one_hot((3, 2, 4, 21))
@@ -1832,6 +1850,7 @@ def test_packed_sequence_save_load(tmp_path, mmap):
 		'n_runs.npy']
 
 	X_load = PackedSequence.load(tmp_path / "packed", mmap=mmap)
+	assert _is_mapped(X_load.data, tmp_path / "packed" / "data.npy") == mmap
 	assert X_load.length == 21
 	assert X_load.alphabet == ('A', 'C', 'G', 'U')
 	assert torch.equal(X_load.data, X_packed.data)
@@ -2066,6 +2085,17 @@ def test_gc_content_packed():
 	assert gc_packed[4] == 0
 
 
+def test_gc_content_packed_alphabet():
+	# A PackedSequence is counted with its own alphabet, here one in which G
+	# and C are the last two characters.
+	X = _packed_one_hot((6, 4, 50))
+	X_packed = PackedSequence.from_one_hot(X, alphabet=('A', 'T', 'C', 'G'))
+
+	gc = gc_content(X, alphabet=['A', 'T', 'C', 'G'])
+	assert torch.equal(gc_content(X_packed), gc)
+	assert not torch.equal(gc, gc_content(X))
+
+
 def test_characters_packed():
 	X = one_hot_encode('ACGNNTGA')
 	X_packed = PackedSequence.from_one_hot(X)
@@ -2093,6 +2123,27 @@ def test_reverse_complement_packed(shape):
 	assert torch.equal(reverse_complement(X_rc).to_one_hot(), X)
 
 	assert_raises(ValueError, reverse_complement, X_packed, allow_N=False)
+
+
+def test_reverse_complement_packed_alphabet():
+	# A PackedSequence is complemented with `complement_map` over its own
+	# alphabet, here one whose complements are not its reverse.
+	alphabet = ('A', 'T', 'C', 'G')
+	complement_map = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
+	X = _packed_one_hot((5, 4, 37))
+	X_packed = PackedSequence.from_one_hot(X, alphabet=alphabet)
+
+	X_rc = reverse_complement(X_packed, complement_map=complement_map)
+	X_ref = torch.stack([reverse_complement(x, complement_map=complement_map)
+		for x in X])
+	assert X_rc.alphabet == alphabet
+	assert torch.equal(X_rc.to_one_hot(), X_ref)
+
+	rna_map = {'A': 'U', 'C': 'G', 'G': 'C', 'U': 'A'}
+	X_rna = PackedSequence.from_one_hot(X, alphabet=('A', 'C', 'G', 'U'))
+	assert torch.equal(reverse_complement(X_rna, complement_map=rna_map
+		).to_one_hot(), torch.stack([reverse_complement(x,
+		complement_map=rna_map) for x in X]))
 
 
 def test_chunk_packed():
