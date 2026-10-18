@@ -6,8 +6,8 @@ Release History
 ===============
 
 
-Version 1.5.1 (unreleased)
-==========================
+Unreleased
+==========
 
 Claude Code skill
 -----------------
