@@ -49,7 +49,11 @@ make them deterministic (required when capturing regression values). For compari
 attributions **across tasks or models**, holding `random_state` *and* `n_shuffles`
 fixed is mandatory — otherwise each call attributes against different backgrounds
 and the differences you see are noise, not signal (see
-`references/comparing-models.md`). A custom `references=` callable has the
+`references/comparing-models.md`). `random_state=r` seeds reference `k` of every
+example with `r + k`, so the references of a seeded call can be precomputed with
+`dinucleotide_shuffle`, whose `random_state` also takes one seed per sequence:
+`torch.stack([dinucleotide_shuffle(X, n=1, random_state=[r + k] * len(X))[:, 0]
+for k in range(n_shuffles)], dim=1)`. A custom `references=` callable has the
 signature `f(X, n, random_state) -> (n_examples, n, len(alphabet), length)`; if you
 only shuffle a sub-span, attributions are exactly `0` outside it — don't interpret
 those positions.
