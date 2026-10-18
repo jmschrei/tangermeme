@@ -1599,12 +1599,15 @@ class PackedSequence:
 	selects along those axes and returns a PackedSequence, so a slice of a
 	large set is decoded without decoding the rest. A PackedSequence holds
 	only hard one-hot encodings: soft encodings and PWMs cannot be packed.
+	Its bytes stay on the CPU, and `to_one_hot` and `to_codes` decode them
+	onto any device.
 
 
 	Parameters
 	----------
 	data: torch.Tensor, dtype=torch.uint8, shape=(..., ceil(length / 4))
-		The packed bytes of each sequence, after any number of batch axes.
+		The packed bytes of each sequence, after any number of batch axes,
+		on the CPU.
 
 	length: int
 		The number of positions in each sequence.
@@ -1633,6 +1636,11 @@ class PackedSequence:
 
 		if data.ndim == 0:
 			raise ValueError("data must have a last axis of packed bytes.")
+
+		if data.device.type != 'cpu':
+			raise ValueError("data must be on the CPU, where a PackedSequence "
+				"keeps its bytes; decode it onto a device with to_one_hot or "
+				"to_codes.")
 
 		length = int(length)
 		if length < 0 or data.shape[-1] != (length + 3) // 4:
@@ -1705,7 +1713,7 @@ class PackedSequence:
 
 	@property
 	def device(self) -> torch.device:
-		"""The device the packed bytes are on."""
+		"""The device the packed bytes are on, which is the CPU."""
 		return self.data.device
 
 	@property
@@ -1911,8 +1919,8 @@ class PackedSequence:
 		device: str, torch.device or None, optional
 			The device to decode on. The packed bytes and the runs of
 			unknown characters are moved there first, so the decoded tensor
-			is built on the device. If None, decode on the device of `data`.
-			Default is None.
+			is built on the device. If None, decode on the CPU. Default is
+			None.
 
 
 		Returns
@@ -1965,8 +1973,8 @@ class PackedSequence:
 		device: str, torch.device or None, optional
 			The device to decode on. The packed bytes and the runs of
 			unknown characters are moved there first, so the decoded tensor
-			is built on the device. If None, decode on the device of `data`.
-			Default is None.
+			is built on the device. If None, decode on the CPU. Default is
+			None.
 
 
 		Returns

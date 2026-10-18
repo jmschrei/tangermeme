@@ -1757,6 +1757,17 @@ def test_packed_sequence_device(device):
 	assert X_packed.to_codes(device=device).device.type == device
 
 
+def test_packed_sequence_bytes_on_cpu(cuda_device):
+	# A PackedSequence keeps its bytes on the CPU and is decoded onto a
+	# device with to_one_hot or to_codes, so bytes on another device raise.
+	X_packed = PackedSequence.from_one_hot(_packed_one_hot((5, 4, 50)))
+	assert X_packed.device.type == 'cpu'
+
+	with pytest.raises(ValueError, match="CPU"):
+		PackedSequence(X_packed.data.to(cuda_device), X_packed.length,
+			X_packed.n_runs)
+
+
 def test_packed_sequence_alphabet():
 	X = _packed_one_hot((3, 4, 20))
 	X_packed = PackedSequence.from_one_hot(X, alphabet=['A', 'C', 'G', 'U'])
