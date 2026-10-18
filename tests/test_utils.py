@@ -4,6 +4,7 @@
 import os
 import json
 import math
+import functools
 
 import numpy
 import numba
@@ -33,6 +34,9 @@ from tangermeme.utils import unchunk
 from tangermeme.utils import extract_signal
 from tangermeme.utils import pwm_consensus
 from tangermeme.utils import PackedSequence
+from tangermeme.utils import _accepts_packed
+from tangermeme.utils import _for_func
+from tangermeme.predict import predict
 from tangermeme.utils import example_to_fasta_coords
 
 from numpy.testing import assert_raises
@@ -1969,3 +1973,43 @@ def test_packed_sequence_getitem_view():
 	# A slice of the bytes is a view, as it is for a tensor.
 	X_packed = PackedSequence.from_one_hot(_packed_one_hot((6, 4, 23)))
 	assert X_packed[1:4].data.data_ptr() == X_packed.data[1].data_ptr()
+
+
+def test_validate_input_packed():
+	X_packed = PackedSequence.from_one_hot(_packed_one_hot((3, 4, 20)))
+	assert validate_input(X_packed, "X", shape=(-1, 4, -1), ohe=True,
+		allow_N=True) is X_packed
+	assert validate_input(X_packed, "X", min_value=0, max_value=1) is X_packed
+
+	assert_raises(ValueError, validate_input, X_packed, "X", shape=(-1, 5, -1))
+	assert_raises(ValueError, validate_input, X_packed, "X", shape=(-1, -1))
+	assert_raises(ValueError, validate_input, X_packed, "X",
+		dtype=torch.float32)
+	assert_raises(ValueError, validate_input, X_packed, "X", min_value=0.5)
+	assert_raises(ValueError, validate_input, X_packed, "X", max_value=0.5)
+
+	with pytest.raises(ValueError, match="unknown characters"):
+		validate_input(X_packed, "X", ohe=True)
+
+	with pytest.warns(TangermemeWarning, match="unknown characters"):
+		validate_input(X_packed, "X", ohe=True, only_warn=True)
+
+	X_no_N = PackedSequence.from_one_hot(random_one_hot((3, 4, 20),
+		random_state=0))
+	assert validate_input(X_no_N, "X", ohe=True) is X_no_N
+
+
+def test_for_func():
+	X = _packed_one_hot((3, 4, 20))
+	X_packed = PackedSequence.from_one_hot(X)
+
+	marked = _accepts_packed(lambda model, X: X)
+	assert _for_func(X_packed, marked) is X_packed
+	assert _for_func(X_packed, functools.partial(functools.partial(marked, 1)
+		)) is X_packed
+	assert _for_func(X_packed, predict) is X_packed
+
+	X_decoded = _for_func(X_packed, lambda model, X: X)
+	assert X_decoded.dtype == torch.int8
+	assert torch.equal(X_decoded, X)
+	assert _for_func(X, marked) is X

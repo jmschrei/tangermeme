@@ -12,11 +12,14 @@ import torch
 from tqdm import trange
 
 from ._compat import _autocast_supported, _preserve_model_state, _resolve_device
+from .utils import _accepts_packed
+from .utils import PackedSequence
 
 
+@_accepts_packed
 def predict(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	args: Sequence[torch.Tensor] | None = None,
 	func: Callable[..., Any] | None = None,
 	batch_size: int = 32,
@@ -48,8 +51,10 @@ def predict(
 	model: torch.nn.Module
 		The PyTorch model to use to make predictions.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to make predictions for.
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
+		A one-hot encoded set of sequences to make predictions for, or a
+		PackedSequence with one batch axis, of which each batch is decoded on
+		`device` in `dtype`.
 
 	args: tuple or list or None, optional
 		An optional set of additional arguments to pass into the model. If
@@ -124,7 +129,10 @@ def predict(
 
 		for start in trange(0, X.shape[0], batch_size, disable=not verbose):
 			end = start + batch_size
-			X_ = X[start:end].type(dtype).to(device)
+			if isinstance(X, PackedSequence):
+				X_ = X[start:end].to_one_hot(dtype=dtype, device=device)
+			else:
+				X_ = X[start:end].type(dtype).to(device)
 
 			if X_.shape[0] == 0:
 				continue

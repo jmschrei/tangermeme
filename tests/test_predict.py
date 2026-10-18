@@ -7,6 +7,7 @@ import pytest
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
 
 from tangermeme.predict import predict
 
@@ -1066,3 +1067,93 @@ def test_predict_convdense_returns_list(X, device):
 
 	assert isinstance(y, list)
 	assert len(y) == 2
+
+
+###
+# A PackedSequence is decoded a batch at a time and gives the predictions of
+# its one-hot encoding.
+
+
+def _with_N(X):
+	X = X.clone()
+	X[0, :, :5] = 0
+	X[3, :, 40:47] = 0
+	X[63, :, -1] = 0
+	return X
+
+
+def _assert_same(y, y_packed):
+	if isinstance(y, torch.Tensor):
+		assert y_packed.dtype == y.dtype
+		assert torch.equal(y_packed, y)
+	else:
+		assert len(y_packed) == len(y)
+		for y_, y_packed_ in zip(y, y_packed):
+			_assert_same(y_, y_packed_)
+
+
+@pytest.mark.parametrize("model_class", [SumModel, FlattenDense, Conv,
+	ConvDense, DilatedConv, Transformer, ConvBatchNorm])
+def test_predict_packed(X, model_class, device):
+	torch.manual_seed(0)
+	model = model_class()
+	X = _with_N(X)
+
+	y = predict(model, X, batch_size=8, device=device)
+	y_packed = predict(model, PackedSequence.from_one_hot(X), batch_size=8,
+		device=device)
+	_assert_same(y, y_packed)
+
+
+@pytest.mark.parametrize("batch_size", [1, 7, 64, 100])
+def test_predict_packed_batch_size(X, batch_size, device):
+	torch.manual_seed(0)
+	model = ConvDense()
+	X = _with_N(X)
+
+	y = predict(model, X, batch_size=batch_size, device=device)
+	y_packed = predict(model, PackedSequence.from_one_hot(X),
+		batch_size=batch_size, device=device)
+	_assert_same(y, y_packed)
+
+
+def test_predict_packed_args_func(X, alpha, beta, device):
+	torch.manual_seed(0)
+	model = MultiInputMultiOutput()
+	X_packed = PackedSequence.from_one_hot(X)
+
+	y = predict(model, X, args=(alpha, beta), batch_size=8, device=device,
+		func=lambda y: [y_ * 2 for y_ in y])
+	y_packed = predict(model, X_packed, args=(alpha, beta), batch_size=8,
+		device=device, func=lambda y: [y_ * 2 for y_ in y])
+	_assert_same(y, y_packed)
+
+
+def test_predict_packed_fp64(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense().double()
+
+	y = predict(model, X.double(), batch_size=8, device=device)
+	y_packed = predict(model, PackedSequence.from_one_hot(X), batch_size=8,
+		device=device)
+	assert y.dtype == torch.float64
+	_assert_same(y, y_packed)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_predict_packed_16bit(X, dtype, cuda_device):
+	torch.manual_seed(0)
+	model = ConvDense()
+
+	y = predict(model, X, batch_size=8, dtype=dtype, device=cuda_device)
+	y_packed = predict(model, PackedSequence.from_one_hot(X), batch_size=8,
+		dtype=dtype, device=cuda_device)
+	_assert_same(y, y_packed)
+
+
+def test_predict_packed_raises(X, device):
+	model = FlattenDense()
+	X_packed = PackedSequence.from_one_hot(X)
+	assert_raises(ValueError, predict, model, X_packed[:0], device=device)
+	assert_raises(ValueError, predict, model, X_packed, args=(X[:5],),
+		device=device)
