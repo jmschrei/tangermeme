@@ -1278,21 +1278,46 @@ def random_one_hot(
 		raise ValueError("return_packed=True needs an alphabet of four "
 			"characters, but shape has {}.".format(shape[1]))
 
-	codes = _random_codes(shape, probs, random_state)
+	if not isinstance(random_state, numpy.random.RandomState):
+		random_state = numpy.random.RandomState(random_state)
+
+	rows = _random_code_rows(shape, probs, random_state)
 	if return_packed:
-		return PackedSequence.from_codes(torch.from_numpy(codes))
+		# Draw and pack a chunk of sequences at a time, so that only the
+		# packed bytes of all of them are held.
+		step = max(1, _RANDOM_CHUNK_POSITIONS // max(1, shape[2]))
+		chunks = []
+		for start in range(0, shape[0], step):
+			codes = numpy.empty((min(step, shape[0] - start), shape[2]),
+				dtype=numpy.uint8)
+			for j in range(codes.shape[0]):
+				codes[j] = next(rows)
+
+			chunks.append(PackedSequence.from_codes(torch.from_numpy(codes)))
+
+		if len(chunks) == 0:
+			return PackedSequence.from_codes(torch.empty((0, shape[2]),
+				dtype=torch.uint8))
+
+		return chunks[0] if len(chunks) == 1 else _cat_packed(chunks)
 
 	ohe = numpy.zeros(shape, dtype=dtype)
-	for i in range(ohe.shape[0]):
-		ohe[i, codes[i], numpy.arange(shape[2])] = 1 
+	positions = numpy.arange(shape[2])
+	for i, choices in enumerate(rows):
+		ohe[i, choices, positions] = 1 
 
 	return torch.from_numpy(ohe)
 
 
-def _random_codes(shape, probs, random_state):
+# The positions random_one_hot draws and packs at a time under
+# return_packed=True.
+_RANDOM_CHUNK_POSITIONS = 2 ** 24
+
+
+def _random_code_rows(shape, probs, random_state):
 	"""Draw the character index of every position of `shape[0]` sequences
-	of length `shape[2]` over `shape[1]` characters, one sequence at a time
-	from `random_state`, as `random_one_hot` does."""
+	of length `shape[2]` over `shape[1]` characters, yielding one sequence
+	at a time, in the order `random_one_hot` draws them."""
 
 	if not isinstance(random_state, numpy.random.RandomState):
 		random_state = numpy.random.RandomState(random_state)
@@ -1300,7 +1325,6 @@ def _random_codes(shape, probs, random_state):
 	if isinstance(probs, list):
 		probs = numpy.array(probs)
 
-	codes = numpy.empty((shape[0], shape[2]), dtype=numpy.int64)
 	for i in range(shape[0]):
 		if probs is None:
 			probs_ = None
@@ -1311,7 +1335,17 @@ def _random_codes(shape, probs, random_state):
 		else:
 			probs_ = probs[i] 
 
-		codes[i] = random_state.choice(shape[1], size=shape[2], p=probs_)
+		yield random_state.choice(shape[1], size=shape[2], p=probs_)
+
+
+def _random_codes(shape, probs, random_state):
+	"""The draws of `_random_code_rows` as one array of shape
+	(shape[0], shape[2]), in uint8 when the characters fit."""
+
+	codes = numpy.empty((shape[0], shape[2]), dtype=numpy.uint8 if
+		shape[1] <= 256 else numpy.int64)
+	for i, row in enumerate(_random_code_rows(shape, probs, random_state)):
+		codes[i] = row
 
 	return codes
 

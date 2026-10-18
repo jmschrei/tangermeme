@@ -2102,6 +2102,25 @@ def test_one_hot_encode_packed_raises():
 		one_hot_encode("ACGT", alphabet=list("ACGTU"), return_packed=True)
 
 
+@pytest.mark.parametrize("chunk", [1, 99, 100, 10 ** 6])
+def test_random_one_hot_packed_chunks(chunk, monkeypatch):
+	# With return_packed=True the sequences are drawn and packed a chunk at
+	# a time, which gives the packed encoding of the one-hot draws whatever
+	# the chunk size, including chunks of one sequence and of all of them.
+	monkeypatch.setattr("tangermeme.utils._RANDOM_CHUNK_POSITIONS", chunk)
+	probs = numpy.random.RandomState(0).dirichlet(numpy.ones(4), size=10)
+
+	for kwargs in ({}, {"probs": probs}):
+		X = random_one_hot((10, 4, 50), random_state=3, **kwargs)
+		X_packed = random_one_hot((10, 4, 50), random_state=3,
+			return_packed=True, **kwargs)
+		Y = PackedSequence.from_one_hot(X)
+		assert torch.equal(X_packed.data, Y.data)
+		assert torch.equal(X_packed.n_runs, Y.n_runs)
+
+	assert random_one_hot((0, 4, 50), return_packed=True).shape == (0, 4, 50)
+
+
 @pytest.mark.parametrize("probs", [None, [[0.5, 0.25, 0.125, 0.125]],
 	"per-sequence"])
 def test_random_one_hot_packed(probs):
