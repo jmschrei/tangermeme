@@ -124,6 +124,28 @@ def test_gkmers_min_k_lt_max_k(X):
 # A PackedSequence gives the counts of its one-hot encoding.
 
 
+@pytest.mark.parametrize("k, length", [(1, 60), (2, 60), (3, 60), (5, 60),
+	(7, 60), (7, 7)])
+def test_kmers_packed_codes(k, length, monkeypatch):
+	# The k-mers of a PackedSequence are read from its character indices,
+	# without decoding the one-hot encoding, and equal those of the one-hot
+	# encoding, with unknown characters at the start, the end and between,
+	# also when k is the length of the sequences.
+	X = random_one_hot((6, 4, length), random_state=1)
+	X[0, :, :3] = 0
+	X[2, :, 4:6] = 0
+	X[4, :, -2:] = 0
+	X[5] = 0
+	X_kmers = kmers(X, k)
+	X_packed = PackedSequence.from_one_hot(X)
+
+	def fail(*args, **kwargs):
+		raise AssertionError("decoded the one-hot encoding")
+
+	monkeypatch.setattr(PackedSequence, "to_one_hot", fail)
+	assert torch.equal(kmers(X_packed, k), X_kmers)
+
+
 def test_kmers_packed():
 	X = random_one_hot((5, 4, 60), random_state=0)
 	X[1, :, 10:14] = 0
