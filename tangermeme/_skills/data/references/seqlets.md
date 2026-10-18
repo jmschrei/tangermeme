@@ -32,7 +32,8 @@ seqlets = recursive_seqlets(attr_sums, threshold=0.01, additional_flanks=0)
   so the right value **depends on how many examples/positions you pass**. Large runs
   often use `0.001`.
 - `min_seqlet_len` (default 4) is also the smallest span the recursive property must
-  hold over — **don't set it to 1**. `max_seqlet_len` (default 25) raises cost.
+  hold over. At 1, every single position inside a seqlet must pass the threshold on
+  its own, so one weak base splits a motif. `max_seqlet_len` (default 25) raises cost.
 - `additional_flanks` pads the reported `start`/`end` **and** the reported
   `attribution` is re-summed over the padded span, so it grows with the flanks. The
   `p-value` is unchanged — it is computed on the un-padded core. Flanks may overlap
