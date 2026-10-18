@@ -2165,6 +2165,24 @@ def _map_rows(X, fn, length, alphabet):
 	return _cat_packed(parts)
 
 
+def _keep_references(kept, references, packed):
+	"""Add a batch of references to `kept`, packed while `packed` is True,
+	and return whether to keep packing. References that are not one-hot,
+	which a callable can return, cannot be packed: the batches packed so far
+	are then decoded, and they and later batches are kept as tensors."""
+
+	if packed:
+		try:
+			kept.append(PackedSequence.from_one_hot(references))
+			return True
+		except ValueError:
+			kept[:] = [X.to_one_hot(dtype=references.dtype,
+				device=references.device) for X in kept]
+
+	kept.append(references)
+	return False
+
+
 def _position_one_hot(X, row, start, end, dtype=torch.int8):
 	"""The one-hot encoding of positions `start` to `end`, with Python's slice
 	bounds, of sequence `row` of the PackedSequence X, which has one batch

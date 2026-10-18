@@ -1514,3 +1514,32 @@ def test_pisa_packed_references_N(X, references, device):
 	assert torch.equal(X_attr_packed.cpu(), X_attr.cpu())
 	assert torch.equal(refs_back.data, refs_packed.data)
 	assert torch.equal(refs_back.n_runs, refs_packed.n_runs)
+
+
+class _MixedReferences:
+	# One-hot references for the first call and uniform ones after it.
+	def __init__(self):
+		self.calls = 0
+
+	def __call__(self, X, n=1, random_state=None):
+		self.calls += 1
+		if self.calls == 1:
+			return shuffle(X, n=n, random_state=0)
+		return _soft_references(X, n=n)
+
+
+def test_pisa_packed_mixed_references(X, device):
+	# When a later batch of references cannot be packed, the earlier ones are
+	# decoded and all of them come back as the tensor a one-hot X gives.
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	kwargs = dict(n_shuffles=3, return_references=True, random_state=0,
+		device=device)
+
+	X_attr, refs = pisa(model, X, references=_MixedReferences(), **kwargs)
+	X_attr_packed, refs_packed = pisa(model, PackedSequence.from_one_hot(X),
+		references=_MixedReferences(), **kwargs)
+
+	assert torch.equal(X_attr_packed, X_attr)
+	assert isinstance(refs_packed, torch.Tensor)
+	assert torch.equal(refs_packed, refs)

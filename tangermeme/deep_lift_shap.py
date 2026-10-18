@@ -17,6 +17,7 @@ from .ersatz import dinucleotide_shuffle
 from .results import AttributionReferencesResult
 from .utils import _accepts_packed
 from .utils import _cat_packed
+from .utils import _keep_references
 from .utils import _validate_input
 from .utils import PackedSequence
 from ._deep_lift_utils import _build_nonlinear_ops
@@ -833,32 +834,18 @@ def deep_lift_shap(
 					attr_ = attr_[n_shuffles:]
 					z += 1
 
-				if return_references and return_packed:
-					try:
-						references_.append(PackedSequence.from_one_hot(
-							_references.detach().cpu()))
-					except ValueError:
-						# References that are not one-hot, from a callable,
-						# cannot be packed, and come back as a tensor.
-						if len(references_) > 0:
-							raise
-
-						return_packed = False
-
-				if return_references and not return_packed:
-					references_.extend(list(_references.cpu().detach()))
+				if return_references:
+					return_packed = _keep_references(references_,
+						_references.detach().cpu(), return_packed)
 
 				Xi, rj = [], []
 
 		attributions = torch.stack(attributions)
 
-		if return_references and return_packed:
-			references_ = _cat_packed(references_).reshape(X.shape[0], n_shuffles)
-			return AttributionReferencesResult(
-				attributions=attributions, references=references_)
-		elif return_references:
-			references_ = torch.cat(references_).reshape(X.shape[0], n_shuffles,
-				*X.shape[1:])
+		if return_references:
+			references_ = (_cat_packed(references_).reshape(X.shape[0],
+				n_shuffles) if return_packed else torch.cat(references_).reshape(
+				X.shape[0], n_shuffles, *X.shape[1:]))
 			return AttributionReferencesResult(
 				attributions=attributions, references=references_)
 		return attributions
@@ -1017,20 +1004,9 @@ def _captum_deep_lift_shap(
 			if not hypothetical:
 				attr = (attr * _X)
 			
-			if return_references and return_packed:
-				try:
-					references_.append(PackedSequence.from_one_hot(
-						_references.unsqueeze(0).cpu()))
-				except ValueError:
-					# References that are not one-hot, from a callable, cannot
-					# be packed, and come back as a tensor.
-					if len(references_) > 0:
-						raise
-
-					return_packed = False
-
-			if return_references and not return_packed:
-				references_.append(_references.unsqueeze(0).cpu())
+			if return_references:
+				return_packed = _keep_references(references_,
+					_references.unsqueeze(0).cpu(), return_packed)
 
 			attributions.append(attr.cpu())
 

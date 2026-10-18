@@ -4704,3 +4704,42 @@ def test_deep_lift_shap_packed_soft_references(X, func, device):
 	assert isinstance(refs_packed, torch.Tensor)
 	assert refs_packed.dtype == refs.dtype
 	assert torch.equal(refs_packed, refs)
+
+
+class _MixedReferences:
+	# One-hot references for the first `n_one_hot` calls and uniform ones
+	# after them.
+	def __init__(self, n_one_hot=1):
+		self.calls, self.n_one_hot = 0, n_one_hot
+
+	def __call__(self, X, n=1, random_state=None):
+		self.calls += 1
+		if self.calls <= self.n_one_hot:
+			return shuffle(X, n=n, random_state=0)
+		return _soft_references(X, n=n)
+
+
+@pytest.mark.parametrize("func", [deep_lift_shap, _captum_deep_lift_shap])
+def test_deep_lift_shap_packed_mixed_references(X, func, device):
+	# When a later batch of references cannot be packed, the earlier ones are
+	# decoded and all of them come back as the tensor a one-hot X gives.
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	kwargs = dict(n_shuffles=3, return_references=True, random_state=0,
+		device=device)
+
+	# deep_lift_shap calls the callable once per pair, so the first batch of
+	# 4 pairs is one-hot; its captum path calls it once per example.
+	n_one_hot = 1
+	if func is deep_lift_shap:
+		kwargs["batch_size"], n_one_hot = 4, 4
+
+	X_attr, refs = func(model, X, references=_MixedReferences(n_one_hot),
+		**kwargs)
+	X_attr_packed, refs_packed = func(model, PackedSequence.from_one_hot(X),
+		references=_MixedReferences(n_one_hot), **kwargs)
+
+	assert torch.equal(X_attr_packed, X_attr)
+	assert isinstance(refs_packed, torch.Tensor)
+	assert refs_packed.dtype == refs.dtype
+	assert torch.equal(refs_packed, refs)

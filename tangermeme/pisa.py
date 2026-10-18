@@ -20,6 +20,7 @@ from .results import AttributionReferencesResult
 from tangermeme.predict import predict
 from tangermeme.utils import _accepts_packed
 from tangermeme.utils import _cat_packed
+from tangermeme.utils import _keep_references
 from tangermeme.utils import _validate_input
 from tangermeme.utils import PackedSequence
 
@@ -241,20 +242,9 @@ def pisa(
 					random_state=random_state)[0]
 
 			_references = _references.to(device).requires_grad_()
-			if return_references and return_packed:
-				try:
-					references_.append(PackedSequence.from_one_hot(
-						_references.detach().cpu()).reshape(1, -1))
-				except ValueError:
-					# References that are not one-hot, from a callable, cannot
-					# be packed, and come back as a tensor.
-					if len(references_) > 0:
-						raise
-
-					return_packed = False
-
-			if return_references and not return_packed:
-				references_.append(_references)
+			if return_references:
+				return_packed = _keep_references(references_,
+					_references.detach().unsqueeze(0), return_packed)
 
 			# Pull out the additional arguments for this example, if additional
 			# arguments are being provided, keeping the batch axis so that each
@@ -342,10 +332,8 @@ def pisa(
 
 		attributions = torch.stack(attributions).detach()
 
-		if return_references and return_packed:
+		if return_references:
 			return AttributionReferencesResult(attributions=attributions,
-				references=_cat_packed(references_))
-		elif return_references:
-			return AttributionReferencesResult(attributions=attributions,
-				references=torch.stack(references_).detach())
+				references=_cat_packed(references_) if return_packed else
+				torch.cat(references_))
 		return attributions
