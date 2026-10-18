@@ -2161,6 +2161,33 @@ def test_packed_helpers_chunks(chunk, monkeypatch):
 		reverse_complement(X[1, 0]))
 
 
+def test_position_one_hot():
+	# Decoding positions start to end of one sequence gives the slice of its
+	# one-hot encoding, with Python's slice bounds, from only the bytes that
+	# hold those positions.
+	from tangermeme.utils import _position_one_hot
+
+	X = _packed_one_hot((4, 4, 103))
+	X[1, :, 40:47] = 0
+	X[2, :, :6] = 0
+	X[3, :, -9:] = 0
+	X_packed = PackedSequence.from_one_hot(X)
+
+	rng = numpy.random.RandomState(0)
+	bounds = [(0, 103), (5, 6), (40, 47), (38, 50), (98, 120), (-9, -1),
+		(-200, 3), (60, 20), (103, 110)]
+	bounds += [tuple(rng.randint(-110, 115, size=2)) for _ in range(200)]
+
+	for row in range(4):
+		for start, end in bounds:
+			for dtype in (torch.int8, torch.float32):
+				X_ = _position_one_hot(X_packed, row, start, end, dtype=dtype)
+				assert X_.dtype == dtype
+				assert torch.equal(X_, X[row, :, start:end].to(dtype))
+				assert X_.untyped_storage().nbytes() == X_.numel() * \
+					X_.element_size()
+
+
 def test_reverse_complement_packed_alphabet():
 	# A PackedSequence is complemented with `complement_map` over its own
 	# alphabet, here one whose complements are not its reverse.

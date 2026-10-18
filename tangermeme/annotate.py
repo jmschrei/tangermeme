@@ -12,6 +12,7 @@ import pandas
 
 from .io import read_meme
 from .utils import _check_one_batch_axis
+from .utils import _position_one_hot
 from .utils import _validate_input
 from .utils import PackedSequence
 
@@ -89,11 +90,8 @@ def annotate_seqlets(
 	X_seqlets = []
 	for example_idx, start, end in seqlets.iloc[:, :3].values:
 		if isinstance(X, PackedSequence):
-			# Only the seqlet's positions are decoded, so that each seqlet
-			# does not keep a decode of its whole sequence alive.
-			codes = X[int(example_idx)].to_codes()[start:end]
-			X_seqlets.append((codes == torch.arange(4, dtype=codes.dtype)[:,
-				None]).to(torch.float32))
+			X_seqlets.append(_position_one_hot(X, int(example_idx), start, end,
+				dtype=torch.float32))
 		else:
 			X_seqlets.append(X[example_idx, :, start:end])
 

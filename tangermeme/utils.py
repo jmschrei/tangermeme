@@ -2165,6 +2165,27 @@ def _map_rows(X, fn, length, alphabet):
 	return _cat_packed(parts)
 
 
+def _position_one_hot(X, row, start, end, dtype=torch.int8):
+	"""The one-hot encoding of positions `start` to `end`, with Python's slice
+	bounds, of sequence `row` of the PackedSequence X, which has one batch
+	axis, decoded from only the bytes that hold those positions."""
+
+	start, end, _ = slice(int(start), int(end)).indices(X.length)
+	end = max(start, end)
+
+	first = start // 4
+	codes = _PACKED_CODES[X.data[row, first:(end + 3) // 4].long()].reshape(
+		-1)[start - 4 * first:end - 4 * first]
+
+	runs, run_ptr = X._runs()
+	runs = runs[run_ptr[row]:run_ptr[row + 1]]
+	for run_start, run_end in runs[(runs[:, 2] > start) & (runs[:, 1] < end),
+		1:]:
+		codes[max(run_start, start) - start:min(run_end, end) - start] = 4
+
+	return (codes == torch.arange(4, dtype=codes.dtype)[:, None]).to(dtype)
+
+
 def chunk(
 	X: list[torch.Tensor | PackedSequence],
 	size: int = 1024,

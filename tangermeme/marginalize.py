@@ -10,6 +10,7 @@ import numpy
 import torch
 
 from .utils import _for_func
+from .utils import _position_one_hot
 from .utils import _validate_input
 from .utils import PackedSequence
 from .utils import one_hot_encode
@@ -206,7 +207,7 @@ def marginalize_annotations(
 
 	for idx, start, end in annotations:
 		if isinstance(X, PackedSequence):
-			seq = X[int(idx)].to_one_hot()[:, start:end].unsqueeze(0)
+			seq = _position_one_hot(X, int(idx), start, end).unsqueeze(0)
 		else:
 			seq = X[idx, :, start:end].unsqueeze(0)
 
