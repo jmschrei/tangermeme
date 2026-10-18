@@ -79,7 +79,9 @@ no dedicated reference file, but here is where to look:
   `return_packed=True` on `one_hot_encode`, `random_one_hot`, `extract_loci`
   and every `ersatz` function; decode with `to_one_hot(dtype=, device=)`;
   index it along its batch axes; `save`/`load(mmap=True)`. Every function that
-  takes `X` takes one and gives the result of its one-hot encoding. Sequences
+  takes one-hot sequences as `X` takes one and gives the result of its one-hot
+  encoding; those that take PWMs, attributions or predictions (`entropy`,
+  `information_content`, `pwm_consensus`, `unchunk`) do not. Sequences
   come back packed (`ersatz`, `references` of `deep_lift_shap`/`pisa`,
   designs); predictions and attributions are tensors as before. A `func=` or
   `shuffle_fn=` you write receives int8 one-hot (`references/func-pattern.md`).
