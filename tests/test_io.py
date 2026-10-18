@@ -2940,6 +2940,51 @@ def test_one_hot_to_fasta_headers_length_mismatch(tmp_path):
 	assert_raises(IndexError, one_hot_to_fasta, X, str(path), headers=["only_one"])
 
 
+def _fasta_text(sequences, headers):
+	return "".join("> {}\n".format(header) + "".join(sequence[i:i+80] + "\n"
+		for i in range(0, len(sequence), 80)) + "\n" for header, sequence in
+		zip(headers, sequences))
+
+
+@pytest.mark.parametrize("dtype", [torch.int8, torch.float32])
+def test_one_hot_to_fasta_N(dtype, tmp_path):
+	# A column of zeros is written as N, at the start, middle and end of a
+	# sequence and throughout one, as a PackedSequence is.
+	sequences = ['NNACGTNNNA' * 20, 'ACGT' * 49 + 'ACNN', 'NNNNNNNN']
+	X = torch.stack([one_hot_encode(s) for s in sequences[:2]]).type(dtype)
+	one_hot_to_fasta(X, str(tmp_path / "one_hot.fa"), headers=["a", "b"])
+	assert (tmp_path / "one_hot.fa").read_text() == _fasta_text(sequences[:2],
+		["a", "b"])
+
+	one_hot_to_fasta(PackedSequence.from_one_hot(X), str(tmp_path /
+		"packed.fa"), headers=["a", "b"])
+	assert (tmp_path / "packed.fa").read_text() == (tmp_path /
+		"one_hot.fa").read_text()
+
+	one_hot_to_fasta(one_hot_encode(sequences[2]).unsqueeze(0).type(dtype),
+		str(tmp_path / "all_N.fa"))
+	assert (tmp_path / "all_N.fa").read_text() == _fasta_text(sequences[2:],
+		[0])
+
+
+def test_one_hot_to_fasta_ties_raise(tmp_path):
+	# A column whose largest value is tied between characters is ambiguous,
+	# and raises whether or not the sequence also holds an N.
+	path = str(tmp_path / "out.fa")
+
+	X = one_hot_encode('ACGTNACGT').unsqueeze(0)
+	X[0, 1, 2] = 1
+	assert_raises(ValueError, one_hot_to_fasta, X, path)
+
+	X = torch.full((1, 4, 5), 0.25)
+	assert_raises(ValueError, one_hot_to_fasta, X, path)
+
+	X = torch.tensor([[[0.7, 0.0, 0.0], [0.3, 0.0, 0.1], [0.0, 0.0, 0.9],
+		[0.0, 0.0, 0.0]]])
+	one_hot_to_fasta(X, path)
+	assert (tmp_path / "out.fa").read_text() == _fasta_text(["ANG"], [0])
+
+
 ###
 
 

@@ -110,6 +110,8 @@ io
 
 	- ``extract_loci``'s return annotation is ``torch.Tensor | list[torch.Tensor]``, which is what it returns: the sequences alone, or a list of the sequences followed by the signals, the input signals and the mask that were asked for. It was annotated as ``tuple``.
 
+	- ``one_hot_to_fasta`` writes a position whose column sums to zero, such as an unknown character from ``one_hot_encode``, as N, as it does for a ``PackedSequence``. It used to raise ``ValueError: At least one position in the PWM has multiple letters with the same probability`` on any sequence with one. A position whose largest value is tied between characters still raises that error, and every other sequence is written as before.
+
 match
 -----
 
