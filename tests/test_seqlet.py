@@ -1,7 +1,12 @@
 # test_seqlet.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import re
+import math
+import itertools
+
 import numpy
+import scipy.stats
 import torch
 import pandas
 import pytest
@@ -20,12 +25,18 @@ from tangermeme.seqlet import recursive_seqlets
 from tangermeme.seqlet import RecursiveSeqletsResult
 from tangermeme.seqlet import _recursive_seqlet_tables
 from tangermeme.seqlet import _recursive_seqlets_fdr
+from tangermeme.seqlet import _recursive_seqlet_null
+from tangermeme.seqlet import _recursive_seqlet_decode
+from tangermeme.seqlet import _as_attributions
 
 from tangermeme.utils import TangermemeWarning
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
+from numpy.testing import assert_array_equal
 from numpy.testing import assert_allclose
+
+from pandas.testing import assert_frame_equal
 
 
 @pytest.fixture
@@ -852,3 +863,1136 @@ def test_recursive_seqlets_fdr_control_range(X_laplace):
 	fdr = _fdr(X_laplace, X_control, thresholds=[1e-2])
 
 	assert fdr['n_control_seqlets'].iloc[0] > 0
+
+
+###
+# A reference implementation of recursive_seqlets in numpy and plain Python,
+# compared with it on small random inputs. It is written from the docstring,
+# and from the code where the docstring is silent: the order in which spans of
+# one length are visited, and the arithmetic of the bins.
+
+
+_columns = ['example_idx', 'start', 'end', 'attribution', 'p-value']
+
+
+def _reference_bins(X, xmin, bin_width, n_bins):
+	"""The bin of each value, floor((x - xmin) / bin_width), with values below
+	the first bin or above the last placed in the end bins.
+
+	The difference is taken in the dtype of X and divided in float64, which is
+	how recursive_seqlets bins float32 attributions.
+	"""
+
+	diff = numpy.asarray(X - xmin).astype(numpy.float64)
+	bins = numpy.floor(diff / bin_width)
+	return numpy.clip(bins, 0, n_bins - 1).astype(numpy.int64)
+
+
+def _reference_pmfs(bins, n_bins, max_seqlet_len):
+	"""P(S = s) for S the sum of k independent draws from the histogram of
+	`bins`, as pmfs[k][s] for k from 1 to max_seqlet_len: the histogram
+	convolved with itself k times."""
+
+	f = numpy.bincount(bins.ravel(), minlength=n_bins) / bins.size
+	pmfs = [numpy.ones(1)]
+	for _ in range(max_seqlet_len):
+		pmfs.append(numpy.convolve(pmfs[-1], f))
+
+	return pmfs
+
+
+def _reference_null(bins, n_bins, max_seqlet_len):
+	"""P(S >= s) as rcdfs[k][s] for k from 1 to max_seqlet_len, the
+	cumulative sum of P(S = s) taken from the top."""
+
+	pmfs = _reference_pmfs(bins, n_bins, max_seqlet_len)
+	return [None] + [numpy.cumsum(pmf[::-1])[::-1] for pmf in pmfs[1:]]
+
+
+def _reference_spans(X, min_seqlet_len, max_seqlet_len, n_bins, X_null=None):
+	"""The p-values of every span of X under the null built from X_null.
+
+	X_null defaults to X, and X is binned in the dtype of X_null. For each
+	length L, `own[L][i, a]` is the p-value of the span [a, a + L) of example
+	i on its own, `key[L][i, a]` the largest p-value over its prefixes of at
+	least min_seqlet_len, `tri[L][i, a]` the largest over all of its
+	sub-spans of at least min_seqlet_len, and `order[L][i]` the starts sorted
+	by key, lowest start first among equal keys. `entries` maps each
+	(length, binned sum) that occurs to its p-value, and `pmfs` holds the
+	distributions of the sums.
+	"""
+
+	X_null = X if X_null is None else X_null
+	X = X.astype(X_null.dtype)
+	xmin = X_null.min()
+	bin_width = float(X_null.max() - xmin) / (n_bins - 1)
+
+	null_bins = _reference_bins(X_null, xmin, bin_width, n_bins)
+	pmfs = _reference_pmfs(null_bins, n_bins, max_seqlet_len)
+	rcdfs = _reference_null(null_bins, n_bins, max_seqlet_len)
+	bins = _reference_bins(X, xmin, bin_width, n_bins)
+	csum = numpy.zeros((X.shape[0], X.shape[1] + 1), dtype=numpy.int64)
+	csum[:, 1:] = numpy.cumsum(bins, axis=1)
+
+	l = X.shape[1]
+	own, key, tri, order, entries = {}, {}, {}, {}, {}
+	for L in range(min_seqlet_len, min(max_seqlet_len, l) + 1):
+		sums = csum[:, L:] - csum[:, :-L]
+		own[L] = rcdfs[L][sums]
+		for s in numpy.unique(sums):
+			entries[L, int(s)] = rcdfs[L][s]
+
+		n_starts = l - L + 1
+		key[L] = numpy.max([own[m][:, :n_starts] for m in
+			range(min_seqlet_len, L + 1)], axis=0)
+		tri[L] = numpy.max([key[L - k][:, k:k + n_starts] for k in
+			range(L - min_seqlet_len + 1)], axis=0)
+		order[L] = [numpy.lexsort((numpy.arange(n_starts), key[L][i]))
+			for i in range(X.shape[0])]
+
+	return {'X': X, 'own': own, 'key': key, 'tri': tri, 'order': order,
+		'entries': entries, 'pmfs': pmfs}
+
+
+def _reference_decode(spans, threshold, additional_flanks=0):
+	"""The seqlets called at a threshold, in the order they are called.
+
+	Examples in order, longest spans first, and within a length the spans in
+	order of their key, until a key reaches the threshold. A span is called
+	if none of its positions is in a seqlet already called and every one of
+	its sub-spans of at least min_seqlet_len is below the threshold. Each row
+	is (example, start, end, attribution, p-value): the flanks are added and
+	clipped to the sequence, the attribution is the exactly rounded sum of X
+	over the flanked span, and the p-value is that of the span on its own.
+	"""
+
+	X = spans['X']
+	n, l = X.shape
+
+	rows = []
+	for i in range(n):
+		called = numpy.zeros(l, dtype=bool)
+		for L in sorted(spans['own'], reverse=True):
+			for a in spans['order'][L][i]:
+				if spans['key'][L][i, a] >= threshold:
+					break
+				if called[a:a+L].any() or spans['tri'][L][i, a] >= threshold:
+					continue
+
+				called[a:a+L] = True
+				start = max(a - additional_flanks, 0)
+				end = min(a + L + additional_flanks, l)
+				attr = math.fsum(X[i, start:end].astype(numpy.float64))
+				rows.append((i, start, end, attr, spans['own'][L][i, a]))
+
+	return rows
+
+
+def _assert_unambiguous(spans, thresholds, rtol=1e-9):
+	"""Check that the reference and the library must make the same calls.
+
+	The two sum the null in a different order, so a p-value may differ in its
+	last bits between them. The calls depend only on how p-values compare
+	with each other and with the threshold, so they agree when no p-value
+	below the threshold is within rtol of the threshold or of another
+	p-value, except where both must compute the same number: spans of one
+	length with the same binned sum share one p-value, and two binned sums
+	of one length have the same p-value when every sum between them has a
+	probability of exactly zero, because no draws add up to it.
+	"""
+
+	limit = max(thresholds) * (1 + 1e-6)
+	values = sorted((v, L, s) for (L, s), v in spans['entries'].items()
+		if v < limit)
+
+	for (v1, L1, s1), (v2, L2, s2) in zip(values[:-1], values[1:]):
+		assert v2 - v1 > rtol * v2 or (v1 == v2 and L1 == L2 and
+			(spans['pmfs'][L1][min(s1, s2):max(s1, s2)] == 0).all())
+
+	values = numpy.array([v for v, _, _ in values])
+	for threshold in thresholds:
+		assert (numpy.abs(values - threshold) > rtol * threshold).all()
+
+
+def _by_position(seqlets):
+	return seqlets.sort_values(['example_idx', 'start']).reset_index(
+		drop=True)
+
+
+def _assert_seqlets_equal(observed, rows):
+	"""Compare a frame from recursive_seqlets with rows from the reference.
+
+	Coordinates must match exactly. The p-value may differ by rounding in the
+	sums that build the null, and the attribution by rounding in a cumulative
+	sum, so both are compared within 1e-9, relative and absolute. The frames
+	are compared by position first, and then row by row: the expected frame
+	is the reference's rows, in the order they are called, ranked by the same
+	pandas sort as recursive_seqlets uses. That sort is not stable, so how
+	seqlets with equal p-values are ordered depends on the order they are
+	called in, and the comparison checks it.
+	"""
+
+	expected = pandas.DataFrame(rows, columns=_columns)
+	expected = expected.sort_values("p-value").reset_index(drop=True)
+
+	assert list(observed.columns) == _columns
+	assert observed.shape == expected.shape
+	if len(expected) == 0:
+		return
+
+	for o, e in ((_by_position(observed), _by_position(expected)),
+		(observed, expected)):
+		assert_array_equal(o[_columns[:3]].values.astype(numpy.int64),
+			e[_columns[:3]].values.astype(numpy.int64))
+		assert_allclose(o['p-value'], e['p-value'], rtol=1e-9, atol=0)
+		assert_allclose(o['attribution'], e['attribution'], rtol=0, atol=1e-9)
+
+
+def _random_attributions(seed, n, l, dtype=numpy.float64):
+	"""Laplace noise with a block of six raised positions in each example, and
+	a block of four after it."""
+
+	rng = numpy.random.RandomState(seed)
+	X = rng.laplace(size=(n, l))
+	X[:, l // 3:l // 3 + 6] += rng.uniform(0, 3, size=(n, 1))
+	X[:, 2 * l // 3:2 * l // 3 + 4] += rng.uniform(1, 3, size=(n, 1))
+	return X.astype(dtype)
+
+
+def _integer_attributions():
+	"""Integers from 0 to 3, with a run of 3s in three of the six examples."""
+
+	X = numpy.random.RandomState(0).randint(0, 4, size=(6, 30))
+	X[[0, 2, 3], 10:16] = 3
+	return X.astype(numpy.float64)
+
+
+_reference_shapes = [(1, 40), (3, 25), (5, 12), (2, 60), (4, 33), (6, 20),
+	(2, 90), (7, 19)]
+
+
+@pytest.mark.parametrize("min_seqlet_len, max_seqlet_len, n_bins, "
+	"additional_flanks, threshold, dtype", [
+	(3, 8, 16, 0, 0.043, numpy.float64),
+	(1, 8, 16, 0, 0.043, numpy.float64),
+	(2, 8, 16, 0, 0.043, numpy.float64),
+	(4, 4, 16, 0, 0.043, numpy.float64),
+	(3, 15, 16, 0, 0.043, numpy.float64),
+	(3, 8, 2, 0, 0.043, numpy.float64),
+	(3, 8, 7, 0, 0.043, numpy.float64),
+	(3, 8, 100, 0, 0.043, numpy.float64),
+	(3, 8, 16, 2, 0.043, numpy.float64),
+	(3, 8, 16, 7, 0.043, numpy.float64),
+	(3, 8, 16, 40, 0.043, numpy.float64),
+	(3, 8, 16, 0, 0.0071, numpy.float64),
+	(3, 8, 16, 0, 0.31, numpy.float64),
+	(3, 8, 16, 0, 0.043, numpy.float32),
+	(1, 15, 7, 3, 0.031, numpy.float32),
+])
+def test_recursive_seqlets_reference(min_seqlet_len, max_seqlet_len, n_bins,
+	additional_flanks, threshold, dtype):
+	"""recursive_seqlets matches the reference on eight random inputs. Each
+	case changes one setting from the first case, or min_seqlet_len and
+	max_seqlet_len together; the last case changes several.
+
+	max_seqlet_len=15 is longer than the examples of length 12, flanks of 7
+	are clipped at an end of the sequence for some seqlets and not others,
+	and flanks of 40 for all of them.
+	"""
+
+	n_called = 0
+	for seed, (n, l) in enumerate(_reference_shapes):
+		X = _random_attributions(seed, n, l, dtype)
+		spans = _reference_spans(X, min_seqlet_len, max_seqlet_len, n_bins)
+		_assert_unambiguous(spans, [threshold])
+		rows = _reference_decode(spans, threshold, additional_flanks)
+
+		seqlets = recursive_seqlets(X, threshold=threshold,
+			min_seqlet_len=min_seqlet_len, max_seqlet_len=max_seqlet_len,
+			additional_flanks=additional_flanks, n_bins=n_bins)
+		_assert_seqlets_equal(seqlets, rows)
+		n_called += len(rows)
+
+	assert n_called > 0
+
+
+@pytest.mark.parametrize("n, l, min_seqlet_len, max_seqlet_len, n_bins", [
+	(3, 4, 4, 4, 16),
+	(3, 4, 4, 25, 16),
+	(2, 10, 3, 25, 16),
+	(1, 80, 3, 8, 16),
+	(60, 6, 2, 5, 16),
+	(4, 30, 5, 5, 2),
+	(4, 30, 1, 1, 16),
+])
+def test_recursive_seqlets_reference_sizes(n, l, min_seqlet_len,
+	max_seqlet_len, n_bins):
+	"""recursive_seqlets matches the reference at the edges of the sizes:
+	examples as long as min_seqlet_len, with max_seqlet_len equal or longer;
+	max_seqlet_len longer than the examples; one example; many short
+	examples; two bins; and min_seqlet_len equal to max_seqlet_len."""
+
+	X = _random_attributions(0, n, l)
+	spans = _reference_spans(X, min_seqlet_len, max_seqlet_len, n_bins)
+
+	n_called = 0
+	for threshold in (0.31, 0.043, 0.0071):
+		_assert_unambiguous(spans, [threshold])
+		rows = _reference_decode(spans, threshold)
+
+		seqlets = recursive_seqlets(X, threshold=threshold,
+			min_seqlet_len=min_seqlet_len, max_seqlet_len=max_seqlet_len,
+			n_bins=n_bins)
+		_assert_seqlets_equal(seqlets, rows)
+		n_called += len(rows)
+
+	assert n_called > 0
+
+
+@pytest.mark.parametrize("dtype", [numpy.float64, numpy.float32])
+def test_recursive_seqlets_reference_ties(dtype):
+	"""recursive_seqlets matches the reference, including the order of rows,
+	when many seqlets have equal p-values.
+
+	Integers from 0 to 3 with four bins put each value in its own bin, so
+	spans of one length with the same sum tie within and across examples;
+	three examples share a run of 3s. A repeated example gives each seqlet
+	once per copy.
+	"""
+
+	X_int = _integer_attributions()
+	X_repeat = numpy.tile(_random_attributions(1, 1, 30), (4, 1))
+
+	for X, n_bins, min_len in ((X_int, 4, 4), (X_repeat, 16, 2)):
+		X = X.astype(dtype)
+
+		for min_seqlet_len, max_seqlet_len, threshold in ((2, 6, 0.21),
+			(3, 3, 0.21), (min_len, 6, 0.043)):
+			spans = _reference_spans(X, min_seqlet_len, max_seqlet_len, n_bins)
+			_assert_unambiguous(spans, [threshold])
+			rows = _reference_decode(spans, threshold)
+
+			seqlets = recursive_seqlets(X, threshold=threshold,
+				min_seqlet_len=min_seqlet_len, max_seqlet_len=max_seqlet_len,
+				n_bins=n_bins)
+			assert seqlets['p-value'].duplicated().sum() >= 2
+			_assert_seqlets_equal(seqlets, rows)
+
+
+def test__recursive_seqlet_decode_order():
+	"""_recursive_seqlet_decode returns seqlets in the order they are called,
+	before any ranking: the reference's order, row for row, on the random
+	inputs and on integer attributions with many equal p-values."""
+
+	inputs = [(_random_attributions(seed, n, l), 3, 8, 16, 2, 0.043)
+		for seed, (n, l) in enumerate(_reference_shapes)]
+	inputs.append((_integer_attributions(), 2, 6, 4, 0, 0.21))
+
+	for X, min_seqlet_len, max_seqlet_len, n_bins, flanks, threshold in inputs:
+		spans = _reference_spans(X, min_seqlet_len, max_seqlet_len, n_bins)
+		_assert_unambiguous(spans, [threshold])
+		rows = _reference_decode(spans, threshold, additional_flanks=flanks)
+
+		xmin, bin_width, rcdfs = _recursive_seqlet_tables(X, max_seqlet_len,
+			n_bins)
+		observed = _recursive_seqlet_decode(X, rcdfs, xmin, bin_width,
+			threshold, min_seqlet_len, max_seqlet_len, flanks, n_bins)
+
+		assert len(observed) == len(rows) > 0
+		for o, e in zip(observed, rows):
+			assert tuple(o[:3]) == tuple(e[:3])
+			assert_allclose(o[3], e[3], rtol=0, atol=1e-9)
+			assert_allclose(o[4], e[4], rtol=1e-9, atol=0)
+
+
+def test_recursive_seqlets_reference_default_settings(X_laplace):
+	"""recursive_seqlets matches the reference at the default n_bins,
+	min_seqlet_len and max_seqlet_len."""
+
+	for dtype in (numpy.float64, numpy.float32):
+		X = X_laplace.astype(dtype)
+		spans = _reference_spans(X, 4, 25, 1000)
+		_assert_unambiguous(spans, [0.01])
+
+		rows = _reference_decode(spans, 0.01)
+		assert len(rows) > 5
+		_assert_seqlets_equal(recursive_seqlets(X), rows)
+
+
+def test_recursive_seqlets_reference_float32_bins(X_laplace):
+	"""float32 attributions are binned with the difference from the smallest
+	value taken in float32 and divided in float64, and recursive_seqlets
+	matches the reference on an input built so that this matters.
+
+	A tenth of the values are replaced by float32 numbers next to bin edges,
+	each of which would fall in another bin if the difference were taken in
+	float64. That would change the histogram, and so every p-value.
+	"""
+
+	X = X_laplace.astype(numpy.float32)
+	xmin, xmax = X.min(), X.max()
+	bin_width = float(xmax - xmin) / 999
+
+	edges = (float(xmin) + numpy.arange(1, 999) * bin_width).astype(
+		numpy.float32)
+	near = numpy.concatenate([numpy.nextafter(edges, numpy.float32(-1)),
+		edges, numpy.nextafter(edges, numpy.float32(1))])
+	moves = _reference_bins(near, xmin, bin_width, 1000) != _reference_bins(
+		near.astype(numpy.float64), float(xmin), bin_width, 1000)
+	near = near[moves & (near > xmin) & (near < xmax)]
+	assert len(near) >= X.size // 10
+
+	rng = numpy.random.RandomState(0)
+	inside = numpy.where((X.ravel() > xmin) & (X.ravel() < xmax))[0]
+	replaced = rng.choice(inside, size=X.size // 10, replace=False)
+	X.ravel()[replaced] = rng.choice(near, size=X.size // 10, replace=False)
+	assert X.min() == xmin and X.max() == xmax
+
+	spans = _reference_spans(X, 4, 25, 1000)
+	_assert_unambiguous(spans, [0.01])
+	rows = _reference_decode(spans, 0.01)
+	assert len(rows) > 5
+	_assert_seqlets_equal(recursive_seqlets(X), rows)
+
+
+@pytest.mark.parametrize("dtype", [numpy.int64, numpy.int32])
+def test_recursive_seqlets_integer_input(dtype):
+	"""Integer attributions give the same output as the same values in
+	float64, bit for bit: differences of integers are exact, and sums are
+	taken in float64."""
+
+	X = numpy.random.RandomState(0).randint(-20, 21, size=(4, 200))
+	X[:, 50:58] += 30
+
+	seqlets = recursive_seqlets(X.astype(dtype), threshold=0.01)
+	assert len(seqlets) > 0
+	assert_frame_equal(seqlets, recursive_seqlets(X.astype(numpy.float64),
+		threshold=0.01), check_exact=True)
+
+
+###
+# Hand-worked inputs. Every value is 0 or 1 and there are two bins, so the
+# bins are the values, and the null of a span of length k is Binomial(k, q),
+# where q is the fraction of ones.
+
+
+def test_recursive_seqlets_tie_lowest_start():
+	"""Of two overlapping spans with the same p-value, the one that starts
+	first is called.
+
+	Ones at [3, 8) in twenty positions: q = 5/20 = 1/4. With min_seqlet_len =
+	max_seqlet_len = 4, [3, 7) and [4, 8) both sum to 4, with p-value
+	q^4 = 1/256, and every other span sums to at most 3, with p-value at
+	least 4 q^3 (1 - q) + q^4 = 13/256 > 0.01. [3, 7) is called first and
+	[4, 8) overlaps it. 1/256 and every product in the null are exact in
+	floating point, so a threshold of exactly 1/256 calls nothing, because a
+	p-value must be below the threshold, and the next float above it calls
+	[3, 7) again.
+	"""
+
+	X = numpy.zeros((1, 20))
+	X[0, 3:8] = 1
+
+	kwargs = {'min_seqlet_len': 4, 'max_seqlet_len': 4, 'n_bins': 2}
+	seqlets = recursive_seqlets(X, threshold=0.01, **kwargs)
+
+	assert_array_equal(seqlets[_columns[:3]].values, [[0, 3, 7]])
+	assert_allclose(seqlets['attribution'], [4.0])
+	assert_allclose(seqlets['p-value'], [1 / 256], rtol=1e-12)
+
+	assert recursive_seqlets(X, threshold=1 / 256, **kwargs).shape == (0, 5)
+	assert_frame_equal(recursive_seqlets(X, threshold=numpy.nextafter(1 / 256,
+		1), **kwargs), seqlets, check_exact=True)
+
+
+def test_recursive_seqlets_longest_first():
+	"""A long span is called before the shorter spans inside it.
+
+	Ones at [4, 10) in twenty positions: q = 6/20 = 0.3. With min_seqlet_len=2,
+	max_seqlet_len=6 and a threshold of 0.1, a run of k ones has p-value
+	q^k <= q^2 = 0.09, so [4, 10) is called whole, with p-value q^6, and the
+	shorter runs inside it overlap it. Every other span of length 2 to 6 has
+	a sub-span 00, 01 or 10, with p-value at least 1 - (1 - q)^2 = 0.51.
+
+	The largest p-value inside [4, 10), q^2, is one product in float64, so
+	at a threshold of exactly 0.3 * 0.3 nothing is called, and at the next
+	float above it [4, 10) is.
+	"""
+
+	X = numpy.zeros((1, 20))
+	X[0, 4:10] = 1
+
+	kwargs = {'min_seqlet_len': 2, 'max_seqlet_len': 6, 'n_bins': 2}
+	seqlets = recursive_seqlets(X, threshold=0.1, **kwargs)
+
+	assert_array_equal(seqlets[_columns[:3]].values, [[0, 4, 10]])
+	assert_allclose(seqlets['attribution'], [6.0])
+	assert_allclose(seqlets['p-value'], [0.3 ** 6], rtol=1e-12)
+
+	assert recursive_seqlets(X, threshold=0.3 * 0.3, **kwargs).shape == (0, 5)
+	assert_frame_equal(recursive_seqlets(X, threshold=numpy.nextafter(0.3 *
+		0.3, 1), **kwargs), seqlets, check_exact=True)
+
+
+def test_recursive_seqlets_triangle():
+	"""A span is called only if every sub-span, not only every prefix, is
+	below the threshold.
+
+	Ones at 4, 5, 6 and 8 in twenty positions: q = 4/20 = 0.2. With
+	min_seqlet_len=2, max_seqlet_len=5 and a threshold of 0.05:
+	P(S_2 >= 2) = q^2 = 0.04, P(S_3 >= 3) = q^3 = 0.008,
+	P(S_4 >= 3) = 4 q^3 (1 - q) + q^4 = 0.0272,
+	P(S_5 >= 4) = 5 q^4 (1 - q) + q^5 = 0.00672, and
+	P(S_3 >= 2) = 3 q^2 (1 - q) + q^3 = 0.104. [4, 9) = 11101 and
+	[4, 8) = 1110 have every prefix below 0.05, but contain [5, 8) = 110 at
+	0.104, so neither is called. [4, 7) = 111 is called, with p-value 0.008;
+	the spans 11 inside it overlap it, and every other span has a sub-span
+	00, 01 or 10, at 1 - (1 - q)^2 = 0.36 or more.
+	"""
+
+	X = numpy.zeros((1, 20))
+	X[0, [4, 5, 6, 8]] = 1
+
+	seqlets = recursive_seqlets(X, threshold=0.05, min_seqlet_len=2,
+		max_seqlet_len=5, n_bins=2)
+
+	assert_array_equal(seqlets[_columns[:3]].values, [[0, 4, 7]])
+	assert_allclose(seqlets['attribution'], [3.0])
+	assert_allclose(seqlets['p-value'], [0.008], rtol=1e-12)
+
+
+def test_recursive_seqlets_triangle_strict():
+	"""Every sub-span must be strictly below the threshold.
+
+	Ones at 4, 5, 6, 8 and 15 in twenty positions: q = 5/20 = 1/4, and every
+	p-value here is exact in floating point. With min_seqlet_len=3 and
+	max_seqlet_len=5, [4, 9) = 11101 has prefixes at q^3 = 1/64,
+	P(S_4 >= 3) = 13/256 and P(S_5 >= 4) = 1/64, and contains [5, 8) = 110
+	and [6, 9) = 101 at P(S_3 >= 2) = 10/64 = 0.15625. At a threshold of
+	exactly 0.15625, neither [4, 9) nor [4, 8) is called, and [4, 7) = 111
+	is, with p-value 1/64. At the next float above it, [4, 9) is called,
+	with p-value 1/64.
+	"""
+
+	X = numpy.zeros((1, 20))
+	X[0, [4, 5, 6, 8, 15]] = 1
+	kwargs = {'min_seqlet_len': 3, 'max_seqlet_len': 5, 'n_bins': 2}
+
+	seqlets = recursive_seqlets(X, threshold=0.15625, **kwargs)
+	assert_array_equal(seqlets.values, [[0, 4, 7, 3.0, 1 / 64]])
+
+	seqlets = recursive_seqlets(X, threshold=numpy.nextafter(0.15625, 1),
+		**kwargs)
+	assert_array_equal(seqlets.values, [[0, 4, 9, 4.0, 1 / 64]])
+
+
+def test_recursive_seqlets_stricter_threshold():
+	"""A stricter threshold can call more seqlets, when a long span called at
+	a looser one covers two shorter ones.
+
+	Ones at 3, 5, 6, 8 and 10 in twenty positions: q = 5/20 = 1/4. With
+	min_seqlet_len=3 and max_seqlet_len=6, the largest p-value of a sub-span
+	of [3, 9) = 101101 is that of 0110, P(S_4 >= 2) = 67/256 = 0.26, so it
+	is called at a threshold of 0.3. At 0.2 it is not, nor is any other span
+	of length 5 or 6, since each contains 0110 or 1010, and [3, 7) = 1011,
+	whose sub-spans are at most P(S_3 >= 2) = 10/64, and [8, 11) = 101 are
+	called. The fdr table counts the same seqlets.
+	"""
+
+	X = numpy.zeros((1, 20))
+	X[0, [3, 5, 6, 8, 10]] = 1
+	kwargs = {'min_seqlet_len': 3, 'max_seqlet_len': 6, 'n_bins': 2}
+
+	loose = recursive_seqlets(X, threshold=0.3, **kwargs)
+	strict = recursive_seqlets(X, threshold=0.2, **kwargs)
+	assert_array_equal(loose[_columns[:3]].values, [[0, 3, 9]])
+	assert_array_equal(_by_position(strict)[_columns[:3]].values,
+		[[0, 3, 7], [0, 8, 11]])
+
+	tables = _recursive_seqlet_tables(X, 6, 2)
+	fdr = _recursive_seqlets_fdr(X, X, tables, 3, 6, 2, thresholds=[0.3, 0.2])
+	assert_array_equal(fdr['n_seqlets'], [1, 2])
+	assert_array_equal(fdr['n_control_seqlets'], [1, 2])
+
+
+@pytest.mark.parametrize("n_ones", [3, 10, 18])
+def test__recursive_seqlet_null_binomial(n_ones):
+	"""P(S_k >= s) is scipy's binomial survival function at s - 1, for every
+	k up to 25, and zero past the largest sum, k."""
+
+	values = numpy.zeros(20)
+	values[:n_ones] = 1
+	rcdfs = _recursive_seqlet_null(values, 0.0, 1.0, 25, 2)
+
+	for k in range(1, 26):
+		s = numpy.arange(k + 1)
+		assert_allclose(rcdfs[k, :k+1], scipy.stats.binom.sf(s - 1, k,
+			n_ones / 20), rtol=1e-10)
+		assert (rcdfs[k, k+1:] == 0).all()
+
+
+@pytest.mark.parametrize("n_bins", [3, 5])
+def test__recursive_seqlet_null_enumeration(n_bins):
+	"""P(S_k >= s) is the total probability of the tuples of k bins summing to
+	at least s, enumerated here for every k up to 4, and zero past the largest
+	sum."""
+
+	values = numpy.random.RandomState(0).normal(size=37)
+	xmin = values.min()
+	bin_width = float(values.max() - xmin) / (n_bins - 1)
+	bins = _reference_bins(values, xmin, bin_width, n_bins)
+	f = numpy.bincount(bins, minlength=n_bins) / values.size
+
+	rcdfs = _recursive_seqlet_null(values, xmin, bin_width, 4, n_bins)
+
+	for k in range(1, 5):
+		tail = numpy.zeros(k * (n_bins - 1) + 1)
+		for tup in itertools.product(range(n_bins), repeat=k):
+			tail[:sum(tup) + 1] += numpy.prod(f[list(tup)])
+
+		assert_allclose(rcdfs[k, :len(tail)], tail, rtol=1e-12)
+		assert (rcdfs[k, len(tail):] == 0).all()
+
+
+def test__recursive_seqlet_null_end_bins():
+	"""Values outside the bins are counted in the end bins.
+
+	With xmin=0, a bin width of 0.5 and three bins, -5 and 0 fall in bin 0,
+	0.5 in bin 1, and 1 and 7 in bin 2, so the histogram is (2, 1, 2) / 5.
+	P(S_1 >= s) is (5, 3, 2, 0) / 5. The distribution of S_2 is
+	(4, 4, 9, 4, 4) / 25, so P(S_2 >= s) is (25, 21, 17, 8, 4, 0) / 25.
+	"""
+
+	values = numpy.array([-5, 0, 0.5, 1, 7])
+	rcdfs = _recursive_seqlet_null(values, 0.0, 0.5, 2, 3)
+
+	assert_allclose(rcdfs[1, :4], numpy.array([5, 3, 2, 0]) / 5, rtol=1e-12)
+	assert_allclose(rcdfs[2, :6], numpy.array([25, 21, 17, 8, 4, 0]) / 25,
+		rtol=1e-12)
+
+
+@pytest.mark.parametrize("dtype", [numpy.float64, numpy.float32])
+def test__recursive_seqlet_tables(X_laplace, dtype):
+	"""The bins start at the smallest value of X and span its range, and the
+	null at the default settings matches the reference within 1e-10. Both
+	sum non-negative terms, so rounding is relative to each entry, tails
+	included. A constant X has no bins.
+
+	The bin width is the range, the difference of the largest and smallest
+	values taken in the dtype of X, divided by n_bins - 1 in float64.
+	"""
+
+	X = X_laplace.astype(dtype)
+	xmin, bin_width, rcdfs = _recursive_seqlet_tables(X, 25, 1000)
+
+	expected_width = float(X.max() - X.min()) / 999
+	assert xmin == X.min()
+	assert bin_width == expected_width
+
+	expected = _reference_null(_reference_bins(X, X.min(), expected_width,
+		1000), 1000, 25)
+	for k in range(1, 26):
+		assert_allclose(rcdfs[k, :len(expected[k])], expected[k], rtol=1e-10,
+			atol=0)
+		assert (rcdfs[k, len(expected[k]):] == 0).all()
+
+	assert _recursive_seqlet_tables(numpy.full((2, 5), 0.3, dtype=dtype), 25,
+		1000) is None
+
+
+###
+# Invariants of the output.
+
+
+@pytest.mark.parametrize("min_seqlet_len, max_seqlet_len", [(4, 25), (1, 10),
+	(6, 6)])
+def test_recursive_seqlets_invariants(X_laplace, min_seqlet_len,
+	max_seqlet_len):
+	"""Without flanks, seqlets do not overlap and their lengths are within
+	the bounds. Every p-value is above zero and below the threshold, and
+	each attribution is the sum of X over the seqlet, within 1e-9 of an
+	exactly rounded sum."""
+
+	seqlets = recursive_seqlets(X_laplace, threshold=0.05,
+		min_seqlet_len=min_seqlet_len, max_seqlet_len=max_seqlet_len)
+	assert len(seqlets) > 10
+
+	lengths = seqlets['end'] - seqlets['start']
+	assert ((lengths >= min_seqlet_len) & (lengths <= max_seqlet_len)).all()
+	_assert_no_overlap(seqlets)
+
+	assert ((seqlets['p-value'] > 0) & (seqlets['p-value'] < 0.05)).all()
+
+	for idx, start, end, attr in seqlets[_columns[:4]].itertuples(index=False):
+		assert_allclose(attr, math.fsum(X_laplace[idx, start:end]), rtol=0,
+			atol=1e-9)
+
+
+def test_recursive_seqlets_example_order(X_laplace):
+	"""The null is built from every example but not from their order:
+	permuting the examples permutes example_idx and changes nothing else,
+	bit for bit."""
+
+	perm = numpy.array([2, 0, 3, 1])
+	seqlets = recursive_seqlets(X_laplace, threshold=0.05)
+	permuted = recursive_seqlets(X_laplace[perm], threshold=0.05)
+	permuted['example_idx'] = perm[permuted['example_idx'].values]
+
+	assert len(seqlets) > 0
+	assert_frame_equal(_by_position(permuted), _by_position(seqlets),
+		check_exact=True)
+
+
+def test_recursive_seqlets_repeated_examples(X_laplace):
+	"""Repeating every example leaves the proportions in the histogram, and so
+	every p-value, unchanged: each seqlet is called once in each copy."""
+
+	seqlets = recursive_seqlets(X_laplace, threshold=0.05)
+	doubled = recursive_seqlets(numpy.concatenate([X_laplace, X_laplace]),
+		threshold=0.05)
+	assert len(seqlets) > 0
+	assert len(doubled) == 2 * len(seqlets)
+
+	first = doubled[doubled['example_idx'] < 4]
+	second = doubled[doubled['example_idx'] >= 4].copy()
+	second['example_idx'] -= 4
+
+	assert_frame_equal(_by_position(first), _by_position(seqlets),
+		check_exact=True)
+	assert_frame_equal(_by_position(second), _by_position(seqlets),
+		check_exact=True)
+
+
+@pytest.mark.parametrize("scale", [0.25, 4.0])
+def test_recursive_seqlets_scale(X_laplace, scale):
+	"""Scaling X by a power of two is exact in floating point and leaves every
+	bin unchanged, so the same seqlets are called, in the same order, with
+	the same p-values and scaled attributions, bit for bit."""
+
+	seqlets = recursive_seqlets(X_laplace, threshold=0.05)
+	scaled = recursive_seqlets(X_laplace * scale, threshold=0.05)
+
+	expected = seqlets.copy()
+	expected['attribution'] *= scale
+	assert len(seqlets) > 0
+	assert_frame_equal(scaled, expected, check_exact=True)
+
+
+@pytest.mark.parametrize("layout", ["fortran", "strided"])
+def test_recursive_seqlets_layout(X_laplace, layout):
+	"""A Fortran-ordered or strided X gives the same frame as a C-contiguous
+	one, bit for bit."""
+
+	if layout == "fortran":
+		X = numpy.asfortranarray(X_laplace)
+	else:
+		X = numpy.repeat(X_laplace, 2, axis=1)[:, ::2]
+
+	assert_frame_equal(recursive_seqlets(X, threshold=0.05),
+		recursive_seqlets(X_laplace, threshold=0.05), check_exact=True)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_recursive_seqlets_torch_exact(X_laplace, X_background, dtype):
+	"""A tensor gives the same output as the array it holds, bit for bit, with
+	and without a control."""
+
+	X = torch.from_numpy(X_laplace).to(dtype)
+	X_control = torch.from_numpy(X_background).to(dtype)
+
+	assert_frame_equal(recursive_seqlets(X, threshold=0.05),
+		recursive_seqlets(X.numpy(), threshold=0.05), check_exact=True)
+
+	result = recursive_seqlets(X, X_control=X_control, target_fdr=0.2,
+		return_fdr=True)
+	expected = recursive_seqlets(X.numpy(), X_control=X_control.numpy(),
+		target_fdr=0.2, return_fdr=True)
+
+	assert len(result.seqlets) > 0
+	assert_frame_equal(result.seqlets, expected.seqlets, check_exact=True)
+	assert_frame_equal(result.fdr, expected.fdr, check_exact=True)
+
+
+def test_recursive_seqlets_inputs_unchanged(X_laplace, X_background):
+	"""Neither X nor X_control is modified, as an array or a tensor."""
+
+	X = X_laplace.copy()
+	X_control = X_background.astype(numpy.float32)
+	X_tensor = torch.from_numpy(X_laplace.copy())
+
+	recursive_seqlets(X, X_control=X_control, target_fdr=0.2)
+	recursive_seqlets(X_tensor, threshold=0.05, additional_flanks=3)
+
+	assert_array_equal(X, X_laplace)
+	assert_array_equal(X_control, X_background.astype(numpy.float32))
+	assert_array_equal(X_tensor.numpy(), X_laplace)
+
+
+def test_recursive_seqlets_output_types(X_laplace, X_background):
+	"""Coordinates are int64 and attributions and p-values float64, for
+	float32 and float64 input. The fdr table has float64 thresholds and
+	estimates and int64 counts, and the result unpacks as (seqlets, fdr)."""
+
+	int64, float64 = numpy.dtype('int64'), numpy.dtype('float64')
+	for dtype in (numpy.float64, numpy.float32):
+		seqlets = recursive_seqlets(X_laplace.astype(dtype), threshold=0.05)
+		assert len(seqlets) > 0
+		assert list(seqlets.dtypes) == [int64, int64, int64, float64, float64]
+
+	result = recursive_seqlets(X_laplace, X_control=X_background,
+		target_fdr=0.2, return_fdr=True)
+	seqlets, fdr = result
+
+	assert RecursiveSeqletsResult._fields == ('seqlets', 'fdr')
+	assert result[0] is seqlets is result.seqlets
+	assert result[1] is fdr is result.fdr
+	assert list(fdr.dtypes) == [float64, int64, int64, float64]
+
+
+@pytest.mark.parametrize("kwargs, match", [
+	({'X': [[0.1, 0.2]]}, "`X` must be either a torch.Tensor or numpy.ndarray"),
+	({'X': numpy.zeros((0, 10))},
+		r"requires X to be non-empty; got X with shape \(0, 10\)"),
+	({'X': numpy.ones((2, 10)), 'X_control': numpy.zeros((3, 0))},
+		r"requires X_control to be non-empty; got X_control with shape "
+		r"\(3, 0\)"),
+	({'X': numpy.ones((2, 10)), 'X_control': [[0.1]]},
+		"`X_control` must be either a torch.Tensor or numpy.ndarray"),
+	({'X': numpy.ones((2, 10)), 'return_fdr': True},
+		"return_fdr=True requires X_control"),
+	({'X': numpy.ones((2, 10)), 'threshold': 1.5},
+		"threshold must be a p-value of at most 1; got 1.5"),
+])
+def test_recursive_seqlets_errors(kwargs, match):
+	with pytest.raises(ValueError, match=match):
+		recursive_seqlets(**kwargs)
+
+
+def test__as_attributions():
+	"""A tensor becomes the array it holds, an array keeps its values, and a
+	dtype, when given, is applied. Other inputs and empty ones raise with the
+	name given."""
+
+	X = numpy.random.RandomState(0).normal(size=(2, 5))
+
+	for X_in in (X, torch.from_numpy(X)):
+		out = _as_attributions(X_in, "X")
+		assert isinstance(out, numpy.ndarray)
+		assert out.dtype == numpy.float64
+		assert_array_equal(out, X)
+
+		out = _as_attributions(X_in, "X", numpy.float32)
+		assert out.dtype == numpy.float32
+		assert_array_equal(out, X.astype(numpy.float32))
+
+	with pytest.raises(ValueError, match="`scores` must be either"):
+		_as_attributions(X.tolist(), "scores")
+	with pytest.raises(ValueError, match=r"got scores with shape \(4, 0\)"):
+		_as_attributions(torch.zeros(4, 0), "scores")
+
+
+###
+# With a control.
+
+
+def _reference_fdr(X, X_control, min_seqlet_len, max_seqlet_len, n_bins):
+	"""The estimate at each of the 117 default thresholds, four per decade
+	from 0.1 to 1e-30, from the reference: the number of control seqlets plus
+	one, scaled to the number of positions in X, over the number of seqlets
+	called on X, and NaN where none are. The control is decoded against the
+	null and bins of X. Every threshold is decoded."""
+
+	thresholds = 10.0 ** -(1 + numpy.arange(117) / 4)
+	spans = _reference_spans(X, min_seqlet_len, max_seqlet_len, n_bins)
+	spans_control = _reference_spans(X_control, min_seqlet_len,
+		max_seqlet_len, n_bins, X_null=X)
+	_assert_unambiguous(spans, thresholds)
+	_assert_unambiguous(spans_control, thresholds)
+
+	n = numpy.array([len(_reference_decode(spans, t)) for t in thresholds])
+	n_control = numpy.array([len(_reference_decode(spans_control, t))
+		for t in thresholds])
+
+	fdr = numpy.full(117, numpy.nan)
+	fdr[n > 0] = (n_control[n > 0] + 1) * (X.size / X_control.size) / n[n > 0]
+	return thresholds, n, n_control, fdr, spans
+
+
+def _control_inputs(name):
+	rng = numpy.random.RandomState(7)
+
+	if name == "shapes":
+		X = _random_attributions(0, 3, 60)
+		X_control = rng.laplace(size=(5, 37))
+	elif name == "range":
+		X = _random_attributions(1, 3, 60)
+		X_control = rng.laplace(size=(4, 50)) * 3
+		X_control[0, 10:20] = X.min() - 5
+		X_control[1, 30:36] = X.max() + 5
+	elif name == "stronger_control":
+		X = rng.laplace(size=(3, 60))
+		X_control = _random_attributions(2, 3, 60)
+		X_control[:, 40:46] += 4
+	elif name == "float32":
+		X = _random_attributions(3, 3, 60, numpy.float32)
+		X_control = rng.laplace(size=(4, 60))
+
+	return X, X_control
+
+
+@pytest.mark.parametrize("min_seqlet_len, max_seqlet_len", [(3, 6), (4, 4)])
+@pytest.mark.parametrize("name", ["shapes", "range", "stronger_control",
+	"float32"])
+def test_recursive_seqlets_control_reference(name, min_seqlet_len,
+	max_seqlet_len):
+	"""The fdr table matches the reference at every threshold, without
+	relying on calls stopping once neither input has a seqlet, and the
+	seqlets are those the reference calls at the largest threshold whose
+	estimate is at or below target_fdr.
+
+	The control has a different number of examples and length than X
+	("shapes"), values beyond both ends of X, including a run below its
+	smallest value and a run above its largest ("range"), seqlets at
+	stricter thresholds than X ("stronger_control"), or float64 values with
+	float32 X ("float32"). Counts must match exactly; estimates are within
+	1e-12, for rounding in the scaling. target_fdr is set halfway between two
+	estimates of the reference near its median that differ by more than
+	rounding, so that some thresholds reach it and some do not.
+	"""
+
+	X, X_control = _control_inputs(name)
+	thresholds, n, n_control, fdr, spans = _reference_fdr(X, X_control,
+		min_seqlet_len, max_seqlet_len, 16)
+
+	estimates = numpy.unique(fdr[~numpy.isnan(fdr)])
+	gaps = numpy.where(numpy.diff(estimates) > 1e-6 * estimates[1:])[0]
+	assert len(gaps) > 0
+	g = gaps[len(gaps) // 2]
+	target_fdr = (estimates[g] + estimates[g + 1]) / 2
+
+	result = recursive_seqlets(X, X_control=X_control, target_fdr=target_fdr,
+		return_fdr=True, min_seqlet_len=min_seqlet_len,
+		max_seqlet_len=max_seqlet_len, n_bins=16)
+
+	assert_allclose(result.fdr['threshold'], thresholds, rtol=1e-12)
+	assert_array_equal(result.fdr['n_seqlets'], n)
+	assert_array_equal(result.fdr['n_control_seqlets'], n_control)
+	assert_allclose(result.fdr['fdr'], fdr, rtol=1e-12)
+
+	if name == "stronger_control":
+		assert ((n == 0) & (n_control > 0)).any()
+
+	passing = fdr <= target_fdr
+	assert passing.any() and not passing.all()
+	_assert_seqlets_equal(result.seqlets, _reference_decode(spans,
+		thresholds[passing].max()))
+
+	threshold = result.fdr['threshold'][passing].max()
+	assert_frame_equal(result.seqlets, recursive_seqlets(X,
+		threshold=threshold, min_seqlet_len=min_seqlet_len,
+		max_seqlet_len=max_seqlet_len, n_bins=16), check_exact=True)
+
+
+def test_recursive_seqlets_control_short_X():
+	"""With X shorter than min_seqlet_len, nothing is called on X at any
+	threshold, so every estimate is NaN and the warning says so, but the
+	control is decoded against the null of X until it calls nothing."""
+
+	X = numpy.random.RandomState(0).normal(size=(2, 3))
+	X_control = _random_attributions(1, 4, 40)
+
+	with pytest.warns(TangermemeWarning, match="no seqlets are called on X "
+		"at any threshold"):
+		seqlets, fdr = recursive_seqlets(X, X_control=X_control,
+			return_fdr=True, max_seqlet_len=8, n_bins=16)
+
+	_, n, n_control, _, _ = _reference_fdr(X, X_control, 4, 8, 16)
+
+	assert seqlets.shape == (0, 5)
+	assert (n == 0).all()
+	assert (fdr['n_seqlets'] == 0).all()
+	assert fdr['fdr'].isna().all()
+	assert n_control[0] > 0
+	assert_array_equal(fdr['n_control_seqlets'], n_control)
+
+
+def test_recursive_seqlets_control_nested():
+	"""With min_seqlet_len equal to max_seqlet_len no sub-span needs checking,
+	so the spans visited at a threshold are visited first, in the same order,
+	at every looser one. The seqlets called at a stricter threshold are then
+	a subset of those called at a looser one, and the counts in the fdr table
+	do not increase down it."""
+
+	rng = numpy.random.RandomState(0)
+	X = rng.laplace(size=(8, 200)) * 0.01
+	X[:, 100:110] += numpy.linspace(0, 0.1, 8)[:, None]
+	X_control = rng.laplace(size=(8, 200)) * 0.01
+
+	fdr = recursive_seqlets(X, X_control=X_control, min_seqlet_len=5,
+		max_seqlet_len=5, target_fdr=0.5, return_fdr=True).fdr
+
+	assert fdr['n_seqlets'].iloc[0] > fdr['n_seqlets'].iloc[40] > 0
+	assert (numpy.diff(fdr['n_seqlets']) <= 0).all()
+	assert (numpy.diff(fdr['n_control_seqlets']) <= 0).all()
+
+	called = None
+	for threshold in (0.1, 1e-2, 1e-3, 1e-5, 1e-8):
+		seqlets = recursive_seqlets(X, threshold=threshold, min_seqlet_len=5,
+			max_seqlet_len=5)
+		stricter = set(map(tuple, seqlets[_columns[:3]].values))
+		if called is not None:
+			assert stricter <= called
+		called = stricter
+
+
+def test_recursive_seqlets_control_largest_passing():
+	"""When the thresholds that reach target_fdr are not contiguous in the
+	table, seqlets are called at the largest of them."""
+
+	rng = numpy.random.RandomState(60)
+	X = rng.laplace(size=(3, 60))
+	X[:, 20:26] += 2.0
+	X_control = rng.laplace(size=(4, 45))
+
+	kwargs = {'min_seqlet_len': 3, 'max_seqlet_len': 6, 'n_bins': 16}
+	result = recursive_seqlets(X, X_control=X_control, target_fdr=0.3,
+		return_fdr=True, **kwargs)
+
+	passing = numpy.where(result.fdr['fdr'] <= 0.3)[0]
+	assert (numpy.diff(passing) > 1).any()
+
+	thresholds = result.fdr['threshold'].values
+	assert_frame_equal(result.seqlets, recursive_seqlets(X,
+		threshold=thresholds[passing[0]], **kwargs), check_exact=True)
+
+	for idx in passing[1:]:
+		seqlets = recursive_seqlets(X, threshold=thresholds[idx], **kwargs)
+		assert not seqlets.equals(result.seqlets)
+
+
+def test_recursive_seqlets_control_target_inclusive(X_laplace, X_background):
+	"""A threshold whose estimate equals target_fdr reaches it; with the next
+	float below the target, it does not."""
+
+	fdr = recursive_seqlets(X_laplace, X_control=X_background, target_fdr=0.2,
+		return_fdr=True).fdr
+
+	# The estimate at the largest threshold with an estimate below 0.5 that
+	# no larger threshold reaches.
+	estimates = fdr['fdr'].values
+	idx = next(i for i, v in enumerate(estimates) if v < 0.5 and
+		not (estimates[:i] <= v).any())
+	target = estimates[idx]
+	below = numpy.nextafter(target, 0)
+	assert (estimates <= below).any()
+
+	for t, expected in ((target, fdr['threshold'][idx]),
+		(below, fdr['threshold'][estimates <= below].max())):
+		seqlets = recursive_seqlets(X_laplace, X_control=X_background,
+			target_fdr=t)
+		assert_frame_equal(seqlets, recursive_seqlets(X_laplace,
+			threshold=expected), check_exact=True)
+
+	assert fdr['threshold'][estimates <= below].max() < fdr['threshold'][idx]
+
+
+def test_recursive_seqlets_control_warning_estimate():
+	"""When no threshold reaches target_fdr, the warning gives the lowest
+	estimate in the table, with a threshold and number of seqlets of a row
+	that has it."""
+
+	rng = numpy.random.RandomState(0)
+	X = rng.laplace(size=(8, 300))
+	X_control = rng.laplace(size=(8, 300))
+
+	with pytest.warns(TangermemeWarning) as record:
+		seqlets, fdr = recursive_seqlets(X, X_control=X_control,
+			target_fdr=0.01, return_fdr=True)
+
+	assert seqlets.shape == (0, 5)
+	messages = [str(w.message) for w in record
+		if issubclass(w.category, TangermemeWarning)]
+	assert len(messages) == 1
+	message = messages[0]
+	match = re.search(r"the lowest estimate is (\S+), at a threshold of (\S+) "
+		r"with (\d+) seqlets", message)
+	assert match is not None, message
+
+	best = fdr['fdr'].min()
+	assert match.group(1) == "{:.3f}".format(best)
+
+	rows = fdr[fdr['fdr'] == best]
+	assert any(match.group(2) == "{:.1e}".format(t) and
+		match.group(3) == str(k) for t, k in zip(rows['threshold'],
+		rows['n_seqlets']))
+
+
+@pytest.mark.parametrize("threshold", [numpy.nan, 2.0])
+def test_recursive_seqlets_control_threshold_unchecked(X_laplace,
+	X_background, threshold):
+	"""threshold is ignored with a control, so a value that would raise
+	without one does not."""
+
+	seqlets = recursive_seqlets(X_laplace, threshold=threshold,
+		X_control=X_background, target_fdr=0.2)
+	assert len(seqlets) > 0
+	assert_frame_equal(seqlets, recursive_seqlets(X_laplace,
+		X_control=X_background, target_fdr=0.2), check_exact=True)
+
+
+def test_recursive_seqlets_control_flanks(X_laplace, X_background):
+	"""Flanks do not change the fdr table, and the seqlets returned with a
+	control get them as at the chosen threshold without one."""
+
+	result = recursive_seqlets(X_laplace, X_control=X_background,
+		target_fdr=0.2, return_fdr=True)
+	flanked = recursive_seqlets(X_laplace, X_control=X_background,
+		target_fdr=0.2, return_fdr=True, additional_flanks=3)
+
+	assert_frame_equal(flanked.fdr, result.fdr, check_exact=True)
+	assert not flanked.seqlets.equals(result.seqlets)
+
+	threshold = result.fdr.loc[result.fdr['fdr'] <= 0.2, 'threshold'].max()
+	assert_frame_equal(flanked.seqlets, recursive_seqlets(X_laplace,
+		threshold=threshold, additional_flanks=3), check_exact=True)
+
+
+def test_recursive_seqlets_control_dtype(X_laplace, X_background):
+	"""A control gives the same output, bit for bit, as the control cast to
+	the dtype of X first, and a tensor control the same as its array.
+
+	Only the last case can show whether the control is binned in the dtype
+	of X: a third or more of its values are moved to just above the lower
+	edge of their bin of X, at float64 values whose float32 roundings fall
+	in the bin below, so binning them in float64 would change their bins and
+	the fdr table. In the first case, values of a float64 control are rarely
+	that close to an edge, and in the second, casting float32 to float64 is
+	exact.
+	"""
+
+	X32 = X_laplace.astype(numpy.float32)
+	C32 = X_background.astype(numpy.float32)
+
+	xmin = X32.min()
+	bin_width = float(X32.max() - xmin) / 999
+	bins = _reference_bins(X_background, float(xmin), bin_width, 1000)
+	edges = float(xmin) + bins * bin_width + 1e-9 * bin_width
+	moved = (bins > 0) & (_reference_bins(edges.astype(numpy.float32), xmin,
+		bin_width, 1000) < _reference_bins(edges, float(xmin), bin_width, 1000))
+	C_edges = numpy.where(moved, edges, X_background)
+	assert moved.mean() > 0.3
+
+	for X, X_control, cast, target_fdr in (
+		(X32, X_background, C32, 0.2),
+		(X_laplace, C32, C32.astype(numpy.float64), 0.2),
+		(X_laplace, torch.from_numpy(X_background), X_background, 0.2),
+		(X32, C_edges, C_edges.astype(numpy.float32), 0.2)):
+
+		result = recursive_seqlets(X, X_control=X_control,
+			target_fdr=target_fdr, return_fdr=True)
+		expected = recursive_seqlets(X, X_control=cast,
+			target_fdr=target_fdr, return_fdr=True)
+
+		assert len(result.seqlets) > 0
+		assert_frame_equal(result.seqlets, expected.seqlets, check_exact=True)
+		assert_frame_equal(result.fdr, expected.fdr, check_exact=True)
