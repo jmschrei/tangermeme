@@ -559,6 +559,18 @@ def recursive_seqlets(
 	their summed bins in these 1-CDFs, yielding a (n_positions, n_lengths)
 	matrix of p-values.
 
+	These p-values rank spans; they are not error rates. Attributions are
+	usually correlated along the sequence, so neighboring positions tend to
+	be high together and spans reach large sums more often than independent
+	draws would, which makes the p-values smaller than the chance of seeing
+	such a span in sequence without real signal. When the null is built from
+	`X`, it also contains the signal being tested, and a span's p-value
+	depends on the other examples in `X`. As a result, a threshold of 0.01
+	does not mean that 1% of the calls are false, and the same threshold can
+	mean very different fractions of false calls in different models and
+	datasets. To choose a threshold with a known estimated false discovery
+	rate, use `recursive_seqlets_fdr` with control attributions.
+
 	This algorithm then identifies seqlets by defining them to have a key
 	property: all internal spans of a seqlet must also have been called a
 	seqlet. This means that all spans from `min_seqlet_len` to `max_seqlet_len`,
@@ -603,8 +615,9 @@ def recursive_seqlets(
 
 	threshold: float, optional
 		The p-value threshold for calling seqlets. All positions within the
-		triangle (as detailed above) must be below this threshold. Default is
-		0.01.
+		triangle (as detailed above) must be below this threshold. This is a
+		cutoff on a ranking score, not a false discovery rate; see above, and
+		`recursive_seqlets_fdr` for choosing it. Default is 0.01.
 
 	min_seqlet_len: int, optional
 		The minimum length that a seqlet must be, and the minimal length of
@@ -624,18 +637,18 @@ def recursive_seqlets(
 		1000.
 
 	X_null: torch.Tensor, numpy.ndarray, or None, optional
-		Projected attributions, computed the same way as `X`, for sequences
-		without real signal, such as dinucleotide-shuffled copies of the
-		sequences. If given, the histogram that the null distributions are
-		built from comes from these values instead of from `X`, so p-values
-		measure how unusual a span is relative to this background rather than
-		relative to the pooled input, and a span's p-value does not depend on
-		the other examples in `X` except through the range of the bins, which
-		covers the values of both. Only the values are used, so the shape may
-		differ from `X`. A span whose summed bins exceed anything the control
-		can produce receives a p-value of 0. The p-values still treat
-		positions as independent; use `recursive_seqlets_fdr` to choose a
-		threshold. If None, the histogram is built from `X`. Default is None.
+		Projected attributions, computed the same way as `X`, to build the
+		null distributions from instead of `X`, such as those of a large
+		reference set of sequences or of many dinucleotide-shuffled
+		sequences. Each span is then scored against this fixed background, so
+		its p-value does not depend on the other examples in `X` except
+		through the range of the bins, which covers the values of both. This
+		lets a single sequence, or several batches, be scored consistently.
+		Only the values are used, so the shape may differ from `X`. A span
+		whose summed bins exceed anything `X_null` can produce receives a
+		p-value of 0. The p-values still treat positions as independent, so
+		they remain a ranking score. If None, the histogram is built from
+		`X`. Default is None.
 
 
 	Returns
@@ -644,7 +657,8 @@ def recursive_seqlets(
 		A BED-formatted dataframe containing the called seqlets, ranked from
 		lowest p-value to higher p-value. The returned p-value is the p-value
 		of the (location, length) span and is not influenced by the other
-		values within the triangle. 
+		values within the triangle. Use it to rank seqlets, not as the
+		probability that a seqlet is false.
 	"""
 
 	X = _as_attributions(X, "X")
@@ -685,25 +699,38 @@ def recursive_seqlets_fdr(
 	calling seqlets on control attributions that contain no real signal, such
 	as attributions on dinucleotide-shuffled copies of the sequences, using
 	the same null distributions and bins as for `X`. Every seqlet called on
-	the control is false, so the estimated false discovery rate at each
-	threshold is the number of control seqlets, scaled to the number of
+	the control is counted as false, so the estimated false discovery rate at
+	each threshold is the number of control seqlets, scaled to the number of
 	positions in `X`, divided by the number of seqlets called on `X`.
 
-	The control used for counting should not be the one passed as `X_null`,
-	because a control scored against a null built from itself produces fewer
-	seqlets than a new control would. Attributing two independent shuffles of
-	each sequence and passing one as `X_null` and the other as `X_control`
-	avoids this.
-
-	To call seqlets at a target false discovery rate, take the largest
-	threshold whose estimate is at or below it and pass that threshold, and
-	the same `X_null`, to `recursive_seqlets`:
+	For most uses, leave `X_null` as None and pass, as `X_control`, the
+	attributions of several dinucleotide shuffles of each sequence in `X`,
+	concatenated along the first axis. The estimate at a threshold is only as
+	precise as the number of control seqlets called there, so more shuffles
+	give a steadier estimate, most of all at strict thresholds. To call
+	seqlets at a target false discovery rate, take the largest threshold
+	whose estimate is at or below it and pass that threshold to
+	`recursive_seqlets`, with the same `X_null` if one is used. Here, `X` is
+	projected attributions of the sequences and `X_control` those of their
+	shuffles:
 
 	::
 
-	    fdr = recursive_seqlets_fdr(X, X_control, X_null=X_null)
+	    fdr = recursive_seqlets_fdr(X, X_control)
 	    threshold = fdr.loc[fdr['fdr'] <= 0.1, 'threshold'].max()
-	    seqlets = recursive_seqlets(X, threshold=threshold, X_null=X_null)
+	    seqlets = recursive_seqlets(X, threshold=threshold)
+
+	A false call here is a seqlet that is no more frequent than in sequences
+	with the same dinucleotide composition. Shuffling can create real motif
+	matches that the model responds to, so the estimate may level off above
+	zero as the threshold gets stricter. A target below that level is then
+	reached by no threshold, and a target near it picks a threshold from a
+	flat stretch of the curve, which moves a lot with the control drawn.
+	Looking at the whole curve shows whether this happens.
+
+	When `X_null` is given, count on a different control: a control's own
+	spans are part of a null built from it, which makes them look slightly
+	less unusual than those of a new control.
 
 
 	Parameters
@@ -714,13 +741,14 @@ def recursive_seqlets_fdr(
 
 	X_control: torch.Tensor or numpy.ndarray, shape=(-1, length)
 		Projected attributions, computed the same way as `X`, for sequences
-		without real signal. It may contain a different number of examples, or
+		without real signal, such as dinucleotide-shuffled copies of the
+		sequences in `X`. It may contain a different number of examples, or
 		examples of a different length, than `X`; the counts are scaled by the
 		number of positions. Values outside the range of the bins are placed in
 		the end bins.
 
 	X_null: torch.Tensor, numpy.ndarray, or None, optional
-		Control attributions to build the null distributions from, as in
+		Attributions to build the null distributions from, as in
 		`recursive_seqlets`. If None, the null distributions are built from `X`
 		itself. Default is None.
 
