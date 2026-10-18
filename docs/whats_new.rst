@@ -56,7 +56,7 @@ Packed sequences
 annotate
 --------
 
-	- ``annotate_seqlets`` runs TOMTOM on 4 threads by default, where it used every core, so that one call does not take a whole shared machine. Pass ``n_jobs=-1`` for every core as before. The annotations are the same for every value. With 8 cores, on 2,000 seqlets and 500 motifs, a call took 1.58 s against 0.91 s, with a peak of 672 MB against 810 MB.
+	- ``annotate_seqlets`` runs TOMTOM on 4 threads by default, where it used every core, so that one call does not take a whole shared machine. The count is capped by numba's ``NUMBA_NUM_THREADS``, so the default also works where numba allows fewer than 4 threads. Pass ``n_jobs=-1`` for every core as before. The annotations are the same for every value. With 8 cores, on 2,000 seqlets and 500 motifs, a call took 1.58 s against 0.91 s, with a peak of 672 MB against 810 MB.
 
 deep_lift_shap
 --------------

@@ -418,6 +418,33 @@ def test_pairwise_annotations_spacing_overlap_across_examples_ok():
 	assert int(y.sum()) == 0
 
 
+def test_annotate_seqlets_few_threads():
+	# The default n_jobs is capped by the threads numba allows, so a call with
+	# the defaults works where numba allows fewer than four.
+	import os
+	import subprocess
+	import sys
+
+	import tangermeme
+
+	code = ("import pandas, torch\n"
+		"from tangermeme.annotate import annotate_seqlets\n"
+		"X = torch.load('tests/data/X_gata.torch')\n"
+		"seqlets = pandas.DataFrame({'example_idx': [0, 1], 'start': [1040, "
+		"1030], 'end': [1060, 1050]})\n"
+		"idxs, pvals = annotate_seqlets(X, seqlets, 'tests/data/test.meme')\n"
+		"print(tuple(idxs.shape))\n")
+
+	root = os.path.dirname(os.path.dirname(tangermeme.__file__))
+	env = dict(os.environ, NUMBA_NUM_THREADS="2",
+		PYTHONPATH=root + os.pathsep + os.environ.get("PYTHONPATH", ""))
+	result = subprocess.run([sys.executable, "-c", code], env=env,
+		capture_output=True, text=True)
+
+	assert result.returncode == 0, result.stderr[-2000:]
+	assert result.stdout.strip() == "(2, 1)"
+
+
 def test_annotate_seqlets_packed(X, gata_seqlets):
 	# A PackedSequence gives the annotations of its one-hot encoding.
 	idxs, pvals = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme")

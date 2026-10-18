@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import numba
 import numpy
 import torch
 import pandas
@@ -61,8 +62,8 @@ def annotate_seqlets(
 		the most significant hit. Default is 1.
 
 	n_jobs: int, optional
-		The number of threads to run TOMTOM on in parallel. -1 means use all
-		available threads. Default is 4.
+		The number of threads to run TOMTOM on in parallel, capped by numba's
+		NUMBA_NUM_THREADS. -1 means use all available threads. Default is 4.
 
 	``**kwargs``: arguments, optional
 		Any other arguments to pass into the TOMTOM algorithm.
@@ -89,6 +90,11 @@ def annotate_seqlets(
 				dtype=torch.float32)[:, start:end])
 		else:
 			X_seqlets.append(X[example_idx, :, start:end])
+
+	# memelite sets numba's thread count to n_jobs unchecked, which raises
+	# above the threads numba allows.
+	if n_jobs != -1:
+		n_jobs = min(int(n_jobs), numba.config.NUMBA_NUM_THREADS)
 
 	p_values, _, _, _, _, idxs = tomtom(X_seqlets, motif_pwms, 
 		n_nearest=n_nearest, n_jobs=n_jobs, **kwargs)
