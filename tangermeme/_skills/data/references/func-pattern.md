@@ -18,7 +18,7 @@ Four library functions already satisfy it and can be passed directly:
 - `tangermeme.saturation_mutagenesis.saturation_mutagenesis` — returns ISM scores.
 - `tangermeme.saliency.saliency` — returns input × gradient attributions.
 
-With a `PackedSequence` as `X`, these three, `pisa`, and the `ersatz` shuffles
+With a `PackedSequence` as `X`, these four, `pisa`, and the `ersatz` shuffles
 given as `shuffle_fn=` (also inside `functools.partial`) receive it packed. Any
 other `func` or `shuffle_fn`, including your own, receives its int8 one-hot
 encoding.

@@ -16,12 +16,15 @@ from .saliency import saliency
 from .saturation_mutagenesis import _check_span
 from .saturation_mutagenesis import _edited_inputs
 from .saturation_mutagenesis import _single_edits
+from .utils import _accepts_packed
 from .utils import _validate_input
+from .utils import PackedSequence
 
 
+@_accepts_packed
 def dependency_map(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	args: Sequence[torch.Tensor] | None = None,
 	start: int = 0,
 	end: int = -1,
@@ -89,9 +92,11 @@ def dependency_map(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A set of one-hot encoded sequences to calculate dependency maps for.
-		Cast to int8 internally, in the same manner as
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
+		A set of one-hot encoded sequences to calculate dependency maps for,
+		or a PackedSequence with one batch axis, which is decoded at the
+		start: the attributions of the edits take more memory than the
+		sequences. Cast to int8 internally, in the same manner as
 		`saturation_mutagenesis`, so that the substitution grid stays small;
 		`func` is responsible for upcasting each batch, as `saliency`,
 		`deep_lift_shap`, and `saturation_mutagenesis` all do.
@@ -179,7 +184,8 @@ def dependency_map(
 	additional_func_kwargs = dict(additional_func_kwargs or {})
 	device = _resolve_device(device)
 
-	X = X.type(torch.int8).cpu()
+	X = X.to_one_hot() if isinstance(X, PackedSequence) else X.type(
+		torch.int8).cpu()
 	n, n_chars, length = X.shape
 	end = _check_span(start, end, length)
 

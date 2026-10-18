@@ -13,12 +13,16 @@ from tqdm import trange
 
 from ._compat import _autocast_supported, _preserve_model_state, _resolve_device
 from .deep_lift_shap import _squeeze_output
+from .predict import _to_device
+from .utils import _accepts_packed
 from .utils import _validate_input
+from .utils import PackedSequence
 
 
+@_accepts_packed
 def saliency(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	args: Sequence[torch.Tensor] | None = None,
 	target: int = 0,
 	batch_size: int = 32,
@@ -92,9 +96,10 @@ def saliency(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A set of one-hot encoded sequences to calculate attribution values
-		for.
+		for, or a PackedSequence with one batch axis, of which each batch is
+		decoded on `device` in `dtype`.
 
 	args: tuple or list or None, optional
 		An optional set of additional arguments to pass into the model. If
@@ -204,10 +209,15 @@ def saliency(
 
 		for start in trange(0, X.shape[0], batch_size, disable=not verbose):
 			end = start + batch_size
-			X_ = X[start:end].type(dtype).to(device).requires_grad_()
+			if isinstance(X, PackedSequence):
+				X_ = X[start:end].to_one_hot(dtype=dtype, device=device)
+			else:
+				X_ = _to_device(X[start:end], dtype, device)
+
+			X_.requires_grad_()
 
 			if args is not None:
-				args_ = [a[start:end].type(dtype).to(device) for a in args]
+				args_ = [_to_device(a[start:end], dtype, device) for a in args]
 			else:
 				args_ = []
 

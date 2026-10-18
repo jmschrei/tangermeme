@@ -6,6 +6,7 @@ import pytest
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
 from tangermeme.ersatz import shuffle
 from tangermeme.ersatz import substitute
 from tangermeme.ersatz import multisubstitute
@@ -560,3 +561,118 @@ def test_saliency_linear_model_gradient_is_constant(device):
 
 		assert_array_almost_equal(X_attr[0], X_attr[1], 5)
 		assert_array_almost_equal(X_attr[0], X_attr[2], 5)
+
+
+###
+# A PackedSequence gives the attributions of its one-hot encoding, each batch
+# decoded on the device. Given as the `func` of another function, saliency
+# receives the packed copies that function makes from a packed X.
+
+
+def _with_N(X):
+	X = X.clone()
+	X[0, :, :5] = 0
+	X[3, :, 40:47] = 0
+	X[-1, :, -1] = 0
+	return X
+
+
+def _assert_same(y, y_packed):
+	if isinstance(y, torch.Tensor):
+		assert y_packed.dtype == y.dtype
+		assert torch.equal(y_packed, y)
+	else:
+		assert len(y_packed) == len(y)
+		for y_, y_packed_ in zip(y, y_packed):
+			_assert_same(y_, y_packed_)
+
+
+@pytest.mark.parametrize("hypothetical", [False, True])
+@pytest.mark.parametrize("batch_size", [1, 7, 64])
+def test_saliency_packed(X, hypothetical, batch_size, device):
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	X = _with_N(X)
+
+	X_attr = saliency(model, X, hypothetical=hypothetical,
+		batch_size=batch_size, device=device)
+	X_attr_packed = saliency(model, PackedSequence.from_one_hot(X),
+		hypothetical=hypothetical, batch_size=batch_size, device=device)
+	_assert_same(X_attr, X_attr_packed)
+
+
+def test_saliency_packed_args_target(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	alpha = torch.zeros(X.shape[0], 1)
+	beta = torch.full((X.shape[0], 1), 2.0)
+
+	X_attr = saliency(model, X, args=(alpha, beta), target=2, device=device)
+	X_attr_packed = saliency(model, PackedSequence.from_one_hot(X),
+		args=(alpha, beta), target=2, device=device)
+	_assert_same(X_attr, X_attr_packed)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_saliency_packed_16bit(X, dtype, cuda_device):
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+
+	X_attr = saliency(model, X, dtype=dtype, device=cuda_device)
+	X_attr_packed = saliency(model, PackedSequence.from_one_hot(X),
+		dtype=dtype, device=cuda_device)
+	_assert_same(X_attr, X_attr_packed)
+
+
+@pytest.mark.parametrize("dtype", [torch.int8, torch.uint8, torch.bool,
+	torch.float16, torch.float64])
+def test_saliency_stored_dtype(X, dtype, device):
+	# Attributions of sequences and arguments stored in another dtype equal
+	# those of the same values given as float32.
+	torch.manual_seed(0)
+	model = FlattenDense()
+	alpha = torch.zeros(X.shape[0], 1)
+	beta = torch.full((X.shape[0], 1), 2.0)
+
+	X_attr = saliency(model, X.type(dtype), args=(alpha.half(),
+		beta.double()), device=device)
+	X_attr0 = saliency(model, X, args=(alpha, beta), device=device)
+	_assert_same(X_attr0, X_attr)
+
+
+@pytest.mark.parametrize("name", ["marginalize", "ablate", "space",
+	"substitution_effect", "apply_pairwise"])
+def test_saliency_func_packed(X, name, device):
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	X = _with_N(X[:4])
+	alpha = torch.tensor([[0.0], [1.0]])
+	beta = torch.tensor([[2.0], [-1.0]])
+
+	calls = {
+		"marginalize": lambda X_: marginalize(model, X_, "ACGTGT",
+			func=saliency, device=device),
+		"ablate": lambda X_: ablate(model, X_, 40, 60, n=3, func=saliency,
+			random_state=0, device=device),
+		"space": lambda X_: space(model, X_, ["ACG", "TTT"], [[2], [5]],
+			func=saliency, device=device),
+		"substitution_effect": lambda X_: substitution_effect(model, X_,
+			torch.tensor([[0, 10, 1], [2, 50, 3]]), func=saliency,
+			device=device),
+		"apply_pairwise": lambda X_: apply_pairwise(saliency, FlattenDense(
+			n_outputs=1), X_, args=(alpha, beta), device=device),
+	}
+
+	torch.manual_seed(0)
+	y = calls[name](X)
+	torch.manual_seed(0)
+	y_packed = calls[name](PackedSequence.from_one_hot(X))
+	_assert_same(y, y_packed)
+
+
+def test_saliency_packed_raises(X, device):
+	model = FlattenDense()
+	X_packed = PackedSequence.from_one_hot(X)
+	assert_raises(ValueError, saliency, model, X_packed[:0], device=device)
+	assert_raises(ValueError, saliency, model, X_packed, args=(X[:5],),
+		device=device)
