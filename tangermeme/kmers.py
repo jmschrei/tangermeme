@@ -11,12 +11,14 @@ import numpy as np
 from numba import njit, prange
 import numba
 
+from .utils import PackedSequence
+
 key_type = numba.types.int64
 value_type = numba.types.float64
 
 
 def kmers(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	k: int,
 	scores: torch.Tensor | None = None,
 ) -> scipy.sparse.csr_matrix:
@@ -31,8 +33,10 @@ def kmers(
 
 	Parameters
 	----------
-	X: torch.Tensor, shape=(-1, len(alphabet), sequence_length)
+	X: torch.Tensor, shape=(-1, len(alphabet), sequence_length), or PackedSequence
 		A one-hot encoded set of sequences.
+		A PackedSequence is decoded to its one-hot encoding at the start,
+		since the counts take more memory than the sequences.
 
 	k: int
 		The size of the k-mers to consider.
@@ -50,6 +54,9 @@ def kmers(
 		A featurization where each row is an example from the original set of
 		sequences and each column is a k-mer that could be in the sequence.
 	"""
+
+	if isinstance(X, PackedSequence):
+		X = X.to_one_hot()
 
 	n = X.shape[1]
 
@@ -164,7 +171,7 @@ def _fast_extract_gkmers(X, min_k, max_k, max_gap, max_len, max_entries):
 
 
 def gapped_kmers(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	scores: torch.Tensor | None = None,
 	min_k: int = 4,
 	max_k: int = 8,
@@ -185,8 +192,10 @@ def gapped_kmers(
 
 	Parameters
 	----------
-	X: torch.Tensor, shape=(-1, len(alphabet), sequence_length)
+	X: torch.Tensor, shape=(-1, len(alphabet), sequence_length), or PackedSequence
 		A one-hot encoded set of sequences.
+		A PackedSequence is decoded to its one-hot encoding at the start,
+		since the counts take more memory than the sequences.
 
 	scores: torch.Tensor with shape=(-1, sequence_length) or None, optional
 		A corresponding set of attribution values to use. If None, return counts
@@ -224,6 +233,9 @@ def gapped_kmers(
 		found.
 	"""
 
+
+	if isinstance(X, PackedSequence):
+		X = X.to_one_hot()
 
 	X_idxs = X.argmax(axis=1)
 	if scores is None:

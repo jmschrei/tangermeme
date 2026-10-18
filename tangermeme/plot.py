@@ -25,6 +25,8 @@ from matplotlib.transforms import Bbox
 from functools import lru_cache
 
 from .deep_lift_shap import deep_lift_shap
+from .utils import _for_func
+from .utils import PackedSequence
 from .utils import TangermemeWarning
 
 import numpy as np
@@ -927,7 +929,7 @@ def plot_categorical_scatter(
 
 def plot_attributions(
 	models: torch.nn.Module | list[torch.nn.Module],
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	func: Callable[..., Any] = deep_lift_shap,
 	attribute_kwargs: dict | None = None,
 	plot_kwargs: dict | None = None,
@@ -961,8 +963,11 @@ def plot_attributions(
 	models: torch.nn.Module or list of torch.nn.Modules
 		One or a set of models to apply to the sequence/s.
 	
-	X: torch.Tensor, shape=(-1, len(alphabet), -1) or (len(alphabet), -1)
+	X: torch.Tensor, shape=(-1, len(alphabet), -1) or (len(alphabet), -1), or PackedSequence
 		One or more sequences to calculate attributions for and visualize.
+		A PackedSequence is passed on to `func` a sequence at a time, packed
+		when `func` takes one, such as `deep_lift_shap`, and as an int8
+		one-hot encoding otherwise.
 
 	func: func, optional
 		The attribution function to use. Default is deep_lift_shap.
@@ -999,6 +1004,9 @@ def plot_attributions(
 		
 		models = [models for _ in range(X.shape[0])]
 		
+	elif X.ndim == 2 and isinstance(X, PackedSequence):
+		X = X.reshape(1)[[0] * len(models)]
+
 	elif X.ndim == 2:
 		X = X.repeat(len(models), 1, 1)
 	
@@ -1017,7 +1025,7 @@ def plot_attributions(
 	
 	X_attrs = []
 	for i, model in enumerate(models):
-		X_attr = func(model, X[i:i+1], **attribute_kwargs)
+		X_attr = func(model, _for_func(X[i:i+1], func), **attribute_kwargs)
 		X_attrs.append(X_attr)
 	X_attrs = torch.cat(X_attrs, dim=0).detach()
 	

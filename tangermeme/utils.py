@@ -398,7 +398,7 @@ def example_to_fasta_coords(
 
 
 def characters(
-	pwm: torch.Tensor | numpy.ndarray,
+	pwm: torch.Tensor | numpy.ndarray | PackedSequence,
 	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
 	force: bool = False,
 	allow_N: bool = False,
@@ -412,10 +412,14 @@ def characters(
 
 	Parameters
 	----------
-	pwm: torch.tensor, shape=(len(alphabet), seq_len)
+	pwm: torch.tensor, shape=(len(alphabet), seq_len), or PackedSequence
 		A numeric representation of the sequence. This can be one-hot encoded
 		or contain numeric values. These numerics can be probabilities but can
 		also be frequencies.
+		A PackedSequence of one sequence is read from its character indices
+		with its own alphabet, an unknown character becoming N under `allow_N`
+		and the first character under `force`, as an all-zero column of a
+		one-hot encoding does.
 
 	alphabet : list or tuple
 		A pre-defined alphabet where the ordering of the symbols is the same
@@ -438,6 +442,22 @@ def characters(
 		A string where the length is the second dimension of PWM.
 	"""
  
+	if isinstance(pwm, PackedSequence):
+		if pwm.ndim == 3 and pwm.shape[0] == 1:
+			pwm = pwm[0]
+
+		if pwm.ndim != 2:
+			raise ValueError("A PackedSequence must hold one sequence.")
+
+		codes = pwm.to_codes().numpy()
+		if (codes == 4).any() and not allow_N and not force:
+			raise ValueError("At least one position in the PWM has multiple " +
+				"letters with the same probability.")
+
+		chars = numpy.array(list(pwm.alphabet) + ['N' if allow_N else
+			pwm.alphabet[0]])
+		return ''.join(chars[codes])
+
 	#if (batch, alphabet_size, motif_size) and batch = 1, remove batch axis
 	if len(pwm.shape) == 3 and pwm.shape[0] == 1:
 		pwm = pwm[0]
@@ -1094,7 +1114,7 @@ def _one_hot_encode_rows(
 
 
 def reverse_complement(
-	seq: str | torch.Tensor,
+	seq: str | torch.Tensor | PackedSequence,
 	complement_map: dict[str, str] = {"A": "T", "C": "G", "G": "C", "T": "A"},
 	allow_N: bool = True,
 ) -> str | torch.Tensor:
@@ -1112,8 +1132,12 @@ def reverse_complement(
 	
 	Parameters
 	----------
-	seq: str or torch.Tensor w/ shape (alphabet_size, length)
+	seq: str or torch.Tensor w/ shape (alphabet_size, length), or PackedSequence
 		The sequence to be reverse complemented.
+		A PackedSequence is reverse complemented on its character indices,
+		with its own alphabet, along its last axis whatever its batch axes,
+		and returned packed. Its unknown characters stay unknown, and raise a
+		ValueError unless `allow_N`.
 	
 	complement_map: dict, optional
 		The ordering and complement of each nucleotide. When the input is a
@@ -1141,6 +1165,16 @@ def reverse_complement(
 	axis. Iterate over the batch (or unsqueeze and call once per row) until a
 	proper batched path is added.
 	"""
+
+	if isinstance(seq, PackedSequence):
+		if not allow_N and len(seq.n_runs) > 0:
+			raise ValueError("'N' not in complement map")
+
+		complement = [seq.alphabet.index(complement_map[char]) for char in
+			seq.alphabet] + [4]
+		codes = torch.tensor(complement, dtype=torch.uint8)[
+			seq.to_codes().flip(-1).long()]
+		return PackedSequence.from_codes(codes, seq.alphabet)
 
 	if isinstance(seq, str):
 		seq_rc = []
@@ -1981,7 +2015,7 @@ def _stack_packed(sequences):
 
 
 def chunk(
-	X: list[torch.Tensor],
+	X: list[torch.Tensor | PackedSequence],
 	size: int = 1024,
 	overlap: int = 0,
 ) -> torch.Tensor:
@@ -2001,8 +2035,10 @@ def chunk(
 
 	Parameters
 	----------
-	X: list of torch.Tensors
+	X: list of torch.Tensors or of PackedSequences
 		A list of one-hot encoded sequences that each are of shape (4, -1).
+		The sequences can instead be PackedSequences of one sequence each, in
+		which case the chunks are returned as a PackedSequence.
 
 	size: int, optional
 		The size of the chunks to produce from the sequence. Default is 1024.
@@ -2028,6 +2064,10 @@ def chunk(
 
 	if not isinstance(overlap, int) or overlap < 0:
 		raise ValueError("overlap must be a non-negative integer.")
+
+	if len(X) > 0 and isinstance(X[0], PackedSequence):
+		return _cat_packed([PackedSequence.from_codes(x.to_codes().unfold(-1,
+			size, size-overlap), x.alphabet) for x in X])
 
 	return torch.cat([x.unfold(-1, size, size-overlap).permute(1, 0, 2) 
 		for x in X], dim=0)
@@ -2228,7 +2268,7 @@ def set_seed(seed: int) -> None:
 
 
 def gc_content(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	alphabet: list[str] | tuple[str, ...] = ['A', 'C', 'G', 'T'],
 ) -> torch.Tensor:
 	"""Compute the GC content of one-hot encoded sequences.
@@ -2240,8 +2280,10 @@ def gc_content(
 
 	Parameters
 	----------
-	X: torch.Tensor, shape=(-1, len(alphabet), length)
+	X: torch.Tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences.
+		A PackedSequence is counted from its character indices, with its own
+		alphabet, without decoding its one-hot encoding.
 
 	alphabet: list[str] or tuple[str, ...], optional
 		The alphabet whose ordering matches `X`'s second axis. Used only
@@ -2261,6 +2303,15 @@ def gc_content(
 	if len(gc_idxs) == 0:
 		raise ValueError("Alphabet {} does not contain G or C; gc_content "
 			"is only defined for alphabets containing both.".format(alphabet))
+
+	if isinstance(X, PackedSequence):
+		codes = X.to_codes()
+		gc_codes = torch.tensor([i for i, c in enumerate(X.alphabet) if c in
+			('G', 'C')], dtype=torch.uint8)
+		gc = torch.isin(codes, gc_codes).sum(dim=-1).float()
+		total = (codes != 4).sum(dim=-1).float()
+		return torch.where(total > 0, gc / total.clamp(min=1),
+			torch.zeros_like(gc))
 
 	X_float = X.float()
 	non_n = X_float.sum(dim=1)  # (-1, length)

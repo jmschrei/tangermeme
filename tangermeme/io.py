@@ -27,6 +27,7 @@ from .utils import _one_hot_encode_rows
 from .utils import _one_hot_rows_mapping
 from .utils import _one_hot_encode_fasta
 from .utils import characters
+from .utils import PackedSequence
 from .utils import TangermemeWarning
 
 from memelite.io import read_meme as memelite_read_meme
@@ -1292,7 +1293,7 @@ def extract_loci(
 
 
 def one_hot_to_fasta(
-	X: torch.Tensor | numpy.ndarray,
+	X: torch.Tensor | numpy.ndarray | PackedSequence,
 	filename: str,
 	mode: str = 'w',
 	headers: list[str] | None = None,
@@ -1307,8 +1308,11 @@ def one_hot_to_fasta(
 
 	Parameters
 	----------
-	X: torch.Tensor, shape=(-1, len(alphabet), length)
+	X: torch.Tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A set of one-hot encoded sequences to write out.
+		A PackedSequence with one batch axis is written from its character
+		indices with its own alphabet, a chunk of sequences at a time, and its
+		unknown characters as N.
 
 	filename: str
 		The path to the FASTA file to write to.
@@ -1326,9 +1330,17 @@ def one_hot_to_fasta(
 		the index into the one-hot encoding. Default is ['A', 'C', 'G', 'T'].
 	"""
 	
+	if isinstance(X, PackedSequence):
+		chars = numpy.frombuffer((''.join(X.alphabet) + 'N').encode('ascii'),
+			dtype=numpy.uint8)
+		step = max(1, 2 ** 24 // max(1, X.length))
+		sequences = (chars[codes].tobytes().decode('ascii') for start in range(
+			0, len(X), step) for codes in X[start:start+step].to_codes().numpy())
+	else:
+		sequences = (characters(X_seq, alphabet=alphabet) for X_seq in X)
+
 	with open(filename, mode=mode) as outfile:
-		for i, X_seq in enumerate(X):
-			X_chars = characters(X_seq, alphabet=alphabet)
+		for i, X_chars in enumerate(sequences):
 			
 			if headers is None:
 				outfile.write("> {}\n".format(i))

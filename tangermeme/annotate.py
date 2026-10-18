@@ -11,12 +11,13 @@ import pandas
 
 from .io import read_meme
 from .utils import _validate_input
+from .utils import PackedSequence
 
 from memelite.tomtom import tomtom
 
 
 def annotate_seqlets(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	seqlets: pandas.DataFrame,
 	motifs: str | dict,
 	n_nearest: int = 1,
@@ -38,9 +39,11 @@ def annotate_seqlets(
 
 	Parameters
 	----------
-	X: torch.Tensor, shape=(n_examples, len(alphabet), length)
+	X: torch.Tensor, shape=(n_examples, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences. These are only relevant for
 		extracting the sequences spanned by each seqlet.
+		A PackedSequence is decoded one sequence at a time, as float32, for
+		the seqlets in it.
 
 	seqlets: pandas.DataFrame, shape=(n_seqlets, 3+)
 		A BED-formatted set of seqlets to annotate. The first three columns
@@ -81,7 +84,11 @@ def annotate_seqlets(
 
 	X_seqlets = []
 	for example_idx, start, end in seqlets.iloc[:, :3].values:
-		X_seqlets.append(X[example_idx, :, start:end])
+		if isinstance(X, PackedSequence):
+			X_seqlets.append(X[int(example_idx)].to_one_hot(
+				dtype=torch.float32)[:, start:end])
+		else:
+			X_seqlets.append(X[example_idx, :, start:end])
 
 	p_values, _, _, _, _, idxs = tomtom(X_seqlets, motif_pwms, 
 		n_nearest=n_nearest, n_jobs=n_jobs, **kwargs)

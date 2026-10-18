@@ -15,6 +15,7 @@ from numpy.testing import assert_array_almost_equal
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
 
 from tangermeme.seqlet import recursive_seqlets
 
@@ -420,3 +421,14 @@ def test_pairwise_annotations_spacing_overlap_across_examples_ok():
 	y = pairwise_annotations_spacing(X, max_distance=100)
 
 	assert int(y.sum()) == 0
+
+
+def test_annotate_seqlets_packed(X, X_contrib):
+	# A PackedSequence gives the annotations of its one-hot encoding.
+	seqlets = recursive_seqlets(X_contrib)
+	idxs, pvals = annotate_seqlets(X, seqlets, "tests/data/test.meme")
+	idxs_packed, pvals_packed = annotate_seqlets(PackedSequence.from_one_hot(X),
+		seqlets, "tests/data/test.meme")
+
+	assert torch.equal(idxs_packed, idxs)
+	assert torch.equal(pvals_packed, pvals)

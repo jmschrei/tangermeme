@@ -706,3 +706,30 @@ def test_interactive_logo_label_false_draws_no_corner_text(X_attr, annotations):
 	html = mpld3.fig_to_html(fig)
 	assert "htmltooltip" in html
 	assert "GATA2" in html
+
+
+def test_plot_attributions_packed():
+	# A PackedSequence is passed on to func and gives the attributions of its
+	# one-hot encoding.
+	from tangermeme.plot import plot_attributions
+	from tangermeme.deep_lift_shap import deep_lift_shap
+	from tangermeme.utils import PackedSequence
+	from tangermeme.utils import random_one_hot
+
+	torch.manual_seed(0)
+	model = torch.nn.Sequential(torch.nn.Conv1d(4, 3, 5), torch.nn.ReLU(),
+		torch.nn.Flatten(), torch.nn.Linear(3 * 26, 1))
+	X = random_one_hot((2, 4, 30), random_state=0).float()
+	kwargs = {"n_shuffles": 3, "random_state": 0, "device": "cpu"}
+
+	_, X_attrs = plot_attributions(model, X, attribute_kwargs=kwargs)
+	_, X_attrs_packed = plot_attributions(model, PackedSequence.from_one_hot(X),
+		attribute_kwargs=kwargs)
+	assert torch.equal(X_attrs_packed, X_attrs)
+
+	_, X_attrs = plot_attributions([model, model], X[0],
+		attribute_kwargs=kwargs)
+	_, X_attrs_packed = plot_attributions([model, model],
+		PackedSequence.from_one_hot(X[0]), attribute_kwargs=kwargs)
+	assert torch.equal(X_attrs_packed, X_attrs)
+	plt.close('all')

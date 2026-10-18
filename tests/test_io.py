@@ -16,6 +16,7 @@ import pybigtools
 
 import tangermeme.io
 import tangermeme.utils
+from tangermeme.utils import PackedSequence
 
 from tangermeme.io import _interleave_loci
 from tangermeme.io import _load_signals
@@ -4226,3 +4227,20 @@ def test_extract_loci_nan_and_inf_threads(tmp_path, monkeypatch, n_jobs):
 		2], [2, 2, 2, 2, 2, 2, 2, 0, 0, 0]])
 	assert numpy.isfinite(y.numpy()).all()
 	assert numpy.isfinite(y_in.numpy()).all()
+
+
+def test_one_hot_to_fasta_packed(tmp_path):
+	# A PackedSequence is written as its one-hot encoding is, and its
+	# unknown characters as N.
+	X = torch.stack([one_hot_encode('ACGT' * 25), one_hot_encode('GCGA' * 25)])
+	one_hot_to_fasta(X, str(tmp_path / "one_hot.fa"))
+	one_hot_to_fasta(PackedSequence.from_one_hot(X), str(tmp_path / "packed.fa"))
+	assert (tmp_path / "packed.fa").read_text() == (tmp_path /
+		"one_hot.fa").read_text()
+
+	X_N = torch.stack([one_hot_encode('ACGTNNNA' * 20), one_hot_encode('C' * 160)])
+	one_hot_to_fasta(PackedSequence.from_one_hot(X_N), str(tmp_path / "N.fa"),
+		headers=["a", "b"])
+	assert (tmp_path / "N.fa").read_text() == ("> a\n" + ('ACGTNNNA' * 10) +
+		"\n" + ('ACGTNNNA' * 10) + "\n\n> b\n" + "C" * 80 + "\n" + "C" * 80 +
+		"\n\n")

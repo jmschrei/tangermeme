@@ -2013,3 +2013,59 @@ def test_for_func():
 	assert X_decoded.dtype == torch.int8
 	assert torch.equal(X_decoded, X)
 	assert _for_func(X, marked) is X
+
+
+###
+# The sequence helpers take a PackedSequence and give the result of its
+# one-hot encoding.
+
+
+def test_gc_content_packed():
+	X = _packed_one_hot((6, 4, 50))
+	X_packed = PackedSequence.from_one_hot(X)
+
+	gc = gc_content(X)
+	gc_packed = gc_content(X_packed)
+	assert gc_packed.dtype == gc.dtype
+	assert torch.equal(gc_packed, gc)
+	assert gc_packed[4] == 0
+
+
+def test_characters_packed():
+	X = one_hot_encode('ACGNNTGA')
+	X_packed = PackedSequence.from_one_hot(X)
+
+	assert characters(X_packed, allow_N=True) == 'ACGNNTGA'
+	assert characters(X_packed, force=True) == characters(X, force=True)
+	assert characters(X_packed.reshape(1), allow_N=True) == 'ACGNNTGA'
+	assert characters(PackedSequence.from_one_hot(X, alphabet='ACGU'),
+		allow_N=True) == 'ACGNNUGA'
+	assert_raises(ValueError, characters, X_packed)
+	assert_raises(ValueError, characters, X_packed.reshape(1)[[0, 0]])
+
+
+@pytest.mark.parametrize("shape", [(5,), (2, 3)])
+def test_reverse_complement_packed(shape):
+	X = _packed_one_hot((*shape, 4, 37))
+	X_packed = PackedSequence.from_one_hot(X)
+	X_rc = reverse_complement(X_packed)
+
+	X_flat = X.reshape(-1, 4, 37)
+	X_ref = torch.stack([reverse_complement(x) for x in X_flat])
+	assert isinstance(X_rc, PackedSequence)
+	assert X_rc.shape == X.shape
+	assert torch.equal(X_rc.to_one_hot().reshape(-1, 4, 37), X_ref)
+	assert torch.equal(reverse_complement(X_rc).to_one_hot(), X)
+
+	assert_raises(ValueError, reverse_complement, X_packed, allow_N=False)
+
+
+def test_chunk_packed():
+	X = [_packed_one_hot((1, 4, 100))[0], random_one_hot((1, 4, 77),
+		random_state=1)[0]]
+	X_chunks = chunk(X, size=20, overlap=5)
+	X_chunks_packed = chunk([PackedSequence.from_one_hot(x) for x in X],
+		size=20, overlap=5)
+
+	assert isinstance(X_chunks_packed, PackedSequence)
+	assert torch.equal(X_chunks_packed.to_one_hot(), X_chunks)
