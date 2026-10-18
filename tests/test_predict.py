@@ -10,6 +10,7 @@ from tangermeme.utils import random_one_hot
 from tangermeme.utils import PackedSequence
 
 from tangermeme.predict import predict
+from tangermeme.predict import _to_device
 
 from .toy_models import SumModel
 from .toy_models import FlattenDense
@@ -1149,6 +1150,61 @@ def test_predict_packed_16bit(X, dtype, cuda_device):
 	y_packed = predict(model, PackedSequence.from_one_hot(X), batch_size=8,
 		dtype=dtype, device=cuda_device)
 	_assert_same(y, y_packed)
+
+
+###
+# _to_device copies a batch of integers narrower than dtype before casting
+# it, and casts any other batch first. Either way it gives the tensor that
+# casting and then copying gives, bit for bit, NaN included.
+
+
+_FLOAT_VALUES = [0, 1, -1, 2.5, -3.75, 1 / 3, 1e-8, -1e-30, 65504, 70000,
+	1e20, -1e20, float('inf'), float('-inf'), float('nan')]
+
+
+def _source(dtype):
+	if dtype == torch.bool:
+		return torch.tensor([True, False, True])
+	if dtype.is_floating_point:
+		return torch.tensor(_FLOAT_VALUES, dtype=torch.float64).to(dtype)
+	info = torch.iinfo(dtype)
+	return torch.tensor([0, 1, info.max, info.min, info.max // 3], dtype=dtype)
+
+
+def _bits(X):
+	X = X.cpu()
+	if X.dtype.is_floating_point:
+		return X.view({2: torch.int16, 4: torch.int32, 8: torch.int64}[
+			X.element_size()])
+	return X
+
+
+@pytest.mark.parametrize("source", [torch.bool, torch.uint8, torch.int8,
+	torch.int16, torch.int32, torch.int64, torch.float16, torch.bfloat16,
+	torch.float32, torch.float64])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16,
+	torch.float32, torch.float64, torch.int32])
+def test_to_device(source, dtype, device):
+	X = _source(source)
+	X_ = _to_device(X, dtype, torch.device(device))
+	assert X_.dtype == dtype
+	assert X_.device.type == device
+	assert torch.equal(_bits(X_), _bits(X.type(dtype)))
+
+
+@pytest.mark.parametrize("dtype", [torch.int8, torch.uint8, torch.bool,
+	torch.float16, torch.float64])
+def test_predict_stored_dtype(X, alpha, beta, dtype, device):
+	# Predictions from sequences and arguments stored in another dtype equal
+	# those from the same values given as float32.
+	torch.manual_seed(0)
+	model = MultiInputMultiOutput()
+
+	y = predict(model, X.type(dtype), args=(alpha.half(), beta.double()),
+		batch_size=8, device=device)
+	y0 = predict(model, X, args=(alpha.half().float(), beta), batch_size=8,
+		device=device)
+	_assert_same(y, y0)
 
 
 def test_predict_packed_raises(X, device):

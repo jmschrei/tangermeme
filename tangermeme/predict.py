@@ -16,6 +16,21 @@ from .utils import _accepts_packed
 from .utils import PackedSequence
 
 
+def _to_device(X, dtype, device):
+	"""Move a batch to `device` in `dtype`, copying the narrower of the two.
+
+	A cast of integers to a wider floating point dtype is exact, so it is made
+	on `device` after the copy. Any other cast is made before it, because a
+	GPU can give a float NaN different bits. On a CPU the order does not
+	matter, since the move is a no-op.
+	"""
+
+	if (dtype.is_floating_point and not X.dtype.is_floating_point and
+			X.element_size() < torch.finfo(dtype).bits // 8):
+		return X.to(device).to(dtype)
+	return X.type(dtype).to(device)
+
+
 @_accepts_packed
 def predict(
 	model: torch.nn.Module,
@@ -42,8 +57,10 @@ def predict(
 	examples in the original dtype. These features allow the function to work on 
 	massive data sets that do not fit in GPU memory. For example, the original
 	sequences can be kept as 8-bit integers for compression and each batch will
-	be upcast to the desired precision. If a single batch does not fit in memory,
-	try lowering the batch size.
+	be upcast to the desired precision. A batch of integers in a narrower dtype
+	than the one it is converted to, such as int8, is converted after it is
+	moved, so that less is copied to the device. If a single batch does not fit in
+	memory, try lowering the batch size.
 
 
 	Parameters
@@ -132,7 +149,7 @@ def predict(
 			if isinstance(X, PackedSequence):
 				X_ = X[start:end].to_one_hot(dtype=dtype, device=device)
 			else:
-				X_ = X[start:end].type(dtype).to(device)
+				X_ = _to_device(X[start:end], dtype, device)
 
 			if X_.shape[0] == 0:
 				continue
@@ -144,7 +161,7 @@ def predict(
 
 			with autocast_ctx:
 				if args is not None:
-					args_ = [a[start:end].type(dtype).to(device) for a in args]
+					args_ = [_to_device(a[start:end], dtype, device) for a in args]
 					y_ = model(X_, *args_)
 				else:
 					y_ = model(X_)
