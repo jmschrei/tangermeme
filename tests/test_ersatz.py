@@ -1375,6 +1375,24 @@ def test_dinucleotide_shuffle_n_jobs_threshold(return_packed, monkeypatch):
 	assert len(calls) == 1
 
 
+@pytest.mark.parametrize("return_packed", [False, True])
+def test_dinucleotide_shuffle_n_jobs_default(return_packed, monkeypatch):
+	# By default the shuffle stays on one thread however large the call, so
+	# numba's threading layer is not started: under its OpenMP layer, a
+	# process that has started it cannot fork worker processes afterwards.
+	import tangermeme.ersatz
+
+	def fail(*args):
+		raise AssertionError("the parallel kernel ran")
+
+	monkeypatch.setattr(tangermeme.ersatz, "_fast_shuffle_parallel", fail)
+	monkeypatch.setattr(tangermeme.ersatz, "_fast_shuffle_packed_parallel",
+		fail)
+
+	X = random_one_hot((16, 4, 500), random_state=0)
+	dinucleotide_shuffle(X, n=5, random_state=0, return_packed=return_packed)
+
+
 def test_dinucleotide_shuffle_packed_device(device):
 	X = _one_hot_with_N(4, 50)
 	X_packed = dinucleotide_shuffle(X.to(device), n=3, random_state=0,

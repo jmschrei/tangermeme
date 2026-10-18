@@ -1028,7 +1028,7 @@ def dinucleotide_shuffle(
 	verbose: bool = False,
 	allow_N: bool = False,
 	return_packed: bool | None = None,
-	n_jobs: int = 4,
+	n_jobs: int = 1,
 ) -> torch.Tensor | PackedSequence:
 	"""Given a one-hot encoded sequence, dinucleotide shuffle it.
 
@@ -1107,7 +1107,9 @@ def dinucleotide_shuffle(
 		shuffles fewer than 4,096 positions in all, the sequences times the
 		shuffles times the length of the region, runs on one thread, since
 		starting the threads took longer than they saved. The shuffles are
-		the same for every value. Default is 4.
+		the same for every value. Under numba's OpenMP threading layer, used
+		when TBB is not installed, a process that has run the threads cannot
+		fork worker processes afterwards. Default is 1.
 
 
 	Returns
