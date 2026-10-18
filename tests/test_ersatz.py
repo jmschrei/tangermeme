@@ -1981,3 +1981,18 @@ def test_ersatz_packed_raises_batch_axes(name):
 
 	with pytest.raises(ValueError, match="X has shape"):
 		calls[name]()
+
+
+@pytest.mark.parametrize("width", [1, 2, 5])
+def test_randomize_packed_raises_probs_width(width):
+	# probs needs one column per character, as on the one-hot path, where a
+	# wrong width raises from the substitution.
+	X = random_one_hot((3, 4, 20), random_state=0)
+	probs = torch.full((1, width), 1.0 / width)
+
+	assert_raises(ValueError, randomize, X, 5, 15, probs=probs)
+	assert_raises(ValueError, randomize, X, 5, 15, probs=probs,
+		return_packed=True)
+	assert_raises(ValueError, randomize, PackedSequence.from_one_hot(X), 5, 15,
+		probs=probs)
+

@@ -577,6 +577,10 @@ def randomize(
 
 	return_packed, packed_alphabet = _packed_output(X, return_packed, "ACGT")
 	if return_packed or isinstance(X, PackedSequence):
+		if probs.shape[1] != X.shape[1]:
+			raise ValueError("probs has {} columns but X has {} characters."
+				.format(probs.shape[1], X.shape[1]))
+
 		X_rands = []
 		for i in range(n):
 			# The same draws, in the same order, as random_one_hot below.
