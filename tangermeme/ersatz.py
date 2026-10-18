@@ -15,6 +15,7 @@ from tqdm import tqdm
 from .utils import _numba_threads
 from .utils import _validate_input
 from .utils import one_hot_encode
+from .utils import PackedSequence
 from .utils import random_one_hot
 from .utils import TangermemeWarning
 
@@ -583,6 +584,103 @@ def _fast_shuffle_parallel(idxs, n_chars, n_shuffles, random_states,
 			shuffled[k])
 
 
+@numba.njit(nogil=True, cache=True)
+def _shuffle_sequence_packed(codes, start, end, n_shuffles, random_state,
+	data, run_starts, run_ends, flags):
+	"""Shuffle positions `start` to `end` of one sequence of character
+	indices, `codes`, with 4 for an unknown character, `n_shuffles` times,
+	and pack each shuffled sequence into a row of `data`.
+
+	`run_starts` and `run_ends` hold the same number of runs of unknown
+	characters, m, for each shuffle, which is the number in `codes` since
+	every shuffle keeps it: those of shuffle i are written to positions i * m
+	to (i + 1) * m. `flags` receives whether any position between the ends
+	of the region is the same in every shuffle, whether all of them are, and
+	whether a shuffle had a number of runs other than m, in which case the
+	rest of its runs are not written.
+	"""
+
+	seq_len = codes.shape[0]
+	region_len = end - start
+
+	shuffled = numpy.empty((n_shuffles, region_len), dtype=numpy.uint8)
+	_shuffle_sequence(codes[start:end], 5, n_shuffles, random_state, shuffled)
+
+	any_conserved, all_conserved = False, True
+	for j in range(1, region_len - 1):
+		conserved = True
+		for i in range(1, n_shuffles):
+			if shuffled[i, j] != shuffled[0, j]:
+				conserved = False
+				break
+
+		any_conserved = any_conserved or conserved
+		all_conserved = all_conserved and conserved
+
+	n_runs = run_starts.shape[0] // n_shuffles if n_shuffles > 0 else 0
+
+	row = codes.copy()
+	wrong_runs = False
+	for i in range(n_shuffles):
+		for j in range(region_len):
+			row[start + j] = shuffled[i, j]
+
+		r, r_end = i * n_runs, (i + 1) * n_runs
+		byte = 0
+		for j in range(seq_len):
+			# An unknown character, 4, is stored as 4 & 3 = 0.
+			byte = (byte << 2) | (row[j] & 3)
+			if j % 4 == 3:
+				data[i, j // 4] = byte
+				byte = 0
+
+			if row[j] == 4 and (j == 0 or row[j-1] != 4):
+				if r == r_end:
+					wrong_runs = True
+					break
+
+				run_starts[r] = j
+
+			if row[j] == 4 and (j == seq_len - 1 or row[j+1] != 4):
+				run_ends[r] = j + 1
+				r += 1
+
+		if seq_len % 4 != 0:
+			data[i, seq_len // 4] = byte << (2 * (4 - seq_len % 4))
+
+		wrong_runs = wrong_runs or r != r_end
+
+	flags[0] = any_conserved
+	flags[1] = all_conserved
+	flags[2] = wrong_runs
+
+
+@numba.njit(nogil=True, cache=True)
+def _fast_shuffle_packed(codes, start, end, n_shuffles, random_states,
+	run_ptr, data, run_starts, run_ends, flags):
+	"""Run `_shuffle_sequence_packed` on each row of `codes`, writing the
+	runs of row k from `n_shuffles * run_ptr[k]`."""
+
+	for k in range(codes.shape[0]):
+		r0, r1 = n_shuffles * run_ptr[k], n_shuffles * run_ptr[k+1]
+		_shuffle_sequence_packed(codes[k], start, end, n_shuffles,
+			random_states[k], data[k], run_starts[r0:r1], run_ends[r0:r1],
+			flags[k])
+
+
+@numba.njit(nogil=True, parallel=True, cache=True)
+def _fast_shuffle_packed_parallel(codes, start, end, n_shuffles,
+	random_states, run_ptr, data, run_starts, run_ends, flags):
+	"""`_fast_shuffle_packed` with the rows split across numba's threads,
+	with the same shuffles for any number of threads."""
+
+	for k in numba.prange(codes.shape[0]):
+		r0, r1 = n_shuffles * run_ptr[k], n_shuffles * run_ptr[k+1]
+		_shuffle_sequence_packed(codes[k], start, end, n_shuffles,
+			random_states[k], data[k], run_starts[r0:r1], run_ends[r0:r1],
+			flags[k])
+
+
 def _random_states(random_state, n):
 	"""The seed of each of `n` sequences: `random_state + i` for sequence i
 	when `random_state` is an integer, a new random base seed when it is
@@ -605,6 +703,22 @@ def _random_states(random_state, n):
 	# The kernel seeds with 32-bit integers, and a larger seed wraps around,
 	# as it did when the kernel took a single int32 seed.
 	return random_states.astype(numpy.int64).astype(numpy.int32)
+
+
+def _check_conserved(any_conserved, all_conserved, n_shuffles, verbose):
+	"""Given, for each sequence, whether any position between the ends of its
+	region is the same in all of its shuffles and whether all of them are,
+	warn when `verbose` if any is, and raise if there is more than one
+	shuffle and all of them are for some sequence, whose shuffles are then
+	identical."""
+
+	if verbose and any_conserved.any():
+		warnings.warn("At least one position in dinucleotide shuffle is "
+			"identical across all positions.", TangermemeWarning, stacklevel=4)
+
+	if n_shuffles > 1 and all_conserved.any():
+		raise ValueError("All dinucleotide shuffles yield identical " +
+			"sequences, potentially due to a lack of diversity in sequence.")
 
 
 def _shuffle_characters(X, n_shuffles, random_states, verbose=False,
@@ -641,14 +755,8 @@ def _shuffle_characters(X, n_shuffles, random_states, verbose=False,
 	# positions between them where every shuffle of a sequence agrees.
 	interior = shuffled[:, :, 1:-1]
 	conserved = (interior == interior[:, :1]).all(dim=1)
-	if verbose and conserved.any():
-		warnings.warn("At least one position in dinucleotide shuffle is "
-			"identical across all positions.", TangermemeWarning, stacklevel=3)
-
-	if n_shuffles > 1 and conserved.all(dim=1).any():
-		raise ValueError("All dinucleotide shuffles yield identical " +
-			"sequences, potentially due to a lack of diversity in sequence.")
-
+	_check_conserved(conserved.any(dim=1), conserved.all(dim=1), n_shuffles,
+		verbose)
 	return shuffled
 
 
@@ -657,6 +765,56 @@ def _thread_count(n_jobs):
 	allows."""
 
 	return numba.config.NUMBA_NUM_THREADS if n_jobs == -1 else int(n_jobs)
+
+
+def _shuffle_packed(codes, start, end, n_shuffles, random_states,
+	verbose=False, n_jobs=1, alphabet=('A', 'C', 'G', 'T')):
+	"""Dinucleotide shuffle positions `start` to `end` of each sequence of
+	character indices `codes`, shape (n, length) with 4 for an unknown
+	character, `n_shuffles` times, seeding sequence i with random_states[i].
+
+	The shuffles are those `_shuffle_characters` draws for the same seeds.
+	Each is packed as it is drawn, so neither the shuffled character indices
+	nor a one-hot encoding of them is held for more than one sequence at a
+	time. Returns a PackedSequence of shape (n, n_shuffles, 4, length).
+	"""
+
+	codes = numpy.ascontiguousarray(codes.cpu().numpy(), dtype=numpy.uint8)
+	n_seqs, length = codes.shape
+
+	is_n = codes == 4
+	n_runs = is_n[:, :1].sum(axis=1) + (is_n[:, 1:] & ~is_n[:, :-1]).sum(
+		axis=1)
+	run_ptr = numpy.zeros(n_seqs + 1, dtype=numpy.int64)
+	run_ptr[1:] = numpy.cumsum(n_runs)
+
+	data = numpy.empty((n_seqs, n_shuffles, (length + 3) // 4),
+		dtype=numpy.uint8)
+	run_starts = numpy.empty(n_shuffles * run_ptr[-1], dtype=numpy.int64)
+	run_ends = numpy.empty(n_shuffles * run_ptr[-1], dtype=numpy.int64)
+	flags = numpy.empty((n_seqs, 3), dtype=numpy.bool_)
+
+	args = (codes, start, end, n_shuffles, random_states, run_ptr, data,
+		run_starts, run_ends, flags)
+	if n_jobs == 1 or n_seqs < 2:
+		_fast_shuffle_packed(*args)
+	else:
+		with _numba_threads(_thread_count(n_jobs)):
+			_fast_shuffle_packed_parallel(*args)
+
+	# A shuffle keeps the count of every dinucleotide and both ends of the
+	# region, and so the number of runs of unknown characters.
+	if flags[:, 2].any():
+		raise RuntimeError("A dinucleotide shuffle changed the number of runs "
+			"of unknown characters.")
+
+	_check_conserved(flags[:, 0], flags[:, 1], n_shuffles, verbose)
+
+	rows = numpy.repeat(numpy.arange(n_seqs * n_shuffles),
+		numpy.repeat(n_runs, n_shuffles))
+	n_runs = numpy.stack([rows, run_starts, run_ends], axis=1)
+	return PackedSequence(torch.from_numpy(data), length,
+		torch.from_numpy(n_runs), alphabet)
 
 
 def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
@@ -709,15 +867,16 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 
 
 def dinucleotide_shuffle(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	start: int = 0,
 	end: int = -1,
 	n: int = 20,
 	random_state: int | Sequence[int] | None = None,
 	verbose: bool = False,
 	allow_N: bool = False,
+	return_packed: bool | None = None,
 	n_jobs: int = 1,
-) -> torch.Tensor:
+) -> torch.Tensor | PackedSequence:
 	"""Given a one-hot encoded sequence, dinucleotide shuffle it.
 
 	This function takes in a one-hot encoded sequence (not a string) and
@@ -734,12 +893,19 @@ def dinucleotide_shuffle(
 	numpy arrays. Code has been adapted from
 	https://github.com/kundajelab/deeplift/blob/master/deeplift/dinuc_shuffle.py
 
+	The shuffles can be returned as a `PackedSequence`, which holds four
+	positions in a byte. With `return_packed=True` each shuffle is packed as
+	it is drawn, so the shuffles take sixteen times less memory than an int8
+	one-hot encoding of them would and the one-hot encoding is never built.
+	The shuffles are the same as those of the one-hot encoding.
+
 	Parameters
 	----------
-	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to be shuffled. Unlike the other
-		functions in this module, unknown characters, encoded as all-zero
-		columns, are rejected unless `allow_N=True`.
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
+		A one-hot encoded set of sequences to be shuffled, or a PackedSequence
+		with one batch axis. Unlike the other functions in this module,
+		unknown characters, encoded as all-zero columns, are rejected unless
+		`allow_N=True`.
 
 	start: int, optional
 		The starting position of where to randomize the sequence, inclusive.
@@ -777,6 +943,11 @@ def dinucleotide_shuffle(
 		unknown characters therefore stays one run but can move. If False,
 		an unknown character raises a ValueError. Default is False.
 
+	return_packed: bool or None, optional
+		Whether to return the shuffles as a PackedSequence rather than a
+		one-hot encoding. Packing needs an alphabet of four characters. If
+		None, return a PackedSequence when `X` is one. Default is None.
+
 	n_jobs: int, optional
 		The number of threads to shuffle the sequences on, or -1 for one per
 		thread numba allows, capped by numba's NUMBA_NUM_THREADS. The shuffles
@@ -785,19 +956,57 @@ def dinucleotide_shuffle(
 
 	Returns
 	-------
-	shuffled_sequences: torch.tensor, shape=(-1, n, len(alphabet), length)
-		The shuffled sequences. Dtype and device match the input `X`.
+	shuffled_sequences: torch.tensor, shape=(-1, n, len(alphabet), length), or PackedSequence
+		The shuffled sequences. A one-hot encoding has the dtype and device
+		of `X`, or int8 on the CPU when `X` is a PackedSequence. A
+		PackedSequence has batch axes (-1, n), the alphabet of `X` or ACGT,
+		and its tensors on the CPU.
 	"""
 
-	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1,
-		allow_N=allow_N)
+	if isinstance(X, PackedSequence):
+		if X.data.ndim != 2:
+			raise ValueError("X has shape {} but must have shape {}".format(
+				tuple(X.shape), (-1, 4, -1)))
+
+		if not allow_N and len(X.n_runs) > 0:
+			raise ValueError("X must be one-hot encoded and cannot have unknown"
+				" characters.")
+
+		packed, length = True, X.length
+	else:
+		_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1,
+			allow_N=allow_N)
+		packed, length = False, X.shape[-1]
+
+	if return_packed is None:
+		return_packed = packed
+
+	if return_packed and not packed and X.shape[1] != 4:
+		raise ValueError("return_packed=True needs an alphabet of four "
+			"characters, but X has {}.".format(X.shape[1]))
 
 	if end < 0:
-		end = X.shape[-1] + 1 + end
+		end = length + 1 + end
 
-	shuffled = _shuffle_characters(X[:, :, start:end], n,
-		_random_states(random_state, X.shape[0]), verbose=verbose,
-		n_jobs=n_jobs)
+	random_states = _random_states(random_state, X.shape[0])
+
+	if return_packed:
+		if packed:
+			codes, alphabet = X.to_codes(), X.alphabet
+		else:
+			values, codes = X.max(dim=1)
+			codes[values == 0] = 4
+			alphabet = ('A', 'C', 'G', 'T')
+
+		start, end, _ = slice(start, end).indices(length)
+		return _shuffle_packed(codes, start, max(start, end), n, random_states,
+			verbose=verbose, n_jobs=n_jobs, alphabet=alphabet)
+
+	if packed:
+		X = X.to_one_hot()
+
+	shuffled = _shuffle_characters(X[:, :, start:end], n, random_states,
+		verbose=verbose, n_jobs=n_jobs)
 
 	X_shufs = X.unsqueeze(1).repeat(1, n, 1, 1)
 	alphabet = torch.arange(X.shape[1], device=X.device)
