@@ -2021,16 +2021,25 @@ class PackedSequence:
 		----------
 		path: str or os.PathLike
 			The directory, which is created if needed. Files of these names
-			already in it are replaced.
+			already in it are replaced, also when this PackedSequence was
+			loaded from them with `mmap=True`.
 		"""
 
 		os.makedirs(path, exist_ok=True)
-		numpy.save(os.path.join(path, "data.npy"), self.data.cpu().numpy())
-		numpy.save(os.path.join(path, "n_runs.npy"), self.n_runs.numpy())
+		meta = {"format_version": _PACKED_FORMAT_VERSION, "length":
+			self.length, "alphabet": list(self.alphabet)}
 
-		with open(os.path.join(path, "meta.json"), "w") as outfile:
-			json.dump({"format_version": _PACKED_FORMAT_VERSION, "length":
-				self.length, "alphabet": list(self.alphabet)}, outfile)
+		# Each file is written beside its name and then moved over it, since
+		# writing in place would truncate a file that is memory-mapped.
+		for name, write in (
+			("data.npy", lambda f: numpy.save(f, self.data.numpy())),
+			("n_runs.npy", lambda f: numpy.save(f, self.n_runs.numpy())),
+			("meta.json", lambda f: f.write(json.dumps(meta).encode()))):
+			filename = os.path.join(path, name)
+			with open(filename + ".tmp", "wb") as outfile:
+				write(outfile)
+
+			os.replace(filename + ".tmp", filename)
 
 	@classmethod
 	def load(cls, path: str | os.PathLike, mmap: bool = False) -> PackedSequence:

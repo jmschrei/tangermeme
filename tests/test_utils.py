@@ -1862,6 +1862,23 @@ def test_packed_sequence_save_load(tmp_path, mmap):
 	assert PackedSequence.load(tmp_path / "packed").shape == (2, 4, 21)
 
 
+def test_packed_sequence_save_mapped(tmp_path):
+	# A PackedSequence loaded with mmap=True can be edited and saved back to
+	# the directory it is mapped from.
+	X_packed = PackedSequence.from_one_hot(_packed_one_hot((50, 4, 21)))
+	X_packed.save(tmp_path)
+
+	X_load = PackedSequence.load(tmp_path, mmap=True)
+	X_load.data[3] = X_packed.data[4]
+	X_load.save(tmp_path)
+
+	X_back = PackedSequence.load(tmp_path)
+	assert torch.equal(X_back.data[3], X_packed.data[4])
+	assert torch.equal(X_back.data[5:], X_packed.data[5:])
+	assert sorted(os.listdir(tmp_path)) == ['data.npy', 'meta.json',
+		'n_runs.npy']
+
+
 def test_packed_sequence_load_raises_version(tmp_path):
 	PackedSequence.from_one_hot(_packed_one_hot((2, 4, 9))).save(tmp_path)
 	with open(tmp_path / "meta.json") as infile:
