@@ -45,8 +45,8 @@ def annotate_seqlets(
 	X: torch.Tensor, shape=(n_examples, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences. These are only relevant for
 		extracting the sequences spanned by each seqlet.
-		A PackedSequence is decoded one sequence at a time, as float32, for
-		the seqlets in it.
+		Only the positions of each seqlet are decoded from a PackedSequence,
+		as float32.
 
 	seqlets: pandas.DataFrame, shape=(n_seqlets, 3+)
 		A BED-formatted set of seqlets to annotate. The first three columns

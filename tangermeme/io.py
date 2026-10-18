@@ -1071,7 +1071,7 @@ def extract_loci(
 		The extracted sequences in the same order as the loci in the locus
 		file after optional filtering by chromosome, as a contiguous tensor of
 		dtype int8, or of the dtype of the values of `sequences` when it is a
-		dictionary.
+		dictionary, or as a PackedSequence under `return_packed`.
 
 	signals: torch.tensor, shape=(n, len(signals), out_window+2*max_jitter)
 		The extracted signals where the first dimension is in the same order
@@ -1264,8 +1264,6 @@ def extract_loci(
 	threads = _cpu_count() if n_jobs == -1 else int(n_jobs)
 	width = in_window + 2 * max_jitter
 
-	# Packed sequences are read a chunk of windows at a time, and each chunk
-	# is packed before the next is read.
 	step = len(mids)
 	if return_packed:
 		step = _chunk_rows(width)
@@ -1336,7 +1334,7 @@ def extract_loci(
 def _fasta_characters(X_seq, alphabet):
 	"""The characters of one sequence, with N for an all-zero column.
 
-	A sequence without one goes through `characters` as it always has. An
+	A sequence without one goes through `characters` alone. An
 	all-zero column is a tie, on which `characters` raises; the sequence is
 	then written with N at each all-zero column when no other column is
 	tied, and the error is raised again otherwise.

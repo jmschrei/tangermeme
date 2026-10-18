@@ -107,12 +107,10 @@ def insert(
 		motif. Default is ['A', 'C', 'G', 'T'].
 
 	return_packed: bool or None, optional
-		Whether to return the sequences as a PackedSequence rather than a
-		one-hot encoding, which needs an alphabet of four characters. `X` can
-		be a PackedSequence with one batch axis, which is decoded and packed
-		a chunk of sequences at a time. If None, return a PackedSequence when
-		`X` is one, and with False, a PackedSequence `X` gives an int8 one-hot
-		encoding. Default is None.
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
 
 
 	Returns
@@ -217,12 +215,10 @@ def substitute(
 		added to the one-hot encoding of the motif. Default is ["N"].
 
 	return_packed: bool or None, optional
-		Whether to return the sequences as a PackedSequence rather than a
-		one-hot encoding, which needs an alphabet of four characters. `X` can
-		be a PackedSequence with one batch axis, which is decoded and packed
-		a chunk of sequences at a time. If None, return a PackedSequence when
-		`X` is one, and with False, a PackedSequence `X` gives an int8 one-hot
-		encoding. Default is None.
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
 
 
 	Returns
@@ -337,12 +333,10 @@ def multisubstitute(
 		added to the one-hot encoding of the motif. Default is ["N"].
 
 	return_packed: bool or None, optional
-		Whether to return the sequences as a PackedSequence rather than a
-		one-hot encoding, which needs an alphabet of four characters. `X` can
-		be a PackedSequence with one batch axis, which is decoded and packed
-		a chunk of sequences at a time. If None, return a PackedSequence when
-		`X` is one, and with False, a PackedSequence `X` gives an int8 one-hot
-		encoding. Default is None.
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
 
 
 	Returns
@@ -421,12 +415,10 @@ def delete(
 		The final position to remove, not inclusive.
 
 	return_packed: bool or None, optional
-		Whether to return the sequences as a PackedSequence rather than a
-		one-hot encoding, which needs an alphabet of four characters. `X` can
-		be a PackedSequence with one batch axis, which is decoded and packed
-		a chunk of sequences at a time. If None, return a PackedSequence when
-		`X` is one, and with False, a PackedSequence `X` gives an int8 one-hot
-		encoding. Default is None.
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
 
 
 	Returns
@@ -509,12 +501,10 @@ def randomize(
 		reproducible seed. Default is None.
 
 	return_packed: bool or None, optional
-		Whether to return the sequences as a PackedSequence rather than a
-		one-hot encoding, which needs an alphabet of four characters. `X` can
-		be a PackedSequence with one batch axis, which is decoded and packed
-		a chunk of sequences at a time. If None, return a PackedSequence when
-		`X` is one, and with False, a PackedSequence `X` gives an int8 one-hot
-		encoding. Default is None.
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
 
 
 	Returns
@@ -622,12 +612,10 @@ def shuffle(
 		is None.
 
 	return_packed: bool or None, optional
-		Whether to return the sequences as a PackedSequence rather than a
-		one-hot encoding, which needs an alphabet of four characters. `X` can
-		be a PackedSequence with one batch axis, which is decoded and packed
-		a chunk of sequences at a time. If None, return a PackedSequence when
-		`X` is one, and with False, a PackedSequence `X` gives an int8 one-hot
-		encoding. Default is None.
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
 
 
 	Returns
@@ -886,8 +874,8 @@ def _check_conserved(any_conserved, all_conserved, n_shuffles, verbose,
 
 
 # A call that shuffles fewer positions than this in all, the sequences times
-# the shuffles times the length of the region, runs on one thread: below it,
-# starting the threads took longer than they saved.
+# the shuffles times the length of the region, runs on one thread, where
+# starting the threads costs more than it saves.
 _SHUFFLE_PARALLEL_MIN = 4096
 
 
@@ -1069,7 +1057,7 @@ def dinucleotide_shuffle(
 		thread numba allows, capped by numba's NUMBA_NUM_THREADS. A call that
 		shuffles fewer than 4,096 positions in all, the sequences times the
 		shuffles times the length of the region, runs on one thread, since
-		starting the threads took longer than they saved. The shuffles are
+		starting the threads costs more than it saves. The shuffles are
 		the same for every value. Under numba's OpenMP threading layer, used
 		when TBB is not installed, a process that has run the threads cannot
 		fork worker processes afterwards. Default is 1.
@@ -1325,18 +1313,18 @@ def local_dinucleotide_shuffle(
 		the useful signal. Default is False.
 
 	return_packed: bool or None, optional
-		Whether to return the sequences as a PackedSequence rather than a
-		one-hot encoding, which needs an alphabet of four characters. `X` can
-		be a PackedSequence with one batch axis, which is decoded and packed
-		a chunk of sequences at a time. If None, return a PackedSequence when
-		`X` is one, and with False, a PackedSequence `X` gives an int8 one-hot
-		encoding. Default is None.
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
 
 
 	Returns
 	-------
 	shuffled_sequences: torch.tensor, shape=(-1, n, len(alphabet), length), or PackedSequence
-		The shuffled sequences. Dtype and device match the input `X`.
+		The shuffled sequences: a PackedSequence under `return_packed`, int8
+		for a packed `X` otherwise, and in the dtype and on the device of a
+		one-hot `X`.
 	"""
 
 	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1)

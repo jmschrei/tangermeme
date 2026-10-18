@@ -67,11 +67,8 @@ def marginalize(
 
 	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to have a motif inserted into.
-		A PackedSequence with one batch axis is passed on packed to `func`
-		when `func` takes one, such as `predict` and `deep_lift_shap`, and as
-		an int8 one-hot encoding otherwise. The motif is substituted into the
-		packed sequences a chunk at a time, so the copy of the sequences with
-		the motif is packed too.
+		A PackedSequence with one batch axis is passed to `func` packed when
+		`func` takes one, and as an int8 one-hot encoding otherwise.
 
 	motif: torch.tensor or str
 		Either a one-hot encoded short motif with shape
@@ -169,11 +166,14 @@ def marginalize_annotations(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences corresponding to the annotations.
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
+		A one-hot encoded set of sequences corresponding to the annotations,
+		or a PackedSequence with one batch axis, of which only the annotated
+		positions are decoded.
 
-	X0: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences that motifs will be substituted into.
+	X0: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
+		A one-hot encoded set of sequences that motifs will be substituted into,
+		or a PackedSequence with one batch axis.
 
 	annotations: torch.Tensor, shape=(n_annotations, 3)
 		A tensor of annotations where the first column is the example_idx, the

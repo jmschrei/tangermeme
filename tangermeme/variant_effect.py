@@ -115,10 +115,8 @@ def substitution_effect(
 
 	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to have substitutions included in.
-		A PackedSequence with one batch axis is passed on packed to `func`
-		when `func` takes one, such as `predict` and `deep_lift_shap`, and as
-		an int8 one-hot encoding otherwise. The substitutions are made in the
-		packed sequences a chunk at a time.
+		A PackedSequence with one batch axis is passed to `func` packed when
+		`func` takes one, and as an int8 one-hot encoding otherwise.
 
 	substitutions: torch.tensor, shape=(-1, 3)
 		A set of variants that should be substituted into each sequence. This
@@ -264,10 +262,8 @@ def deletion_effect(
 
 	X: torch.tensor, shape=(-1, len(alphabet), length + max_deletions), or PackedSequence
 		A one-hot encoded set of sequences to have deletions included in.
-		A PackedSequence with one batch axis is passed on packed to `func`
-		when `func` takes one, such as `predict` and `deep_lift_shap`, and as
-		an int8 one-hot encoding otherwise. The deletions are made in the
-		packed sequences a chunk at a time.
+		A PackedSequence with one batch axis is passed to `func` packed when
+		`func` takes one, and as an int8 one-hot encoding otherwise.
 
 	deletions: torch.tensor, shape=(-1, 2)
 		A set of deletions indicating characters that should be removed from
@@ -417,10 +413,8 @@ def insertion_effect(
 
 	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to have insertions included in.
-		A PackedSequence with one batch axis is passed on packed to `func`
-		when `func` takes one, such as `predict` and `deep_lift_shap`, and as
-		an int8 one-hot encoding otherwise. The insertions are made in the
-		packed sequences a chunk at a time.
+		A PackedSequence with one batch axis is passed to `func` packed when
+		`func` takes one, and as an int8 one-hot encoding otherwise.
 
 	insertions: torch.tensor, shape=(-1, 3)
 		A set of insertions indicating characters that should be added to

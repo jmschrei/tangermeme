@@ -78,9 +78,9 @@ def apply_pairwise(
 
 	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to make predictions for.
-		A PackedSequence with one batch axis is passed on to `func` a batch at
-		a time, packed when `func` takes one, such as `predict` and
-		`deep_lift_shap`, and as an int8 one-hot encoding otherwise.
+		A PackedSequence with one batch axis is passed to `func` a batch at a
+		time, packed when `func` takes one, and as an int8 one-hot encoding
+		otherwise.
 
 	args: tuple or list
 		A set of additional arguments, each of which is one input to the model.
@@ -244,9 +244,9 @@ def apply_product(
 
 	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to make predictions for.
-		A PackedSequence with one batch axis is passed on to `func` a batch at
-		a time, packed when `func` takes one, such as `predict` and
-		`deep_lift_shap`, and as an int8 one-hot encoding otherwise.
+		A PackedSequence with one batch axis is passed to `func` a batch at a
+		time, packed when `func` takes one, and as an int8 one-hot encoding
+		otherwise.
 
 	args: tuple or list
 		A set of additional arguments to pass into the model. Each element in

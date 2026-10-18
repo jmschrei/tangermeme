@@ -62,10 +62,8 @@ def space(
 
 	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to have motifs inserted into.
-		A PackedSequence with one batch axis is passed on packed to `func`
-		when `func` takes one, such as `predict` and `deep_lift_shap`, and as
-		an int8 one-hot encoding otherwise. The motifs are substituted into
-		the packed sequences, so each copy with the motifs is packed too.
+		A PackedSequence with one batch axis is passed to `func` packed when
+		`func` takes one, and as an int8 one-hot encoding otherwise.
 
 	motifs: list of torch.tensor, shape=(-1, len(alphabet), motif_length)
 		A list of strings or of one-hot encoded versions of short motifs to

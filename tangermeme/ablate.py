@@ -71,11 +71,9 @@ def ablate(
 
 	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to have a region shuffled out of.
-		A PackedSequence with one batch axis is passed on packed to `func`
-		when `func` takes one, such as `predict` and `deep_lift_shap`, and as
-		an int8 one-hot encoding otherwise. It is likewise passed packed to
-		`shuffle_fn` when that takes one, as the shuffles in ersatz do, which
-		then return packed shuffles.
+		A PackedSequence with one batch axis is passed to `func` and to
+		`shuffle_fn` packed when they take one, and as an int8 one-hot
+		encoding otherwise.
 
 	start: int
 		The starting position of where to randomize the sequence, inclusive.
@@ -203,8 +201,9 @@ def ablate_annotations(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to ablate annotations from.
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
+		A one-hot encoded set of sequences to ablate annotations from, or a
+		PackedSequence with one batch axis.
 
 	annotations: torch.Tensor, shape=(n_annotations, 3)
 		A tensor of annotations where the first column is the example_idx, the

@@ -2969,7 +2969,7 @@ def test_one_hot_to_fasta_N(dtype, tmp_path):
 
 def test_one_hot_to_fasta_N_only_all_zero(tmp_path):
 	# Only an all-zero column is written as N. A column that sums to zero
-	# without being zero has a largest value, which is written as before.
+	# without being zero has a largest value, whose character is written.
 	path = str(tmp_path / "out.fa")
 	X = torch.tensor([[[1.0, 1.0, 0.3, 0.0], [-1.0, 0.0, -0.2, 0.0],
 		[0.0, 0.0, -0.1, 0.0], [0.0, 0.0, 0.0, 0.0]]])

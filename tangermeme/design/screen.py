@@ -141,8 +141,9 @@ def screen(
 
 	Returns
 	-------
-	X: torch.Tensor, shape=(n_best, len(alphabet), length)
-		The screened examples with the lowest loss.
+	X: torch.Tensor, shape=(n_best, len(alphabet), length), or PackedSequence
+		The screened examples with the lowest loss, packed when `func` draws
+		packed sequences.
 	"""
 
 	if y is None:

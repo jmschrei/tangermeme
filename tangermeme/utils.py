@@ -250,6 +250,7 @@ def validate_input(
 	pre-flight your own tensor against the same shape / dtype / one-hot /
 	value-range checks the library applies internally; with `only_warn=True`
 	you can get a non-raising mode that emits a `TangermemeWarning` instead.
+	`X` can be a PackedSequence, which is checked without reading its bytes.
 
 	The underscored `_validate_input` is retained as an alias for backward
 	compatibility with code (including tests and tutorials) that already
@@ -1164,7 +1165,7 @@ def reverse_complement(
 	seq: str | torch.Tensor | PackedSequence,
 	complement_map: dict[str, str] = {"A": "T", "C": "G", "G": "C", "T": "A"},
 	allow_N: bool = True,
-) -> str | torch.Tensor:
+) -> str | torch.Tensor | PackedSequence:
 	"""Return the reverse complement of a single sequence.
 
 	This function will take in a single one-hot encoding of a sequence, or a
@@ -1194,12 +1195,12 @@ def reverse_complement(
 		it. Default is the nucleotide alphabet.
 
 	allow_N: bool, optional
-		Whether to allow N characters when doing the reverse complement. Only
-		matters when reverse complementing strings. Default is True.
+		Whether to allow N characters when reverse complementing a string or
+		a PackedSequence; a tensor ignores it. Default is True.
 	
 	Returns
 	-------
-	rev_comp: str or torch.Tensor w/ shape (alphabet_size, length)
+	rev_comp: str, torch.Tensor w/ shape (alphabet_size, length), or PackedSequence
 		The reverse complemented string or tensor, matching the type of `seq`.
 
 	Notes
@@ -1376,8 +1377,8 @@ _PACKED_CODES = ((torch.arange(256)[:, None] >> torch.tensor([6, 4, 2, 0]))
 _PACKED_FORMAT_VERSION = 1
 
 
-# The dtypes the packing kernels read and write directly. A one-hot encoding
-# of another dtype, such as float16, goes through int8.
+# The dtypes the packing kernels read and write directly. to_one_hot decodes
+# to int8 and casts for any other dtype, such as float16.
 _PACKED_KERNEL_DTYPES = (torch.int8, torch.uint8, torch.int16, torch.int32,
 	torch.int64, torch.float32, torch.float64, torch.bool)
 
@@ -1604,6 +1605,16 @@ class PackedSequence:
 	Its bytes stay on the CPU, and `to_one_hot` and `to_codes` decode them
 	onto any device.
 
+	Every tangermeme function that takes one-hot sequences as `X` takes a
+	PackedSequence with one batch axis. Those that make sequences return
+	them packed, with the alphabet of a packed `X`, and with ACGT for a
+	one-hot `X` under `return_packed=True`. A function given as `func` or
+	`shuffle_fn` receives packed sequences when it is one of tangermeme's
+	that take them, and their int8 one-hot encoding otherwise, so a function
+	you write receives a tensor. A PackedSequence has no `.to`, `.clone` or
+	concatenation, `==` compares identity, and outputs of length zero are
+	not supported.
+
 
 	Parameters
 	----------
@@ -1738,8 +1749,9 @@ class PackedSequence:
 
 		The index is applied as it would be to a tensor whose shape is the
 		batch axes, so integers, slices, lists, integer and boolean tensors,
-		and tuples of these over several batch axes all work. Indexing the
-		character or position axes raises an IndexError: decode first.
+		and tuples of these over several batch axes all work. `...` stands for
+		batch axes only, so `X[..., j]` selects along the last batch axis.
+		The character and position axes cannot be indexed: decode first.
 
 
 		Parameters
@@ -2207,7 +2219,7 @@ def chunk(
 	X: list[torch.Tensor | PackedSequence],
 	size: int = 1024,
 	overlap: int = 0,
-) -> torch.Tensor:
+) -> torch.Tensor | PackedSequence:
 	"""Chunk a set of sequences into overlapping blocks.
 
 	This function will take a set of sequences of variable length and will
@@ -2239,10 +2251,11 @@ def chunk(
 
 	Returns
 	-------
-	y: torch.Tensor, shape=(-1, len(alphabet), size)
-		A single tensor containing strides across the sequences. The chunks
-		are concatenated together across examples such that the final chunk
-		from the first item is followed by first chunk from the second item.
+	y: torch.Tensor, shape=(-1, len(alphabet), size), or PackedSequence
+		A single tensor containing strides across the sequences, or a
+		PackedSequence when `X` holds PackedSequences. The chunks are
+		concatenated together across examples such that the final chunk from
+		the first item is followed by first chunk from the second item.
 	"""
 
 	if not isinstance(X, list):

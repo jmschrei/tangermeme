@@ -723,7 +723,6 @@ def deep_lift_shap(
 				X.shape[2]), ohe=True, allow_N=True, ohe_dim=-2, only_warn=only_warn)
 			n_shuffles = references.shape[1]
 
-		# Packed sequences in give packed references out.
 		return_packed = (isinstance(X, PackedSequence) or
 			isinstance(references, PackedSequence))
 
@@ -970,7 +969,6 @@ def _captum_deep_lift_shap(
 	device = _resolve_device(device)
 	model = model.to(device).eval()
 
-	# A PackedSequence is decoded in the dtype of the model's parameters.
 	dtype = next(model.parameters(), torch.zeros(1)).dtype
 	return_packed = (isinstance(X, PackedSequence) or
 		isinstance(references, PackedSequence))
