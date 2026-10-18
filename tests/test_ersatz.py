@@ -1891,7 +1891,7 @@ _ERSATZ_CALLS = {
 def test_ersatz_packed(name, chunk, monkeypatch):
 	if chunk is not None:
 		# Several chunks of sequences per call.
-		monkeypatch.setattr("tangermeme.ersatz._CHUNK_POSITIONS", chunk)
+		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
 
 	call = _ERSATZ_CALLS[name]
 	X = _ersatz_X()

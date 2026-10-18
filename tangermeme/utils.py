@@ -1307,7 +1307,7 @@ def random_one_hot(
 	if return_packed:
 		# Draw and pack a chunk of sequences at a time, so that only the
 		# packed bytes of all of them are held.
-		step = max(1, _RANDOM_CHUNK_POSITIONS // max(1, shape[2]))
+		step = _chunk_rows(shape[2])
 		chunks = []
 		for start in range(0, shape[0], step):
 			codes = numpy.empty((min(step, shape[0] - start), shape[2]),
@@ -1329,11 +1329,6 @@ def random_one_hot(
 		ohe[i, choices, positions] = 1 
 
 	return torch.from_numpy(ohe)
-
-
-# The positions random_one_hot draws and packs at a time under
-# return_packed=True.
-_RANDOM_CHUNK_POSITIONS = 2 ** 24
 
 
 def _random_code_rows(shape, probs, random_state):
@@ -1895,11 +1890,7 @@ class PackedSequence:
 		if X.device.type != 'cpu' or X.dtype not in _PACKED_KERNEL_DTYPES:
 			_validate_input(X, "X", ohe=True, ohe_dim=-2, allow_N=True)
 
-			# `max` rather than `argmax`, which is much slower along this axis
-			# on the CPU, gives the same index for a one-hot encoding.
-			values, codes = X.max(dim=-2)
-			codes[values == 0] = 4
-			return cls.from_codes(codes, alphabet)
+			return cls.from_codes(_one_hot_codes(X), alphabet)
 
 		batch, length = X.shape[:-2], X.shape[-1]
 		n_rows = math.prod(batch)
@@ -2102,26 +2093,74 @@ def _cat_packed(sequences):
 
 
 def _stack_packed(sequences):
-	"""Stack PackedSequences of the same shape, length and alphabet along a
-	new second batch axis, as torch.stack(..., dim=1) would."""
+	"""Stack PackedSequences of the same length and alphabet, each with one
+	batch axis of the same size, along a new second batch axis, as
+	torch.stack(..., dim=1) would."""
 
 	first = sequences[0]
 	k = len(sequences)
 	data = torch.stack([X.data for X in sequences], dim=1)
 
-	# Flattened sequence r of item j moves to its row of the stacked axes.
-	inner = math.prod(first.data.shape[1:-1])
 	runs = []
 	for j, X in enumerate(sequences):
 		runs_ = X.n_runs.numpy().copy()
-		rows = runs_[:, 0]
-		runs_[:, 0] = (rows // inner) * (k * inner) + j * inner + rows % inner
+		runs_[:, 0] = runs_[:, 0] * k + j
 		runs.append(runs_)
 
 	runs = numpy.concatenate(runs)
 	runs = runs[numpy.lexsort((runs[:, 1], runs[:, 0]))]
 	return PackedSequence._from_parts(data, first.length, torch.from_numpy(
 		runs), first.alphabet)
+
+
+# The positions handled at a time by the chunked paths for packed sequences:
+# 16 MB of character indices, or 64 MB of an int8 one-hot encoding.
+_CHUNK_POSITIONS = 2 ** 24
+
+
+def _chunk_rows(length):
+	"""The number of sequences of `length` that make up one chunk."""
+
+	return max(1, _CHUNK_POSITIONS // max(1, length))
+
+
+def _one_hot_codes(X):
+	"""The character index of every position of a one-hot encoding of shape
+	(..., len(alphabet), length), as uint8 with 4 for an all-zero column."""
+
+	# `max` rather than `argmax`, which is much slower along this axis on the
+	# CPU, gives the same index for a one-hot encoding.
+	values, codes = X.max(dim=-2)
+	codes[values == 0] = 4
+	return codes.to(torch.uint8)
+
+
+def _codes_of(X, rows):
+	"""The character index of every position of sequences `rows` of X, a
+	PackedSequence or a one-hot encoding of four characters, as uint8 on the
+	CPU with 4 for an unknown character."""
+
+	if isinstance(X, PackedSequence):
+		return X[rows].to_codes()
+
+	return _one_hot_codes(X[rows]).cpu()
+
+
+def _map_rows(X, fn, length, alphabet):
+	"""Apply `fn(codes, rows)`, which returns the character indices of the
+	outputs of sequences `rows` of X given theirs, a chunk of sequences at a
+	time, and pack the outputs, each `length` long, into a PackedSequence."""
+
+	_check_one_batch_axis(X)
+	step = _chunk_rows(X.shape[-1])
+	parts = [PackedSequence.from_codes(fn(_codes_of(X, rows), rows), alphabet)
+		for rows in (slice(i, i + step) for i in range(0, X.shape[0], step))]
+
+	if len(parts) == 0:
+		return PackedSequence(torch.zeros((0, (length + 3) // 4),
+			dtype=torch.uint8), length, alphabet=alphabet)
+
+	return _cat_packed(parts)
 
 
 def chunk(

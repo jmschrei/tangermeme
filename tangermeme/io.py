@@ -28,6 +28,7 @@ from .utils import _one_hot_encode_rows
 from .utils import _one_hot_rows_mapping
 from .utils import _one_hot_encode_fasta
 from .utils import _cat_packed
+from .utils import _chunk_rows
 from .utils import _check_one_batch_axis
 from .utils import characters
 from .utils import PackedSequence
@@ -837,11 +838,6 @@ def _read_fasta_windows(fasta, windows, length, alphabet, ignore,
 	return X
 
 
-# The positions read and packed at a time by extract_loci under
-# return_packed, 64 MB of int8 one-hot encoding.
-_PACKED_CHUNK_POSITIONS = 2 ** 24
-
-
 def extract_loci(
 	loci: str | os.PathLike | pandas.DataFrame | list,
 	sequences: str | os.PathLike | pyfaidx.Fasta | dict,
@@ -1272,7 +1268,7 @@ def extract_loci(
 	# is packed before the next is read.
 	step = len(mids)
 	if return_packed:
-		step = max(1, _PACKED_CHUNK_POSITIONS // max(1, width))
+		step = _chunk_rows(width)
 
 	def pack(seqs):
 		return PackedSequence.from_one_hot(torch.from_numpy(seqs), tuple(
@@ -1410,7 +1406,7 @@ def one_hot_to_fasta(
 		_check_one_batch_axis(X)
 		chars = numpy.frombuffer((''.join(X.alphabet) + 'N').encode('ascii'),
 			dtype=numpy.uint8)
-		step = max(1, _PACKED_CHUNK_POSITIONS // max(1, X.length))
+		step = _chunk_rows(X.length)
 		sequences = (chars[codes].tobytes().decode('ascii') for start in range(
 			0, len(X), step) for codes in X[start:start+step].to_codes().numpy())
 	else:

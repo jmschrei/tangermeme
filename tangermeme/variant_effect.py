@@ -12,9 +12,9 @@ import torch
 
 from .utils import _cast_as_tensor
 from .utils import _for_func
+from .utils import _map_rows
 from .utils import PackedSequence
 
-from .ersatz import _map_rows
 from .predict import predict
 from .results import PerturbationResult
 

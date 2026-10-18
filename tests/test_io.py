@@ -4316,7 +4316,7 @@ def test_one_hot_to_fasta_packed(tmp_path):
 @pytest.mark.parametrize("chunk", [None, 10, 25])
 def test_extract_loci_packed(chunk, monkeypatch):
 	if chunk is not None:
-		monkeypatch.setattr("tangermeme.io._PACKED_CHUNK_POSITIONS", chunk)
+		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
 
 	loci, fasta = "tests/data/test.bed", "tests/data/test.fa"
 	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
@@ -4356,7 +4356,7 @@ def fasta_with_N(tmp_path):
 @pytest.mark.parametrize("reader", ["path", "pyfaidx"])
 def test_extract_loci_packed_N(fasta_with_N, chunk, reader, monkeypatch):
 	if chunk is not None:
-		monkeypatch.setattr("tangermeme.io._PACKED_CHUNK_POSITIONS", chunk)
+		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
 
 	loci = pandas.DataFrame({"chrom": ["chr1", "chr1", "chr2", "chr2", "chr1"],
 		"start": [100, 380, 600, 300, 640], "end": [140, 420, 660, 310, 700]})
@@ -4390,7 +4390,7 @@ def test_extract_loci_packed_raises():
 def test_one_hot_to_fasta_packed_chunks_alphabet(chunk, tmp_path, monkeypatch):
 	# A PackedSequence is written a chunk of sequences at a time, with its
 	# own alphabet: every chunk is written, and in order.
-	monkeypatch.setattr("tangermeme.io._PACKED_CHUNK_POSITIONS", chunk)
+	monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
 	X = tangermeme.utils.random_one_hot((7, 4, 100), random_state=2)
 	X[3, :, 10:20] = 0
 

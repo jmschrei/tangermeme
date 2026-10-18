@@ -513,7 +513,7 @@ def _predict_one_hot(model, X, **kwargs):
 def test_substitution_effect_packed(X, substitutions, func, chunk, device,
 	monkeypatch):
 	if chunk is not None:
-		monkeypatch.setattr("tangermeme.ersatz._CHUNK_POSITIONS", chunk)
+		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
 
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
@@ -533,7 +533,7 @@ def test_substitution_effect_packed(X, substitutions, func, chunk, device,
 def test_deletion_effect_packed(X_del, deletions, func, left, chunk, device,
 	monkeypatch):
 	if chunk is not None:
-		monkeypatch.setattr("tangermeme.ersatz._CHUNK_POSITIONS", chunk)
+		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
 
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
@@ -554,7 +554,7 @@ def test_deletion_effect_packed(X_del, deletions, func, left, chunk, device,
 def test_insertion_effect_packed(X, substitutions, func, left, chunk, device,
 	monkeypatch):
 	if chunk is not None:
-		monkeypatch.setattr("tangermeme.ersatz._CHUNK_POSITIONS", chunk)
+		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
 
 	torch.manual_seed(0)
 	model = SmallDeepSEA()

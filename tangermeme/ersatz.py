@@ -13,8 +13,9 @@ import torch
 from tqdm import tqdm
 
 from .utils import _accepts_packed
-from .utils import _cat_packed
-from .utils import _check_one_batch_axis
+from .utils import _codes_of
+from .utils import _map_rows
+from .utils import _one_hot_codes
 from .utils import _numba_threads
 from .utils import _random_codes
 from .utils import _stack_packed
@@ -26,49 +27,12 @@ from .utils import random_one_hot
 from .utils import TangermemeWarning
 
 
-# The positions decoded at a time by the packed paths below, 16 MB of
-# character indices.
-_CHUNK_POSITIONS = 2 ** 24
-
-
-def _codes_of(X, rows):
-	"""The character index of every position of sequences `rows` of X, a
-	PackedSequence or a one-hot encoding of four characters, as uint8 with 4
-	for an unknown character."""
-
-	if isinstance(X, PackedSequence):
-		return X[rows].to_codes()
-
-	values, codes = X[rows].max(dim=1)
-	codes[values == 0] = 4
-	return codes.to(torch.uint8).cpu()
-
-
-def _map_rows(X, fn, length, alphabet):
-	"""Apply `fn(codes, rows)`, which returns the character indices of the
-	outputs of sequences `rows` of X given theirs, a chunk of sequences at a
-	time, and pack the outputs, each `length` long, into a PackedSequence."""
-
-	_check_one_batch_axis(X)
-	step = max(1, _CHUNK_POSITIONS // max(1, X.shape[-1]))
-	parts = [PackedSequence.from_codes(fn(_codes_of(X, rows), rows), alphabet)
-		for rows in (slice(i, i + step) for i in range(0, X.shape[0], step))]
-
-	if len(parts) == 0:
-		return PackedSequence(torch.zeros((0, (length + 3) // 4),
-			dtype=torch.uint8), length, alphabet=alphabet)
-
-	return _cat_packed(parts)
-
-
 def _motif_codes(motif, rows, n):
 	"""The character indices of the motifs of sequences `rows`, whether
 	`motif` holds one motif or one per sequence, with 4 for all-zero
 	columns."""
 
-	values, codes = motif.max(dim=1)
-	codes[values == 0] = 4
-	codes = codes.to(torch.uint8).cpu()
+	codes = _one_hot_codes(motif).cpu()
 	return codes.expand(n, -1)[rows] if codes.shape[0] == 1 else codes[rows]
 
 

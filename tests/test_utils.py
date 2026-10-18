@@ -2210,7 +2210,7 @@ def test_random_one_hot_packed_chunks(chunk, monkeypatch):
 	# With return_packed=True the sequences are drawn and packed a chunk at
 	# a time, which gives the packed encoding of the one-hot draws whatever
 	# the chunk size, including chunks of one sequence and of all of them.
-	monkeypatch.setattr("tangermeme.utils._RANDOM_CHUNK_POSITIONS", chunk)
+	monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
 	probs = numpy.random.RandomState(0).dirichlet(numpy.ones(4), size=10)
 
 	for kwargs in ({}, {"probs": probs}):
