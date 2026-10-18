@@ -27,10 +27,10 @@ seqlets = recursive_seqlets(attr_sums, threshold=0.01, additional_flanks=0)
 ```
 
 - Returns **positive seqlets only**. For negative ones, run on `-attr_sums` (and
-  `X_null=-attr_null` if you use a control), negate the returned `attribution`,
-  and drop any that overlap a positive seqlet. Do not run on `attr_sums.abs()`:
-  the null then pools both tails, so negatives weaker than the positives are never
-  significant.
+  `X_control=-attr_control` if you use a control), negate the returned
+  `attribution`, and drop any that overlap a positive seqlet. Do not run on
+  `attr_sums.abs()`: the null then pools both tails, so negatives weaker than the
+  positives are never significant.
 - The `p-value` column is a **ranking score, not an error rate**. It is computed as
   if positions were independent draws from a histogram, but attributions are
   correlated along the sequence and the default histogram contains the signal being
@@ -47,38 +47,41 @@ seqlets = recursive_seqlets(attr_sums, threshold=0.01, additional_flanks=0)
   neighbors even though the cores cannot, so flanked spans are not disjoint, their
   attributions can double-count the same positions, and
   `pairwise_annotations_spacing` rejects them (see `references/annotate.md`).
-- **Over-calls on a single example** (it can't fit a null from one sequence), and by
-  default a sequence's p-values depend on the other sequences passed with it. Pass
-  many examples, or a fixed reference set (e.g. attributions of many sequences, or of
-  many dinucleotide shuffles) as `X_null` to score every sequence or batch against
-  the same null.
+- **Over-calls on a single example** (it can't fit a null from one sequence), and a
+  sequence's p-values depend on the other sequences passed with it. Pass many
+  examples together.
 
 ### Choosing the threshold with a control
 
-Attribute several dinucleotide shuffles of each sequence with the same model,
-target and settings as `X`, concatenate them, and count the seqlets called on them
-at each threshold. Leave `X_null` unset: the null is pooled over `X`, and the
-shuffles are only counted.
+Pass control attributions as `X_control` and the threshold is chosen for you: the
+largest one whose estimated false discovery rate is at or below `target_fdr`
+(default 0.1). `threshold` is then ignored. A good control is several dinucleotide
+shuffles of each sequence, attributed with the same model, target and settings as
+`X`, and concatenated:
 
 ```python
 import torch
 
 from tangermeme.ersatz import dinucleotide_shuffle
 from tangermeme.seqlet import recursive_seqlets
-from tangermeme.seqlet import recursive_seqlets_fdr
 
 shuffles = dinucleotide_shuffle(X, n=3, random_state=0)       # (n, 3, 4, length)
 attr_control = torch.cat([deep_lift_shap(model, shuffles[:, k], random_state=0).sum(dim=1)
 	for k in range(3)])
 
-fdr = recursive_seqlets_fdr(attr_sums, attr_control)
-threshold = fdr.loc[fdr['fdr'] <= 0.2, 'threshold'].max()   # NaN if none passes
-seqlets = recursive_seqlets(attr_sums, threshold=threshold)
+seqlets, fdr = recursive_seqlets(attr_sums, X_control=attr_control, target_fdr=0.1,
+	return_fdr=True)
 ```
 
-- `fdr` has one row per threshold (0.1 to 1e-30 by default): seqlets called on `X`,
-  on the control, and their ratio scaled by size. It is a property of the whole set
-  of calls at that threshold, not of any single seqlet.
+- The estimate at each threshold is the number of seqlets called on the control
+  plus one, scaled to the size of `X`, over the number called on `X`. The plus one
+  stops a few chance calls at an extreme threshold, with no control calls, from
+  passing as zero. It is a property of the whole set of calls, not of any single
+  seqlet.
+- `return_fdr=True` returns `(seqlets, fdr)`: one row per threshold (0.1 to 1e-30,
+  four per decade) with both counts and the estimate. Without it, only `seqlets`.
+- **No threshold reaches the target** → a `TangermemeWarning` with the lowest
+  estimate reached, and no seqlets. Raise `target_fdr`.
 - **More shuffles, steadier estimate.** The estimate is only as precise as the number
   of control seqlets at a threshold; with one shuffle, a strict threshold may rest on
   a few dozen. Each shuffle costs one more attribution pass.
@@ -87,10 +90,6 @@ seqlets = recursive_seqlets(attr_sums, threshold=threshold)
   model responds to, so the curve can level off above zero: a target below that
   level is reached by no threshold, and a target near it picks a threshold from a
   flat stretch that moves a lot between controls.
-- With `X_null`, pass the **same `X_null`** to `recursive_seqlets` as to
-  `recursive_seqlets_fdr`, or the threshold means something else, and count on a
-  control other than `X_null`. A span whose summed bins exceed anything `X_null` can
-  produce gets p = 0.
 
 ## tfmodisco_seqlets — longer, discovery-oriented
 
