@@ -730,8 +730,13 @@ def deep_lift_shap(
 				else:
 					if random_state is None:
 						_references = references(_X, n=1)[:, 0]
+					elif references is dinucleotide_shuffle:
+						# One call draws the batch, giving each pair the seed
+						# the per-pair calls below would give it.
+						_references = references(_X, n=1, random_state=[
+							random_state + k for k in rj])[:, 0]
 					else:
-						_references = torch.cat([references(_X[j:j+1], n=1, 
+						_references = torch.cat([references(_X[j:j+1], n=1,
 							random_state=random_state+rj[j])[:, 0] 
 								for j in range(len(_X))])
 

@@ -71,6 +71,20 @@ def _hooks_disabled():
 	return not _HookState.enabled
 
 
+def _rescale(delta_in, delta_out, grad_input, grad_output):
+	"""The rescale rule on tensors: `grad_output` times the secant
+	`delta_out / delta_in`, or `grad_input` where `abs(delta_in) < 1e-6`.
+
+	`_nonlinear` applies it to a hooked module. The arguments broadcast
+	against each other, so the differences, computed once per example and
+	reference, can serve gradients for both halves of a batch, or for a
+	sequence and each of its references.
+	"""
+
+	return torch.where(torch.abs(delta_in) < 1e-6, grad_input,
+		grad_output * (delta_out / delta_in))
+
+
 def _nonlinear(module, grad_input, grad_output):
 	"""An internal function implementing a general-purpose nonlinear correction.
 
@@ -117,15 +131,12 @@ def _nonlinear(module, grad_input, grad_output):
 	delta_out = torch.sub(*module.output.chunk(2))
 
 	# The secant depends only on the activations, so it is computed at half
-	# width and tiled over both halves of the batch.
-	delta = delta_out / delta_in
-	idxs = torch.abs(delta_in) < 1e-6
+	# width and broadcast over both halves of the batch.
+	shape = (2, *delta_in.shape)
+	grad = _rescale(delta_in, delta_out, grad_input[0].reshape(shape),
+		grad_output[0].reshape(shape))
 
-	repeat = [2] + [1] * (delta.ndim - 1)
-	delta = delta.repeat(repeat)
-	idxs = idxs.repeat(repeat)
-
-	return (torch.where(idxs, grad_input[0], grad_output[0] * delta),)
+	return (grad.reshape(grad_input[0].shape),)
 
 
 def _windows_overlap(module):
@@ -498,13 +509,41 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 		f"Unsupported norm_type: {norm_type}")
 
 	x, x_ref = module.input.chunk(2)
-
-	# Normalized dimensions: last len(normalized_shape) dims
 	n_norm_dims = len(module.normalized_shape)
-	D = 1
-	for s in module.normalized_shape:
-		D *= s
+
+	# `torch.nn.RMSNorm.eps` defaults to None, which `F.rms_norm` interprets
+	# as the dtype's epsilon; mirror that here so the hook matches the forward
+	# pass it is correcting.
+	eps = module.eps if module.eps is not None else torch.finfo(x.dtype).eps
+	terms = _layer_normalization_terms(x, x_ref, n_norm_dims, eps, norm_type)
+
+	# gamma-scaled upstream gradients for both halves of the batch
+	gamma = module.weight if module.weight is not None else 1.0
+	g_tilde, g_tilde_ref = (grad_output[0] * gamma).chunk(2)
+
+	grad_in = _layer_normalization_grad(g_tilde, *terms, n_norm_dims,
+		norm_type)
+	grad_in_ref = _layer_normalization_grad(g_tilde_ref, *terms, n_norm_dims,
+		norm_type)
+
+	return (torch.cat([grad_in, grad_in_ref]),)
+
+
+def _layer_normalization_terms(x, x_ref, n_norm_dims, eps,
+	norm_type="layernorm"):
+	"""The terms of the normalization rule that depend only on the
+	activations, from `_layer_normalization_helper`'s derivation: v_avg, a_sum
+	and Term 2's leading factor.
+
+	`x` and `x_ref` are normalized over their last `n_norm_dims` axes and
+	broadcast against each other on the others, so one example can be paired
+	with each of its references without being copied.
+	"""
+
 	norm_dims = list(range(-n_norm_dims, 0))
+	D = 1
+	for s in x.shape[-n_norm_dims:]:
+		D *= s
 
 	# Mean-centered inputs: a_i = x_i - mu
 	if norm_type == "rmsnorm":
@@ -519,22 +558,14 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 	# Inverse std: v = (σ^2 + eps)^{-1/2}
 	var = (a ** 2).mean(dim=norm_dims, keepdim=True)
 	var_ref = (a_ref ** 2).mean(dim=norm_dims, keepdim=True)
-	# `torch.nn.RMSNorm.eps` defaults to None, which `F.rms_norm` interprets
-	# as the dtype's epsilon; mirror that here so the hook matches the forward
-	# pass it is correcting.
-	eps = module.eps if module.eps is not None else torch.finfo(x.dtype).eps
 	v = (var + eps) ** (-0.5)
 	v_ref = (var_ref + eps) ** (-0.5)
-
-	# gamma-scaled upstream gradients for both halves of the batch
-	gamma = module.weight if module.weight is not None else 1.0
-	g_tilde, g_tilde_ref = (grad_output[0] * gamma).chunk(2)
 
 	# some additional terms
 	v_avg = (v + v_ref) / 2
 	a_sum = a + a_ref
 
-	# ratio = Δv / Δ(σ^2) 
+	# ratio = Δv / Δ(σ^2)
 	#       = (v - v_ref) / (v^{-2} - v_ref^{-2})
 	#       = -v^2 * v_ref^2 / (v + v_ref)
 	#       = -v^2 * v_ref^2 / (2 * v_avg)
@@ -542,19 +573,22 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 
 	# Term 2's leading factor is shared by both halves, so build it once.
 	variance_term = ratio * a_sum / (2 * D)
+	return v_avg, a_sum, variance_term
 
-	def _compute_grad(g_tilde_):
-		if norm_type == "rmsnorm":
-			term1 = v_avg * g_tilde_
-		else:
-			term1 = v_avg * (g_tilde_ - g_tilde_.mean(dim=norm_dims, keepdim=True))
-		dot = (g_tilde_ * a_sum).sum(dim=norm_dims, keepdim=True)
-		return term1 + variance_term * dot
 
-	grad_in = _compute_grad(g_tilde)
-	grad_in_ref = _compute_grad(g_tilde_ref)
+def _layer_normalization_grad(g_tilde, v_avg, a_sum, variance_term,
+	n_norm_dims, norm_type="layernorm"):
+	"""The normalization rule's gradient at the input, given the gamma-scaled
+	upstream gradient `g_tilde` of one half of the batch and the terms of
+	`_layer_normalization_terms`."""
 
-	return (torch.cat([grad_in, grad_in_ref]),)
+	norm_dims = list(range(-n_norm_dims, 0))
+	if norm_type == "rmsnorm":
+		term1 = v_avg * g_tilde
+	else:
+		term1 = v_avg * (g_tilde - g_tilde.mean(dim=norm_dims, keepdim=True))
+	dot = (g_tilde * a_sum).sum(dim=norm_dims, keepdim=True)
+	return term1 + variance_term * dot
 
 
 def _layernorm(module, grad_input, grad_output):

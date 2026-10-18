@@ -9,6 +9,7 @@ torch.manual_seed(0)
 import numpy
 import pytest
 import warnings
+import types
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
@@ -33,6 +34,10 @@ from tangermeme._deep_lift_utils import _glu
 from tangermeme._deep_lift_utils import _build_nonlinear_ops
 from tangermeme._deep_lift_utils import _softmax
 from tangermeme._deep_lift_utils import _layernorm
+from tangermeme._deep_lift_utils import _layer_normalization_helper
+from tangermeme._deep_lift_utils import _layer_normalization_terms
+from tangermeme._deep_lift_utils import _layer_normalization_grad
+from tangermeme._deep_lift_utils import _rescale
 from tangermeme._deep_lift_utils import _rmsnorm
 from tangermeme._deep_lift_utils import _HookState
 from tangermeme._deep_lift_utils import _disable_hooks
@@ -359,6 +364,21 @@ def test_deep_lift_shap_random_state(X, device):
 
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr1)
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr2)
+
+
+def test_deep_lift_shap_random_state_references(X, device):
+	# Reference k of example e is the shuffle seeded with random_state + k,
+	# however the batches split an example's references.
+	torch.manual_seed(0)
+	model = FlattenDense(n_outputs=1)
+
+	expected = torch.stack([torch.cat([dinucleotide_shuffle(X[e:e+1], n=1,
+		random_state=5+k)[:, 0] for k in range(6)]) for e in range(len(X))])
+
+	for batch_size in 1, 4, 6, 7, 32:
+		_, refs = deep_lift_shap(model, X, n_shuffles=6, random_state=5,
+			batch_size=batch_size, return_references=True, device=device)
+		assert (refs == expected).all()
 
 
 def test_deep_lift_shap_reference_tensor(X, device):
@@ -2076,6 +2096,54 @@ def test_deep_lift_shap_norm_completeness(X, references, device):
 				warning_threshold=1e-4 if device == "cpu" else 1e-2)
 
 		assert X_attr.shape == X.shape
+
+
+def _paired(x, x_ref):
+	"""Stand-in hooked module input: each example once per reference, then
+	the references, flattened to (2 * pairs, ...)."""
+
+	return torch.cat([x.expand_as(x_ref), x_ref]).flatten(0, 1)
+
+
+def test_rescale_broadcasts_like_nonlinear():
+	# One example broadcast against each of its references gives what
+	# _nonlinear gives on the explicit (example, reference) pairs.
+	torch.manual_seed(0)
+	x = torch.randn(3, 1, 5, 7, dtype=torch.float64)
+	x_ref = torch.randn(3, 4, 5, 7, dtype=torch.float64)
+	x_ref[0, 1, 2] = x[0, 0, 2] + 1e-8  # below 1e-6: the plain gradient
+	act = torch.nn.GELU(approximate="tanh")
+	g = torch.randn(3, 4, 5, 7, dtype=torch.float64)
+	g_plain = torch.randn(3, 4, 5, 7, dtype=torch.float64)
+
+	ours = _rescale(x - x_ref, act(x) - act(x_ref), g_plain, g)
+
+	module = types.SimpleNamespace(input=_paired(x, x_ref),
+		output=_paired(act(x), act(x_ref)))
+	grad = _nonlinear(module, (torch.cat([g_plain, g_plain]).flatten(0, 1),),
+		(torch.cat([g, g]).flatten(0, 1),))[0]
+
+	assert torch.equal(ours.flatten(0, 1), grad[:12])
+	assert torch.equal(ours[0, 1, 2], g_plain[0, 1, 2])
+
+
+@pytest.mark.parametrize("norm_type", ["layernorm", "rmsnorm"])
+def test_layer_normalization_terms_broadcast_like_helper(norm_type):
+	torch.manual_seed(0)
+	x = torch.randn(3, 1, 5, 7, dtype=torch.float64) * 2 + 1
+	x_ref = torch.randn(3, 4, 5, 7, dtype=torch.float64)
+	g = torch.randn(3, 4, 5, 7, dtype=torch.float64)
+
+	terms = _layer_normalization_terms(x, x_ref, 2, 1e-3, norm_type)
+	ours = _layer_normalization_grad(g, *terms, 2, norm_type)
+
+	module = types.SimpleNamespace(input=_paired(x, x_ref), eps=1e-3,
+		normalized_shape=[5, 7], weight=None)
+	grad = _layer_normalization_helper(module, None,
+		(torch.cat([g, torch.zeros_like(g)]).flatten(0, 1),),
+		norm_type=norm_type)[0]
+
+	assert torch.equal(ours.flatten(0, 1), grad[:12])
 
 
 def test_deep_lift_shap_rmsnorm_explicit_eps(X, references, device):
