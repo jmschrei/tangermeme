@@ -571,6 +571,26 @@ def test_recursive_seqlets_shorter_than_min_seqlet_len():
 	assert seqlets.shape == (0, 5)
 
 
+@pytest.mark.parametrize("threshold", [numpy.nan, 1.0000001, 1.5, numpy.inf])
+def test_recursive_seqlets_threshold_invalid(X_laplace, threshold):
+	"""A NaN threshold, or one above 1, used to never return.
+
+	The decoder stops at the first p-value at or above the threshold, and no
+	p-value is NaN or above 1.
+	"""
+
+	assert_raises(ValueError, recursive_seqlets, X_laplace, threshold=threshold)
+
+
+@pytest.mark.parametrize("threshold", [1.0, 0.0, -1.0])
+def test_recursive_seqlets_threshold_bounds(X_laplace, threshold):
+	seqlets = recursive_seqlets(X_laplace, threshold=threshold)
+	if threshold <= 0:
+		assert seqlets.shape == (0, 5)
+	else:
+		assert seqlets.shape[0] > 0
+
+
 def test_tfmodisco_seqlets_empty():
 	assert_raises(ValueError, tfmodisco_seqlets, torch.zeros(0, 100))
 

@@ -137,6 +137,8 @@ seqlet
 
 	- The ``recursive_seqlets`` docstring says that its p-values rank spans rather than give error rates, and why, so that ``threshold=0.01`` does not mean that 1% of the calls are false, and it describes choosing the threshold with ``X_control``. For negative seqlets, it says to run on the negated attributions and drop those that overlap a positive seqlet. Running on the absolute values, as it used to suggest, pools both tails into one null, so negative seqlets weaker than the positive ones are never significant.
 
+	- ``recursive_seqlets`` raises a ``ValueError`` for a ``threshold`` that is NaN or above 1. It used to never return: its decoder stops at the first p-value at or above the threshold, and no p-value is NaN or above 1, so ``threshold=numpy.nan``, ``1.5`` or ``numpy.inf`` looped until the process was killed. A threshold of 1 is still accepted, and one of 0 or below still calls no seqlets.
+
 utils
 -----
 

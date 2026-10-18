@@ -703,7 +703,8 @@ def recursive_seqlets(
 	threshold: float, optional
 		The p-value threshold for calling seqlets. All positions within the
 		triangle (as detailed above) must be below this threshold. This is a
-		cutoff on a ranking score, not a false discovery rate; see above.
+		cutoff on a ranking score, not a false discovery rate; see above. It
+		must be at most 1, and not NaN; at 0 or below, no seqlets are called.
 		Ignored when `X_control` is given. Default is 0.01.
 
 	min_seqlet_len: int, optional
@@ -767,6 +768,12 @@ def recursive_seqlets(
 	if return_fdr and X_control is None:
 		raise ValueError("return_fdr=True requires X_control, the control "
 			"attributions that the false discovery rate is estimated from.")
+
+	# The decoder stops at the first p-value at or above the threshold, and
+	# no p-value is NaN or above 1, so such a threshold would never stop it.
+	if X_control is None and not threshold <= 1:
+		raise ValueError("threshold must be a p-value of at most 1; got "
+			"{}.".format(threshold))
 
 	columns = ['example_idx', 'start', 'end', 'attribution', 'p-value']
 
