@@ -1271,3 +1271,21 @@ class ReorderedChannels(torch.nn.Module):
 		X = X.float()[:, self.order]
 		X = torch.cat([X, torch.zeros_like(X)], dim=1)
 		return self.conv(X)
+
+
+class LinearConv(torch.nn.Module):
+	"""Two Conv1d layers with no activation between them, mean-pooled.
+
+	Composing linear ops keeps the whole model linear, so its Jacobian with
+	respect to the input is constant and does not depend on the bases that
+	are present. `Conv1` is not a substitute -- it lacks `padding='same'` and
+	so does not reduce to a single output per example.
+	"""
+
+	def __init__(self):
+		super(LinearConv, self).__init__()
+		self.conv1 = torch.nn.Conv1d(4, 6, 3, padding='same')
+		self.conv2 = torch.nn.Conv1d(6, 1, 3, padding='same')
+
+	def forward(self, X):
+		return self.conv2(self.conv1(X)).mean(dim=-1)
