@@ -13,6 +13,7 @@ import types
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
 
 from tangermeme.ersatz import substitute
 from tangermeme.ersatz import shuffle
@@ -4569,3 +4570,113 @@ def test_deep_lift_shap_autocast_additional_nonlinear_ops(X, references,
 				name="layernorm")})
 
 	assert X_attr.dtype == torch.bfloat16
+
+
+###
+# A PackedSequence as X or as references gives the attributions of its
+# one-hot encoding, and packed sequences in give packed references out.
+
+
+def _assert_packed_equal(X_packed, Y_packed):
+	assert isinstance(X_packed, PackedSequence)
+	assert X_packed.shape == Y_packed.shape
+	assert torch.equal(X_packed.data, Y_packed.data)
+	assert torch.equal(X_packed.n_runs, Y_packed.n_runs)
+
+
+@pytest.mark.parametrize("batch_size", [1, 3, 8, 40])
+def test_deep_lift_shap_packed(X, batch_size, device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+
+	X_attr, refs = deep_lift_shap(model, X, n_shuffles=5, batch_size=batch_size,
+		random_state=0, return_references=True, device=device)
+	X_attr_packed, refs_packed = deep_lift_shap(model,
+		PackedSequence.from_one_hot(X), n_shuffles=5, batch_size=batch_size,
+		random_state=0, return_references=True, device=device)
+
+	assert X_attr_packed.dtype == X_attr.dtype
+	assert torch.equal(X_attr_packed, X_attr)
+	assert refs_packed.shape == refs.shape
+	_assert_packed_equal(refs_packed, PackedSequence.from_one_hot(refs))
+
+
+@pytest.mark.parametrize("hypothetical, raw_outputs", [(True, False),
+	(False, True)])
+def test_deep_lift_shap_packed_outputs(X, hypothetical, raw_outputs, device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	kwargs = dict(n_shuffles=3, random_state=0, hypothetical=hypothetical,
+		raw_outputs=raw_outputs, device=device)
+
+	X_attr = deep_lift_shap(model, X, **kwargs)
+	X_attr_packed = deep_lift_shap(model, PackedSequence.from_one_hot(X),
+		**kwargs)
+	assert torch.equal(X_attr_packed, X_attr)
+
+
+def test_deep_lift_shap_packed_references(X, references, device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	refs_packed = PackedSequence.from_one_hot(references)
+
+	X_attr = deep_lift_shap(model, X, references=references, device=device)
+	X_attr_packed = deep_lift_shap(model, X, references=refs_packed,
+		device=device)
+	assert torch.equal(X_attr_packed, X_attr)
+
+	X_attr_both, refs_back = deep_lift_shap(model,
+		PackedSequence.from_one_hot(X), references=refs_packed,
+		return_references=True, device=device)
+	assert torch.equal(X_attr_both, X_attr)
+	_assert_packed_equal(refs_back, refs_packed)
+
+
+def test_deep_lift_shap_packed_unseeded(X, device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+
+	numpy.random.seed(5)
+	X_attr = deep_lift_shap(model, X, n_shuffles=3, device=device)
+	numpy.random.seed(5)
+	X_attr_packed = deep_lift_shap(model, PackedSequence.from_one_hot(X),
+		n_shuffles=3, device=device)
+	assert torch.equal(X_attr_packed, X_attr)
+
+
+def test_deep_lift_shap_packed_fp64(X, device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA().double()
+
+	X_attr = deep_lift_shap(model, X.double(), n_shuffles=3, random_state=0,
+		device=device)
+	X_attr_packed = deep_lift_shap(model, PackedSequence.from_one_hot(X),
+		n_shuffles=3, random_state=0, device=device)
+	assert X_attr_packed.dtype == torch.float64
+	assert torch.equal(X_attr_packed, X_attr)
+
+
+def test_deep_lift_shap_packed_raises(X, references, device):
+	model = SmallDeepSEA()
+	X_N = X.clone()
+	X_N[0, :, :3] = 0
+
+	assert_raises(ValueError, deep_lift_shap, model,
+		PackedSequence.from_one_hot(X_N), device=device)
+	assert_raises(ValueError, deep_lift_shap, model,
+		PackedSequence.from_one_hot(X), references=PackedSequence.from_one_hot(
+		references[:3]), device=device)
+
+
+def test_captum_deep_lift_shap_packed(X, references, device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+
+	X_attr, refs = _captum_deep_lift_shap(model, X[:4], references=references[:4],
+		return_references=True, device=device)
+	X_attr_packed, refs_packed = _captum_deep_lift_shap(model,
+		PackedSequence.from_one_hot(X[:4]), references=PackedSequence.from_one_hot(
+		references[:4]), return_references=True, device=device)
+
+	assert torch.equal(X_attr_packed, X_attr)
+	_assert_packed_equal(refs_packed, PackedSequence.from_one_hot(refs))

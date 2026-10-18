@@ -11,6 +11,7 @@ import warnings
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
 
 from tangermeme.ersatz import substitute
 from tangermeme.ersatz import shuffle
@@ -1447,3 +1448,29 @@ def test_pisa_shared_module_cleanup(X):
 		for name in ("handles", "_caches", "_fwd_counter", "_bw_idx",
 			"_staged", "input", "output", "left", "right"):
 			assert name not in module.__dict__
+
+
+###
+# A PackedSequence as X or as references gives the attributions of its
+# one-hot encoding, and packed sequences in give packed references out.
+
+
+def test_pisa_packed(X, references, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X_packed = PackedSequence.from_one_hot(X)
+	refs_packed = PackedSequence.from_one_hot(references)
+
+	X_attr, refs = pisa(model, X, n_shuffles=3, random_state=0,
+		return_references=True, device=device)
+	X_attr_packed, refs_back = pisa(model, X_packed, n_shuffles=3,
+		random_state=0, return_references=True, device=device)
+	assert torch.equal(X_attr_packed.cpu(), X_attr.cpu())
+	assert isinstance(refs_back, PackedSequence)
+	assert torch.equal(refs_back.to_one_hot(), refs.cpu().to(torch.int8))
+
+	X_attr = pisa(model, X, references=references, device=device)
+	assert torch.equal(pisa(model, X_packed, references=refs_packed,
+		device=device).cpu(), X_attr.cpu())
+	assert torch.equal(pisa(model, X, references=refs_packed,
+		device=device).cpu(), X_attr.cpu())

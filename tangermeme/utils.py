@@ -1920,6 +1920,28 @@ class PackedSequence:
 			torch.from_numpy(n_runs), meta["alphabet"])
 
 
+def _cat_packed(sequences):
+	"""Concatenate PackedSequences of the same length, alphabet and trailing
+	batch axes along their first batch axis."""
+
+	first = sequences[0]
+	n_bytes = first.data.shape[-1]
+	data = torch.cat([X.data.reshape(-1, *first.data.shape[1:]) for X in
+		sequences])
+
+	runs, offset = [], 0
+	for X in sequences:
+		runs_ = X.n_runs.numpy().copy()
+		runs_[:, 0] += offset
+		runs.append(runs_)
+		offset += math.prod(X.data.shape[:-1])
+
+	n_runs = torch.from_numpy(numpy.concatenate(runs) if len(runs) > 0 else
+		numpy.zeros((0, 3), dtype=numpy.int64))
+	return PackedSequence._from_parts(data.reshape(-1, *first.data.shape[1:-1],
+		n_bytes), first.length, n_runs, first.alphabet)
+
+
 def chunk(
 	X: list[torch.Tensor],
 	size: int = 1024,
