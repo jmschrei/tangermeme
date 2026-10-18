@@ -4680,3 +4680,27 @@ def test_captum_deep_lift_shap_packed(X, references, device):
 
 	assert torch.equal(X_attr_packed, X_attr)
 	_assert_packed_equal(refs_packed, PackedSequence.from_one_hot(refs))
+
+
+def _soft_references(X, n=1, random_state=None):
+	# Uniform references, which are not a one-hot encoding.
+	return torch.full((X.shape[0], n, X.shape[1], X.shape[2]), 0.25)
+
+
+@pytest.mark.parametrize("func", [deep_lift_shap, _captum_deep_lift_shap])
+def test_deep_lift_shap_packed_soft_references(X, func, device):
+	# References that are not one-hot cannot be packed, so with a packed X
+	# they come back as a tensor, the one a one-hot X gives.
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	kwargs = dict(references=_soft_references, n_shuffles=3,
+		return_references=True, random_state=0, device=device)
+
+	X_attr, refs = func(model, X, **kwargs)
+	X_attr_packed, refs_packed = func(model, PackedSequence.from_one_hot(X),
+		**kwargs)
+
+	assert torch.equal(X_attr_packed, X_attr)
+	assert isinstance(refs_packed, torch.Tensor)
+	assert refs_packed.dtype == refs.dtype
+	assert torch.equal(refs_packed, refs)

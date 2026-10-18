@@ -173,8 +173,9 @@ def pisa(
 
 	references: torch.tensor or PackedSequence, optional
 		The references used for each input sequence, with the shape
-		(n_input_sequences, n_shuffles, 4, length). A PackedSequence when `X`
-		or `references` is one. Only returned if `return_references = True`.
+		(n_input_sequences, n_shuffles, 4, length). A PackedSequence when
+		`references` is one, or when `X` is one and the references are
+		one-hot. Only returned if `return_references = True`.
 
 	Notes
 	-----
@@ -241,9 +242,18 @@ def pisa(
 
 			_references = _references.to(device).requires_grad_()
 			if return_references and return_packed:
-				references_.append(PackedSequence.from_one_hot(
-					_references.detach().cpu()).reshape(1, -1))
-			elif return_references:
+				try:
+					references_.append(PackedSequence.from_one_hot(
+						_references.detach().cpu()).reshape(1, -1))
+				except ValueError:
+					# References that are not one-hot, from a callable, cannot
+					# be packed, and come back as a tensor.
+					if len(references_) > 0:
+						raise
+
+					return_packed = False
+
+			if return_references and not return_packed:
 				references_.append(_references)
 
 			# Pull out the additional arguments for this example, if additional

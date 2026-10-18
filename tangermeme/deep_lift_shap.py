@@ -685,8 +685,9 @@ def deep_lift_shap(
 
 	references: torch.tensor or PackedSequence, optional
 		The references used for each input sequence, with the shape
-		(n_input_sequences, n_shuffles, 4, length). A PackedSequence when `X`
-		or `references` is one, packed a batch at a time. Only returned if
+		(n_input_sequences, n_shuffles, 4, length). A PackedSequence when
+		`references` is one, or when `X` is one and the references are
+		one-hot, packed a batch at a time. Only returned if
 		`return_references = True`.
 	"""
 
@@ -833,9 +834,18 @@ def deep_lift_shap(
 					z += 1
 
 				if return_references and return_packed:
-					references_.append(PackedSequence.from_one_hot(
-						_references.detach().cpu()))
-				elif return_references:
+					try:
+						references_.append(PackedSequence.from_one_hot(
+							_references.detach().cpu()))
+					except ValueError:
+						# References that are not one-hot, from a callable,
+						# cannot be packed, and come back as a tensor.
+						if len(references_) > 0:
+							raise
+
+						return_packed = False
+
+				if return_references and not return_packed:
 					references_.extend(list(_references.cpu().detach()))
 
 				Xi, rj = [], []
@@ -1008,9 +1018,18 @@ def _captum_deep_lift_shap(
 				attr = (attr * _X)
 			
 			if return_references and return_packed:
-				references_.append(PackedSequence.from_one_hot(
-					_references.unsqueeze(0).cpu()))
-			elif return_references:
+				try:
+					references_.append(PackedSequence.from_one_hot(
+						_references.unsqueeze(0).cpu()))
+				except ValueError:
+					# References that are not one-hot, from a callable, cannot
+					# be packed, and come back as a tensor.
+					if len(references_) > 0:
+						raise
+
+					return_packed = False
+
+			if return_references and not return_packed:
 				references_.append(_references.unsqueeze(0).cpu())
 
 			attributions.append(attr.cpu())

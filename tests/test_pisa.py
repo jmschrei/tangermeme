@@ -1474,3 +1474,25 @@ def test_pisa_packed(X, references, device):
 		device=device).cpu(), X_attr.cpu())
 	assert torch.equal(pisa(model, X, references=refs_packed,
 		device=device).cpu(), X_attr.cpu())
+
+
+def _soft_references(X, n=1, random_state=None):
+	# Uniform references, which are not a one-hot encoding.
+	return torch.full((X.shape[0], n, X.shape[1], X.shape[2]), 0.25)
+
+
+def test_pisa_packed_soft_references(X, device):
+	# References that are not one-hot cannot be packed, so with a packed X
+	# they come back as a tensor, the one a one-hot X gives.
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	kwargs = dict(references=_soft_references, n_shuffles=3,
+		return_references=True, random_state=0, device=device)
+
+	X_attr, refs = pisa(model, X, **kwargs)
+	X_attr_packed, refs_packed = pisa(model, PackedSequence.from_one_hot(X),
+		**kwargs)
+
+	assert torch.equal(X_attr_packed, X_attr)
+	assert isinstance(refs_packed, torch.Tensor)
+	assert torch.equal(refs_packed, refs)
