@@ -11,6 +11,7 @@ import numpy as np
 from numba import njit, prange
 import numba
 
+from .utils import _chunk_rows
 from .utils import PackedSequence
 
 key_type = numba.types.int64
@@ -56,36 +57,46 @@ def kmers(
 		sequences and each column is a k-mer that could be in the sequence.
 	"""
 
-	if isinstance(X, PackedSequence) and X.length >= k:
-		# The index of each k-mer is the sum of its characters' indices times
-		# n to the power of their offsets, as the convolution below gives.
-		codes = X.to_codes()
-		codes[codes == 4] = 0
-
-		n, n_kmers = 4, X.length - k + 1
-		idxs = torch.zeros((codes.shape[0], n_kmers), dtype=torch.int64)
-		for j in range(k):
-			idxs += codes[:, j:j+n_kmers].long() * n ** j
-	else:
-		if isinstance(X, PackedSequence):
-			X = X.to_one_hot()
-
-		n = X.shape[1]
-
-		X = X.type(torch.int32)
-		w = torch.arange(n).repeat(k, 1).T * n ** torch.arange(k)
-		w = w[None, :, :].type(torch.int32).to(X.device)
-		idxs = torch.nn.functional.conv1d(X, w).type(torch.int64)[:, 0]
-
 	if scores is not None:
 		scores = scores.unsqueeze(1).type(torch.float32)
 		ws = torch.ones(1, 1, k, dtype=torch.float32)
-		score_ = torch.nn.functional.conv1d(scores, ws)[:, 0]
-	else:
-		score_ = torch.ones(1, dtype=torch.float32).expand_as(idxs)
+		scores = torch.nn.functional.conv1d(scores, ws)[:, 0]
+
+	if isinstance(X, PackedSequence) and X.length >= k:
+		# The index of each k-mer is the sum of its characters' indices times
+		# n to the power of their offsets, as the convolution below gives,
+		# counted a chunk of sequences at a time. `& 3` counts an unknown
+		# character, 4, as the first, as an all-zero column is.
+		n, n_kmers = 4, X.length - k + 1
+		X_kmers = torch.zeros((len(X), n**k))
+
+		step = _chunk_rows(X.length)
+		for i in range(0, len(X), step):
+			codes = X[i:i+step].to_codes().bitwise_and_(3)
+			idxs = torch.zeros((codes.shape[0], n_kmers), dtype=torch.int64)
+			for j in range(k):
+				idxs.add_(codes[:, j:j+n_kmers], alpha=n ** j)
+
+			X_kmers[i:i+step].scatter_add_(1, idxs, torch.ones(1,
+				dtype=torch.float32).expand_as(idxs) if scores is None else scores[i:i+step])
+
+		return X_kmers
+
+	if isinstance(X, PackedSequence):
+		X = X.to_one_hot()
+
+	n = X.shape[1]
+
+	X = X.type(torch.int32)
+	w = torch.arange(n).repeat(k, 1).T * n ** torch.arange(k)
+	w = w[None, :, :].type(torch.int32).to(X.device)
+	idxs = torch.nn.functional.conv1d(X, w).type(torch.int64)[:, 0]
+
+	if scores is None:
+		scores = torch.ones(1, dtype=torch.float32).expand_as(idxs)
 
 	X_kmers = torch.zeros((idxs.shape[0], n**k))
-	X_kmers.scatter_add_(1, idxs, score_)
+	X_kmers.scatter_add_(1, idxs, scores)
 	return X_kmers
 
 

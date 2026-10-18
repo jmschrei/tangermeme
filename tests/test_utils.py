@@ -2142,6 +2142,25 @@ def test_reverse_complement_packed(shape):
 	assert_raises(ValueError, reverse_complement, X_packed, allow_N=False)
 
 
+@pytest.mark.parametrize("chunk", [1, 100, 10 ** 6])
+def test_packed_helpers_chunks(chunk, monkeypatch):
+	# gc_content and reverse_complement work a chunk of sequences at a time,
+	# with the results of the one-hot encoding, for any batch axes.
+	monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
+	X = _packed_one_hot((3, 2, 4, 37))
+	X_packed = PackedSequence.from_one_hot(X)
+
+	X_flat = X.reshape(6, 4, 37)
+	assert torch.equal(gc_content(X_packed.reshape(6)), gc_content(X_flat))
+
+	X_rc = reverse_complement(X_packed)
+	assert X_rc.shape == X.shape
+	assert torch.equal(X_rc.to_one_hot().reshape(6, 4, 37), torch.stack(
+		[reverse_complement(x) for x in X_flat]))
+	assert torch.equal(reverse_complement(X_packed[1, 0]).to_one_hot(),
+		reverse_complement(X[1, 0]))
+
+
 def test_reverse_complement_packed_alphabet():
 	# A PackedSequence is complemented with `complement_map` over its own
 	# alphabet, here one whose complements are not its reverse.

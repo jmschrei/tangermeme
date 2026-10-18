@@ -159,3 +159,19 @@ def test_kmers_packed():
 	X_gkmers = gapped_kmers(X, min_k=4, max_k=5)
 	X_gkmers_packed = gapped_kmers(X_packed, min_k=4, max_k=5)
 	assert (X_gkmers_packed != X_gkmers).nnz == 0
+
+
+@pytest.mark.parametrize("chunk", [1, 100, 10 ** 6])
+def test_kmers_packed_chunks(chunk, monkeypatch):
+	# Counting a chunk of sequences at a time gives the counts, and the
+	# score-weighted counts, of the one-hot encoding.
+	monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
+	X = random_one_hot((7, 4, 40), random_state=2)
+	X[3, :, 5:9] = 0
+	scores = torch.randn(7, 40, generator=torch.Generator().manual_seed(1))
+	X_packed = PackedSequence.from_one_hot(X)
+
+	assert torch.equal(kmers(X_packed, 3), kmers(X, 3))
+	assert torch.equal(kmers(X_packed, 2, scores=scores), kmers(X, 2,
+		scores=scores))
+

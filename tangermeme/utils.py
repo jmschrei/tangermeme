@@ -1215,11 +1215,13 @@ def reverse_complement(
 		if not allow_N and len(seq.n_runs) > 0:
 			raise ValueError("'N' not in complement map")
 
-		complement = [seq.alphabet.index(complement_map[char]) for char in
-			seq.alphabet] + [4]
-		codes = torch.tensor(complement, dtype=torch.uint8)[
-			seq.to_codes().flip(-1).long()]
-		return PackedSequence.from_codes(codes, seq.alphabet)
+		complement = numpy.array([seq.alphabet.index(complement_map[char])
+			for char in seq.alphabet] + [4], dtype=numpy.uint8)
+
+		X_rc = _map_rows(seq.reshape(-1), lambda codes, rows: torch.from_numpy(
+			numpy.take(complement, codes.numpy()[:, ::-1])), seq.length,
+			seq.alphabet)
+		return X_rc.reshape(seq.data.shape[:-1])
 
 	if isinstance(seq, str):
 		seq_rc = []
@@ -2460,11 +2462,16 @@ def gc_content(
 			"is only defined for alphabets containing both.".format(alphabet))
 
 	if isinstance(X, PackedSequence):
-		codes = X.to_codes()
 		gc_codes = torch.tensor([i for i, c in enumerate(X.alphabet) if c in
 			('G', 'C')], dtype=torch.uint8)
-		gc = torch.isin(codes, gc_codes).sum(dim=-1).float()
-		total = (codes != 4).sum(dim=-1).float()
+
+		gc, total = torch.empty(len(X)), torch.empty(len(X))
+		step = _chunk_rows(X.length)
+		for i in range(0, len(X), step):
+			codes = X[i:i+step].to_codes()
+			gc[i:i+step] = torch.isin(codes, gc_codes).sum(dim=-1)
+			total[i:i+step] = (codes != 4).sum(dim=-1)
+
 		return torch.where(total > 0, gc / total.clamp(min=1),
 			torch.zeros_like(gc))
 
