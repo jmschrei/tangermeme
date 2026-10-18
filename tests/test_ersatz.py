@@ -18,6 +18,7 @@ from tangermeme.ersatz import delete
 from tangermeme.ersatz import randomize
 from tangermeme.ersatz import shuffle
 from tangermeme.ersatz import dinucleotide_shuffle
+from tangermeme.ersatz import _dinucleotide_shuffle
 from tangermeme.ersatz import local_dinucleotide_shuffle
 
 from tangermeme.utils import TangermemeWarning
@@ -1144,6 +1145,25 @@ def test_dinucleotide_shuffle_two_characters():
 		assert (X_shuf[:, 0] == X).all()
 
 		assert_raises(ValueError, dinucleotide_shuffle, X, n=3)
+
+
+def test_dinucleotide_shuffle_private(device):
+	# gReLU imports _dinucleotide_shuffle: one sequence in, and float32
+	# shuffles on the CPU out, those of dinucleotide_shuffle with unknown
+	# characters allowed.
+	X = random_one_hot((1, 4, 60), random_state=0).type(torch.int8)
+	X[:, :, 10:13] = 0
+	expected = dinucleotide_shuffle(X, n=3, random_state=7, allow_N=True)[0]
+
+	X_shuf = _dinucleotide_shuffle(X[0].to(device), n_shuffles=3,
+		random_state=7)
+	assert X_shuf.shape == (3, 4, 60)
+	assert X_shuf.dtype == torch.float32
+	assert X_shuf.device.type == "cpu"
+	assert (X_shuf == expected.float()).all()
+
+	X_shuf = _dinucleotide_shuffle(X[0, :, 20:40], random_state=7)
+	assert X_shuf.shape == (1, 4, 20)
 
 
 ###
