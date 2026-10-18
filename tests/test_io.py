@@ -2977,6 +2977,13 @@ def test_one_hot_to_fasta_N_only_all_zero(tmp_path):
 	assert (tmp_path / "out.fa").read_text() == _fasta_text(["AAAN"], [0])
 
 
+def test_one_hot_to_fasta_bfloat16_raises(tmp_path):
+	# characters cannot read bfloat16, so a bfloat16 sequence with an N or a
+	# tie raises the ValueError that characters raised on it, as before.
+	X = one_hot_encode('ACGTNACGT').unsqueeze(0).type(torch.bfloat16)
+	assert_raises(ValueError, one_hot_to_fasta, X, str(tmp_path / "out.fa"))
+
+
 def test_one_hot_to_fasta_ties_raise(tmp_path):
 	# A column whose largest value is tied between characters is ambiguous,
 	# and raises whether or not the sequence also holds an N.

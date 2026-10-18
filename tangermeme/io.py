@@ -1350,7 +1350,8 @@ def _fasta_characters(X_seq, alphabet):
 		return characters(X_seq, alphabet=alphabet)
 	except ValueError:
 		if (not isinstance(X_seq, torch.Tensor) or X_seq.ndim != 2 or
-				X_seq.shape[0] != len(alphabet)):
+				X_seq.shape[0] != len(alphabet) or
+				X_seq.dtype == torch.bfloat16):
 			raise
 
 		X_seq = X_seq.numpy(force=True)
