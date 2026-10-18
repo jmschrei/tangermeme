@@ -32,6 +32,8 @@ Claude Code skill
 
 	- ``references/deep_lift_shap.md`` gives the seeds ``deep_lift_shap`` draws its references with, ``random_state + k`` for reference ``k`` of every example, and how to precompute the same references with ``dinucleotide_shuffle``, whose ``random_state`` now takes one seed per sequence.
 
+	- ``references/seqlets.md`` no longer says never to set ``min_seqlet_len`` to 1, advice that dates from ``recursive_seqlets`` calling nearly every position at that value (fixed below). It says instead that a value of 1 requires every position of a seqlet to pass the threshold on its own.
+
 	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
 
 deep_lift_shap
@@ -113,6 +115,21 @@ saturation_mutagenesis
 	- The first batch of edits is computed with ``fast=False`` and timed, and a job that would take under thirty seconds at that rate continues with ``fast=False`` without capturing the model, since capturing and checking it can take several seconds. Otherwise, the fast path is checked against ``fast=False`` on one batch of edits from the first example, including both ends of the edited span, and timed against it. When the model cannot be captured, for instance because its Python control flow depends on the values it computes, when it has forward hooks registered, when the two differ by more than rounding, or when the fast path is slower, a ``TangermemeWarning`` gives the reason and the call continues with ``fast=False``. On a GPU the fast path runs many small operations per batch, so it gains more from a larger ``batch_size`` than ``fast=False`` does, and at the default of 32 it is often not faster. Pass ``fast=False`` to skip the attempt.
 
 	- With ``fast=True``, the model stays on ``device`` for the whole call, where ``fast=False`` moves it there and back for each sequence, so a job that runs with ``fast=False`` because it is too short can still be faster: ISM of 16 Beluga sequences on a GPU, with the model starting on the CPU, took 5.8 s against 8.1 s.
+
+seqlet
+------
+
+	- ``recursive_seqlets`` gives each span the p-value its docstring describes: the probability that a span of that length, drawn position by position from the histogram of all binned attributions, has a sum of bins at least as large. It used to bin the span's continuous sum, which can lie up to ``seqlet_len - 1`` bins above the sum of its binned values, and look that up in a table that held P(S > i) + P(S = 0) rather than P(S >= i). Where most positions sit at the minimum, P(S = 0) dominated the table: ten-position blocks of ones on a background of exact zeros were not called at all, because every span of four had P(S = 0) = 0.97^4 = 0.89. Rounding in the continuous sum could also put a run of values equal to the minimum one bin below zero, which wrapped to the end of the table and called the run with a p-value of 0.
+
+	- The ``p-value`` column of ``recursive_seqlets`` is the p-value of the called span alone, as the docstring says, and the seqlets are sorted by it. It used to be the largest p-value over the span's prefixes from ``min_seqlet_len`` up, the quantity the recursive property is checked against, so seqlets were ranked by their weakest prefix: on the attributions in the test suite, the seqlet with the largest attribution was reported at 4.5e-3 rather than 1.9e-12.
+
+	- ``recursive_seqlets`` calls seqlets that end at the last position of a sequence. Spans starting ``min_seqlet_len`` positions from the end were given a p-value of 1, so no seqlet could cover the last ``min_seqlet_len`` positions, and the masking of a called seqlet and ``additional_flanks`` both stopped one position short of the end. A block of ten high values at the end of a 1,000bp sequence was called as positions 988 to 996 with ``min_seqlet_len=4`` and not called with ``min_seqlet_len=8``, while the same block elsewhere was called in full.
+
+	- ``recursive_seqlets`` with ``min_seqlet_len=1`` calls a single position only when it is significant on its own. The null distribution for spans of length 1 was never filled in, so every length-1 span had a p-value of 0 and nearly every position was called: more than 12,500 of the 12,684 positions of the test attributions. A seqlet ending at the last position could also be called a second time as an overlapping length-1 seqlet.
+
+	- ``recursive_seqlets`` returns an empty frame for a constant input, where every span of a given length has the same sum and none can be significant, and for sequences shorter than ``min_seqlet_len``. The first raised ``ZeroDivisionError`` from a bin width of zero. The second wrote past the end of an array, which sometimes crashed the interpreter and sometimes returned an empty frame.
+
+	- Together, these change the calls on real attributions modestly and leave the run time unchanged. On count-head DeepLIFT/SHAP attributions of 1,000 summit-centred 2,114bp peaks each, at the default threshold, 94% (CTCF ChIP-seq, BPNet), 92% (GATA2 ChIP-seq, BPNet) and 89% (ATAC-seq, ChromBPNet) of the seqlets now called are the same spans as before, every one overlaps a seqlet called before, and 0.4% to 3% fewer are called. A call took 0.29 s against 0.29 s (CTCF) and 0.49 s against 0.51 s (ATAC-seq) on one CPU thread.
 
 utils
 -----

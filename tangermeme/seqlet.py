@@ -380,10 +380,12 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	bin_width = (xmax - xmin) / (n_bins - 1)
 
 	f = numpy.zeros(n_bins, dtype=numpy.float64)
+	X_bin_csum = numpy.zeros((n, l+1), dtype=numpy.int64)
 
 	for i in range(n):
 		for j in range(l):
 			x_bin = math.floor((X[i, j] - xmin) / bin_width)
+			X_bin_csum[i, j+1] = X_bin_csum[i, j] + x_bin
 			f[x_bin] += 1
 
 	f = f / m
@@ -396,16 +398,19 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 		dtype=numpy.float64)
 	scores[1, :n_bins] = f
 	
-	rcdfs = numpy.zeros_like(scores)
-	rcdfs[:, 0] = 1.0
-	
-	for seqlet_len in range(2, max_seqlet_len+1):
+	# rcdfs[k, i] is P(S >= i) for S a sum of k binned values. It is summed
+	# down from the top because 1 - CDF loses the small tail probabilities to
+	# rounding. The extra column is the zero that the sum starts from.
+	rcdfs = numpy.zeros((max_seqlet_len+1, n_bins*max_seqlet_len+1),
+		dtype=numpy.float64)
+
+	for seqlet_len in range(1, max_seqlet_len+1):
 		for i in range(n_bins * (seqlet_len-1)):
 			for j in range(n_bins):
 				scores[seqlet_len, i+j] += scores[seqlet_len-1, i] * f[j]
 
-		for i in range(1, n_bins * seqlet_len):
-			rcdfs[seqlet_len, i] = max(rcdfs[seqlet_len, i-1] - scores[seqlet_len, i], 0)
+		for i in range(n_bins * seqlet_len - 1, -1, -1):
+			rcdfs[seqlet_len, i] = rcdfs[seqlet_len, i+1] + scores[seqlet_len, i]
 
 	###
 	# Step 3: Calculate p-values given these 1-CDFs
@@ -426,13 +431,10 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 	for i in range(n):
 		p_value = numpy.ones((max_seqlet_len+1, l), dtype=numpy.float64)
 		p_value[:min_seqlet_len] = 0
-		p_value[:, -min_seqlet_len] = 1
 
 		for seqlet_len in range(min_seqlet_len, max_seqlet_len+1):
 			for k in range(l-seqlet_len+1):
-				x_ = X_csum[i, k+seqlet_len] - X_csum[i, k]
-				x_ = math.floor((x_ - xmin*seqlet_len) / bin_width)
-				
+				x_ = X_bin_csum[i, k+seqlet_len] - X_bin_csum[i, k]
 				p_value[seqlet_len, k] = max(rcdfs[seqlet_len, x_],
 					p_value[seqlet_len-1, k])
 
@@ -454,10 +456,15 @@ def _recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
 						break
 
 				else:
-					for end in range(start, min(start+seqlet_len, l-1)):
+					for end in range(start, start+seqlet_len):
 						p_value[:, end] = 1
 
-					end = min(start + seqlet_len + additional_flanks, l-1)
+					# Report the span's own p-value, not the maximum over its
+					# prefixes that p_value holds.
+					x_ = X_bin_csum[i, start+seqlet_len] - X_bin_csum[i, start]
+					p = rcdfs[seqlet_len, x_]
+
+					end = min(start + seqlet_len + additional_flanks, l)
 					start = max(start - additional_flanks, 0)
 					attr = X_csum[i, end] - X_csum[i, start]
 					seqlets.append((i, start, end, attr, p))
@@ -482,11 +489,14 @@ def recursive_seqlets(
 
 	This algorithm identifies spans of high attribution characters, called
 	seqlets, using a simple approach derived from the Tomtom/FIMO algorithms.
-	First, distributions of attribution sums are created for all potential
-	seqlet lengths by discretizing the attribution sum into integers. Then,
-	CDFs are calculated for each distribution (or, more specifically, 1-CDFs).
-	Finally, p-values are calculated via lookup to these 1-CDFs for all
-	potential spans, yielding a (n_positions, n_lengths) matrix of p-values.
+	First, each attribution is discretized into one of `n_bins` integer bins,
+	and the distribution of summed bins is created for all potential seqlet
+	lengths by treating positions as independent draws from the histogram of
+	all bins. Then, 1-CDFs are calculated for each distribution, giving the
+	probability that a span of that length has a summed bin at least as large.
+	Finally, p-values are calculated for all potential spans by looking up
+	their summed bins in these 1-CDFs, yielding a (n_positions, n_lengths)
+	matrix of p-values.
 
 	This algorithm then identifies seqlets by defining them to have a key
 	property: all internal spans of a seqlet must also have been called a
@@ -572,8 +582,15 @@ def recursive_seqlets(
 			"X with shape {}.".format(tuple(X.shape)))
 
 	columns = ['example_idx', 'start', 'end', 'attribution', 'p-value']
-	seqlets = _recursive_seqlets(X, threshold, min_seqlet_len, max_seqlet_len,
-		additional_flanks, n_bins)
+
+	# Every span of a constant input has the same sum, so none is significant,
+	# and the bin width would be zero.
+	if X.max() == X.min():
+		seqlets = []
+	else:
+		seqlets = _recursive_seqlets(X, threshold, min_seqlet_len,
+			max_seqlet_len, additional_flanks, n_bins)
+
 	seqlets = pandas.DataFrame(seqlets, columns=columns)
 	return seqlets.sort_values("p-value").reset_index(drop=True)
     

@@ -20,6 +20,7 @@ from tangermeme.seqlet import recursive_seqlets
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
+from numpy.testing import assert_allclose
 
 
 @pytest.fixture
@@ -218,40 +219,40 @@ def test_tfmodisco_seqlets(X_contrib):
 def test_recursive_seqlets(X_contrib):
 	seqlets = recursive_seqlets(X_contrib)
 
-	assert seqlets.shape == (24, 5)
-	
+	assert seqlets.shape == (23, 5)
+
 	column_names = ['example_idx', 'start', 'end', 'attribution', 'p-value']
 	for name1, name2 in zip(seqlets.columns, column_names):
 		assert name1 == name2
 
 	assert_array_almost_equal(seqlets.values[:20], [
-		[4.0, 1060.0, 1071.0, 0.1999, 0.0017], 
-		[2.0, 1028.0, 1037.0, 0.0955, 0.0039], 
-		[0.0, 1051.0, 1063.0, 0.306, 0.0045], 
-		[2.0, 968.0, 978.0, 0.1317, 0.0045], 
-		[2.0, 1247.0, 1253.0, 0.0481, 0.0046], 
-		[1.0, 913.0, 923.0, 0.1585, 0.0046], 
-		[5.0, 1034.0, 1042.0, 0.0568, 0.0051], 
-		[5.0, 1069.0, 1080.0, 0.1817, 0.0054], 
-		[1.0, 1607.0, 1613.0, 0.0369, 0.0066], 
-		[0.0, 578.0, 585.0, 0.0441, 0.0068], 
-		[4.0, 635.0, 641.0, 0.0359, 0.007], 
-		[4.0, 1042.0, 1055.0, 0.2294, 0.0074], 
-		[0.0, 1520.0, 1531.0, 0.0903, 0.0082], 
-		[1.0, 1051.0, 1063.0, 0.2828, 0.0083], 
-		[2.0, 1059.0, 1065.0, 0.0331, 0.0086], 
-		[4.0, 551.0, 555.0, 0.0236, 0.0093], 
-		[0.0, 1247.0, 1254.0, 0.041, 0.0095], 
-		[5.0, 885.0, 891.0, 0.0332, 0.0096], 
-		[1.0, 1537.0, 1544.0, 0.0529, 0.0096], 
-		[4.0, 1222.0, 1228.0, 0.0343, 0.0096]], 
+		[0.0, 1051.0, 1063.0, 0.306, 1.864e-12],
+		[1.0, 1051.0, 1063.0, 0.2828, 1.269e-11],
+		[4.0, 1042.0, 1055.0, 0.2294, 2.97e-09],
+		[4.0, 1060.0, 1071.0, 0.1999, 1.778e-08],
+		[5.0, 1069.0, 1080.0, 0.1817, 8.533e-08],
+		[1.0, 913.0, 923.0, 0.1585, 9.749e-07],
+		[2.0, 968.0, 978.0, 0.1317, 7.38e-06],
+		[2.0, 1028.0, 1037.0, 0.0955, 7.669e-05],
+		[0.0, 1520.0, 1531.0, 0.0903, 0.0003],
+		[5.0, 1034.0, 1042.0, 0.0568, 0.0026],
+		[1.0, 1537.0, 1544.0, 0.0529, 0.0028],
+		[2.0, 1247.0, 1253.0, 0.0481, 0.0035],
+		[2.0, 929.0, 935.0, 0.0478, 0.0037],
+		[3.0, 1268.0, 1274.0, 0.0452, 0.0047],
+		[0.0, 578.0, 585.0, 0.0441, 0.0057],
+		[0.0, 1247.0, 1254.0, 0.041, 0.0066],
+		[1.0, 1607.0, 1613.0, 0.0369, 0.0067],
+		[4.0, 635.0, 641.0, 0.0359, 0.007],
+		[4.0, 1222.0, 1228.0, 0.0343, 0.0076],
+		[5.0, 885.0, 891.0, 0.0332, 0.0079]],
 	4)
 
 
 def test_recursive_seqlets_additional_flanks(X_contrib):
 	seqlets = recursive_seqlets(X_contrib).values
 	seqlets2 = recursive_seqlets(X_contrib, additional_flanks=2).values
-	assert seqlets2.shape == (24, 5)
+	assert seqlets2.shape == (23, 5)
 
 	assert_array_almost_equal(seqlets[:, 0], seqlets2[:, 0])
 	assert_array_almost_equal(seqlets[:, 1], seqlets2[:, 1]+2)
@@ -259,7 +260,7 @@ def test_recursive_seqlets_additional_flanks(X_contrib):
 
 
 	seqlets2 = recursive_seqlets(X_contrib, additional_flanks=1).values
-	assert seqlets2.shape == (24, 5)
+	assert seqlets2.shape == (23, 5)
 
 	assert_array_almost_equal(seqlets[:, 0], seqlets2[:, 0])
 	assert_array_almost_equal(seqlets[:, 1], seqlets2[:, 1]+1)
@@ -267,14 +268,14 @@ def test_recursive_seqlets_additional_flanks(X_contrib):
 
 
 	seqlets3 = recursive_seqlets(X_contrib, additional_flanks=4).values
-	assert seqlets3.shape == (24, 5)
+	assert seqlets3.shape == (23, 5)
 
 	assert_array_almost_equal(seqlets[:, 0], seqlets3[:, 0])
 	assert_array_almost_equal(seqlets[:, 1], seqlets3[:, 1]+4)
 	assert_array_almost_equal(seqlets[:, 2], seqlets3[:, 2]-4)
 
 	seqlets4 = recursive_seqlets(X_contrib, additional_flanks=7).values
-	assert seqlets4.shape == (24, 5)
+	assert seqlets4.shape == (23, 5)
 
 
 def test_recursive_seqlets_min_length(X_contrib):
@@ -292,7 +293,7 @@ def test_recursive_seqlets_min_length(X_contrib):
 	assert (seqlets4[:, 2] - seqlets4[:, 1]).min() == 6
 	assert (seqlets5[:, 2] - seqlets5[:, 1]).min() == 7
 	assert (seqlets6[:, 2] - seqlets6[:, 1]).min() == 9
-	assert (seqlets7[:, 2] - seqlets7[:, 1]).min() == 12
+	assert (seqlets7[:, 2] - seqlets7[:, 1]).min() == 11
 
 
 def test_recursive_seqlets_max_length(X_contrib):
@@ -314,8 +315,8 @@ def test_recursive_seqlets_p_values(X_contrib):
 	seqlets2 = recursive_seqlets(X_contrib, threshold=0.1).values
 	seqlets3 = recursive_seqlets(X_contrib, threshold=0.001).values
 
-	assert seqlets.shape == (24, 5)
-	assert seqlets2.shape == (250, 5)
+	assert seqlets.shape == (23, 5)
+	assert seqlets2.shape == (228, 5)
 	assert seqlets3.shape == (8, 5)
 
 
@@ -357,6 +358,212 @@ def test_tfmodisco_seqlets_determinism(X_contrib):
 
 def test_recursive_seqlets_empty():
 	assert_raises(ValueError, recursive_seqlets, torch.zeros(0, 100))
+
+
+@pytest.mark.parametrize("value", [0.0, 0.5])
+def test_recursive_seqlets_constant(value):
+	"""A constant input used to raise ZeroDivisionError from a zero bin width.
+
+	Every span of a given length has the same sum, so none can be significant.
+	"""
+
+	seqlets = recursive_seqlets(torch.full((2, 100), value))
+
+	assert seqlets.shape == (0, 5)
+	assert list(seqlets.columns) == ['example_idx', 'start', 'end',
+		'attribution', 'p-value']
+
+
+@pytest.mark.parametrize("min_seqlet_len", [4, 6, 8])
+def test_recursive_seqlets_right_edge(min_seqlet_len):
+	"""The last min_seqlet_len positions used to be excluded from every seqlet.
+
+	A block at [990, 1000) was called as [988, 996) at min_seqlet_len=4 and
+	not called at all at min_seqlet_len=8, while identical blocks at the left
+	edge and in the middle were called in full.
+	"""
+
+	X = numpy.random.RandomState(0).normal(0, 0.01, size=(1, 1000))
+	for start in (0, 495, 990):
+		X[0, start:start+10] += 1
+
+	seqlets = recursive_seqlets(X, min_seqlet_len=min_seqlet_len)
+	seqlets = seqlets.sort_values("start").reset_index(drop=True)
+
+	assert seqlets.shape[0] == 3
+	assert seqlets.loc[0, 'start'] == 0 and seqlets.loc[0, 'end'] >= 10
+	assert seqlets.loc[1, 'start'] <= 495 and seqlets.loc[1, 'end'] >= 505
+	assert seqlets.loc[2, 'start'] <= 990 and seqlets.loc[2, 'end'] == 1000
+
+	for _, (idx, start, end, attr, _) in seqlets.iterrows():
+		assert_array_almost_equal(attr, X[int(idx), int(start):int(end)].sum())
+
+
+def test_recursive_seqlets_additional_flanks_edges():
+	"""Flanks past the right edge used to be clipped to length - 1."""
+
+	X = numpy.random.RandomState(0).normal(0, 0.01, size=(1, 1000))
+	X[0, 5:15] += 1
+	X[0, 980:990] += 1
+
+	seqlets = recursive_seqlets(X, additional_flanks=15)
+	seqlets = seqlets.sort_values("start").reset_index(drop=True)
+
+	assert seqlets.shape[0] == 2
+	assert seqlets.loc[0, 'start'] == 0
+	assert seqlets.loc[1, 'end'] == 1000
+
+	for _, (idx, start, end, attr, _) in seqlets.iterrows():
+		assert_array_almost_equal(attr, X[int(idx), int(start):int(end)].sum())
+
+
+def _assert_no_overlap(seqlets):
+	seqlets = seqlets.sort_values(['example_idx', 'start'])
+	for _, group in seqlets.groupby('example_idx'):
+		assert (group['start'].values[1:] >= group['end'].values[:-1]).all()
+
+
+def test_recursive_seqlets_min_seqlet_len_one(X_contrib):
+	"""With min_seqlet_len=1 every length-1 span used to get a p-value of 0.
+
+	The length-1 null was never filled in, so more than 12,500 of the 12,684
+	positions were called as length-1 seqlets. A single position is
+	significant only if fewer than 1% of positions score at least as high.
+	"""
+
+	seqlets = recursive_seqlets(X_contrib, min_seqlet_len=1)
+	lengths = seqlets['end'] - seqlets['start']
+
+	assert (lengths == 1).sum() <= 0.01 * X_contrib.numel()
+	assert (seqlets['p-value'] > 0).all()
+	_assert_no_overlap(seqlets)
+
+
+def test_recursive_seqlets_min_seqlet_len_one_right_edge():
+	"""The last position used to be left unmasked after a seqlet ending there.
+
+	With min_seqlet_len=1 it was then called a second time as a length-1
+	seqlet overlapping the first.
+	"""
+
+	X = numpy.random.RandomState(0).normal(0, 0.01, size=(1, 1000))
+	X[0, 995:1000] += numpy.linspace(1, 2, 5)
+
+	seqlets = recursive_seqlets(X, min_seqlet_len=1)
+
+	assert ((seqlets['start'] == 995) & (seqlets['end'] == 1000)).sum() == 1
+	_assert_no_overlap(seqlets)
+
+
+def _span_p_values(X, seqlets, n_bins=1000):
+	"""P(S >= s) for each seqlet, where s is the sum of its binned values.
+
+	S is a sum of end - start independent draws from the binned values of X.
+	"""
+
+	bin_width = (X.max() - X.min()) / (n_bins - 1)
+	bins = numpy.floor((X - X.min()) / bin_width).astype(int)
+	f = numpy.bincount(bins.ravel(), minlength=n_bins) / bins.size
+
+	pmfs = [numpy.ones(1)]
+	for _ in range(int((seqlets['end'] - seqlets['start']).max())):
+		pmfs.append(numpy.convolve(pmfs[-1], f))
+
+	p_values = []
+	for idx, start, end in seqlets.values[:, :3].astype(int):
+		p_values.append(pmfs[end - start][bins[idx, start:end].sum():].sum())
+
+	return numpy.array(p_values)
+
+
+@pytest.fixture
+def X_laplace():
+	rng = numpy.random.RandomState(0)
+	X = rng.laplace(size=(4, 500)) * 0.01
+	X[rng.uniform(size=X.shape) < 0.002] *= 40
+	X[:, 100:108] += 0.05
+	X[:, 300:306] += 0.03
+	return X
+
+
+def test_recursive_seqlets_p_value_oracle(X_laplace):
+	"""The p-value is P(S >= s), where s is the sum of the span's binned values.
+
+	It used to look up the bin of the continuous sum, which is up to
+	seqlet_len - 1 bins above s, in a table holding P(S > i) + P(S = 0).
+	"""
+
+	seqlets = recursive_seqlets(X_laplace, min_seqlet_len=6, max_seqlet_len=6)
+	assert seqlets.shape[0] > 0
+
+	assert_allclose(seqlets['p-value'], _span_p_values(X_laplace, seqlets),
+		rtol=1e-6)
+
+
+def test_recursive_seqlets_p_value_own_span(X_contrib):
+	"""The reported p-value is that of the called span alone.
+
+	It used to be the maximum over every prefix of the span from
+	min_seqlet_len upward, so the ranking followed the weakest prefix: the
+	seqlet with the largest attribution here was reported at 4.5e-3 rather
+	than 1.9e-12.
+	"""
+
+	X = X_contrib.numpy().astype(numpy.float64)
+	seqlets = recursive_seqlets(X)
+	assert seqlets.shape[0] > 0
+
+	assert_allclose(seqlets['p-value'], _span_p_values(X, seqlets), rtol=1e-6)
+	assert seqlets['p-value'].is_monotonic_increasing
+
+
+def test_recursive_seqlets_minimum_runs():
+	"""A run of values equal to the minimum used to be called with p = 0.
+
+	Rounding in the cumulative sum could put the span's sum just below
+	seqlet_len * X.min(), giving a bin index of -1 that wrapped around to the
+	end of the table. Here [31, 35) of example 0 is four values of -0.5.
+	"""
+
+	X = numpy.clip(numpy.random.RandomState(89).normal(size=(2, 500)), -0.5,
+		None)
+	seqlets = recursive_seqlets(X)
+
+	assert seqlets.shape[0] > 0
+	assert (seqlets['attribution'] > 0).all()
+	assert (seqlets['p-value'] > 0).all()
+
+
+def test_recursive_seqlets_minimum_mass():
+	"""Blocks on a background of exact zeros used to go uncalled.
+
+	The table of p-values held P(S > i) + P(S = 0), and with 97% of positions
+	at the minimum, P(S = 0) is 0.97^4 = 0.89 for every span of length 4.
+	"""
+
+	X = torch.zeros(1, 1000)
+	for start in (0, 495, 990):
+		X[0, start:start+10] = 1
+
+	seqlets = recursive_seqlets(X)
+	seqlets = seqlets.sort_values("start").reset_index(drop=True)
+
+	assert seqlets.shape[0] == 3
+	assert seqlets.loc[0, 'start'] == 0 and seqlets.loc[0, 'end'] >= 10
+	assert seqlets.loc[1, 'start'] <= 495 and seqlets.loc[1, 'end'] >= 505
+	assert seqlets.loc[2, 'start'] <= 990 and seqlets.loc[2, 'end'] == 1000
+
+
+def test_recursive_seqlets_shorter_than_min_seqlet_len():
+	"""A sequence shorter than min_seqlet_len used to be indexed out of bounds.
+
+	The out-of-bounds write sometimes segfaulted and sometimes returned an
+	empty frame.
+	"""
+
+	X = numpy.random.RandomState(0).normal(size=(2, 3))
+	seqlets = recursive_seqlets(X, min_seqlet_len=4)
+	assert seqlets.shape == (0, 5)
 
 
 def test_tfmodisco_seqlets_empty():
