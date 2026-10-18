@@ -25,6 +25,8 @@ from .toy_models import FlattenDense
 from .toy_models import ConvAvgDense
 from .toy_models import ConvDense
 from .toy_models import LinearConv
+from ._packed import assert_same
+from ._packed import with_N
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_equal
@@ -569,36 +571,18 @@ def test_saliency_linear_model_gradient_is_constant(device):
 # receives the packed copies that function makes from a packed X.
 
 
-def _with_N(X):
-	X = X.clone()
-	X[0, :, :5] = 0
-	X[3, :, 40:47] = 0
-	X[-1, :, -1] = 0
-	return X
-
-
-def _assert_same(y, y_packed):
-	if isinstance(y, torch.Tensor):
-		assert y_packed.dtype == y.dtype
-		assert torch.equal(y_packed, y)
-	else:
-		assert len(y_packed) == len(y)
-		for y_, y_packed_ in zip(y, y_packed):
-			_assert_same(y_, y_packed_)
-
-
 @pytest.mark.parametrize("hypothetical", [False, True])
 @pytest.mark.parametrize("batch_size", [1, 7, 64])
 def test_saliency_packed(X, hypothetical, batch_size, device):
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
-	X = _with_N(X)
+	X = with_N(X)
 
 	X_attr = saliency(model, X, hypothetical=hypothetical,
 		batch_size=batch_size, device=device)
 	X_attr_packed = saliency(model, PackedSequence.from_one_hot(X),
 		hypothetical=hypothetical, batch_size=batch_size, device=device)
-	_assert_same(X_attr, X_attr_packed)
+	assert_same(X_attr, X_attr_packed)
 
 
 def test_saliency_packed_args_target(X, device):
@@ -610,7 +594,7 @@ def test_saliency_packed_args_target(X, device):
 	X_attr = saliency(model, X, args=(alpha, beta), target=2, device=device)
 	X_attr_packed = saliency(model, PackedSequence.from_one_hot(X),
 		args=(alpha, beta), target=2, device=device)
-	_assert_same(X_attr, X_attr_packed)
+	assert_same(X_attr, X_attr_packed)
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
@@ -621,7 +605,7 @@ def test_saliency_packed_16bit(X, dtype, cuda_device):
 	X_attr = saliency(model, X, dtype=dtype, device=cuda_device)
 	X_attr_packed = saliency(model, PackedSequence.from_one_hot(X),
 		dtype=dtype, device=cuda_device)
-	_assert_same(X_attr, X_attr_packed)
+	assert_same(X_attr, X_attr_packed)
 
 
 @pytest.mark.parametrize("dtype", [torch.int8, torch.uint8, torch.bool,
@@ -637,7 +621,7 @@ def test_saliency_stored_dtype(X, dtype, device):
 	X_attr = saliency(model, X.type(dtype), args=(alpha.half(),
 		beta.double()), device=device)
 	X_attr0 = saliency(model, X, args=(alpha, beta), device=device)
-	_assert_same(X_attr0, X_attr)
+	assert_same(X_attr0, X_attr)
 
 
 @pytest.mark.parametrize("name", ["marginalize", "ablate", "space",
@@ -645,7 +629,7 @@ def test_saliency_stored_dtype(X, dtype, device):
 def test_saliency_func_packed(X, name, device):
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
-	X = _with_N(X[:4])
+	X = with_N(X[:4])
 	alpha = torch.tensor([[0.0], [1.0]])
 	beta = torch.tensor([[2.0], [-1.0]])
 
@@ -667,7 +651,7 @@ def test_saliency_func_packed(X, name, device):
 	y = calls[name](X)
 	torch.manual_seed(0)
 	y_packed = calls[name](PackedSequence.from_one_hot(X))
-	_assert_same(y, y_packed)
+	assert_same(y, y_packed)
 
 
 def test_saliency_packed_raises(X, device):

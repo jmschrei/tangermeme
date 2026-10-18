@@ -26,6 +26,8 @@ from tangermeme.variant_effect import deletion_effect
 from tangermeme.variant_effect import insertion_effect
 
 from tangermeme.deep_lift_shap import deep_lift_shap
+from ._packed import check_packed
+from ._packed import Spy
 
 
 @pytest.fixture
@@ -492,23 +494,10 @@ def test_substitution_effect_allows_repeated_position_across_examples():
 # `func` takes it packed or is given its int8 one-hot encoding.
 
 
-def _assert_same(y, y_packed):
-	assert y_packed.dtype == y.dtype
-	assert torch.equal(y_packed, y)
+_PREDICT_SPY = Spy(predict, 1)
 
 
-# The dtypes a function not marked as taking a PackedSequence was given.
-_SEEN = []
-
-
-def _predict_one_hot(model, X, **kwargs):
-	# A function not marked as taking a PackedSequence gets int8 one-hot.
-	assert isinstance(X, torch.Tensor)
-	_SEEN.append(X.dtype)
-	return predict(model, X, **kwargs)
-
-
-@pytest.mark.parametrize("func", [predict, _predict_one_hot])
+@pytest.mark.parametrize("func", [predict, _PREDICT_SPY])
 @pytest.mark.parametrize("chunk", [None, 100])
 def test_substitution_effect_packed(X, substitutions, func, chunk, device,
 	monkeypatch):
@@ -517,17 +506,11 @@ def test_substitution_effect_packed(X, substitutions, func, chunk, device,
 
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
-	y, y_var = substitution_effect(model, X, substitutions, func=func,
-		device=device)
-	_SEEN.clear()
-	y_packed, y_var_packed = substitution_effect(model,
-		PackedSequence.from_one_hot(X), substitutions, func=func, device=device)
-	assert all(dtype == torch.int8 for dtype in _SEEN)
-	_assert_same(y, y_packed)
-	_assert_same(y_var, y_var_packed)
+	check_packed(lambda X_: substitution_effect(model, X_, substitutions,
+		func=func, device=device), X, [func] if func is _PREDICT_SPY else [])
 
 
-@pytest.mark.parametrize("func", [predict, _predict_one_hot])
+@pytest.mark.parametrize("func", [predict, _PREDICT_SPY])
 @pytest.mark.parametrize("left", [False, True])
 @pytest.mark.parametrize("chunk", [None, 100])
 def test_deletion_effect_packed(X_del, deletions, func, left, chunk, device,
@@ -537,18 +520,11 @@ def test_deletion_effect_packed(X_del, deletions, func, left, chunk, device,
 
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
-	y, y_var = deletion_effect(model, X_del, deletions, left=left, func=func,
-		device=device)
-	_SEEN.clear()
-	y_packed, y_var_packed = deletion_effect(model,
-		PackedSequence.from_one_hot(X_del), deletions, left=left, func=func,
-		device=device)
-	assert all(dtype == torch.int8 for dtype in _SEEN)
-	_assert_same(y, y_packed)
-	_assert_same(y_var, y_var_packed)
+	check_packed(lambda X_: deletion_effect(model, X_, deletions, left=left,
+		func=func, device=device), X_del, [func] if func is _PREDICT_SPY else [])
 
 
-@pytest.mark.parametrize("func", [predict, _predict_one_hot])
+@pytest.mark.parametrize("func", [predict, _PREDICT_SPY])
 @pytest.mark.parametrize("left", [False, True])
 @pytest.mark.parametrize("chunk", [None, 100])
 def test_insertion_effect_packed(X, substitutions, func, left, chunk, device,
@@ -558,15 +534,9 @@ def test_insertion_effect_packed(X, substitutions, func, left, chunk, device,
 
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
-	y, y_var = insertion_effect(model, X.float(), substitutions, left=left,
-		func=func, device=device)
-	_SEEN.clear()
-	y_packed, y_var_packed = insertion_effect(model,
-		PackedSequence.from_one_hot(X), substitutions, left=left, func=func,
-		device=device)
-	assert all(dtype == torch.int8 for dtype in _SEEN)
-	_assert_same(y, y_packed)
-	_assert_same(y_var, y_var_packed)
+	check_packed(lambda X_: insertion_effect(model, X_, substitutions,
+		left=left, func=func, device=device), X.float(), [func] if func is
+		_PREDICT_SPY else [])
 
 
 @pytest.mark.parametrize("name", ["substitution", "deletion", "insertion"])

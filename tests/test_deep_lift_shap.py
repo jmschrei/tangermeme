@@ -87,6 +87,9 @@ from .toy_models import ConvAttentionPool
 
 from tangermeme.deep_lift_shap import BilinearOp
 from .toy_models import AttributeNameConv
+from ._packed import assert_packed_equal
+from ._packed import MixedReferences
+from ._packed import soft_references
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -4577,13 +4580,6 @@ def test_deep_lift_shap_autocast_additional_nonlinear_ops(X, references,
 # one-hot encoding, and packed sequences in give packed references out.
 
 
-def _assert_packed_equal(X_packed, Y_packed):
-	assert isinstance(X_packed, PackedSequence)
-	assert X_packed.shape == Y_packed.shape
-	assert torch.equal(X_packed.data, Y_packed.data)
-	assert torch.equal(X_packed.n_runs, Y_packed.n_runs)
-
-
 @pytest.mark.parametrize("batch_size", [1, 3, 8, 40])
 def test_deep_lift_shap_packed(X, batch_size, device):
 	torch.manual_seed(0)
@@ -4598,7 +4594,7 @@ def test_deep_lift_shap_packed(X, batch_size, device):
 	assert X_attr_packed.dtype == X_attr.dtype
 	assert torch.equal(X_attr_packed, X_attr)
 	assert refs_packed.shape == refs.shape
-	_assert_packed_equal(refs_packed, PackedSequence.from_one_hot(refs))
+	assert_packed_equal(refs_packed, PackedSequence.from_one_hot(refs))
 
 
 @pytest.mark.parametrize("hypothetical, raw_outputs", [(True, False),
@@ -4629,7 +4625,7 @@ def test_deep_lift_shap_packed_references(X, references, device):
 		PackedSequence.from_one_hot(X), references=refs_packed,
 		return_references=True, device=device)
 	assert torch.equal(X_attr_both, X_attr)
-	_assert_packed_equal(refs_back, refs_packed)
+	assert_packed_equal(refs_back, refs_packed)
 
 
 def test_deep_lift_shap_packed_unseeded(X, device):
@@ -4679,21 +4675,16 @@ def test_captum_deep_lift_shap_packed(X, references, device):
 		references[:4]), return_references=True, device=device)
 
 	assert torch.equal(X_attr_packed, X_attr)
-	_assert_packed_equal(refs_packed, PackedSequence.from_one_hot(refs))
-
-
-def _soft_references(X, n=1, random_state=None):
-	# Uniform references, which are not a one-hot encoding.
-	return torch.full((X.shape[0], n, X.shape[1], X.shape[2]), 0.25)
+	assert_packed_equal(refs_packed, PackedSequence.from_one_hot(refs))
 
 
 @pytest.mark.parametrize("func", [deep_lift_shap, _captum_deep_lift_shap])
-def test_deep_lift_shap_packed_soft_references(X, func, device):
+def test_deep_lift_shap_packedsoft_references(X, func, device):
 	# References that are not one-hot cannot be packed, so with a packed X
 	# they come back as a tensor, the one a one-hot X gives.
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
-	kwargs = dict(references=_soft_references, n_shuffles=3,
+	kwargs = dict(references=soft_references, n_shuffles=3,
 		return_references=True, random_state=0, device=device)
 
 	X_attr, refs = func(model, X, **kwargs)
@@ -4704,19 +4695,6 @@ def test_deep_lift_shap_packed_soft_references(X, func, device):
 	assert isinstance(refs_packed, torch.Tensor)
 	assert refs_packed.dtype == refs.dtype
 	assert torch.equal(refs_packed, refs)
-
-
-class _MixedReferences:
-	# One-hot references for the first `n_one_hot` calls and uniform ones
-	# after them.
-	def __init__(self, n_one_hot=1):
-		self.calls, self.n_one_hot = 0, n_one_hot
-
-	def __call__(self, X, n=1, random_state=None):
-		self.calls += 1
-		if self.calls <= self.n_one_hot:
-			return shuffle(X, n=n, random_state=0)
-		return _soft_references(X, n=n)
 
 
 @pytest.mark.parametrize("func", [deep_lift_shap, _captum_deep_lift_shap])
@@ -4734,10 +4712,10 @@ def test_deep_lift_shap_packed_mixed_references(X, func, device):
 	if func is deep_lift_shap:
 		kwargs["batch_size"], n_one_hot = 4, 4
 
-	X_attr, refs = func(model, X, references=_MixedReferences(n_one_hot),
+	X_attr, refs = func(model, X, references=MixedReferences(shuffle, n_one_hot),
 		**kwargs)
 	X_attr_packed, refs_packed = func(model, PackedSequence.from_one_hot(X),
-		references=_MixedReferences(n_one_hot), **kwargs)
+		references=MixedReferences(shuffle, n_one_hot), **kwargs)
 
 	assert torch.equal(X_attr_packed, X_attr)
 	assert isinstance(refs_packed, torch.Tensor)

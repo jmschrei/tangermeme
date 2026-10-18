@@ -25,6 +25,7 @@ from tangermeme.ersatz import local_dinucleotide_shuffle
 from tangermeme.ersatz import _fast_shuffle_packed
 
 from tangermeme.utils import TangermemeWarning
+from ._packed import assert_packed_equal
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -1150,13 +1151,6 @@ def test_dinucleotide_shuffle_two_characters():
 		assert_raises(ValueError, dinucleotide_shuffle, X, n=3)
 
 
-def _assert_packed_equal(X_packed, Y_packed):
-	assert X_packed.length == Y_packed.length
-	assert X_packed.alphabet == Y_packed.alphabet
-	assert torch.equal(X_packed.data, Y_packed.data)
-	assert torch.equal(X_packed.n_runs, Y_packed.n_runs)
-
-
 def _one_hot_with_N(n, length, random_state=0):
 	"""Random sequences with unknown characters at the start of the first, in
 	a run in the middle of the second, at the end of the third and scattered
@@ -1184,7 +1178,7 @@ def test_dinucleotide_shuffle_return_packed(length):
 	assert X_packed.alphabet == ('A', 'C', 'G', 'T')
 	assert len(X_packed.n_runs) == 0
 	assert torch.equal(X_packed.to_one_hot(), X_shuf)
-	_assert_packed_equal(X_packed, PackedSequence.from_one_hot(X_shuf))
+	assert_packed_equal(X_packed, PackedSequence.from_one_hot(X_shuf))
 
 
 @pytest.mark.parametrize("dtype", [torch.int8, torch.float32, torch.float64])
@@ -1195,7 +1189,7 @@ def test_dinucleotide_shuffle_return_packed_allow_N(dtype):
 		return_packed=True)
 
 	assert torch.equal(X_packed.to_one_hot(dtype=dtype), X_shuf)
-	_assert_packed_equal(X_packed, PackedSequence.from_one_hot(X_shuf))
+	assert_packed_equal(X_packed, PackedSequence.from_one_hot(X_shuf))
 
 
 def test_dinucleotide_shuffle_packed_input():
@@ -1207,7 +1201,7 @@ def test_dinucleotide_shuffle_packed_input():
 		allow_N=True)
 	assert isinstance(X_shuf_packed, PackedSequence)
 	assert X_shuf_packed.alphabet == ('A', 'C', 'G', 'U')
-	_assert_packed_equal(X_shuf_packed, PackedSequence.from_one_hot(X_shuf,
+	assert_packed_equal(X_shuf_packed, PackedSequence.from_one_hot(X_shuf,
 		alphabet=('A', 'C', 'G', 'U')))
 
 	X_shuf_one_hot = dinucleotide_shuffle(X_packed, n=3, random_state=8,
@@ -1232,7 +1226,7 @@ def test_dinucleotide_shuffle_packed_start_end(start, end, n):
 		allow_N=True)
 	X_packed = dinucleotide_shuffle(X, start=start, end=end, n=n,
 		random_state=2, allow_N=True, return_packed=True)
-	_assert_packed_equal(X_packed, PackedSequence.from_one_hot(X_shuf))
+	assert_packed_equal(X_packed, PackedSequence.from_one_hot(X_shuf))
 
 
 def test_dinucleotide_shuffle_packed_random_states():
@@ -1244,7 +1238,7 @@ def test_dinucleotide_shuffle_packed_random_states():
 	for i, seed in enumerate(seeds):
 		X_packed_i = dinucleotide_shuffle(X[i:i+1], n=4, random_state=seed,
 			allow_N=True, return_packed=True)
-		_assert_packed_equal(X_packed[i:i+1], X_packed_i)
+		assert_packed_equal(X_packed[i:i+1], X_packed_i)
 
 
 def test_dinucleotide_shuffle_packed_n_zero():
@@ -1320,7 +1314,7 @@ def test_dinucleotide_shuffle_n_jobs(n_jobs, return_packed, monkeypatch):
 	assert numba.get_num_threads() == n_threads
 
 	if return_packed:
-		_assert_packed_equal(X_shuf_jobs, X_shuf)
+		assert_packed_equal(X_shuf_jobs, X_shuf)
 	else:
 		assert X_shuf_jobs.dtype == X_shuf.dtype
 		assert torch.equal(X_shuf_jobs, X_shuf)
@@ -1368,7 +1362,7 @@ def test_dinucleotide_shuffle_n_jobs_threshold(return_packed, monkeypatch):
 		X_serial = dinucleotide_shuffle(X, random_state=0, allow_N=True,
 			return_packed=return_packed, n_jobs=1, **kw)
 		if return_packed:
-			_assert_packed_equal(X_, X_serial)
+			assert_packed_equal(X_, X_serial)
 		else:
 			assert torch.equal(X_, X_serial)
 
@@ -1399,7 +1393,7 @@ def test_dinucleotide_shuffle_packed_device(device):
 		allow_N=True, return_packed=True)
 
 	assert X_packed.data.device.type == 'cpu'
-	_assert_packed_equal(X_packed, dinucleotide_shuffle(X, n=3,
+	assert_packed_equal(X_packed, dinucleotide_shuffle(X, n=3,
 		random_state=0, allow_N=True, return_packed=True))
 
 
@@ -1899,8 +1893,8 @@ def test_ersatz_packed(name, chunk, monkeypatch):
 	Y = call(X)
 	Y_packed = PackedSequence.from_one_hot(Y)
 
-	_assert_packed_equal(call(X, return_packed=True), Y_packed)
-	_assert_packed_equal(call(X_packed), Y_packed)
+	assert_packed_equal(call(X, return_packed=True), Y_packed)
+	assert_packed_equal(call(X_packed), Y_packed)
 
 	Y_one_hot = call(X_packed, return_packed=False)
 	assert Y_one_hot.dtype == torch.int8
@@ -1946,11 +1940,11 @@ def test_local_dinucleotide_shuffle_packed(verbose):
 		Y_packed = local_dinucleotide_shuffle(PackedSequence.from_one_hot(X),
 			**kwargs)
 
-	_assert_packed_equal(Y_packed, PackedSequence.from_one_hot(Y))
+	assert_packed_equal(Y_packed, PackedSequence.from_one_hot(Y))
 	assert [str(w_.message) for w_ in w_packed] == [str(w_.message) for w_ in w]
 	assert any("came back identical" in str(w_.message) for w_ in w)
 
-	_assert_packed_equal(local_dinucleotide_shuffle(X, return_packed=True,
+	assert_packed_equal(local_dinucleotide_shuffle(X, return_packed=True,
 		**kwargs), Y_packed)
 	assert torch.equal(local_dinucleotide_shuffle(PackedSequence.from_one_hot(
 		X), return_packed=False, **kwargs), Y.to(torch.int8))

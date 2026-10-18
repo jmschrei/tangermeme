@@ -23,6 +23,9 @@ from .toy_models import Conv
 from .toy_models import Scatter
 from .toy_models import ConvDense
 from .toy_models import SmallDeepSEA
+from ._packed import assert_same
+from ._packed import check_packed
+from ._packed import Spy
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -903,25 +906,7 @@ def test_marginalize_annotations_returns_named_tuple(X, device):
 # decoded for others, with the predictions of its one-hot encoding.
 
 
-def _assert_same(y, y_packed):
-	if isinstance(y, torch.Tensor):
-		assert y_packed.dtype == y.dtype
-		assert torch.equal(y_packed, y)
-	else:
-		assert len(y_packed) == len(y)
-		for y_, y_packed_ in zip(y, y_packed):
-			_assert_same(y_, y_packed_)
-
-
-# The dtypes a function not marked as taking a PackedSequence was given.
-_SEEN = []
-
-
-def _predict_one_hot(model, X, **kwargs):
-	# A function not marked as taking a PackedSequence gets int8 one-hot.
-	assert isinstance(X, torch.Tensor)
-	_SEEN.append(X.dtype)
-	return predict(model, X, **kwargs)
+_PREDICT_SPY = Spy(predict, 1)
 
 
 @pytest.mark.parametrize("func", ["predict", "deep_lift_shap", "custom"])
@@ -932,7 +917,7 @@ def test_marginalize_packed(X, func, device):
 	X[2, :, 10:15] = 0
 
 	kwargs = {"predict": dict(func=predict), "custom": dict(
-		func=_predict_one_hot), "deep_lift_shap": dict(func=deep_lift_shap,
+		func=_PREDICT_SPY), "deep_lift_shap": dict(func=deep_lift_shap,
 		additional_func_kwargs={"n_shuffles": 3, "random_state": 0,
 		"references": shuffle})}[func]
 
@@ -940,13 +925,8 @@ def test_marginalize_packed(X, func, device):
 		X = X[:8].clone()
 		X[2] = random_one_hot((1, 4, 100), random_state=1)[0]
 
-	y = marginalize(model, X, "ACGTACGT", device=device, **kwargs)
-	_SEEN.clear()
-	y_packed = marginalize(model, PackedSequence.from_one_hot(X), "ACGTACGT",
-		device=device, **kwargs)
-	assert all(dtype == torch.int8 for dtype in _SEEN)
-	_assert_same(y.y_before, y_packed.y_before)
-	_assert_same(y.y_after, y_packed.y_after)
+	check_packed(lambda X_: marginalize(model, X_, "ACGTACGT", device=device,
+		**kwargs), X, [_PREDICT_SPY] if func == "custom" else [])
 
 
 def test_marginalize_annotations_packed(X, device):
@@ -958,5 +938,5 @@ def test_marginalize_annotations_packed(X, device):
 	y = marginalize_annotations(model, X, X0, annotations, device=device)
 	y_packed = marginalize_annotations(model, PackedSequence.from_one_hot(X),
 		PackedSequence.from_one_hot(X0), annotations, device=device)
-	_assert_same(y.y_befores, y_packed.y_befores)
-	_assert_same(y.y_afters, y_packed.y_afters)
+	assert_same(y.y_befores, y_packed.y_befores)
+	assert_same(y.y_afters, y_packed.y_afters)

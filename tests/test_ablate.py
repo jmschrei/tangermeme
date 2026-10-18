@@ -28,6 +28,9 @@ from .toy_models import Conv
 from .toy_models import Scatter
 from .toy_models import ConvDense
 from .toy_models import SmallDeepSEA
+from ._packed import assert_same
+from ._packed import check_packed
+from ._packed import Spy
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -1223,48 +1226,18 @@ def test_ablate_annotations_returns_named_tuple(X, device):
 # decoded for others, with the predictions of its one-hot encoding.
 
 
-def _assert_same(y, y_packed):
-	if isinstance(y, torch.Tensor):
-		assert y_packed.dtype == y.dtype
-		assert torch.equal(y_packed, y)
-	else:
-		assert len(y_packed) == len(y)
-		for y_, y_packed_ in zip(y, y_packed):
-			_assert_same(y_, y_packed_)
-
-
-# The dtypes a function not marked as taking a PackedSequence was given.
-_SEEN = []
-
-
-def _shuffle_one_hot(X, **kwargs):
-	# A shuffle not marked as taking a PackedSequence gets int8 one-hot.
-	assert isinstance(X, torch.Tensor)
-	_SEEN.append(X.dtype)
-	return shuffle(X, **kwargs)
-
-
-def _predict_one_hot(model, X, **kwargs):
-	assert isinstance(X, torch.Tensor)
-	_SEEN.append(X.dtype)
-	return predict(model, X, **kwargs)
+_SHUFFLE_SPY, _PREDICT_SPY = Spy(shuffle, 0), Spy(predict, 1)
 
 
 @pytest.mark.parametrize("shuffle_fn", [shuffle, dinucleotide_shuffle,
-	_shuffle_one_hot])
-@pytest.mark.parametrize("func", [predict, _predict_one_hot])
+	_SHUFFLE_SPY])
+@pytest.mark.parametrize("func", [predict, _PREDICT_SPY])
 def test_ablate_packed(X, shuffle_fn, func, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
-
-	y = ablate(model, X, 20, 60, n=4, shuffle_fn=shuffle_fn, func=func,
-		random_state=0, device=device)
-	_SEEN.clear()
-	y_packed = ablate(model, PackedSequence.from_one_hot(X), 20, 60, n=4,
-		shuffle_fn=shuffle_fn, func=func, random_state=0, device=device)
-	assert all(dtype == torch.int8 for dtype in _SEEN)
-	_assert_same(y.y_before, y_packed.y_before)
-	_assert_same(y.y_after, y_packed.y_after)
+	check_packed(lambda X_: ablate(model, X_, 20, 60, n=4,
+		shuffle_fn=shuffle_fn, func=func, random_state=0, device=device), X,
+		[f for f in (shuffle_fn, func) if isinstance(f, Spy)])
 
 
 def test_ablate_annotations_packed(X, device):
@@ -1276,8 +1249,8 @@ def test_ablate_annotations_packed(X, device):
 		device=device)
 	y_packed = ablate_annotations(model, PackedSequence.from_one_hot(X),
 		annotations, n=3, random_state=0, device=device)
-	_assert_same(y.y_befores, y_packed.y_befores)
-	_assert_same(y.y_afters, y_packed.y_afters)
+	assert_same(y.y_befores, y_packed.y_befores)
+	assert_same(y.y_afters, y_packed.y_afters)
 
 
 @pytest.mark.parametrize("shuffle_fn", ["shuffle", "dinucleotide_shuffle"])
@@ -1297,5 +1270,5 @@ def test_ablate_packed_N(X, shuffle_fn, device):
 		device=device)
 	y_packed = ablate(model, PackedSequence.from_one_hot(X), 20, 60, n=4,
 		shuffle_fn=shuffle_fn, random_state=0, device=device)
-	_assert_same(y.y_before, y_packed.y_before)
-	_assert_same(y.y_after, y_packed.y_after)
+	assert_same(y.y_before, y_packed.y_before)
+	assert_same(y.y_after, y_packed.y_after)

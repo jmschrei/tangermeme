@@ -28,6 +28,8 @@ from .toy_models import ConvLayerNorm
 from .toy_models import MultiActivation
 from .toy_models import DropoutConv
 from .toy_models import MultiInputMultiOutput
+from ._packed import assert_same
+from ._packed import with_N
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -1075,47 +1077,29 @@ def test_predict_convdense_returns_list(X, device):
 # its one-hot encoding.
 
 
-def _with_N(X):
-	X = X.clone()
-	X[0, :, :5] = 0
-	X[3, :, 40:47] = 0
-	X[63, :, -1] = 0
-	return X
-
-
-def _assert_same(y, y_packed):
-	if isinstance(y, torch.Tensor):
-		assert y_packed.dtype == y.dtype
-		assert torch.equal(y_packed, y)
-	else:
-		assert len(y_packed) == len(y)
-		for y_, y_packed_ in zip(y, y_packed):
-			_assert_same(y_, y_packed_)
-
-
 @pytest.mark.parametrize("model_class", [SumModel, FlattenDense, Conv,
 	ConvDense, DilatedConv, Transformer, ConvBatchNorm])
 def test_predict_packed(X, model_class, device):
 	torch.manual_seed(0)
 	model = model_class()
-	X = _with_N(X)
+	X = with_N(X)
 
 	y = predict(model, X, batch_size=8, device=device)
 	y_packed = predict(model, PackedSequence.from_one_hot(X), batch_size=8,
 		device=device)
-	_assert_same(y, y_packed)
+	assert_same(y, y_packed)
 
 
 @pytest.mark.parametrize("batch_size", [1, 7, 64, 100])
 def test_predict_packed_batch_size(X, batch_size, device):
 	torch.manual_seed(0)
 	model = ConvDense()
-	X = _with_N(X)
+	X = with_N(X)
 
 	y = predict(model, X, batch_size=batch_size, device=device)
 	y_packed = predict(model, PackedSequence.from_one_hot(X),
 		batch_size=batch_size, device=device)
-	_assert_same(y, y_packed)
+	assert_same(y, y_packed)
 
 
 def test_predict_packed_args_func(X, alpha, beta, device):
@@ -1127,7 +1111,7 @@ def test_predict_packed_args_func(X, alpha, beta, device):
 		func=lambda y: [y_ * 2 for y_ in y])
 	y_packed = predict(model, X_packed, args=(alpha, beta), batch_size=8,
 		device=device, func=lambda y: [y_ * 2 for y_ in y])
-	_assert_same(y, y_packed)
+	assert_same(y, y_packed)
 
 
 def test_predict_packed_fp64(X, device):
@@ -1138,7 +1122,7 @@ def test_predict_packed_fp64(X, device):
 	y_packed = predict(model, PackedSequence.from_one_hot(X), batch_size=8,
 		device=device)
 	assert y.dtype == torch.float64
-	_assert_same(y, y_packed)
+	assert_same(y, y_packed)
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
@@ -1149,7 +1133,7 @@ def test_predict_packed_16bit(X, dtype, cuda_device):
 	y = predict(model, X, batch_size=8, dtype=dtype, device=cuda_device)
 	y_packed = predict(model, PackedSequence.from_one_hot(X), batch_size=8,
 		dtype=dtype, device=cuda_device)
-	_assert_same(y, y_packed)
+	assert_same(y, y_packed)
 
 
 ###
@@ -1204,7 +1188,7 @@ def test_predict_stored_dtype(X, alpha, beta, dtype, device):
 		batch_size=8, device=device)
 	y0 = predict(model, X, args=(alpha.half().float(), beta), batch_size=8,
 		device=device)
-	_assert_same(y, y0)
+	assert_same(y, y0)
 
 
 def test_predict_packed_raises(X, device):
