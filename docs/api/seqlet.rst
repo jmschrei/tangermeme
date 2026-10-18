@@ -2,4 +2,4 @@ seqlet
 ======
 
 .. automodule:: tangermeme.seqlet
-	:members: recursive_seqlets, tfmodisco_seqlets
+	:members: recursive_seqlets, RecursiveSeqletsResult, tfmodisco_seqlets

@@ -422,11 +422,11 @@ seqlets = recursive_seqlets(X_attr.sum(dim=1))   # You pass in a 2D tensor, not 
 
 print(seqlets.head())
 #    example_idx  start   end  attribution   p-value
-# 0           25   1062  1067     0.000261  0.000026
-# 1           53    828   832     0.000210  0.000142
-# 2           12    594   601     0.000286  0.000174
-# 3           28   1239  1244     0.000245  0.000200
-# 4           24    966   973     0.000337  0.000207
+# 0           93   1611  1619     0.000388  0.000001
+# 1           24    966   973     0.000337  0.000005
+# 2           94     52    59     0.000329  0.000009
+# 3           32    886   894     0.000342  0.000015
+# 4           94    199   207     0.000342  0.000016
 ```
 
 ![image](https://github.com/user-attachments/assets/152f63ab-ef58-42df-902a-1c1be2641868)

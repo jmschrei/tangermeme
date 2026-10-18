@@ -17,8 +17,6 @@ from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
 from tangermeme.utils import PackedSequence
 
-from tangermeme.seqlet import recursive_seqlets
-
 from tangermeme.annotate import annotate_seqlets
 from tangermeme.annotate import count_annotations
 from tangermeme.annotate import pairwise_annotations
@@ -43,19 +41,24 @@ def X():
 
 
 @pytest.fixture
-def X_contrib(X):
-	X_attr = torch.load("tests/data/X_gata_attr.torch")
-	return (X * X_attr).sum(axis=1)
+def gata_seqlets():
+	# Fixed seqlets over the GATA examples, so that these tests do not change
+	# when the seqlet caller does.
+	return pandas.DataFrame([
+		[4, 1060, 1071], [2, 1028, 1037], [0, 1051, 1063], [2, 968, 978],
+		[2, 1247, 1253], [1, 913, 923], [5, 1034, 1042], [5, 1069, 1080],
+		[1, 1607, 1613], [0, 578, 585], [4, 635, 641], [4, 1042, 1055],
+		[0, 1520, 1531], [1, 1051, 1063], [2, 1059, 1065], [4, 551, 555],
+		[0, 1247, 1254], [5, 885, 891], [1, 1537, 1544], [4, 1222, 1228],
+		[1, 1042, 1048], [3, 1267, 1274], [2, 928, 935], [5, 1330, 1334]
+	], columns=['example_idx', 'start', 'end'])
 
 
 ###
 
 
-def test_annotate_seqlets(X, X_contrib):
-	seqlets = recursive_seqlets(X_contrib)
-	assert seqlets.shape == (24, 5)
-
-	idxs, pvals = annotate_seqlets(X, seqlets, "tests/data/test.meme")
+def test_annotate_seqlets(X, gata_seqlets):
+	idxs, pvals = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme")
 
 	assert idxs.shape == (24, 1)
 	assert idxs.dtype == torch.int32
@@ -74,11 +77,8 @@ def test_annotate_seqlets(X, X_contrib):
 	4)
 
 
-def test_annotate_seqlets_n_nearest(X, X_contrib):
-	seqlets = recursive_seqlets(X_contrib)
-	assert seqlets.shape == (24, 5)
-
-	idxs, pvals = annotate_seqlets(X, seqlets, "tests/data/test.meme",
+def test_annotate_seqlets_n_nearest(X, gata_seqlets):
+	idxs, pvals = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme",
 		n_nearest=3)
 	
 	assert idxs.shape == (24, 3)
@@ -88,7 +88,7 @@ def test_annotate_seqlets_n_nearest(X, X_contrib):
 	assert pvals.dtype == torch.float64
 
 
-	idxs, pvals = annotate_seqlets(X, seqlets, "tests/data/test.meme",
+	idxs, pvals = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme",
 		n_nearest=12)
 	
 	assert idxs.shape == (24, 12)
@@ -98,13 +98,10 @@ def test_annotate_seqlets_n_nearest(X, X_contrib):
 	assert pvals.dtype == torch.float64
 
 
-def test_annotate_seqlets_reverse_complement(X, X_contrib):
-	seqlets = recursive_seqlets(X_contrib)
-	assert seqlets.shape == (24, 5)
-
-	idxs0, pvals0 = annotate_seqlets(X, seqlets, "tests/data/test.meme",
+def test_annotate_seqlets_reverse_complement(X, gata_seqlets):
+	idxs0, pvals0 = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme",
 		reverse_complement=True)
-	idxs1, pvals1 = annotate_seqlets(X, seqlets, "tests/data/test.meme",
+	idxs1, pvals1 = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme",
 		reverse_complement=False)
 	
 	assert_raises(AssertionError, assert_array_almost_equal, idxs0, idxs1)
@@ -372,12 +369,10 @@ def test_pairwise_annotations_spacing_dataframe_input():
 ###
 
 
-def test_annotate_seqlets_dict_motifs(X, X_contrib):
-	seqlets = recursive_seqlets(X_contrib)
-
+def test_annotate_seqlets_dict_motifs(X, gata_seqlets):
 	motifs_dict = read_meme("tests/data/test.meme")
-	idxs_d, pvals_d = annotate_seqlets(X, seqlets, motifs_dict)
-	idxs_s, pvals_s = annotate_seqlets(X, seqlets, "tests/data/test.meme")
+	idxs_d, pvals_d = annotate_seqlets(X, gata_seqlets, motifs_dict)
+	idxs_s, pvals_s = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme")
 
 	assert_array_almost_equal(idxs_d, idxs_s)
 	assert_array_almost_equal(pvals_d, pvals_s)
@@ -423,12 +418,11 @@ def test_pairwise_annotations_spacing_overlap_across_examples_ok():
 	assert int(y.sum()) == 0
 
 
-def test_annotate_seqlets_packed(X, X_contrib):
+def test_annotate_seqlets_packed(X, gata_seqlets):
 	# A PackedSequence gives the annotations of its one-hot encoding.
-	seqlets = recursive_seqlets(X_contrib)
-	idxs, pvals = annotate_seqlets(X, seqlets, "tests/data/test.meme")
+	idxs, pvals = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme")
 	idxs_packed, pvals_packed = annotate_seqlets(PackedSequence.from_one_hot(X),
-		seqlets, "tests/data/test.meme")
+		gata_seqlets, "tests/data/test.meme")
 
 	assert torch.equal(idxs_packed, idxs)
 	assert torch.equal(pvals_packed, pvals)

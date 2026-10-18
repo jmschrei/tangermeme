@@ -26,21 +26,70 @@ seqlets = recursive_seqlets(attr_sums, threshold=0.01, additional_flanks=0)
 # DataFrame columns: example_idx, start, end, attribution, p-value (sorted by p-value)
 ```
 
-- Returns **positive seqlets only**. For negative ones, run on `attr_sums.abs()` and
-  re-extract signed attribution from the returned boundaries.
-- `threshold` is a p-value; it effectively requires ~`1/threshold` candidate spans,
-  so the right value **depends on how many examples/positions you pass**. Large runs
-  often use `0.001`.
+- Returns **positive seqlets only**. For negative ones, run on `-attr_sums` (and
+  `X_control=-attr_control` if you use a control), negate the returned
+  `attribution`, and drop any that overlap a positive seqlet. Do not run on
+  `attr_sums.abs()`: the null then pools both tails, so negatives weaker than the
+  positives are never significant.
+- The `p-value` column is a **ranking score, not an error rate**. It is computed as
+  if positions were independent draws from a histogram, but attributions are
+  correlated along the sequence and the default histogram contains the signal being
+  tested, so p-values come out smaller than the real chance of a span in
+  signal-free sequence. `threshold=0.01` does not mean 1% of calls are false, and the
+  same threshold means different false-call rates in different models and datasets.
+  Rank seqlets by it; choose the threshold with a control (below), not by habit.
 - `min_seqlet_len` (default 4) is also the smallest span the recursive property must
-  hold over — **don't set it to 1**. `max_seqlet_len` (default 25) raises cost.
+  hold over. At 1, every single position inside a seqlet must pass the threshold on
+  its own, so one weak base splits a motif. `max_seqlet_len` (default 25) raises cost.
 - `additional_flanks` pads the reported `start`/`end` **and** the reported
   `attribution` is re-summed over the padded span, so it grows with the flanks. The
   `p-value` is unchanged — it is computed on the un-padded core. Flanks may overlap
   neighbors even though the cores cannot, so flanked spans are not disjoint, their
   attributions can double-count the same positions, and
   `pairwise_annotations_spacing` rejects them (see `references/annotate.md`).
-- **Over-calls on a single example** (it can't fit a null from one sequence) — pass
-  many examples, or threshold by magnitude.
+- **Over-calls on a single example** (it can't fit a null from one sequence), and a
+  sequence's p-values depend on the other sequences passed with it. Pass many
+  examples together.
+
+### Choosing the threshold with a control
+
+Pass control attributions as `X_control` and the threshold is chosen for you: the
+largest one whose estimated false discovery rate is at or below `target_fdr`
+(default 0.1). `threshold` is then ignored. A good control is several dinucleotide
+shuffles of each sequence, attributed with the same model, target and settings as
+`X`, and concatenated:
+
+```python
+import torch
+
+from tangermeme.ersatz import dinucleotide_shuffle
+from tangermeme.seqlet import recursive_seqlets
+
+shuffles = dinucleotide_shuffle(X, n=3, random_state=0)       # (n, 3, 4, length)
+attr_control = torch.cat([deep_lift_shap(model, shuffles[:, k], random_state=0).sum(dim=1)
+	for k in range(3)])
+
+seqlets, fdr = recursive_seqlets(attr_sums, X_control=attr_control, target_fdr=0.1,
+	return_fdr=True)
+```
+
+- The estimate at each threshold is the number of seqlets called on the control
+  plus one, scaled to the size of `X`, over the number called on `X`. The plus one
+  stops a few chance calls at an extreme threshold, with no control calls, from
+  passing as zero. It is a property of the whole set of calls, not of any single
+  seqlet.
+- `return_fdr=True` returns `(seqlets, fdr)`: one row per threshold (0.1 to 1e-30,
+  four per decade) with both counts and the estimate. Without it, only `seqlets`.
+- **No threshold reaches the target** → a `TangermemeWarning` with the lowest
+  estimate reached, and no seqlets. Raise `target_fdr`.
+- **More shuffles, steadier estimate.** The estimate is only as precise as the number
+  of control seqlets at a threshold; with one shuffle, a strict threshold may rest on
+  a few dozen. Each shuffle costs one more attribution pass.
+- **Look at the whole curve.** "False" here means no more frequent than in sequences
+  with the same dinucleotide composition. Shuffles keep chance motif matches that the
+  model responds to, so the curve can level off above zero: a target below that
+  level is reached by no threshold, and a target near it picks a threshold from a
+  flat stretch that moves a lot between controls.
 
 ## tfmodisco_seqlets — longer, discovery-oriented
 
@@ -60,7 +109,7 @@ seqlets = tfmodisco_seqlets(attr_sums, window_size=21, flank=10)
 
 ## Which to use
 
-`recursive_seqlets` for sharp, minimal spans and per-seqlet p-values;
+`recursive_seqlets` for sharp, minimal spans ranked by p-value;
 `tfmodisco_seqlets` when feeding a motif-discovery pipeline that wants generous
 spans. Both flow straight into annotation and plotting.
 
