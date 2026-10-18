@@ -30,6 +30,8 @@ Claude Code skill
 
 	- ``references/saturation_mutagenesis.md`` describes ``fast=True``, the new default: which operations it computes over windows, that jobs under thirty seconds skip it, that it is checked against ``fast=False`` and falls back with a warning, and which models gain from it. It no longer says that ISM over a window is bit-identical to slicing ISM over the whole sequence, which holds only up to rounding with ``fast=True``. The ISM row of the router table in ``SKILL.md`` names the default.
 
+	- ``references/deep_lift_shap.md`` gives the seeds ``deep_lift_shap`` draws its references with, ``random_state + k`` for reference ``k`` of every example, and how to precompute the same references with ``dinucleotide_shuffle``, whose ``random_state`` now takes one seed per sequence.
+
 	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
 
 deep_lift_shap
@@ -37,10 +39,20 @@ deep_lift_shap
 
 	- ``deep_lift_shap`` drops trailing output axes of length 1, so a model that returns ``(batch_size, n_targets, 1)``, such as one ending in ``AdaptiveAvgPool1d(1)``, gets correct convergence deltas. ``model(X)[:, target]`` used to keep the trailing axis, and subtracting the ``(batch_size,)`` input differences from it broadcast the deltas into a ``(batch_size, batch_size)`` matrix that compared unrelated example-reference pairs. On two small convolutional models whose outputs change under shuffling, attributing 8 sequences of 100bp with 20 shuffles each raised "Convergence deltas too high" on every batch, with reported deltas as large as ``0.34`` where the true ones were below ``1e-7``. The attributions were not affected, since the gradient is taken of the sum of the outputs either way. Any other axis after the targets, such as the length axis of a profile, now raises a ``ValueError`` that names the shape and says to wrap the model. Such outputs usually raised a ``RuntimeError`` from the broadcast, or, for ``(batch_size, n_targets, length, 1)``, returned attributions of the summed profile with meaningless deltas and no error. The docstring of ``target`` now says that it indexes the second axis of the predictions, not the last. Thanks @avantikalal!
 
+	- With a ``random_state`` and the default references, ``deep_lift_shap`` draws each batch's references in one call to ``dinucleotide_shuffle``, passing every example-reference pair the seed it was given before, ``random_state + k`` for reference ``k``. It used to call the shuffle once per pair. The references and attributions are unchanged. On 16 sequences of 2,114bp with 20 shuffles each, on an H200 GPU, a call took 27 ms against 117 ms with a small convolutional model and 34 ms against 122 ms with one that has GELUs and layer normalizations. Without a ``random_state``, where the shuffle was already one call per batch, the faster shuffle below took the same calls to 27 ms and 34 ms, from 109 ms and 116 ms. With references given as a tensor, the times are unchanged. Prompted by jmschrei/cherimoya#103. Thanks @emattei!
+
+	- The arithmetic of the rescale rule, which ``_nonlinear`` applies to activations, and of the normalization rule of ``_layernorm`` and ``_rmsnorm`` moves into four private functions, ``_rescale``, ``_layer_normalization_stats``, ``_layer_normalization_terms`` and ``_layer_normalization_grad``, which the hooks call with the same expressions in the same order. Their gradients are bit-identical. The functions take an example and its references as tensors that broadcast against each other, and the normalization's statistics as inputs, so that code computing DeepLIFT multipliers without hooks, such as an engine that keeps one copy of each example for all of its references and the statistics of its forward pass, can apply the same rules rather than a copy of them.
+
 ersatz
 ------
 
 	- ``dinucleotide_shuffle`` accepts unknown characters, encoded as all-zero columns, when given ``allow_N=True``. Each is shuffled as a fifth character, so every shuffle keeps the number of unknown characters and the count of every dinucleotide, including those that contain one, and a contiguous run of them such as an assembly gap stays one run but moves with the shuffle. Passing the flag on to validation alone would not have been enough: the transition matrix is built from ``X.argmax(axis=0)``, which reads an all-zero column as the first character of the alphabet, so every unknown character would have been shuffled as an ``A`` and come out as one. A 30bp gap in a 300bp sequence then raised the ``AA`` count from 23 to 53. The default, ``allow_N=False``, keeps rejecting unknown characters, and the shuffles of a sequence without any are unchanged. Thanks @Al-Murphy!
+
+	- ``dinucleotide_shuffle`` shuffles every sequence of a call in one numba call, which releases the GIL. It used to call the kernel once per sequence and build each sequence's transition table in Python around the call. The shuffles are bit-identical, for seeds beyond 32 bits, unknown characters, ``start`` and ``end``, and ``n=0`` included. On 64 sequences of 2,114bp on the CPU, one shuffle of each took 2.9 ms against 17.1 ms, and twenty of each 52 ms against 71 ms. ``_dinucleotide_shuffle`` keeps its signature and output.
+
+	- ``dinucleotide_shuffle`` takes one ``random_state`` per sequence, as a list, array or tensor of integers, as well as a single integer. Sequence ``i`` is then shuffled as ``dinucleotide_shuffle(X[i:i+1], random_state=random_state[i])`` would shuffle it, whatever else is in the batch, which is how ``deep_lift_shap`` seeds its references.
+
+	- ``dinucleotide_shuffle`` raised a ``RuntimeError`` from taking the maximum of an empty tensor on a region of one or two characters. Such a region keeps both of its ends, so its only shuffle is itself: one shuffle now returns it, and more than one raises the ``ValueError`` for identical shuffles.
 
 io
 --

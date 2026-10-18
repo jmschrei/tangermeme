@@ -1092,6 +1092,60 @@ def test_dinucleotide_shuffle_allow_N_raises_all_N():
 	assert_raises(ValueError, dinucleotide_shuffle, X, allow_N=True)
 
 
+def test_dinucleotide_shuffle_random_states():
+	X = random_one_hot((6, 4, 50), random_state=0)
+	seeds = [11, 3, 3, 250, 0, 9999999]
+	X_shuf = dinucleotide_shuffle(X, n=4, random_state=seeds)
+	assert X_shuf.shape == (6, 4, 4, 50)
+
+	for i, seed in enumerate(seeds):
+		X_shuf_i = dinucleotide_shuffle(X[i:i+1], n=4, random_state=seed)
+		assert (X_shuf[i] == X_shuf_i[0]).all()
+
+	for seeds in numpy.array(seeds), torch.tensor(seeds):
+		assert (dinucleotide_shuffle(X, n=4, random_state=seeds) == X_shuf).all()
+
+
+def test_dinucleotide_shuffle_random_states_match_int():
+	X = random_one_hot((5, 4, 40), random_state=0)
+	X_shuf = dinucleotide_shuffle(X, n=3, random_state=7)
+	X_shuf_seeds = dinucleotide_shuffle(X, n=3, random_state=range(7, 12))
+	assert (X_shuf == X_shuf_seeds).all()
+
+
+def test_dinucleotide_shuffle_random_states_allow_N():
+	X = random_one_hot((3, 4, 40), random_state=0)
+	X[:, :, 10:13] = 0
+	X_shuf = dinucleotide_shuffle(X, n=2, random_state=[5, 1, 5], allow_N=True)
+
+	for i, seed in enumerate([5, 1, 5]):
+		X_shuf_i = dinucleotide_shuffle(X[i:i+1], n=2, random_state=seed,
+			allow_N=True)
+		assert (X_shuf[i] == X_shuf_i[0]).all()
+
+
+def test_dinucleotide_shuffle_raises_random_states():
+	X = random_one_hot((3, 4, 40), random_state=0)
+	assert_raises(ValueError, dinucleotide_shuffle, X, random_state=[1, 2])
+	assert_raises(ValueError, dinucleotide_shuffle, X,
+		random_state=[[1, 2, 3]])
+	assert_raises(ValueError, dinucleotide_shuffle, X, random_state=1.5)
+	assert_raises(ValueError, dinucleotide_shuffle, X,
+		random_state=[1.0, 2.0, 3.0])
+
+
+def test_dinucleotide_shuffle_two_characters():
+	# A region of one or two characters keeps both ends, so its only shuffle
+	# is itself: one shuffle returns it, and more than one raises.
+	for seq in 'A', 'AC':
+		X = one_hot_encode(seq).unsqueeze(0)
+		X_shuf = dinucleotide_shuffle(X, n=1, random_state=0)
+		assert X_shuf.shape == (1, 1, 4, len(seq))
+		assert (X_shuf[:, 0] == X).all()
+
+		assert_raises(ValueError, dinucleotide_shuffle, X, n=3)
+
+
 ###
 
 
