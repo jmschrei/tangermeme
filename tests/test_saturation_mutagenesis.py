@@ -8,6 +8,7 @@ import pytest
 
 from tangermeme.predict import predict
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
 from tangermeme.utils import TangermemeWarning
 
 from tangermeme._fastism import _FastISM
@@ -1192,3 +1193,28 @@ def test_saturation_mutagenesis_fast_fallback_error(X0, device, force_fast,
 
 	_assert_falls_back(SmallDeepSEA(), X0,
 		"raised RuntimeError: an unexpected failure", device)
+
+
+###
+# A PackedSequence gives the attributions of its one-hot encoding.
+
+
+@pytest.mark.parametrize("fast", [False, True])
+@pytest.mark.parametrize("kwargs", [{}, {"hypothetical": True}, {"start": 20,
+	"end": 60}, {"raw_outputs": True}])
+def test_saturation_mutagenesis_packed(X0, fast, kwargs, device):
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	X0 = X0.clone()
+	X0[1, :, 30:33] = 0
+
+	y = saturation_mutagenesis(model, X0, fast=fast, device=device, **kwargs)
+	y_packed = saturation_mutagenesis(model, PackedSequence.from_one_hot(X0),
+		fast=fast, device=device, **kwargs)
+
+	if kwargs.get("raw_outputs"):
+		assert torch.equal(y_packed.y0, y.y0)
+		assert torch.equal(y_packed.y_hat, y.y_hat)
+	else:
+		assert y_packed.dtype == y.dtype
+		assert torch.equal(y_packed, y)

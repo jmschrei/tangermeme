@@ -20,6 +20,8 @@ from ._compat import _resolve_device
 from ._fastism import _FastISM
 from ._fastism import _Unsupported
 from .predict import predict
+from .utils import _accepts_packed
+from .utils import PackedSequence
 from .utils import TangermemeWarning
 
 
@@ -375,9 +377,10 @@ def _fast_path(model, X, args, start, end, batch_size, dtype, device, func):
 
 
 
+@_accepts_packed
 def saturation_mutagenesis(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	args: tuple | None = None,
 	start: int = 0,
 	end: int = -1,
@@ -447,9 +450,11 @@ def saturation_mutagenesis(
 	model: torch.nn.Module
 		The PyTorch model to use to make predictions.
 	
-	X: torch.tensor, shape=(-1, len(alphabet), length)
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A set of one-hot encoded sequences to calculate attribution values
-		for. 
+		for, or a PackedSequence with one batch axis. Either is held as int8
+		during the call, which a PackedSequence is decoded to at the start:
+		the predictions for the edits take more memory than the sequences.
 	
 	args: tuple or None, optional
 		An optional set of additional arguments to pass into the model. If
@@ -537,7 +542,7 @@ def saturation_mutagenesis(
 		The outputs from the model for each of the perturbed sequences.
 	"""
 
-	X = _to_int8(X)
+	X = X.to_one_hot() if isinstance(X, PackedSequence) else _to_int8(X)
 	y0 = predict(model, X, args=args, func=func, dtype=dtype, device=device)
 
 	if not raw_outputs and not isinstance(y0, torch.Tensor):
