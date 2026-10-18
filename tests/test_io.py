@@ -2967,6 +2967,16 @@ def test_one_hot_to_fasta_N(dtype, tmp_path):
 		[0])
 
 
+def test_one_hot_to_fasta_N_only_all_zero(tmp_path):
+	# Only an all-zero column is written as N. A column that sums to zero
+	# without being zero has a largest value, which is written as before.
+	path = str(tmp_path / "out.fa")
+	X = torch.tensor([[[1.0, 1.0, 0.3, 0.0], [-1.0, 0.0, -0.2, 0.0],
+		[0.0, 0.0, -0.1, 0.0], [0.0, 0.0, 0.0, 0.0]]])
+	one_hot_to_fasta(X, path)
+	assert (tmp_path / "out.fa").read_text() == _fasta_text(["AAAN"], [0])
+
+
 def test_one_hot_to_fasta_ties_raise(tmp_path):
 	# A column whose largest value is tied between characters is ambiguous,
 	# and raises whether or not the sequence also holds an N.

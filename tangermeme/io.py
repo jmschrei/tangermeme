@@ -1337,20 +1337,30 @@ def extract_loci(
 
 
 def _fasta_characters(X_seq, alphabet):
-	"""The characters of one sequence, with N for a column that sums to zero.
+	"""The characters of one sequence, with N for an all-zero column.
 
-	`characters` stops checking for a tied largest value when given allow_N,
-	so the check is made here over the columns that are not N.
+	A sequence without one goes through `characters` as it always has. An
+	all-zero column is a tie, on which `characters` raises; the sequence is
+	then written with N at each all-zero column when no other column is
+	tied, and the error is raised again otherwise.
 	"""
 
-	X_chars = characters(X_seq, alphabet=alphabet, allow_N=True)
+	try:
+		return characters(X_seq, alphabet=alphabet)
+	except ValueError:
+		if (not isinstance(X_seq, torch.Tensor) or X_seq.ndim != 2 or
+				X_seq.shape[0] != len(alphabet)):
+			raise
 
-	is_max = X_seq == X_seq.max(dim=0, keepdim=True).values
-	if (is_max.sum(dim=0)[X_seq.sum(dim=0) != 0] > 1).any():
-		raise ValueError("At least one position in the PWM has multiple " +
-			"letters with the same probability.")
+		X_seq = X_seq.numpy(force=True)
+		is_N = (X_seq == 0).all(axis=0)
+		n_max = (X_seq == X_seq.max(axis=0, keepdims=True)).sum(axis=0)
+		if not is_N.any() or (n_max[~is_N] > 1).any():
+			raise
 
-	return X_chars
+		X_chars = numpy.array(alphabet)[X_seq.argmax(axis=0)]
+		X_chars[is_N] = 'N'
+		return ''.join(X_chars)
 
 
 def one_hot_to_fasta(
@@ -1371,7 +1381,7 @@ def one_hot_to_fasta(
 	----------
 	X: torch.Tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A set of one-hot encoded sequences to write out. A position whose
-		column sums to zero, such as an unknown character, is written as N.
+		column is all zeros, such as an unknown character, is written as N.
 		A position whose largest value is tied between characters raises a
 		ValueError.
 		A PackedSequence with one batch axis is written from its character
