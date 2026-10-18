@@ -1765,3 +1765,119 @@ def test_ersatz_ops_preserve_cuda_device(cuda_device):
 		('dinucleotide_shuffle', dinucleotide_shuffle(X, n=2, random_state=0)),
 	]:
 		assert out.device.type == 'cuda', f"{name} produced device {out.device}"
+
+
+###
+# Every function in ersatz takes a PackedSequence and returns one, or packs
+# its output from a one-hot X under return_packed=True, with the sequences
+# of the one-hot path.
+
+
+def _ersatz_X():
+	X = random_one_hot((7, 4, 60), random_state=3)
+	X[0, :, :4] = 0
+	X[2, :, 25:33] = 0
+	X[4, :, -2:] = 0
+	X[5, :, ::11] = 0
+	return X
+
+
+_motifs_per_sequence = random_one_hot((7, 4, 5), random_state=4)
+
+_ERSATZ_CALLS = {
+	"insert": lambda X, **kw: insert(X, "ACGTT", start=20, **kw),
+	"insert_default_start": lambda X, **kw: insert(X, "CAT", **kw),
+	"insert_per_sequence": lambda X, **kw: insert(X, _motifs_per_sequence,
+		start=3, **kw),
+	"substitute": lambda X, **kw: substitute(X, "ACGTT", start=20, **kw),
+	"substitute_N": lambda X, **kw: substitute(X, "ANNGT", start=24, **kw),
+	"substitute_per_sequence": lambda X, **kw: substitute(X,
+		_motifs_per_sequence, start=55, **kw),
+	"multisubstitute": lambda X, **kw: multisubstitute(X, ["ACG", "TTNA",
+		"GG"], [2, 5], start=10, **kw),
+	"delete": lambda X, **kw: delete(X, 22, 35, **kw),
+	"randomize": lambda X, **kw: randomize(X, 10, 30, n=3, random_state=5,
+		**kw),
+	"randomize_probs": lambda X, **kw: randomize(X, 0, 60, probs=[[0.5, 0.25,
+		0.125, 0.125]], n=2, random_state=6, **kw),
+	"shuffle": lambda X, **kw: shuffle(X, n=3, random_state=7, **kw),
+	"shuffle_region": lambda X, **kw: shuffle(X, start=20, end=45, n=2,
+		random_state=8, **kw),
+}
+
+
+@pytest.mark.parametrize("name", list(_ERSATZ_CALLS))
+@pytest.mark.parametrize("chunk", [None, 50])
+def test_ersatz_packed(name, chunk, monkeypatch):
+	if chunk is not None:
+		# Several chunks of sequences per call.
+		monkeypatch.setattr("tangermeme.ersatz._CHUNK_POSITIONS", chunk)
+
+	call = _ERSATZ_CALLS[name]
+	X = _ersatz_X()
+	X_packed = PackedSequence.from_one_hot(X)
+	Y = call(X)
+	Y_packed = PackedSequence.from_one_hot(Y)
+
+	_assert_packed_equal(call(X, return_packed=True), Y_packed)
+	_assert_packed_equal(call(X_packed), Y_packed)
+
+	Y_one_hot = call(X_packed, return_packed=False)
+	assert Y_one_hot.dtype == torch.int8
+	assert torch.equal(Y_one_hot, Y.to(torch.int8))
+	assert torch.equal(X_packed.to_one_hot(), X)
+
+
+@pytest.mark.parametrize("name", ["substitute", "insert", "delete",
+	"randomize", "shuffle", "multisubstitute"])
+def test_ersatz_packed_raises_alphabet(name):
+	X = random_one_hot((3, 5, 60), random_state=0)
+	with pytest.raises(ValueError, match="four characters"):
+		if name in ("substitute", "insert"):
+			_ERSATZ_CALLS[name](X, return_packed=True, alphabet=list("ACGTU"))
+		elif name == "multisubstitute":
+			multisubstitute(X, ["ACG", "TT"], 3, alphabet=list("ACGTU"),
+				return_packed=True)
+		else:
+			_ERSATZ_CALLS[name](X, return_packed=True)
+
+
+def test_ersatz_packed_empty():
+	X_packed = PackedSequence.from_one_hot(random_one_hot((3, 4, 60),
+		random_state=0))[:0]
+	Y = substitute(X_packed, "ACG", start=4)
+	assert Y.shape == (0, 4, 60)
+	assert insert(X_packed, "ACG", start=4).shape == (0, 4, 63)
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_local_dinucleotide_shuffle_packed(verbose):
+	X = random_one_hot((3, 4, 1500), random_state=9)
+	X[1, :, 200:1000] = one_hot_encode('A' * 800)
+	kwargs = dict(n=2, bin_size=256, min_bin_size=128, random_state=10,
+		verbose=verbose)
+
+	with warnings.catch_warnings(record=True) as w:
+		warnings.simplefilter("always")
+		Y = local_dinucleotide_shuffle(X, **kwargs)
+
+	with warnings.catch_warnings(record=True) as w_packed:
+		warnings.simplefilter("always")
+		Y_packed = local_dinucleotide_shuffle(PackedSequence.from_one_hot(X),
+			**kwargs)
+
+	_assert_packed_equal(Y_packed, PackedSequence.from_one_hot(Y))
+	assert [str(w_.message) for w_ in w_packed] == [str(w_.message) for w_ in w]
+	assert any("came back identical" in str(w_.message) for w_ in w)
+
+	_assert_packed_equal(local_dinucleotide_shuffle(X, return_packed=True,
+		**kwargs), Y_packed)
+	assert torch.equal(local_dinucleotide_shuffle(PackedSequence.from_one_hot(
+		X), return_packed=False, **kwargs), Y.to(torch.int8))
+
+
+def test_local_dinucleotide_shuffle_packed_raises_N():
+	X = random_one_hot((2, 4, 1500), random_state=9)
+	X[0, :, 10:20] = 0
+	assert_raises(ValueError, local_dinucleotide_shuffle,
+		PackedSequence.from_one_hot(X), bin_size=256, min_bin_size=128)

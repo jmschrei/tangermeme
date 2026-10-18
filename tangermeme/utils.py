@@ -1210,16 +1210,27 @@ def random_one_hot(
 	if not isinstance(shape, tuple) or len(shape) != 3:
 		raise ValueError("Shape must be a tuple with 3 dimensions.")
 
+	codes = _random_codes(shape, probs, random_state)
+	ohe = numpy.zeros(shape, dtype=dtype)
+	for i in range(ohe.shape[0]):
+		ohe[i, codes[i], numpy.arange(shape[2])] = 1 
+
+	return torch.from_numpy(ohe)
+
+
+def _random_codes(shape, probs, random_state):
+	"""Draw the character index of every position of `shape[0]` sequences
+	of length `shape[2]` over `shape[1]` characters, one sequence at a time
+	from `random_state`, as `random_one_hot` does."""
+
 	if not isinstance(random_state, numpy.random.RandomState):
 		random_state = numpy.random.RandomState(random_state)
 
 	if isinstance(probs, list):
 		probs = numpy.array(probs)
-		
-	n = shape[1]
-	ohe = numpy.zeros(shape, dtype=dtype)
 
-	for i in range(ohe.shape[0]):
+	codes = numpy.empty((shape[0], shape[2]), dtype=numpy.int64)
+	for i in range(shape[0]):
 		if probs is None:
 			probs_ = None
 		elif probs.ndim == 1:
@@ -1229,10 +1240,9 @@ def random_one_hot(
 		else:
 			probs_ = probs[i] 
 
-		choices = random_state.choice(n, size=shape[2], p=probs_)
-		ohe[i, choices, numpy.arange(shape[2])] = 1 
+		codes[i] = random_state.choice(shape[1], size=shape[2], p=probs_)
 
-	return torch.from_numpy(ohe)
+	return codes
 
 
 # The code of each of the four positions a packed byte holds, in order. The
@@ -1940,6 +1950,29 @@ def _cat_packed(sequences):
 		numpy.zeros((0, 3), dtype=numpy.int64))
 	return PackedSequence._from_parts(data.reshape(-1, *first.data.shape[1:-1],
 		n_bytes), first.length, n_runs, first.alphabet)
+
+
+def _stack_packed(sequences):
+	"""Stack PackedSequences of the same shape, length and alphabet along a
+	new second batch axis, as torch.stack(..., dim=1) would."""
+
+	first = sequences[0]
+	k = len(sequences)
+	data = torch.stack([X.data for X in sequences], dim=1)
+
+	# Flattened sequence r of item j moves to its row of the stacked axes.
+	inner = math.prod(first.data.shape[1:-1])
+	runs = []
+	for j, X in enumerate(sequences):
+		runs_ = X.n_runs.numpy().copy()
+		rows = runs_[:, 0]
+		runs_[:, 0] = (rows // inner) * (k * inner) + j * inner + rows % inner
+		runs.append(runs_)
+
+	runs = numpy.concatenate(runs)
+	runs = runs[numpy.lexsort((runs[:, 1], runs[:, 0]))]
+	return PackedSequence._from_parts(data, first.length, torch.from_numpy(
+		runs), first.alphabet)
 
 
 def chunk(
