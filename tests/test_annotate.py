@@ -418,6 +418,32 @@ def test_pairwise_annotations_spacing_overlap_across_examples_ok():
 	assert int(y.sum()) == 0
 
 
+def test_annotate_seqlets_packed_decodes_seqlets(X, gata_seqlets,
+	monkeypatch):
+	# With a PackedSequence, each seqlet given to TOMTOM holds only its own
+	# positions, not a view into a decode of the whole sequence, so the
+	# decodes are not all kept alive at once.
+	import tangermeme.annotate
+
+	seen = []
+	tomtom = tangermeme.annotate.tomtom
+
+	def spy(X_seqlets, *args, **kwargs):
+		seen.extend(X_seqlets)
+		return tomtom(X_seqlets, *args, **kwargs)
+
+	monkeypatch.setattr(tangermeme.annotate, "tomtom", spy)
+	annotate_seqlets(PackedSequence.from_one_hot(X), gata_seqlets,
+		"tests/data/test.meme")
+
+	assert len(seen) == len(gata_seqlets)
+	for X_seqlet, (_, start, end) in zip(seen,
+			gata_seqlets.iloc[:, :3].values):
+		assert X_seqlet.shape == (4, end - start)
+		assert X_seqlet.untyped_storage().nbytes() == X_seqlet.numel() * \
+			X_seqlet.element_size()
+
+
 def test_annotate_seqlets_few_threads():
 	# The default n_jobs is capped by the threads numba allows, so a call with
 	# the defaults works where numba allows fewer than four.

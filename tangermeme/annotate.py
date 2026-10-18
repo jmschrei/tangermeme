@@ -86,8 +86,11 @@ def annotate_seqlets(
 	X_seqlets = []
 	for example_idx, start, end in seqlets.iloc[:, :3].values:
 		if isinstance(X, PackedSequence):
-			X_seqlets.append(X[int(example_idx)].to_one_hot(
-				dtype=torch.float32)[:, start:end])
+			# Only the seqlet's positions are decoded, so that each seqlet
+			# does not keep a decode of its whole sequence alive.
+			codes = X[int(example_idx)].to_codes()[start:end]
+			X_seqlets.append((codes == torch.arange(4, dtype=codes.dtype)[:,
+				None]).to(torch.float32))
 		else:
 			X_seqlets.append(X[example_idx, :, start:end])
 
