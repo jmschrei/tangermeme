@@ -35,6 +35,7 @@ from tangermeme._deep_lift_utils import _build_nonlinear_ops
 from tangermeme._deep_lift_utils import _softmax
 from tangermeme._deep_lift_utils import _layernorm
 from tangermeme._deep_lift_utils import _layer_normalization_helper
+from tangermeme._deep_lift_utils import _layer_normalization_stats
 from tangermeme._deep_lift_utils import _layer_normalization_terms
 from tangermeme._deep_lift_utils import _layer_normalization_grad
 from tangermeme._deep_lift_utils import _rescale
@@ -2134,8 +2135,15 @@ def test_layer_normalization_terms_broadcast_like_helper(norm_type):
 	x_ref = torch.randn(3, 4, 5, 7, dtype=torch.float64)
 	g = torch.randn(3, 4, 5, 7, dtype=torch.float64)
 
-	terms = _layer_normalization_terms(x, x_ref, 2, 1e-3, norm_type)
+	mu, v = _layer_normalization_stats(x, 2, 1e-3, norm_type)
+	mu_ref, v_ref = _layer_normalization_stats(x_ref, 2, 1e-3, norm_type)
+	terms = _layer_normalization_terms(x, mu, v, x_ref, mu_ref, v_ref, 2)
 	ours = _layer_normalization_grad(g, *terms, 2, norm_type)
+
+	if norm_type == "layernorm":
+		assert mu.shape == (3, 1, 1, 1) and mu_ref.shape == (3, 4, 1, 1)
+	else:
+		assert mu is None and mu_ref is None
 
 	module = types.SimpleNamespace(input=_paired(x, x_ref), eps=1e-3,
 		normalized_shape=[5, 7], weight=None)

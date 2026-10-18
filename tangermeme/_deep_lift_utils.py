@@ -515,7 +515,11 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 	# as the dtype's epsilon; mirror that here so the hook matches the forward
 	# pass it is correcting.
 	eps = module.eps if module.eps is not None else torch.finfo(x.dtype).eps
-	terms = _layer_normalization_terms(x, x_ref, n_norm_dims, eps, norm_type)
+	mu, v = _layer_normalization_stats(x, n_norm_dims, eps, norm_type)
+	mu_ref, v_ref = _layer_normalization_stats(x_ref, n_norm_dims, eps,
+		norm_type)
+	terms = _layer_normalization_terms(x, mu, v, x_ref, mu_ref, v_ref,
+		n_norm_dims)
 
 	# gamma-scaled upstream gradients for both halves of the batch
 	gamma = module.weight if module.weight is not None else 1.0
@@ -529,37 +533,45 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 	return (torch.cat([grad_in, grad_in_ref]),)
 
 
-def _layer_normalization_terms(x, x_ref, n_norm_dims, eps,
-	norm_type="layernorm"):
+def _layer_normalization_stats(x, n_norm_dims, eps, norm_type="layernorm"):
+	"""The statistics of `_layer_normalization_helper`'s derivation over the
+	last `n_norm_dims` axes of `x`, with those axes kept: the mean mu, None
+	for RMSNorm, which does not centre, and the inverse standard deviation
+	v = (σ^2 + eps)^{-1/2}."""
+
+	norm_dims = list(range(-n_norm_dims, 0))
+
+	# Mean-centered inputs: a_i = x_i - mu
+	if norm_type == "rmsnorm":
+		mu = None
+		a = x
+	else:
+		mu = x.mean(dim=norm_dims, keepdim=True)
+		a = x - mu
+
+	# Inverse std: v = (σ^2 + eps)^{-1/2}
+	var = (a ** 2).mean(dim=norm_dims, keepdim=True)
+	return mu, (var + eps) ** (-0.5)
+
+
+def _layer_normalization_terms(x, mu, v, x_ref, mu_ref, v_ref, n_norm_dims):
 	"""The terms of the normalization rule that depend only on the
 	activations, from `_layer_normalization_helper`'s derivation: v_avg, a_sum
 	and Term 2's leading factor.
 
-	`x` and `x_ref` are normalized over their last `n_norm_dims` axes and
+	`x` and `x_ref` come with their statistics, from
+	`_layer_normalization_stats`, so that a caller can compute them once and
+	keep them. They are normalized over their last `n_norm_dims` axes and
 	broadcast against each other on the others, so one example can be paired
 	with each of its references without being copied.
 	"""
 
-	norm_dims = list(range(-n_norm_dims, 0))
 	D = 1
 	for s in x.shape[-n_norm_dims:]:
 		D *= s
 
-	# Mean-centered inputs: a_i = x_i - mu
-	if norm_type == "rmsnorm":
-		a = x
-		a_ref = x_ref
-	else:
-		mu = x.mean(dim=norm_dims, keepdim=True)
-		mu_ref = x_ref.mean(dim=norm_dims, keepdim=True)
-		a = x - mu
-		a_ref = x_ref - mu_ref
-
-	# Inverse std: v = (σ^2 + eps)^{-1/2}
-	var = (a ** 2).mean(dim=norm_dims, keepdim=True)
-	var_ref = (a_ref ** 2).mean(dim=norm_dims, keepdim=True)
-	v = (var + eps) ** (-0.5)
-	v_ref = (var_ref + eps) ** (-0.5)
+	a = x if mu is None else x - mu
+	a_ref = x_ref if mu_ref is None else x_ref - mu_ref
 
 	# some additional terms
 	v_avg = (v + v_ref) / 2
