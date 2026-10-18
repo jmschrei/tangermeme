@@ -67,7 +67,7 @@ ersatz
 
 	- ``dinucleotide_shuffle`` accepts unknown characters, encoded as all-zero columns, when given ``allow_N=True``. Each is shuffled as a fifth character, so every shuffle keeps the number of unknown characters and the count of every dinucleotide, including those that contain one, and a contiguous run of them such as an assembly gap stays one run but moves with the shuffle. Passing the flag on to validation alone would not have been enough: the transition matrix is built from ``X.argmax(axis=0)``, which reads an all-zero column as the first character of the alphabet, so every unknown character would have been shuffled as an ``A`` and come out as one. A 30bp gap in a 300bp sequence then raised the ``AA`` count from 23 to 53. The default, ``allow_N=False``, keeps rejecting unknown characters, and the shuffles of a sequence without any are unchanged. Thanks @Al-Murphy!
 
-	- ``dinucleotide_shuffle`` shuffles every sequence of a call in one numba call, which releases the GIL. It used to call the kernel once per sequence and build each sequence's transition table in Python around the call. The shuffles are bit-identical, for seeds beyond 32 bits, unknown characters, ``start`` and ``end``, and ``n=0`` included. On 64 sequences of 2,114bp on the CPU, one shuffle of each took 2.9 ms against 17.1 ms, and twenty of each 52 ms against 71 ms. ``_dinucleotide_shuffle`` keeps its signature and output.
+	- ``dinucleotide_shuffle`` shuffles every sequence of a call in one numba call, which releases the GIL. It used to call the kernel once per sequence and build each sequence's transition table in Python around the call. The shuffles are bit-identical, for seeds beyond 32 bits, unknown characters, ``start`` and ``end``, and ``n=0`` included. On 64 sequences of 2,114bp on the CPU, one shuffle of each took 2.9 ms against 17.1 ms, and twenty of each 52 ms against 71 ms. ``_dinucleotide_shuffle``, which gReLU imports, keeps its signature and output. It now calls ``dinucleotide_shuffle``, so it raises a ``ValueError`` on input that is not one-hot, which it used to accept.
 
 	- ``dinucleotide_shuffle`` takes one ``random_state`` per sequence, as a list, array or tensor of integers, as well as a single integer. Sequence ``i`` is then shuffled as ``dinucleotide_shuffle(X[i:i+1], random_state=random_state[i])`` would shuffle it, whatever else is in the batch, which is how ``deep_lift_shap`` seeds its references.
 
@@ -195,6 +195,88 @@ Documentation
 	- The first ``dinucleotide_shuffle`` example in the README printed two shuffles that ``dinucleotide_shuffle(seq, random_state=0)`` does not return. It now shows the two it does.
 
 	- The README is rewritten. It links the paper in Nature Methods and gives its citation, opens with an image of a workflow map of every public function that links to an interactive version, and adds a Speed section comparing one-hot encoding, saturation mutagenesis and DeepLIFT/SHAP with other packages, giving the machine, versions and settings of each measurement. The Usage examples form one walkthrough that defines a small model, run as written, and show their printed output, and they gain sections on ``extract_loci``, PISA, ``local_dinucleotide_shuffle``, the other design methods and plotting. The roadmap is removed, the note that FIMO and Tomtom moved to memesuite-lite is now part of a Related Packages section, and the ``interactive`` extra is listed. The ``space`` example passed ``spacing=10``, which raises ``ValueError: spacing has shape torch.Size([]) but must have shape (-1, 1)``; it now passes a tensor with one row per spacing.
+
+
+saliency
+--------
+
+	- Adds ``tangermeme.saliency.saliency``, input-times-gradient
+	  attribution. It answers the same question as ``deep_lift_shap`` and
+	  ``saturation_mutagenesis`` -- which nucleotides drive this prediction
+	  -- for the cost of one backward pass, at the price of the linearity
+	  assumption: the gradient is the tangent to the model at the observed
+	  sequence, so it saturates and says nothing about finite substitutions.
+	  Use it when there are far more sequences than the other two methods can
+	  afford, or when an op in the model has no DeepLIFT rule registered.
+	  Returns ``(-1, len(alphabet), length)`` signed attributions and takes
+	  ``hypothetical``, so it is interchangeable with ``deep_lift_shap`` and
+	  ``saturation_mutagenesis`` and plots directly with ``plot_logo``. It
+	  satisfies the ``func=`` contract and can be passed to ``ablate``,
+	  ``marginalize``, ``space``, and the ``variant_effect`` functions.
+	  Thanks @cyborgdnx!
+	- ``saliency`` subtracts the mean gradient across the alphabet at each
+	  position before projecting it onto the sequence, following Majdandzic
+	  et al. (Genome Biology 2023). A one-hot sequence lies on a simplex, and
+	  the component of the gradient that points off it describes inputs the
+	  model never saw, which adds noise to the attributions. On Beluga, for
+	  targets 214 and 267 at 25 hg38 loci (24 random cCREs and the Tutorial
+	  A6 locus), the correction raised the Pearson correlation between
+	  saliency and ``deep_lift_shap`` over the central 100bp at 22 of 25 loci
+	  for both targets, by 0.026 in median r. ``deep_lift_shap`` and
+	  ``saturation_mutagenesis`` already remove this component. Pass
+	  ``gradient_correction=False`` for the uncorrected input times
+	  gradient. ``dependency_map`` uses the corrected values by default.
+	- ``saliency`` reads one value per target from the model's output, as
+	  ``deep_lift_shap`` does: trailing axes of length 1 are dropped, and
+	  any other axis after the targets, such as the length axis of a
+	  profile, raises a ``ValueError`` rather than having ``target``
+	  attribute the sum of a whole profile. Pass a ``func`` that reduces the
+	  profile, or wrap the model.
+
+dependency_map
+--------------
+
+	- Adds ``tangermeme.dependency_map.dependency_map``, which substitutes
+	  every base at every position and records how far each substitution
+	  moves the attributions across the whole sequence. A model that treats
+	  positions independently yields a purely diagonal map, so off-diagonal
+	  structure is direct evidence of epistasis the model has learned:
+	  cooperative motif pairs appear as blocks, and the flanks a motif
+	  depends on appear as stripes. ``func=`` selects the attribution method
+	  and defaults to ``saliency``; ``deep_lift_shap`` and
+	  ``saturation_mutagenesis`` both satisfy the same contract and can be
+	  passed in when their accuracy is worth the cost. ``start`` and ``end``
+	  restrict which positions are substituted, following the same
+	  convention as ``saturation_mutagenesis``, since substituting every
+	  position of a full-length locus is rarely what you want. Dependency
+	  maps were introduced by Tomaz da Silva et al. (Nature Genetics 2025)
+	  for genomic language models; this adapts them to attributions,
+	  averages over the substitutions at a position rather than taking the
+	  largest, and puts the substituted position on the columns. Thanks
+	  @cyborgdnx!
+	- Substitutions that re-apply the base already present are skipped
+	  rather than computed, because their attributions are unchanged and
+	  their difference is exactly zero, and each position is averaged over
+	  only the substitutions that actually changed it. This removes a
+	  quarter of the passes for DNA and puts a position holding an ``N``,
+	  which has four real substitutions rather than three, on the same scale
+	  as every other position.
+	- Note that the diagonal is not comparable to the rest of the map: it is
+	  the direct effect of a substitution on its own attribution, is
+	  non-zero even for a linear model, and is typically several times
+	  larger than the off-diagonal entries. Mask it before plotting.
+	- ``device`` is forwarded to ``func``, and the model is moved there once
+	  for the whole call, so the two calls to ``func`` per sequence do not
+	  each move it. The model's original device and training mode are
+	  restored afterward. The map is float64 when ``func`` returns float64,
+	  and float32 otherwise, including for half-precision attributions.
+	- An attribution function that draws random references, as
+	  ``deep_lift_shap`` does by default, draws new ones for every
+	  substituted copy, so the map also contains the change of references.
+	  On the Tutorial B8 sequence, holding three shuffles of the original
+	  sequence fixed lowered the cross-motif value from 0.0607 to 0.0152
+	  and the background from 0.0129 to 0.0029. The docstring, the skill and
+	  Tutorial B8 hold the references fixed with a wrapper.
 
 
 Version 1.5.0
