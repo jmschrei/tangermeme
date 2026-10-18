@@ -10,6 +10,7 @@ import sys
 import mmap
 import ctypes
 import warnings
+import itertools
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -26,6 +27,7 @@ from .utils import one_hot_encode  # noqa: F401, importable from here
 from .utils import _one_hot_encode_rows
 from .utils import _one_hot_rows_mapping
 from .utils import _one_hot_encode_fasta
+from .utils import _cat_packed
 from .utils import characters
 from .utils import PackedSequence
 from .utils import TangermemeWarning
@@ -834,6 +836,11 @@ def _read_fasta_windows(fasta, windows, length, alphabet, ignore,
 	return X
 
 
+# The positions read and packed at a time by extract_loci under
+# return_packed, 64 MB of int8 one-hot encoding.
+_PACKED_CHUNK_POSITIONS = 2 ** 24
+
+
 def extract_loci(
 	loci: str | os.PathLike | pandas.DataFrame | list,
 	sequences: str | os.PathLike | pyfaidx.Fasta | dict,
@@ -854,7 +861,8 @@ def extract_loci(
 	return_mask: bool = False,
 	verbose: bool = False,
 	n_jobs: int = 8,
-) -> torch.Tensor | list[torch.Tensor]:
+	return_packed: bool = False,
+) -> torch.Tensor | PackedSequence | list[torch.Tensor | PackedSequence]:
 	"""Extract sequence and signal information for each provided locus.
 
 	This function will take in a set of loci, sequences, and optionally signals,
@@ -1052,6 +1060,13 @@ def extract_loci(
 		also capped by numba's NUMBA_NUM_THREADS. The returned values do not
 		depend on it. Default is 8.
 
+	return_packed: bool, optional
+		Whether to return the sequences as a PackedSequence rather than a
+		one-hot encoding. The windows are read and packed a chunk at a time,
+		so the one-hot encoding of all of them is never held. Needs an
+		alphabet of four characters, and the characters in `ignore` become
+		unknown characters. The signals are returned as they are otherwise.
+		Default is False.
 
 	Returns
 	-------
@@ -1094,6 +1109,10 @@ def extract_loci(
 
 	if n_loci is not None and n_loci < 1:
 		raise ValueError("n_loci must be at least 1 or None.")
+
+	if return_packed and len(alphabet) != 4:
+		raise ValueError("return_packed=True needs an alphabet of four "
+			"characters, but the alphabet has {}.".format(len(alphabet)))
 
 	if isinstance(n_jobs, bool) or not isinstance(n_jobs, (int, numpy.integer)):
 		raise TypeError("n_jobs must be an integer.")
@@ -1246,34 +1265,59 @@ def extract_loci(
 	# file where they can be, and the windows of a pyfaidx.Fasta one at a
 	# time; both are one-hot encoded straight into one C-contiguous array.
 	threads = _cpu_count() if n_jobs == -1 else int(n_jobs)
+	width = in_window + 2 * max_jitter
+
+	# Packed sequences are read a chunk of windows at a time, and each chunk
+	# is packed before the next is read.
+	step = len(mids)
+	if return_packed:
+		step = max(1, _PACKED_CHUNK_POSITIONS // max(1, width))
+
+	def pack(seqs):
+		return PackedSequence.from_one_hot(torch.from_numpy(seqs), tuple(
+			alphabet))
+
 	try:
 		if opened_fasta and mids.dtype == numpy.int64:
 			codes, names = pandas.factorize(loci_chroms)
+			names = [str(name) for name in names]
+			starts = mids - in_width - max_jitter
+
+			chunks = []
 			with tqdm(total=len(mids), disable=d, desc=desc) as progress:
-				seqs = _read_fasta_windows(sequences, (codes, mids - in_width -
-					max_jitter), in_window + 2 * max_jitter, alphabet, ignore,
-					names=[str(name) for name in names], n_jobs=threads)
-				progress.update(len(mids))
+				for c in range(0, len(mids), step):
+					seqs = _read_fasta_windows(sequences, (codes[c:c+step],
+						starts[c:c+step]), width, alphabet, ignore, names=names,
+						n_jobs=threads)
+					chunks.append(pack(seqs) if return_packed else seqs)
+					progress.update(len(seqs))
 		else:
 			windows = ((str(chrom), mid - in_width - max_jitter, mid + in_width
 				+ max_jitter + (in_window % 2)) for chrom, mid in tqdm(zip(
 				loci_chroms, mids.tolist()), total=len(mids), disable=d,
 				desc=desc))
 
-			# numpy.stack keeps the memory layout of its inputs, so a stack of
-			# slices of Fortran-ordered arrays is not contiguous by default.
-			if isinstance(sequences, dict):
-				seqs = numpy.ascontiguousarray(numpy.stack([sequences[chrom][:,
-					start:end] for chrom, start, end in windows]))
-			else:
-				seqs = _read_pyfaidx_windows(sequences, windows, alphabet,
-					ignore, n_jobs=threads)
+			chunks = []
+			for c in range(0, len(mids), step):
+				windows_ = itertools.islice(windows, step)
+
+				# numpy.stack keeps the memory layout of its inputs, so a stack
+				# of slices of Fortran-ordered arrays is not contiguous by
+				# default.
+				if isinstance(sequences, dict):
+					seqs = numpy.ascontiguousarray(numpy.stack([sequences[
+						chrom][:, start:end] for chrom, start, end in windows_]))
+				else:
+					seqs = _read_pyfaidx_windows(sequences, windows_, alphabet,
+						ignore, n_jobs=threads)
+
+				chunks.append(pack(seqs) if return_packed else seqs)
 	finally:
 		if opened_fasta:
 			sequences.close()
 
 	# Figure out how to format the outputs depending on the provided parameters.
-	seqs = torch.from_numpy(seqs)
+	seqs = _cat_packed(chunks) if return_packed else torch.from_numpy(chunks[0])
 	y_return = [seqs]
 
 	if signals is not None:

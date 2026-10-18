@@ -208,3 +208,21 @@ def test_screen_random_state_reproducibility(device):
 		random_state=0)
 
 	assert_array_almost_equal(X_hat0, X_hat1)
+
+
+def test_screen_packed(device):
+	# Drawing packed sequences gives the screen of their one-hot encoding,
+	# packed.
+	import functools
+	from tangermeme.utils import PackedSequence
+
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	X_hat = screen(model, (4, 100), [10], device=device, max_iter=2, n_best=3,
+		random_state=0)
+	X_hat_packed = screen(model, (4, 100), [10], device=device, max_iter=2,
+		n_best=3, random_state=0, func=functools.partial(random_one_hot,
+		return_packed=True))
+
+	assert isinstance(X_hat_packed, PackedSequence)
+	assert torch.equal(X_hat_packed.to_one_hot(), X_hat)

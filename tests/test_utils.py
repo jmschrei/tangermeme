@@ -2069,3 +2069,49 @@ def test_chunk_packed():
 
 	assert isinstance(X_chunks_packed, PackedSequence)
 	assert torch.equal(X_chunks_packed.to_one_hot(), X_chunks)
+
+
+@pytest.mark.parametrize("sequence", ["ACGTACGTAC", "ACGNNNTGAN", "N" * 7,
+	"ACGT" * 70000 + "NA", ""])
+def test_one_hot_encode_packed(sequence):
+	X = one_hot_encode(sequence)
+	X_packed = one_hot_encode(sequence, return_packed=True)
+	X_ref = PackedSequence.from_one_hot(X)
+
+	assert X_packed.shape == X.shape
+	assert torch.equal(X_packed.data, X_ref.data)
+	assert torch.equal(X_packed.n_runs, X_ref.n_runs)
+
+
+def test_one_hot_encode_packed_alphabet_ignore():
+	X = one_hot_encode("ACGUXXNA", alphabet=list("ACGU"), ignore=['N', 'X'])
+	X_packed = one_hot_encode("ACGUXXNA", alphabet=list("ACGU"), ignore=['N',
+		'X'], return_packed=True)
+	assert X_packed.alphabet == ('A', 'C', 'G', 'U')
+	assert torch.equal(X_packed.to_one_hot(), X)
+
+
+def test_one_hot_encode_packed_raises():
+	with pytest.raises(ValueError, match="not in"):
+		one_hot_encode("ACGTZ", return_packed=True)
+
+	with pytest.raises(ValueError, match="not in"):
+		one_hot_encode("ACGTé", return_packed=True)
+
+	with pytest.raises(ValueError, match="four characters"):
+		one_hot_encode("ACGT", alphabet=list("ACGTU"), return_packed=True)
+
+
+@pytest.mark.parametrize("probs", [None, [[0.5, 0.25, 0.125, 0.125]],
+	"per-sequence"])
+def test_random_one_hot_packed(probs):
+	if probs == "per-sequence":
+		probs = numpy.random.RandomState(0).dirichlet(numpy.ones(4), size=5)
+
+	X = random_one_hot((5, 4, 33), probs=probs, random_state=3)
+	X_packed = random_one_hot((5, 4, 33), probs=probs, random_state=3,
+		return_packed=True)
+	assert torch.equal(X_packed.to_one_hot(), X)
+
+	with pytest.raises(ValueError, match="four characters"):
+		random_one_hot((5, 3, 33), return_packed=True)

@@ -4244,3 +4244,81 @@ def test_one_hot_to_fasta_packed(tmp_path):
 	assert (tmp_path / "N.fa").read_text() == ("> a\n" + ('ACGTNNNA' * 10) +
 		"\n" + ('ACGTNNNA' * 10) + "\n\n> b\n" + "C" * 80 + "\n" + "C" * 80 +
 		"\n\n")
+
+
+###
+# Under return_packed=True, extract_loci reads and packs the windows a chunk
+# at a time and returns the packed sequences of its one-hot path.
+
+
+@pytest.mark.parametrize("chunk", [None, 10, 25])
+def test_extract_loci_packed(chunk, monkeypatch):
+	if chunk is not None:
+		monkeypatch.setattr("tangermeme.io._PACKED_CHUNK_POSITIONS", chunk)
+
+	loci, fasta = "tests/data/test.bed", "tests/data/test.fa"
+	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
+
+	X, y = extract_loci(loci, fasta, bw, in_window=10, out_window=10)
+	X_packed, y_packed = extract_loci(loci, fasta, bw, in_window=10,
+		out_window=10, return_packed=True)
+
+	assert isinstance(X_packed, PackedSequence)
+	assert X_packed.shape == X.shape
+	assert torch.equal(X_packed.to_one_hot(), X)
+	assert torch.equal(y_packed, y)
+
+
+@pytest.fixture
+def fasta_with_N(tmp_path):
+	rng = numpy.random.RandomState(0)
+	chroms = {}
+	for name, length in (("chr1", 900), ("chr2", 700)):
+		seq = list(rng.choice(list("ACGTacgt"), size=length))
+		seq[100:130] = "N" * 30
+		seq[401] = "n"
+		seq[650:655] = "NNNNN"
+		chroms[name] = "".join(seq)
+
+	path = tmp_path / "with_N.fa"
+	with open(path, "w") as outfile:
+		for name, seq in chroms.items():
+			outfile.write(">{}\n".format(name))
+			for start in range(0, len(seq), 60):
+				outfile.write(seq[start:start+60] + "\n")
+
+	return str(path)
+
+
+@pytest.mark.parametrize("chunk", [None, 120])
+@pytest.mark.parametrize("reader", ["path", "pyfaidx"])
+def test_extract_loci_packed_N(fasta_with_N, chunk, reader, monkeypatch):
+	if chunk is not None:
+		monkeypatch.setattr("tangermeme.io._PACKED_CHUNK_POSITIONS", chunk)
+
+	loci = pandas.DataFrame({"chrom": ["chr1", "chr1", "chr2", "chr2", "chr1"],
+		"start": [100, 380, 600, 300, 640], "end": [140, 420, 660, 310, 700]})
+	sequences = fasta_with_N if reader == "path" else pyfaidx.Fasta(fasta_with_N)
+	kwargs = dict(in_window=60, max_jitter=4, ignore=['N', 'n'],
+		alphabet=list("ACGT"), return_mask=True)
+
+	X, mask = extract_loci(loci, sequences, **kwargs)
+	X_packed, mask_packed = extract_loci(loci, sequences, return_packed=True,
+		**kwargs)
+
+	assert len(X_packed.n_runs) > 0
+	assert torch.equal(X_packed.to_one_hot(), X)
+	assert torch.equal(mask_packed, mask)
+
+
+def test_extract_loci_packed_dict(dict_sequences):
+	X = extract_loci("tests/data/test.bed", dict_sequences, in_window=10)
+	X_packed = extract_loci("tests/data/test.bed", dict_sequences, in_window=10,
+		return_packed=True)
+	assert torch.equal(X_packed.to_one_hot(), X)
+
+
+def test_extract_loci_packed_raises():
+	with pytest.raises(ValueError, match="four characters"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
+			alphabet=list("ACGTN"), ignore=[], return_packed=True)

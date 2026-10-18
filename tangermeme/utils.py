@@ -656,8 +656,9 @@ def one_hot_encode(
 	desc: str | None = None,
 	verbose: bool = False,
 	n_jobs: int = 1,
+	return_packed: bool = False,
 	**kwargs: Any,
-) -> torch.Tensor:
+) -> torch.Tensor | PackedSequence:
 	"""Converts a string into a one-hot encoding.
 
 	This function will take in a string and convert it into a one-hot
@@ -699,13 +700,20 @@ def one_hot_encode(
 		only for sequences of at least 262,144 characters. The returned
 		encoding does not depend on it. Default is 1.
 
+	return_packed: bool, optional
+		Whether to return the sequence as a PackedSequence of one sequence,
+		with the characters in `ignore` as unknown characters, rather than a
+		one-hot encoding. The characters are looked up into their indices
+		without building the one-hot encoding. Needs an alphabet of four
+		characters. Default is False.
 
 	Returns
 	-------
-	ohe : torch.Tensor
+	ohe : torch.Tensor or PackedSequence
 		A binary tensor of shape (alphabet_size, sequence_length) where
 		alphabet_size is the number of unique elements in the sequence and
-		sequence_length is the length of the input sequence.
+		sequence_length is the length of the input sequence, or a
+		PackedSequence of that shape.
 	"""
 
 	for char in ignore:
@@ -733,6 +741,21 @@ def one_hot_encode(
 			alphabet, ignore)
 
 	n, m = len(sequence), len(alphabet)
+
+	if return_packed:
+		if m != 4:
+			raise ValueError("return_packed=True needs an alphabet of four "
+				"characters, but the alphabet has {}.".format(m))
+
+		codes = one_hot_mapping[numpy.frombuffer(bytearray(sequence, e),
+			dtype=numpy.uint8)]
+		if (codes == -2).any():
+			raise ValueError("Encountered character that is not in " +
+				"`alphabet` or in `ignore`.")
+
+		codes[codes == -1] = 4
+		return PackedSequence.from_codes(torch.from_numpy(codes), tuple(
+			alphabet))
 
 	# With an ASCII alphabet and ignore list, a character that is not ASCII
 	# is in neither, so a sequence that is not ASCII raises the error of the
@@ -1204,7 +1227,8 @@ def random_one_hot(
 	probs: list | tuple | numpy.ndarray | None = None,
 	dtype: str | numpy.dtype = 'int8',
 	random_state: int | numpy.random.RandomState | None = None,
-) -> torch.Tensor:
+	return_packed: bool = False,
+) -> torch.Tensor | PackedSequence:
 	"""Generate random one-hot encodings. Useful for debugging.
 
 	This function will generate random one-hot encodings where the second to
@@ -1234,17 +1258,30 @@ def random_one_hot(
 		The random state to use for generation. If None, do not use a 
 		deterministic seed. Default is None.
 
+	return_packed: bool, optional
+		Whether to return the sequences as a PackedSequence, drawn as the
+		one-hot encoding would be and packed without building it. Needs an
+		alphabet of four characters. Default is False.
+
 
 	Returns
 	-------
-	ohe: torch.Tensor
-		A tensor with the specified shape that is one-hot encoded.
+	ohe: torch.Tensor or PackedSequence
+		A tensor with the specified shape that is one-hot encoded, or a
+		PackedSequence of that shape.
 	"""
 
 	if not isinstance(shape, tuple) or len(shape) != 3:
 		raise ValueError("Shape must be a tuple with 3 dimensions.")
 
+	if return_packed and shape[1] != 4:
+		raise ValueError("return_packed=True needs an alphabet of four "
+			"characters, but shape has {}.".format(shape[1]))
+
 	codes = _random_codes(shape, probs, random_state)
+	if return_packed:
+		return PackedSequence.from_codes(torch.from_numpy(codes))
+
 	ohe = numpy.zeros(shape, dtype=dtype)
 	for i in range(ohe.shape[0]):
 		ohe[i, codes[i], numpy.arange(shape[2])] = 1 
