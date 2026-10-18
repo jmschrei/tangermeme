@@ -1961,3 +1961,23 @@ def test_local_dinucleotide_shuffle_packed_raises_N():
 	X[0, :, 10:20] = 0
 	assert_raises(ValueError, local_dinucleotide_shuffle,
 		PackedSequence.from_one_hot(X), bin_size=256, min_bin_size=128)
+
+
+@pytest.mark.parametrize("name", ["insert", "substitute", "multisubstitute",
+	"delete", "randomize", "shuffle"])
+def test_ersatz_packed_raises_batch_axes(name):
+	# A PackedSequence with two batch axes is rejected, as the matching 4-D
+	# one-hot tensor is, rather than edited along the wrong axis.
+	X = PackedSequence.from_one_hot(random_one_hot((6, 4, 40),
+		random_state=1)).reshape(2, 3)
+	calls = {
+		"insert": lambda: insert(X, "ACG"),
+		"substitute": lambda: substitute(X, "ACG"),
+		"multisubstitute": lambda: multisubstitute(X, ["AC", "GT"], [3]),
+		"delete": lambda: delete(X, 1, 4),
+		"randomize": lambda: randomize(X, 1, 4, random_state=0),
+		"shuffle": lambda: shuffle(X, 1, 10, random_state=0),
+	}
+
+	with pytest.raises(ValueError, match="X has shape"):
+		calls[name]()

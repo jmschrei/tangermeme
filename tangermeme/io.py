@@ -28,6 +28,7 @@ from .utils import _one_hot_encode_rows
 from .utils import _one_hot_rows_mapping
 from .utils import _one_hot_encode_fasta
 from .utils import _cat_packed
+from .utils import _check_one_batch_axis
 from .utils import characters
 from .utils import PackedSequence
 from .utils import TangermemeWarning
@@ -1405,6 +1406,7 @@ def one_hot_to_fasta(
 	"""
 	
 	if isinstance(X, PackedSequence):
+		_check_one_batch_axis(X)
 		chars = numpy.frombuffer((''.join(X.alphabet) + 'N').encode('ascii'),
 			dtype=numpy.uint8)
 		step = max(1, 2 ** 24 // max(1, X.length))

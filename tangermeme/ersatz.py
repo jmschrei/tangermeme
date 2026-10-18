@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from .utils import _accepts_packed
 from .utils import _cat_packed
+from .utils import _check_one_batch_axis
 from .utils import _numba_threads
 from .utils import _random_codes
 from .utils import _stack_packed
@@ -48,6 +49,7 @@ def _map_rows(X, fn, length, alphabet):
 	outputs of sequences `rows` of X given theirs, a chunk of sequences at a
 	time, and pack the outputs, each `length` long, into a PackedSequence."""
 
+	_check_one_batch_axis(X)
 	step = max(1, _CHUNK_POSITIONS // max(1, X.shape[-1]))
 	parts = [PackedSequence.from_codes(fn(_codes_of(X, rows), rows), alphabet)
 		for rows in (slice(i, i + step) for i in range(0, X.shape[0], step))]

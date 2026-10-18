@@ -555,3 +555,21 @@ def test_insertion_effect_packed(X, substitutions, func, left, chunk, device,
 		device=device)
 	_assert_same(y, y_packed)
 	_assert_same(y_var, y_var_packed)
+
+
+@pytest.mark.parametrize("name", ["substitution", "deletion", "insertion"])
+def test_variant_effect_packed_raises_batch_axes(name):
+	X = PackedSequence.from_one_hot(random_one_hot((6, 4, 40),
+		random_state=1)).reshape(2, 3)
+	model = FlattenDense(seq_len=40)
+	calls = {
+		"substitution": lambda: substitution_effect(model, X,
+			torch.tensor([[0, 3, 1]]), device='cpu'),
+		"deletion": lambda: deletion_effect(model, X, torch.tensor([[0, 3]]),
+			device='cpu'),
+		"insertion": lambda: insertion_effect(model, X,
+			torch.tensor([[0, 3, 1]]), device='cpu'),
+	}
+
+	with pytest.raises(ValueError, match="must have shape"):
+		calls[name]()

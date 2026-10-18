@@ -2134,3 +2134,14 @@ def test_random_one_hot_packed(probs):
 
 	with pytest.raises(ValueError, match="four characters"):
 		random_one_hot((5, 3, 33), return_packed=True)
+
+
+def test_chunk_packed_raises_batch_axes():
+	# chunk takes PackedSequences of one sequence each.
+	X = PackedSequence.from_one_hot(random_one_hot((6, 4, 40),
+		random_state=1)).reshape(2, 3)
+	with pytest.raises(ValueError, match="one sequence"):
+		chunk([X])
+
+	with pytest.raises(ValueError, match="one sequence"):
+		chunk([X[0]])

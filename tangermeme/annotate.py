@@ -11,6 +11,7 @@ import torch
 import pandas
 
 from .io import read_meme
+from .utils import _check_one_batch_axis
 from .utils import _validate_input
 from .utils import PackedSequence
 
@@ -82,6 +83,8 @@ def annotate_seqlets(
 		motifs = read_meme(motifs)
 
 	motif_pwms = list(motifs.values())
+
+	_check_one_batch_axis(X)
 
 	X_seqlets = []
 	for example_idx, start, end in seqlets.iloc[:, :3].values:

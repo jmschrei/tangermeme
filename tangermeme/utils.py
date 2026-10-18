@@ -106,7 +106,7 @@ def _validate_input(
 	
 	if isinstance(X, PackedSequence):
 		return _validate_packed(X, name, shape, dtype, min_value, max_value,
-			ohe, allow_N, only_warn)
+			ohe, ohe_dim, allow_N, only_warn)
 
 	if not isinstance(X, torch.Tensor):
 		_warn_or_raise(ValueError, "{} must be a torch.Tensor object".format(
@@ -158,7 +158,7 @@ def _validate_input(
 
 
 def _validate_packed(X, name, shape, dtype, min_value, max_value, ohe,
-	allow_N, only_warn):
+	ohe_dim, allow_N, only_warn):
 	"""The checks of `_validate_input` for a PackedSequence, which decodes to
 	a one-hot encoding of any dtype, and so of values 0 and 1, without reading
 	its bytes."""
@@ -180,11 +180,27 @@ def _validate_packed(X, name, shape, dtype, min_value, max_value, ohe,
 		_warn_or_raise(ValueError, "{} cannot have a value above {}".format(
 			name, max_value), only_warn)
 
+	# The characters of a PackedSequence are its second-to-last axis, so a
+	# one-hot check along another axis, such as the default axis 1, needs
+	# exactly one batch axis, as the same check on a tensor does.
+	if ohe and ohe_dim % X.ndim != X.ndim - 2:
+		_warn_or_raise(ValueError, "{} has shape {} but must have shape {}"
+			.format(name, tuple(X.shape), (-1, len(X.alphabet), -1)), only_warn)
+
 	if ohe and not allow_N and len(X.n_runs) > 0:
 		_warn_or_raise(ValueError, "{} must be one-hot encoded and cannot have "
 			"unknown characters.".format(name), only_warn)
 
 	return X
+
+
+def _check_one_batch_axis(X, name="X"):
+	"""Raise unless `X`, when a PackedSequence, has exactly one batch axis,
+	as functions that take X of shape (-1, len(alphabet), length) need."""
+
+	if isinstance(X, PackedSequence) and X.data.ndim != 2:
+		raise ValueError("{} has shape {} but must have shape {}".format(name,
+			tuple(X.shape), (-1, len(X.alphabet), -1)))
 
 
 def _accepts_packed(func):
@@ -2137,6 +2153,12 @@ def chunk(
 		raise ValueError("overlap must be a non-negative integer.")
 
 	if len(X) > 0 and isinstance(X[0], PackedSequence):
+		for x in X:
+			if x.data.ndim != 1:
+				raise ValueError("chunk takes PackedSequences of one sequence "
+					"each, of shape {}, but one has shape {}.".format(
+					(len(x.alphabet), -1), tuple(x.shape)))
+
 		return _cat_packed([PackedSequence.from_codes(x.to_codes().unfold(-1,
 			size, size-overlap), x.alphabet) for x in X])
 

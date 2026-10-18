@@ -940,3 +940,16 @@ def test_apply_product_packed(X, alpha, beta, device):
 	y_packed = apply_product(predict, model, PackedSequence.from_one_hot(
 		X[:4]), args=(alpha[:3], beta[:2]), batch_size=5, device=device)
 	assert torch.equal(y_packed, y)
+
+
+def test_apply_packed_raises_batch_axes():
+	X = PackedSequence.from_one_hot(random_one_hot((6, 4, 40),
+		random_state=1)).reshape(2, 3)
+	model = FlattenDense(seq_len=40)
+	alpha, beta = torch.zeros(2, 1), torch.ones(2, 1)
+
+	with pytest.raises(ValueError, match="must have shape"):
+		apply_pairwise(predict, model, X, args=(alpha, beta), device='cpu')
+
+	with pytest.raises(ValueError, match="must have shape"):
+		apply_product(predict, model, X, args=(alpha, beta), device='cpu')

@@ -4377,3 +4377,10 @@ def test_extract_loci_packed_raises():
 	with pytest.raises(ValueError, match="four characters"):
 		extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
 			alphabet=list("ACGTN"), ignore=[], return_packed=True)
+
+
+def test_one_hot_to_fasta_packed_raises_batch_axes(tmp_path):
+	X = PackedSequence.from_one_hot(tangermeme.utils.random_one_hot((6, 4, 40),
+		random_state=1)).reshape(2, 3)
+	with pytest.raises(ValueError, match="must have shape"):
+		one_hot_to_fasta(X, str(tmp_path / "out.fa"))

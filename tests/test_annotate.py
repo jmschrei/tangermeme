@@ -479,3 +479,10 @@ def test_annotate_seqlets_packed(X, gata_seqlets):
 
 	assert torch.equal(idxs_packed, idxs)
 	assert torch.equal(pvals_packed, pvals)
+
+
+def test_annotate_seqlets_packed_raises_batch_axes(gata_seqlets):
+	X = PackedSequence.from_one_hot(random_one_hot((6, 4, 40),
+		random_state=1)).reshape(2, 3)
+	with pytest.raises(ValueError, match="must have shape"):
+		annotate_seqlets(X, gata_seqlets, "tests/data/test.meme")

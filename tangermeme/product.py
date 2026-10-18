@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from ._compat import _preserve_model_state, _resolve_device
 from .utils import _cat_packed
+from .utils import _check_one_batch_axis
 from .utils import _for_func
 from .utils import PackedSequence
 
@@ -128,6 +129,7 @@ def apply_pairwise(
 		concatenated across all batches.
 	"""
 
+	_check_one_batch_axis(X)
 	device = _resolve_device(device)
 	additional_func_kwargs = dict(additional_func_kwargs or {})
 	# Pass device as a string to downstream `func` to remain back-compatible
@@ -294,6 +296,7 @@ def apply_product(
 		concatenated across all batches.
 	"""
 
+	_check_one_batch_axis(X)
 	device = _resolve_device(device)
 	additional_func_kwargs = dict(additional_func_kwargs or {})
 	# Pass device as a string to downstream `func` to remain back-compatible
