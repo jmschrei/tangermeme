@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import os
+import json
+import math
 import random
 import warnings
 import functools
@@ -1173,6 +1176,418 @@ def random_one_hot(
 		ohe[i, choices, numpy.arange(shape[2])] = 1 
 
 	return torch.from_numpy(ohe)
+
+
+# The code of each of the four positions a packed byte holds, in order. The
+# first position sits in the two most significant bits.
+_PACKED_CODES = ((torch.arange(256)[:, None] >> torch.tensor([6, 4, 2, 0]))
+	& 3).to(torch.uint8)
+
+_PACKED_FORMAT_VERSION = 1
+
+
+class PackedSequence:
+	"""Sequences over a four-character alphabet stored at two bits a position.
+
+	A one-hot encoding spends four values on every position, which is four
+	bytes in int8 and sixteen in float32. A sequence over a four-character
+	alphabet needs two bits: a PackedSequence stores four positions in each
+	byte, sixteen times less than an int8 one-hot encoding. It is meant for
+	holding many sequences at once, such as genome-wide windows or their
+	dinucleotide shuffles, and decoding them a batch at a time with
+	`to_one_hot`.
+
+	Each character is stored as its index in `alphabet`, with the first of a
+	byte's four positions in its two most significant bits. A sequence whose
+	length is not a multiple of four ends in a partial byte whose unused bits
+	are zero. Two bits leave no code for an unknown character, encoded in a
+	one-hot encoding as an all-zero column, so these are stored as runs in
+	`n_runs`, and their bits are zero. Sequences with the same characters
+	therefore have the same bytes.
+
+	The sequences can have any number of leading batch axes, such as
+	`(n, n_shuffles)` for shuffles, but all have the same length. Indexing
+	selects along those axes and returns a PackedSequence, so a slice of a
+	large set is decoded without decoding the rest. A PackedSequence holds
+	only hard one-hot encodings: soft encodings and PWMs cannot be packed.
+
+
+	Parameters
+	----------
+	data: torch.Tensor, dtype=torch.uint8, shape=(*batch, ceil(length / 4))
+		The packed bytes of each sequence.
+
+	length: int
+		The number of positions in each sequence.
+
+	n_runs: torch.Tensor or None, shape=(n_runs, 3), optional
+		The runs of unknown characters, one row of (sequence, start, end) per
+		run, with `sequence` the index of the sequence in the flattened batch
+		axes and `end` exclusive. Rows are sorted by sequence and then by
+		start, and runs neither overlap nor touch. If None, there are no
+		unknown characters. Default is None.
+
+	alphabet: list or tuple of four str, optional
+		The characters that codes 0 to 3 stand for, in the order of the
+		channels of the one-hot encoding. Default is ('A', 'C', 'G', 'T').
+	"""
+
+	def __init__(
+		self,
+		data: torch.Tensor,
+		length: int,
+		n_runs: torch.Tensor | None = None,
+		alphabet: list[str] | tuple[str, ...] = ('A', 'C', 'G', 'T'),
+	) -> None:
+		if not isinstance(data, torch.Tensor) or data.dtype != torch.uint8:
+			raise ValueError("data must be a torch.Tensor with dtype uint8.")
+
+		if data.ndim == 0:
+			raise ValueError("data must have a last axis of packed bytes.")
+
+		length = int(length)
+		if length < 0 or data.shape[-1] != (length + 3) // 4:
+			raise ValueError("data holds {} bytes per sequence, but a length of "
+				"{} takes {}.".format(data.shape[-1], length, (length + 3) // 4))
+
+		alphabet = tuple(alphabet)
+		if len(alphabet) != 4:
+			raise ValueError("alphabet must have four characters but has {}."
+				.format(len(alphabet)))
+
+		n_rows = math.prod(data.shape[:-1])
+		if n_runs is None:
+			n_runs = torch.zeros((0, 3), dtype=torch.int64)
+
+		n_runs = torch.as_tensor(n_runs).cpu()
+		if n_runs.ndim != 2 or n_runs.shape[1] != 3 or (len(n_runs) > 0 and
+			n_runs.is_floating_point()):
+			raise ValueError("n_runs must be integers with shape (n_runs, 3).")
+
+		n_runs = n_runs.to(torch.int64)
+		if len(n_runs) > 0:
+			rows, starts, ends = n_runs.unbind(dim=1)
+			if (rows.min() < 0 or rows.max() >= n_rows or starts.min() < 0 or
+				ends.max() > length or (ends <= starts).any()):
+				raise ValueError("n_runs must lie within {} sequences of length "
+					"{}, with each end after its start.".format(n_rows, length))
+
+			later_row = rows[1:] > rows[:-1]
+			same_row = rows[1:] == rows[:-1]
+			if not (later_row | (same_row & (starts[1:] > ends[:-1]))).all():
+				raise ValueError("n_runs must be sorted by sequence and start, "
+					"and the runs of a sequence must neither overlap nor touch.")
+
+		self.data = data
+		self.length = length
+		self.n_runs = n_runs
+		self.alphabet = alphabet
+
+		# The runs of flattened sequence i are rows _n_ptr[i]:_n_ptr[i+1].
+		self._n_ptr = torch.zeros(n_rows + 1, dtype=torch.int64)
+		self._n_ptr[1:] = torch.cumsum(torch.bincount(n_runs[:, 0],
+			minlength=n_rows), dim=0)
+
+	@property
+	def shape(self) -> torch.Size:
+		"""The shape of the one-hot encoding, (*batch, 4, length)."""
+		return torch.Size((*self.data.shape[:-1], 4, self.length))
+
+	@property
+	def ndim(self) -> int:
+		"""The number of axes of the one-hot encoding."""
+		return self.data.ndim + 1
+
+	def __len__(self) -> int:
+		if self.data.ndim == 1:
+			raise TypeError("len() of a single packed sequence")
+
+		return self.data.shape[0]
+
+	def __repr__(self) -> str:
+		return "PackedSequence(shape={}, n_runs={}, alphabet={})".format(
+			tuple(self.shape), len(self.n_runs), ''.join(self.alphabet))
+
+	def __getitem__(self, index: Any) -> PackedSequence:
+		"""Select sequences along the batch axes.
+
+		The index is applied as it would be to a tensor whose shape is the
+		batch axes, so integers, slices, lists, integer and boolean tensors,
+		and tuples of these over several batch axes all work. Indexing the
+		character or position axes raises an IndexError: decode first.
+
+
+		Parameters
+		----------
+		index: int, slice, list, torch.Tensor, numpy.ndarray or tuple
+			The sequences to select.
+
+
+		Returns
+		-------
+		X: PackedSequence
+			The selected sequences, with their runs of unknown characters.
+		"""
+
+		batch, n_bytes = self.data.shape[:-1], self.data.shape[-1]
+		rows = torch.arange(math.prod(batch)).reshape(batch)[index]
+		flat = rows.reshape(-1)
+
+		data = self.data.reshape(math.prod(batch), n_bytes)[flat]
+		data = data.reshape(*rows.shape, n_bytes)
+
+		counts = self._n_ptr[flat + 1] - self._n_ptr[flat]
+		firsts = torch.repeat_interleave(self._n_ptr[flat], counts)
+		offsets = torch.repeat_interleave(torch.cumsum(counts, dim=0) - counts,
+			counts)
+
+		n_runs = self.n_runs[firsts + torch.arange(len(firsts)) - offsets]
+		n_runs[:, 0] = torch.repeat_interleave(torch.arange(len(flat)), counts)
+		return PackedSequence(data, self.length, n_runs, self.alphabet)
+
+	def reshape(self, *shape: int) -> PackedSequence:
+		"""Reshape the batch axes, keeping the order of the sequences.
+
+
+		Parameters
+		----------
+		*shape: int, or one tuple of int
+			The new batch axes, with at most one -1, as in `torch.reshape`.
+
+
+		Returns
+		-------
+		X: PackedSequence
+			The same sequences with batch axes `shape`.
+		"""
+
+		if len(shape) == 1 and isinstance(shape[0], (tuple, list, torch.Size)):
+			shape = tuple(shape[0])
+
+		data = self.data.reshape(*shape, self.data.shape[-1])
+		return PackedSequence(data, self.length, self.n_runs, self.alphabet)
+
+	@classmethod
+	def from_codes(
+		cls,
+		codes: torch.Tensor,
+		alphabet: list[str] | tuple[str, ...] = ('A', 'C', 'G', 'T'),
+	) -> PackedSequence:
+		"""Pack the index of every character into a PackedSequence.
+
+
+		Parameters
+		----------
+		codes: torch.Tensor or numpy.ndarray, shape=(*batch, length)
+			Integers from 0 to 3, the index of each character in `alphabet`,
+			or 4 for an unknown character.
+
+		alphabet: list or tuple of four str, optional
+			The characters that codes 0 to 3 stand for. Default is
+			('A', 'C', 'G', 'T').
+
+
+		Returns
+		-------
+		X: PackedSequence, shape=(*batch, 4, length)
+			The packed sequences.
+		"""
+
+		codes = torch.as_tensor(codes).cpu()
+		if codes.ndim == 0 or codes.is_floating_point() or codes.dtype == \
+			torch.bool:
+			raise ValueError("codes must be integers with a last axis of "
+				"positions.")
+
+		if codes.numel() > 0 and (codes.min() < 0 or codes.max() > 4):
+			raise ValueError("codes must be 0 to 3, or 4 for an unknown "
+				"character.")
+
+		batch, length = codes.shape[:-1], codes.shape[-1]
+		n_bytes = (length + 3) // 4
+
+		n_rows = math.prod(batch)
+		codes = codes.reshape(n_rows, length).to(torch.uint8)
+		quads = torch.zeros((n_rows, 4 * n_bytes), dtype=torch.uint8)
+		quads[:, :length] = codes & 3
+		quads = quads.reshape(n_rows, n_bytes, 4)
+		data = ((quads[..., 0] << 6) | (quads[..., 1] << 4) |
+			(quads[..., 2] << 2) | quads[..., 3])
+
+		is_n = (codes == 4).to(torch.int8)
+		zeros = torch.zeros((n_rows, 1), dtype=torch.int8)
+		edges = torch.diff(is_n, dim=1, prepend=zeros, append=zeros)
+		rows, starts = torch.nonzero(edges == 1, as_tuple=True)
+		ends = torch.nonzero(edges == -1, as_tuple=True)[1]
+
+		n_runs = torch.stack([rows, starts, ends], dim=1)
+		return cls(data.reshape(*batch, n_bytes), length, n_runs, alphabet)
+
+	@classmethod
+	def from_one_hot(
+		cls,
+		X: torch.Tensor,
+		alphabet: list[str] | tuple[str, ...] = ('A', 'C', 'G', 'T'),
+	) -> PackedSequence:
+		"""Pack a one-hot encoding into a PackedSequence.
+
+
+		Parameters
+		----------
+		X: torch.Tensor, shape=(*batch, 4, length)
+			A one-hot encoding of any dtype and device, in which an all-zero
+			column is an unknown character. Soft encodings raise a
+			ValueError.
+
+		alphabet: list or tuple of four str, optional
+			The characters of the four channels of `X`, in order. Default is
+			('A', 'C', 'G', 'T').
+
+
+		Returns
+		-------
+		X: PackedSequence, shape=(*batch, 4, length)
+			The packed sequences, with their tensors on the CPU.
+		"""
+
+		if not isinstance(X, torch.Tensor) or X.ndim < 2 or X.shape[-2] != 4:
+			raise ValueError("X must be a torch.Tensor with shape (*batch, 4, "
+				"length).")
+
+		_validate_input(X, "X", ohe=True, ohe_dim=-2, allow_N=True)
+
+		# `max` rather than `argmax`, which is much slower along this axis on
+		# the CPU, gives the same index for a one-hot encoding.
+		values, codes = X.max(dim=-2)
+		codes[values == 0] = 4
+		return cls.from_codes(codes, alphabet)
+
+	def to_codes(self, device: str | torch.device | None = None) -> torch.Tensor:
+		"""Decode the index of every character.
+
+
+		Parameters
+		----------
+		device: str, torch.device or None, optional
+			The device to decode on. The packed bytes are moved there first,
+			so only they cross to the device. If None, decode on the device
+			of `data`. Default is None.
+
+
+		Returns
+		-------
+		codes: torch.Tensor, dtype=torch.uint8, shape=(*batch, length)
+			The index of each character in `alphabet`, or 4 for an unknown
+			character.
+		"""
+
+		data = self.data if device is None else self.data.to(device)
+		n_rows, n_bytes = math.prod(data.shape[:-1]), data.shape[-1]
+		data = data.reshape(n_rows, n_bytes)
+
+		codes = _PACKED_CODES.to(data.device)[data.long()]
+		codes = codes.reshape(n_rows, 4 * n_bytes)[:, :self.length].contiguous()
+
+		if len(self.n_runs) > 0:
+			rows, starts, ends = self.n_runs.to(data.device).unbind(dim=1)
+			lengths = ends - starts
+			firsts = torch.repeat_interleave(torch.cumsum(lengths, dim=0) -
+				lengths, lengths)
+			positions = torch.repeat_interleave(starts, lengths) + torch.arange(
+				len(firsts), device=data.device) - firsts
+			codes[torch.repeat_interleave(rows, lengths), positions] = 4
+
+		return codes.reshape(*self.data.shape[:-1], self.length)
+
+	def to_one_hot(
+		self,
+		dtype: torch.dtype = torch.int8,
+		device: str | torch.device | None = None,
+	) -> torch.Tensor:
+		"""Decode the one-hot encoding.
+
+
+		Parameters
+		----------
+		dtype: torch.dtype, optional
+			The dtype of the one-hot encoding. Default is torch.int8.
+
+		device: str, torch.device or None, optional
+			The device to decode on. The packed bytes are moved there first,
+			so only they cross to the device. If None, decode on the device
+			of `data`. Default is None.
+
+
+		Returns
+		-------
+		X: torch.Tensor, shape=(*batch, 4, length)
+			The one-hot encoding, with an all-zero column for each unknown
+			character.
+		"""
+
+		codes = self.to_codes(device=device)
+		alphabet = torch.arange(4, dtype=torch.uint8, device=codes.device)
+		return (codes.unsqueeze(-2) == alphabet[:, None]).to(dtype)
+
+	def save(self, path: str | os.PathLike) -> None:
+		"""Write the sequences to a directory.
+
+		The directory holds `data.npy`, the packed bytes, `n_runs.npy`, the
+		runs of unknown characters, and `meta.json`, the length, the
+		alphabet and the version of the format. Read it back with `load`.
+
+
+		Parameters
+		----------
+		path: str or os.PathLike
+			The directory, which is created if needed. Files of these names
+			already in it are replaced.
+		"""
+
+		os.makedirs(path, exist_ok=True)
+		numpy.save(os.path.join(path, "data.npy"), self.data.cpu().numpy())
+		numpy.save(os.path.join(path, "n_runs.npy"), self.n_runs.numpy())
+
+		with open(os.path.join(path, "meta.json"), "w") as outfile:
+			json.dump({"format_version": _PACKED_FORMAT_VERSION, "length":
+				self.length, "alphabet": list(self.alphabet)}, outfile)
+
+	@classmethod
+	def load(cls, path: str | os.PathLike, mmap: bool = False) -> PackedSequence:
+		"""Read sequences written by `save`.
+
+
+		Parameters
+		----------
+		path: str or os.PathLike
+			The directory `save` wrote.
+
+		mmap: bool, optional
+			Whether to memory-map the packed bytes rather than read them, so
+			that indexing reads only the sequences it selects. The mapping is
+			copy-on-write: writing to `data` never changes the file. Default
+			is False.
+
+
+		Returns
+		-------
+		X: PackedSequence
+			The sequences.
+		"""
+
+		with open(os.path.join(path, "meta.json")) as infile:
+			meta = json.load(infile)
+
+		if meta.get("format_version") != _PACKED_FORMAT_VERSION:
+			raise ValueError("{} was written in format version {}, but this "
+				"version of tangermeme reads version {}.".format(path,
+				meta.get("format_version"), _PACKED_FORMAT_VERSION))
+
+		data = numpy.load(os.path.join(path, "data.npy"),
+			mmap_mode="c" if mmap else None)
+		n_runs = numpy.load(os.path.join(path, "n_runs.npy"))
+		return cls(torch.from_numpy(data), meta["length"],
+			torch.from_numpy(n_runs), meta["alphabet"])
 
 
 def chunk(
