@@ -1881,3 +1881,91 @@ def test_packed_sequence_from_codes_raises():
 	assert_raises(ValueError, PackedSequence.from_codes,
 		torch.tensor([[True, False]]))
 	assert_raises(ValueError, PackedSequence.from_codes, torch.tensor(3))
+
+
+@pytest.mark.parametrize("dtype", [torch.int8, torch.int64, torch.float32,
+	torch.float64])
+@pytest.mark.parametrize("value", [0.5, 2, -1, float('nan'), 'two ones'])
+def test_packed_sequence_from_one_hot_raises_values(dtype, value):
+	X = _packed_one_hot((3, 4, 21)).to(dtype)
+	if value == 'two ones':
+		X[1, :2, 5] = 1
+	elif dtype.is_floating_point or value in (2, -1):
+		X[1, 2, 5] = value
+	else:
+		pytest.skip("an integer dtype cannot hold {}".format(value))
+
+	assert_raises(ValueError, PackedSequence.from_one_hot, X)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.bool,
+	torch.int16, torch.int32])
+def test_packed_sequence_from_one_hot_other_dtypes(dtype):
+	X = _packed_one_hot((5, 4, 37))
+	X_packed = PackedSequence.from_one_hot(X.to(dtype))
+	X_ref = PackedSequence.from_one_hot(X)
+
+	assert torch.equal(X_packed.data, X_ref.data)
+	assert torch.equal(X_packed.n_runs, X_ref.n_runs)
+	assert torch.equal(X_packed.to_one_hot(dtype=dtype), X.to(dtype))
+
+
+def test_packed_sequence_from_one_hot_layouts():
+	X = _packed_one_hot((6, 4, 40))
+
+	# A strided view, a transposed copy read back as a view, and a tensor
+	# that requires a gradient all pack like the contiguous tensor.
+	X_strided = _packed_one_hot((6, 4, 80))[:, :, ::2]
+	X_transposed = X.permute(2, 0, 1).contiguous().permute(1, 2, 0)
+	X_grad = X.float().requires_grad_()
+
+	for X_ in X_strided, X_transposed, X_grad:
+		X_packed = PackedSequence.from_one_hot(X_)
+		assert torch.equal(X_packed.to_one_hot(), X_.detach().to(torch.int8))
+
+
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.int8, torch.int16,
+	torch.int32, torch.int64])
+def test_packed_sequence_from_codes_dtypes(dtype):
+	X = _packed_one_hot((5, 4, 30))
+	X_packed = PackedSequence.from_one_hot(X)
+	codes = X_packed.to_codes()
+
+	X_codes = PackedSequence.from_codes(codes.to(dtype))
+	assert torch.equal(X_codes.data, X_packed.data)
+	assert torch.equal(X_codes.n_runs, X_packed.n_runs)
+	assert torch.equal(PackedSequence.from_codes(codes[:, ::2].to(dtype)
+		).to_codes(), codes[:, ::2])
+
+
+@pytest.mark.parametrize("index", [None, Ellipsis, (Ellipsis, 1), (1,
+	Ellipsis), -1, (-1, -2), (None, 2), (slice(None), [0, 2, 2]),
+	(slice(1, None), 0), ([3, 0], slice(None)), ([[0, 1], [3, 3]], [[1, 2],
+	[0, 0]]), "mask", "row_mask", (slice(0, 0),), ([],)])
+def test_packed_sequence_getitem_forms(index):
+	X = _packed_one_hot((4, 3, 4, 23))
+	X[2, 1, :, 3:9] = 0
+	X_packed = PackedSequence.from_one_hot(X)
+
+	if index == "mask":
+		index = torch.tensor([[True, False, True], [False, False, False],
+			[True, True, False], [False, True, True]])
+	elif index == "row_mask":
+		index = numpy.array([True, False, True, True])
+
+	# Indexing the batch axes only: the channel and length axes are kept.
+	tuple_index = index if isinstance(index, tuple) else (index,)
+	X_ref = X[(*tuple_index, slice(None), slice(None))]
+
+	X_index = X_packed[index]
+	assert X_index.shape == X_ref.shape
+	assert torch.equal(X_index.to_one_hot(), X_ref)
+	X_ref_packed = PackedSequence.from_one_hot(X_ref)
+	assert torch.equal(X_index.data, X_ref_packed.data)
+	assert torch.equal(X_index.n_runs, X_ref_packed.n_runs)
+
+
+def test_packed_sequence_getitem_view():
+	# A slice of the bytes is a view, as it is for a tensor.
+	X_packed = PackedSequence.from_one_hot(_packed_one_hot((6, 4, 23)))
+	assert X_packed[1:4].data.data_ptr() == X_packed.data[1].data_ptr()

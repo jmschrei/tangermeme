@@ -1186,6 +1186,207 @@ _PACKED_CODES = ((torch.arange(256)[:, None] >> torch.tensor([6, 4, 2, 0]))
 _PACKED_FORMAT_VERSION = 1
 
 
+# The dtypes the packing kernels read and write directly. A one-hot encoding
+# of another dtype, such as float16, goes through int8.
+_PACKED_KERNEL_DTYPES = (torch.int8, torch.uint8, torch.int16, torch.int32,
+	torch.int64, torch.float32, torch.float64, torch.bool)
+
+
+@numba.njit(nogil=True, cache=True)
+def _pack_row(codes, data, i, length):
+	"""Pack the character indices `codes[:length]`, with 4 for an unknown
+	character, into row `i` of `data`, four to a byte, and return the number
+	of runs of unknown characters."""
+
+	n_full = length // 4
+	for b in range(n_full):
+		data[i, b] = (((codes[4 * b] & 3) << 6) | ((codes[4 * b + 1] & 3) << 4)
+			| ((codes[4 * b + 2] & 3) << 2) | (codes[4 * b + 3] & 3))
+
+	if length % 4 != 0:
+		byte = 0
+		for j in range(4 * n_full, length):
+			byte = (byte << 2) | (codes[j] & 3)
+		data[i, n_full] = byte << (2 * (4 - length % 4))
+
+	runs, previous = 0, False
+	for j in range(length):
+		unknown = codes[j] == 4
+		runs += unknown and not previous
+		previous = unknown
+
+	return runs
+
+
+@numba.njit(nogil=True, cache=True)
+def _pack_codes_kernel(codes, data, n_runs):
+	"""Pack each row of character indices, `codes`, into the same row of
+	`data` and count its runs of unknown characters, 4, into `n_runs`.
+	Returns the number of indices outside 0 to 4."""
+
+	n_rows, length = codes.shape
+	invalid = 0
+	for i in range(n_rows):
+		for j in range(length):
+			invalid += codes[i, j] < 0 or codes[i, j] > 4
+
+		n_runs[i] = _pack_row(codes[i], data, i, length)
+
+	return invalid
+
+
+@numba.njit(nogil=True, cache=True)
+def _pack_one_hot_kernel(X, data, n_runs):
+	"""Pack each one-hot encoded row of `X`, shape (n, 4, length), into the
+	same row of `data` and count its runs of all-zero columns into `n_runs`.
+	Returns the number of columns with a value other than 0 or 1, or with
+	more than one 1.
+
+	Each row's character indices are found first without branches, so that
+	the loop over positions vectorizes, and then packed.
+	"""
+
+	n_rows, length = X.shape[0], X.shape[2]
+	codes = numpy.empty(length, dtype=numpy.uint8)
+	invalid = 0
+	for i in range(n_rows):
+		for j in range(length):
+			v0, v1, v2, v3 = X[i, 0, j], X[i, 1, j], X[i, 2, j], X[i, 3, j]
+			o1, o2, o3 = numpy.uint8(v1 == 1), numpy.uint8(v2 == 1), numpy.uint8(
+				v3 == 1)
+			ones = numpy.uint8(v0 == 1) + o1 + o2 + o3
+			zeros = (numpy.uint8(v0 == 0) + numpy.uint8(v1 == 0) +
+				numpy.uint8(v2 == 0) + numpy.uint8(v3 == 0))
+
+			invalid += ones + zeros != 4 or ones > 1
+			codes[j] = numpy.uint8(4) if ones == 0 else o1 + 2 * o2 + 3 * o3
+
+		n_runs[i] = _pack_row(codes, data, i, length)
+
+	return invalid
+
+
+@numba.njit(nogil=True, cache=True)
+def _codes_runs_kernel(codes, run_ptr, runs):
+	"""Write the runs of 4 in each row i of `codes` to `runs` from row
+	`run_ptr[i]`, as (row, start, end)."""
+
+	n_rows, length = codes.shape
+	for i in range(n_rows):
+		r = run_ptr[i]
+		if r == run_ptr[i + 1]:
+			continue
+
+		for j in range(length):
+			if codes[i, j] != 4:
+				continue
+
+			if j == 0 or codes[i, j - 1] != 4:
+				runs[r, 0] = i
+				runs[r, 1] = j
+
+			if j == length - 1 or codes[i, j + 1] != 4:
+				runs[r, 2] = j + 1
+				r += 1
+
+
+@numba.njit(nogil=True, cache=True)
+def _one_hot_runs_kernel(X, run_ptr, runs):
+	"""Write the runs of all-zero columns in each row i of `X`, shape
+	(n, 4, length), to `runs` from row `run_ptr[i]`, as (row, start, end)."""
+
+	n_rows, length = X.shape[0], X.shape[2]
+	for i in range(n_rows):
+		r = run_ptr[i]
+		if r == run_ptr[i + 1]:
+			continue
+
+		previous = False
+		for j in range(length):
+			unknown = (X[i, 0, j] == 0 and X[i, 1, j] == 0 and X[i, 2, j] == 0
+				and X[i, 3, j] == 0)
+			if unknown and not previous:
+				runs[r, 0] = i
+				runs[r, 1] = j
+			elif previous and not unknown:
+				runs[r, 2] = j
+				r += 1
+			previous = unknown
+
+		if previous:
+			runs[r, 2] = length
+
+
+@numba.njit(nogil=True, cache=True)
+def _unpack_row(data, i, run_ptr, runs, codes):
+	"""Decode row `i` of `data` into the character indices `codes`, of length
+	four times the bytes in a row, with 4 over the row's runs of unknown
+	characters."""
+
+	for b in range(data.shape[1]):
+		byte = data[i, b]
+		codes[4 * b] = byte >> 6
+		codes[4 * b + 1] = (byte >> 4) & 3
+		codes[4 * b + 2] = (byte >> 2) & 3
+		codes[4 * b + 3] = byte & 3
+
+	for r in range(run_ptr[i], run_ptr[i + 1]):
+		for j in range(runs[r, 1], runs[r, 2]):
+			codes[j] = 4
+
+
+@numba.njit(nogil=True, cache=True)
+def _unpack_codes_kernel(data, length, run_ptr, runs, codes):
+	"""Decode the character index of every position of every row of `data`
+	into `codes`, with 4 over the runs of unknown characters."""
+
+	row = numpy.empty(4 * data.shape[1], dtype=numpy.uint8)
+	for i in range(data.shape[0]):
+		_unpack_row(data, i, run_ptr, runs, row)
+		for j in range(length):
+			codes[i, j] = row[j]
+
+
+@numba.njit(nogil=True, cache=True)
+def _unpack_one_hot_kernel(data, length, run_ptr, runs, X):
+	"""Decode every row of `data` into the one-hot encoding `X`, shape
+	(n, 4, length), writing every value, with all-zero columns over the runs
+	of unknown characters. Each row is decoded to character indices first,
+	and then each channel is written in order, which vectorizes."""
+
+	row = numpy.empty(4 * data.shape[1], dtype=numpy.uint8)
+	for i in range(data.shape[0]):
+		_unpack_row(data, i, run_ptr, runs, row)
+		for c in range(4):
+			for j in range(length):
+				X[i, c, j] = row[j] == c
+
+
+def _collect_runs(counts, fill):
+	"""Given the number of runs in each row, allocate the (row, start, end)
+	array of all of them, have `fill(run_ptr, runs)` write it, and return it
+	with the row pointer."""
+
+	run_ptr = numpy.zeros(len(counts) + 1, dtype=numpy.int64)
+	numpy.cumsum(counts, out=run_ptr[1:])
+	runs = numpy.empty((run_ptr[-1], 3), dtype=numpy.int64)
+	if len(runs) > 0:
+		fill(run_ptr, runs)
+
+	return torch.from_numpy(runs), run_ptr
+
+
+def _packed_alphabet(alphabet):
+	"""Return `alphabet` as a tuple, raising unless it has four characters."""
+
+	alphabet = tuple(alphabet)
+	if len(alphabet) != 4:
+		raise ValueError("alphabet must have four characters but has {}."
+			.format(len(alphabet)))
+
+	return alphabet
+
+
 class PackedSequence:
 	"""Sequences over a four-character alphabet stored at two bits a position.
 
@@ -1250,11 +1451,7 @@ class PackedSequence:
 			raise ValueError("data holds {} bytes per sequence, but a length of "
 				"{} takes {}.".format(data.shape[-1], length, (length + 3) // 4))
 
-		alphabet = tuple(alphabet)
-		if len(alphabet) != 4:
-			raise ValueError("alphabet must have four characters but has {}."
-				.format(len(alphabet)))
-
+		alphabet = _packed_alphabet(alphabet)
 		n_rows = math.prod(data.shape[:-1])
 		if n_runs is None:
 			n_runs = torch.zeros((0, 3), dtype=torch.int64)
@@ -1282,11 +1479,35 @@ class PackedSequence:
 		self.length = length
 		self.n_runs = n_runs
 		self.alphabet = alphabet
+		self._run_ptr = None
+		self._row_ids = None
 
-		# The runs of flattened sequence i are rows _n_ptr[i]:_n_ptr[i+1].
-		self._n_ptr = torch.zeros(n_rows + 1, dtype=torch.int64)
-		self._n_ptr[1:] = torch.cumsum(torch.bincount(n_runs[:, 0],
-			minlength=n_rows), dim=0)
+	@classmethod
+	def _from_parts(cls, data, length, n_runs, alphabet, run_ptr=None):
+		"""Build a PackedSequence from parts already known to be valid,
+		without the checks of the constructor."""
+
+		X = object.__new__(cls)
+		X.data = data
+		X.length = length
+		X.n_runs = n_runs
+		X.alphabet = alphabet
+		X._run_ptr = run_ptr
+		X._row_ids = None
+		return X
+
+	def _runs(self):
+		"""The runs as a numpy array, and the row pointer: the runs of
+		flattened sequence i are rows run_ptr[i] to run_ptr[i+1]."""
+
+		if self._run_ptr is None:
+			n_rows = math.prod(self.data.shape[:-1])
+			self._run_ptr = numpy.zeros(n_rows + 1, dtype=numpy.int64)
+			if len(self.n_runs) > 0:
+				numpy.cumsum(numpy.bincount(self.n_runs[:, 0].numpy(),
+					minlength=n_rows), out=self._run_ptr[1:])
+
+		return self.n_runs.numpy(), self._run_ptr
 
 	@property
 	def shape(self) -> torch.Size:
@@ -1330,21 +1551,34 @@ class PackedSequence:
 			The selected sequences, with their runs of unknown characters.
 		"""
 
-		batch, n_bytes = self.data.shape[:-1], self.data.shape[-1]
-		rows = torch.arange(math.prod(batch)).reshape(batch)[index]
-		flat = rows.reshape(-1)
+		index = index if isinstance(index, tuple) else (index,)
 
-		data = self.data.reshape(math.prod(batch), n_bytes)[flat]
-		data = data.reshape(*rows.shape, n_bytes)
+		# The trailing slice keeps an Ellipsis, or more indices than there
+		# are batch axes, off the axis of bytes.
+		data = self.data[(*index, slice(None))]
+		if len(self.n_runs) == 0:
+			return PackedSequence._from_parts(data, self.length, self.n_runs,
+				self.alphabet)
 
-		counts = self._n_ptr[flat + 1] - self._n_ptr[flat]
-		firsts = torch.repeat_interleave(self._n_ptr[flat], counts)
-		offsets = torch.repeat_interleave(torch.cumsum(counts, dim=0) - counts,
-			counts)
+		if self._row_ids is None:
+			self._row_ids = torch.arange(math.prod(self.data.shape[:-1]))
 
-		n_runs = self.n_runs[firsts + torch.arange(len(firsts)) - offsets]
-		n_runs[:, 0] = torch.repeat_interleave(torch.arange(len(flat)), counts)
-		return PackedSequence(data, self.length, n_runs, self.alphabet)
+		rows = self._row_ids.reshape(self.data.shape[:-1])[index]
+		rows = rows.reshape(-1).numpy()
+
+		runs, run_ptr = self._runs()
+		counts = run_ptr[rows + 1] - run_ptr[rows]
+		firsts = numpy.cumsum(counts) - counts
+		selected = numpy.repeat(run_ptr[rows] - firsts, counts) + numpy.arange(
+			counts.sum())
+
+		n_runs = runs[selected]
+		n_runs[:, 0] = numpy.repeat(numpy.arange(len(rows)), counts)
+
+		new_ptr = numpy.zeros(len(rows) + 1, dtype=numpy.int64)
+		numpy.cumsum(counts, out=new_ptr[1:])
+		return PackedSequence._from_parts(data, self.length,
+			torch.from_numpy(n_runs), self.alphabet, new_ptr)
 
 	def reshape(self, *shape: int) -> PackedSequence:
 		"""Reshape the batch axes, keeping the order of the sequences.
@@ -1367,7 +1601,8 @@ class PackedSequence:
 			shape = tuple(shape[0])
 
 		data = self.data.reshape(*shape, self.data.shape[-1])
-		return PackedSequence(data, self.length, self.n_runs, self.alphabet)
+		return PackedSequence._from_parts(data, self.length, self.n_runs,
+			self.alphabet, self._run_ptr)
 
 	@classmethod
 	def from_codes(
@@ -1395,35 +1630,28 @@ class PackedSequence:
 			The packed sequences.
 		"""
 
-		codes = torch.as_tensor(codes).cpu()
-		if codes.ndim == 0 or codes.is_floating_point() or codes.dtype == \
-			torch.bool:
+		codes = torch.as_tensor(codes)
+		if (codes.ndim == 0 or codes.is_floating_point() or codes.is_complex()
+			or codes.dtype == torch.bool):
 			raise ValueError("codes must be integers with a last axis of "
 				"positions.")
 
-		if codes.numel() > 0 and (codes.min() < 0 or codes.max() > 4):
+		alphabet = _packed_alphabet(alphabet)
+		batch, length = codes.shape[:-1], codes.shape[-1]
+		n_rows = math.prod(batch)
+		codes = numpy.ascontiguousarray(codes.detach().cpu().reshape(n_rows,
+			length).numpy())
+
+		data = numpy.empty((n_rows, (length + 3) // 4), dtype=numpy.uint8)
+		counts = numpy.empty(n_rows, dtype=numpy.int64)
+		if _pack_codes_kernel(codes, data, counts) > 0:
 			raise ValueError("codes must be 0 to 3, or 4 for an unknown "
 				"character.")
 
-		batch, length = codes.shape[:-1], codes.shape[-1]
-		n_bytes = (length + 3) // 4
-
-		n_rows = math.prod(batch)
-		codes = codes.reshape(n_rows, length).to(torch.uint8)
-		quads = torch.zeros((n_rows, 4 * n_bytes), dtype=torch.uint8)
-		quads[:, :length] = codes & 3
-		quads = quads.reshape(n_rows, n_bytes, 4)
-		data = ((quads[..., 0] << 6) | (quads[..., 1] << 4) |
-			(quads[..., 2] << 2) | quads[..., 3])
-
-		is_n = (codes == 4).to(torch.int8)
-		zeros = torch.zeros((n_rows, 1), dtype=torch.int8)
-		edges = torch.diff(is_n, dim=1, prepend=zeros, append=zeros)
-		rows, starts = torch.nonzero(edges == 1, as_tuple=True)
-		ends = torch.nonzero(edges == -1, as_tuple=True)[1]
-
-		n_runs = torch.stack([rows, starts, ends], dim=1)
-		return cls(data.reshape(*batch, n_bytes), length, n_runs, alphabet)
+		n_runs, run_ptr = _collect_runs(counts, lambda run_ptr, runs:
+			_codes_runs_kernel(codes, run_ptr, runs))
+		data = torch.from_numpy(data).reshape(*batch, data.shape[1])
+		return cls._from_parts(data, length, n_runs, alphabet, run_ptr)
 
 	@classmethod
 	def from_one_hot(
@@ -1456,13 +1684,30 @@ class PackedSequence:
 			raise ValueError("X must be a torch.Tensor with shape (..., 4, "
 				"length).")
 
-		_validate_input(X, "X", ohe=True, ohe_dim=-2, allow_N=True)
+		alphabet = _packed_alphabet(alphabet)
+		if X.device.type != 'cpu' or X.dtype not in _PACKED_KERNEL_DTYPES:
+			_validate_input(X, "X", ohe=True, ohe_dim=-2, allow_N=True)
 
-		# `max` rather than `argmax`, which is much slower along this axis on
-		# the CPU, gives the same index for a one-hot encoding.
-		values, codes = X.max(dim=-2)
-		codes[values == 0] = 4
-		return cls.from_codes(codes, alphabet)
+			# `max` rather than `argmax`, which is much slower along this axis
+			# on the CPU, gives the same index for a one-hot encoding.
+			values, codes = X.max(dim=-2)
+			codes[values == 0] = 4
+			return cls.from_codes(codes, alphabet)
+
+		batch, length = X.shape[:-2], X.shape[-1]
+		n_rows = math.prod(batch)
+		X = numpy.ascontiguousarray(X.detach().reshape(n_rows, 4,
+			length).numpy())
+
+		data = numpy.empty((n_rows, (length + 3) // 4), dtype=numpy.uint8)
+		counts = numpy.empty(n_rows, dtype=numpy.int64)
+		if _pack_one_hot_kernel(X, data, counts) > 0:
+			raise ValueError("X must be one-hot encoded.")
+
+		n_runs, run_ptr = _collect_runs(counts, lambda run_ptr, runs:
+			_one_hot_runs_kernel(X, run_ptr, runs))
+		data = torch.from_numpy(data).reshape(*batch, data.shape[1])
+		return cls._from_parts(data, length, n_runs, alphabet, run_ptr)
 
 	def to_codes(self, device: str | torch.device | None = None) -> torch.Tensor:
 		"""Decode the index of every character.
@@ -1484,23 +1729,32 @@ class PackedSequence:
 			character.
 		"""
 
-		data = self.data if device is None else self.data.to(device)
-		n_rows, n_bytes = math.prod(data.shape[:-1]), data.shape[-1]
-		data = data.reshape(n_rows, n_bytes)
+		device = self.data.device if device is None else torch.device(device)
+		batch, n_bytes = self.data.shape[:-1], self.data.shape[-1]
+		n_rows = math.prod(batch)
+		runs, run_ptr = self._runs()
 
-		codes = _PACKED_CODES.to(data.device)[data.long()]
+		if device.type == 'cpu':
+			data = numpy.ascontiguousarray(self.data.cpu().reshape(n_rows,
+				n_bytes).numpy())
+			codes = numpy.empty((n_rows, self.length), dtype=numpy.uint8)
+			_unpack_codes_kernel(data, self.length, run_ptr, runs, codes)
+			return torch.from_numpy(codes).reshape(*batch, self.length)
+
+		data = self.data.to(device).reshape(n_rows, n_bytes)
+		codes = _PACKED_CODES.to(device)[data.long()]
 		codes = codes.reshape(n_rows, 4 * n_bytes)[:, :self.length].contiguous()
 
-		if len(self.n_runs) > 0:
-			rows, starts, ends = self.n_runs.to(data.device).unbind(dim=1)
+		if len(runs) > 0:
+			rows, starts, ends = torch.from_numpy(runs).to(device).unbind(dim=1)
 			lengths = ends - starts
 			firsts = torch.repeat_interleave(torch.cumsum(lengths, dim=0) -
 				lengths, lengths)
 			positions = torch.repeat_interleave(starts, lengths) + torch.arange(
-				len(firsts), device=data.device) - firsts
+				len(firsts), device=device) - firsts
 			codes[torch.repeat_interleave(rows, lengths), positions] = 4
 
-		return codes.reshape(*self.data.shape[:-1], self.length)
+		return codes.reshape(*batch, self.length)
 
 	def to_one_hot(
 		self,
@@ -1529,9 +1783,24 @@ class PackedSequence:
 			character.
 		"""
 
-		codes = self.to_codes(device=device)
-		alphabet = torch.arange(4, dtype=torch.uint8, device=codes.device)
-		return (codes.unsqueeze(-2) == alphabet[:, None]).to(dtype)
+		device = self.data.device if device is None else torch.device(device)
+		if device.type != 'cpu':
+			codes = self.to_codes(device=device)
+			alphabet = torch.arange(4, dtype=torch.uint8, device=device)
+			return (codes.unsqueeze(-2) == alphabet[:, None]).to(dtype)
+
+		batch, n_bytes = self.data.shape[:-1], self.data.shape[-1]
+		n_rows = math.prod(batch)
+		runs, run_ptr = self._runs()
+		data = numpy.ascontiguousarray(self.data.cpu().reshape(n_rows,
+			n_bytes).numpy())
+
+		kernel_dtype = dtype if dtype in _PACKED_KERNEL_DTYPES else torch.int8
+		X = torch.empty((n_rows, 4, self.length), dtype=kernel_dtype)
+		_unpack_one_hot_kernel(data, self.length, run_ptr, runs, X.numpy())
+
+		X = X.reshape(*batch, 4, self.length)
+		return X if kernel_dtype == dtype else X.to(dtype)
 
 	def save(self, path: str | os.PathLike) -> None:
 		"""Write the sequences to a directory.
