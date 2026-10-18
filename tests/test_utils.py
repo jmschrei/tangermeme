@@ -2026,6 +2026,30 @@ def test_for_func():
 	assert _for_func(X, marked) is X
 
 
+def test_for_func_wraps():
+	# functools.wraps copies a function's attributes onto its wrapper, but a
+	# wrapper the user writes still receives the int8 one-hot encoding, and
+	# so does a callable object, which may not be hashable.
+	X = _packed_one_hot((3, 4, 20))
+	X_packed = PackedSequence.from_one_hot(X)
+
+	@functools.wraps(predict)
+	def wrapped(model, X, **kwargs):
+		return X
+
+	X_decoded = _for_func(X_packed, wrapped)
+	assert X_decoded.dtype == torch.int8
+	assert torch.equal(X_decoded, X)
+
+	class Unhashable:
+		__hash__ = None
+
+		def __call__(self, model, X, **kwargs):
+			return X
+
+	assert torch.equal(_for_func(X_packed, Unhashable()), X)
+
+
 ###
 # The sequence helpers take a PackedSequence and give the result of its
 # one-hot encoding.

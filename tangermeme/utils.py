@@ -203,11 +203,17 @@ def _check_one_batch_axis(X, name="X"):
 			tuple(X.shape), (-1, len(X.alphabet), -1)))
 
 
+# The functions marked by _accepts_packed, by id. An attribute would be
+# copied by functools.wraps onto a wrapper that may not take a
+# PackedSequence; holding the functions keeps their ids from being reused.
+_PACKED_FUNCS = {}
+
+
 def _accepts_packed(func):
 	"""Mark `func` as taking a PackedSequence as `X`, so that a function
 	given it as `func` can pass a PackedSequence on rather than decode it."""
 
-	func._accepts_packed = True
+	_PACKED_FUNCS[id(func)] = func
 	return func
 
 
@@ -223,7 +229,7 @@ def _for_func(X, func):
 	while isinstance(inner, functools.partial):
 		inner = inner.func
 
-	return X if getattr(inner, "_accepts_packed", False) else X.to_one_hot()
+	return X if _PACKED_FUNCS.get(id(inner)) is inner else X.to_one_hot()
 
 
 def validate_input(
