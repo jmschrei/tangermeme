@@ -712,7 +712,6 @@ def test_plot_attributions_packed():
 	# A PackedSequence is passed on to func and gives the attributions of its
 	# one-hot encoding.
 	from tangermeme.plot import plot_attributions
-	from tangermeme.deep_lift_shap import deep_lift_shap
 	from tangermeme.utils import PackedSequence
 	from tangermeme.utils import random_one_hot
 
