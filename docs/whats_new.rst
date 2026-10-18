@@ -34,6 +34,8 @@ Claude Code skill
 
 	- ``references/seqlets.md`` no longer says never to set ``min_seqlet_len`` to 1, advice that dates from ``recursive_seqlets`` calling nearly every position at that value (fixed below). It says instead that a value of 1 requires every position of a seqlet to pass the threshold on its own.
 
+	- ``references/seqlets.md`` describes the ``p-value`` column as a ranking score rather than an error rate, drops the advice that large runs often use ``threshold=0.001``, and gives a recipe for choosing the threshold with ``X_control`` on several dinucleotide shuffles. It replaces the advice to call negative seqlets on ``attr_sums.abs()`` with negating the attributions.
+
 	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
 
 deep_lift_shap
@@ -130,6 +132,12 @@ seqlet
 	- ``recursive_seqlets`` returns an empty frame for a constant input, where every span of a given length has the same sum and none can be significant, and for sequences shorter than ``min_seqlet_len``. The first raised ``ZeroDivisionError`` from a bin width of zero. The second wrote past the end of an array, which sometimes crashed the interpreter and sometimes returned an empty frame.
 
 	- Together, these change the calls on real attributions modestly and leave the run time unchanged. On count-head DeepLIFT/SHAP attributions of 1,000 summit-centred 2,114bp peaks each, at the default threshold, 94% (CTCF ChIP-seq, BPNet), 92% (GATA2 ChIP-seq, BPNet) and 89% (ATAC-seq, ChromBPNet) of the seqlets now called are the same spans as before, every one overlaps a seqlet called before, and 0.4% to 3% fewer are called. A call took 0.29 s against 0.29 s (CTCF) and 0.49 s against 0.51 s (ATAC-seq) on one CPU thread.
+
+	- ``recursive_seqlets`` can choose its threshold from control attributions. Given ``X_control``, such as the attributions of several dinucleotide shuffles of each sequence concatenated, it calls seqlets on the control with the same null distributions and bins as on ``X`` at 117 thresholds from 0.1 to 1e-30, estimates the false discovery rate at each as the number of control seqlets plus one, scaled to the size of ``X``, over the number called on ``X``, and calls seqlets at the largest threshold whose estimate is at or below ``target_fdr``, 0.1 by default. ``threshold`` is then ignored. The one added to the control count keeps a strict threshold at which a few seqlets are called on ``X`` and, by chance, none on the control from passing as an estimate of zero. If no threshold reaches the target, a ``TangermemeWarning`` gives the lowest estimate reached and no seqlets are returned. ``return_fdr=True`` returns a ``RecursiveSeqletsResult`` of the seqlets and the estimate at every threshold. Without ``X_control``, the calls are unchanged. A p-value threshold has no stated error rate, because the p-values treat positions as independent while attributions are correlated along the sequence: on count-head DeepLIFT/SHAP attributions of 1,000 peaks from each of seven models (ChromBPNet ATAC-seq, gReLU DNase-seq, BPNet CTCF, GATA2, JUNB and MAX ChIP-seq, and ProCapNet PRO-cap), an estimated 31% (CTCF) to 82% (PRO-cap) of the seqlets called at the default ``threshold=0.01`` were no more frequent than on dinucleotide-shuffled copies of the same peaks.
+
+	- The ``recursive_seqlets`` docstring says that its p-values rank spans rather than give error rates, and why, so that ``threshold=0.01`` does not mean that 1% of the calls are false, and it describes choosing the threshold with ``X_control``. For negative seqlets, it says to run on the negated attributions and drop those that overlap a positive seqlet. Running on the absolute values, as it used to suggest, pools both tails into one null, so negative seqlets weaker than the positive ones are never significant.
+
+	- ``recursive_seqlets`` raises a ``ValueError`` for a ``threshold`` that is NaN or above 1. It used to never return: its decoder stops at the first p-value at or above the threshold, and no p-value is NaN or above 1, so ``threshold=numpy.nan``, ``1.5`` or ``numpy.inf`` looped until the process was killed. A threshold of 1 is still accepted, and one of 0 or below still calls no seqlets.
 
 utils
 -----
