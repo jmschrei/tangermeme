@@ -9,7 +9,9 @@ from typing import Any, NamedTuple
 import numpy
 import torch
 
+from .utils import _for_func
 from .utils import _validate_input
+from .utils import PackedSequence
 from .utils import _cast_as_tensor
 from .utils import one_hot_encode
 
@@ -33,7 +35,7 @@ class SpaceResult(NamedTuple):
 
 def space(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	motifs: list[torch.Tensor | str],
 	spacing: torch.Tensor | numpy.ndarray | list,
 	start: int | None = None,
@@ -58,8 +60,12 @@ def space(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to have motifs inserted into.
+		A PackedSequence with one batch axis is passed on packed to `func`
+		when `func` takes one, such as `predict` and `deep_lift_shap`, and as
+		an int8 one-hot encoding otherwise. The motifs are substituted into
+		the packed sequences, so each copy with the motifs is packed too.
 
 	motifs: list of torch.tensor, shape=(-1, len(alphabet), motif_length)
 		A list of strings or of one-hot encoded versions of short motifs to
@@ -144,7 +150,8 @@ def space(
 
 	additional_func_kwargs = dict(additional_func_kwargs or {})
 
-	y_before = func(model, X, **kwargs, **additional_func_kwargs)
+	y_before = func(model, _for_func(X, func), **kwargs,
+		**additional_func_kwargs)
 	y_afters = []
 
 	for _spacing in tqdm(spacing, disable=not verbose):
@@ -153,7 +160,8 @@ def space(
 		X_perturb = multisubstitute(X, motifs, _spacing, start=start, 
 			alphabet=alphabet)
 
-		y_after = func(model, X_perturb, **kwargs, **additional_func_kwargs)
+		y_after = func(model, _for_func(X_perturb, func), **kwargs,
+			**additional_func_kwargs)
 		y_afters.append(y_after)
 
 	if isinstance(y_afters[0], torch.Tensor):

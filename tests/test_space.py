@@ -7,6 +7,7 @@ import pytest
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
 
 from tangermeme.space import space
 from tangermeme.ersatz import multisubstitute
@@ -778,3 +779,21 @@ def test_space_returns_named_tuple(X, device):
 	assert torch.equal(result.y_afters, y_afters)
 	assert isinstance(result, SpaceResult)
 	assert isinstance(result, tuple)
+
+
+###
+# A PackedSequence gives the predictions of its one-hot encoding.
+
+
+def test_space_packed(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X = X.clone()
+	X[5, :, 50:55] = 0
+	motifs, spacing = ["ACG", "TTNA"], [[2], [5], [9]]
+
+	y = space(model, X, motifs, spacing, device=device)
+	y_packed = space(model, PackedSequence.from_one_hot(X), motifs, spacing,
+		device=device)
+	assert torch.equal(y_packed.y_before, y.y_before)
+	assert torch.equal(y_packed.y_afters, y.y_afters)

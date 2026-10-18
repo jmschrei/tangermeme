@@ -12,6 +12,7 @@ import torch
 
 from tqdm import tqdm
 
+from .utils import _accepts_packed
 from .utils import _cat_packed
 from .utils import _numba_threads
 from .utils import _random_codes
@@ -601,6 +602,7 @@ def randomize(
 	return torch.stack(X_rands).permute(1, 0, 2, 3)
 
 
+@_accepts_packed
 def shuffle(
 	X: torch.Tensor | PackedSequence,
 	start: int = 0,
@@ -1055,6 +1057,7 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 	return (shuffled.unsqueeze(1) == alphabet[:, None]).to(torch.float32)
 
 
+@_accepts_packed
 def dinucleotide_shuffle(
 	X: torch.Tensor | PackedSequence,
 	start: int = 0,
@@ -1310,6 +1313,7 @@ def _local_shuffle_packed(X, n, bin_size, min_bin_size, rng, verbose,
 	return Y, len(starts), n_unshuffled
 
 
+@_accepts_packed
 def local_dinucleotide_shuffle(
 	X: torch.Tensor | PackedSequence,
 	n: int = 20,

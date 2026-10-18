@@ -11,6 +11,8 @@ import pytest
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
+from tangermeme.predict import predict
 
 from tangermeme.ablate import ablate
 from tangermeme.ablate import ablate_annotations
@@ -1214,3 +1216,57 @@ def test_ablate_annotations_returns_named_tuple(X, device):
 	assert torch.equal(result.y_befores, y_befores)
 	assert torch.equal(result.y_afters, y_afters)
 	assert isinstance(result, PerturbationAnnotationsResult)
+
+
+###
+# A PackedSequence is passed on packed to functions that take one and
+# decoded for others, with the predictions of its one-hot encoding.
+
+
+def _assert_same(y, y_packed):
+	if isinstance(y, torch.Tensor):
+		assert y_packed.dtype == y.dtype
+		assert torch.equal(y_packed, y)
+	else:
+		assert len(y_packed) == len(y)
+		for y_, y_packed_ in zip(y, y_packed):
+			_assert_same(y_, y_packed_)
+
+
+def _shuffle_one_hot(X, **kwargs):
+	# A shuffle not marked as taking a PackedSequence gets int8 one-hot.
+	assert isinstance(X, torch.Tensor)
+	return shuffle(X, **kwargs)
+
+
+def _predict_one_hot(model, X, **kwargs):
+	assert isinstance(X, torch.Tensor)
+	return predict(model, X, **kwargs)
+
+
+@pytest.mark.parametrize("shuffle_fn", [shuffle, dinucleotide_shuffle,
+	_shuffle_one_hot])
+@pytest.mark.parametrize("func", [predict, _predict_one_hot])
+def test_ablate_packed(X, shuffle_fn, func, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+
+	y = ablate(model, X, 20, 60, n=4, shuffle_fn=shuffle_fn, func=func,
+		random_state=0, device=device)
+	y_packed = ablate(model, PackedSequence.from_one_hot(X), 20, 60, n=4,
+		shuffle_fn=shuffle_fn, func=func, random_state=0, device=device)
+	_assert_same(y.y_before, y_packed.y_before)
+	_assert_same(y.y_after, y_packed.y_after)
+
+
+def test_ablate_annotations_packed(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	annotations = torch.tensor([[0, 5, 30], [3, 40, 70]])
+
+	y = ablate_annotations(model, X, annotations, n=3, random_state=0,
+		device=device)
+	y_packed = ablate_annotations(model, PackedSequence.from_one_hot(X),
+		annotations, n=3, random_state=0, device=device)
+	_assert_same(y.y_befores, y_packed.y_befores)
+	_assert_same(y.y_afters, y_packed.y_afters)

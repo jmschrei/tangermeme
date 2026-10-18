@@ -1583,6 +1583,11 @@ class PackedSequence:
 		return torch.Size((*self.data.shape[:-1], 4, self.length))
 
 	@property
+	def device(self) -> torch.device:
+		"""The device the packed bytes are on."""
+		return self.data.device
+
+	@property
 	def ndim(self) -> int:
 		"""The number of axes of the one-hot encoding."""
 		return self.data.ndim + 1
