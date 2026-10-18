@@ -68,9 +68,15 @@ no dedicated reference file, but here is where to look:
   length; `start`/`end` confine shuffles to a region). All but the two
   dinucleotide shuffles accept unknown characters in `X` as all-zero columns;
   `dinucleotide_shuffle` does with `allow_N=True`, shuffling each as a fifth
-  character.
+  character. `dinucleotide_shuffle(..., return_packed=True)`, or a
+  `PackedSequence` as `X`, returns a `PackedSequence` of batch shape
+  `(n_seqs, n)` instead of a one-hot tensor, with the same shuffles; `n_jobs`
+  splits the sequences across threads without changing the shuffles.
 - `tangermeme.utils` — `one_hot_encode` (returns int8; `n_jobs` > 1
-  helped only for sequences of about 8 Mbp or more), `characters`,
+  helped only for sequences of about 8 Mbp or more), `PackedSequence`
+  (four-letter sequences at 2 bits a position: `from_one_hot`, `to_one_hot`,
+  indexing over batch axes, `save`/`load`; unknown characters kept as runs;
+  soft encodings cannot be packed), `characters`,
   `random_one_hot`, `reverse_complement` (single sequence), `pwm_consensus`,
   `set_seed`, `gc_content`, etc.
 - `tangermeme.pisa.pisa` — per-position (PISA) attribution reusing the DLS hooks.

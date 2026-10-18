@@ -1214,8 +1214,8 @@ class PackedSequence:
 
 	Parameters
 	----------
-	data: torch.Tensor, dtype=torch.uint8, shape=(*batch, ceil(length / 4))
-		The packed bytes of each sequence.
+	data: torch.Tensor, dtype=torch.uint8, shape=(..., ceil(length / 4))
+		The packed bytes of each sequence, after any number of batch axes.
 
 	length: int
 		The number of positions in each sequence.
@@ -1290,7 +1290,8 @@ class PackedSequence:
 
 	@property
 	def shape(self) -> torch.Size:
-		"""The shape of the one-hot encoding, (*batch, 4, length)."""
+		"""The shape of the one-hot encoding: the batch axes, 4 and the
+		length."""
 		return torch.Size((*self.data.shape[:-1], 4, self.length))
 
 	@property
@@ -1351,8 +1352,9 @@ class PackedSequence:
 
 		Parameters
 		----------
-		*shape: int, or one tuple of int
-			The new batch axes, with at most one -1, as in `torch.reshape`.
+		shape: int, or one tuple of int
+			The new batch axes, given as separate integers or as one tuple,
+			with at most one -1, as in `torch.reshape`.
 
 
 		Returns
@@ -1378,7 +1380,7 @@ class PackedSequence:
 
 		Parameters
 		----------
-		codes: torch.Tensor or numpy.ndarray, shape=(*batch, length)
+		codes: torch.Tensor or numpy.ndarray, shape=(..., length)
 			Integers from 0 to 3, the index of each character in `alphabet`,
 			or 4 for an unknown character.
 
@@ -1389,7 +1391,7 @@ class PackedSequence:
 
 		Returns
 		-------
-		X: PackedSequence, shape=(*batch, 4, length)
+		X: PackedSequence, shape=(..., 4, length)
 			The packed sequences.
 		"""
 
@@ -1434,7 +1436,7 @@ class PackedSequence:
 
 		Parameters
 		----------
-		X: torch.Tensor, shape=(*batch, 4, length)
+		X: torch.Tensor, shape=(..., 4, length)
 			A one-hot encoding of any dtype and device, in which an all-zero
 			column is an unknown character. Soft encodings raise a
 			ValueError.
@@ -1446,12 +1448,12 @@ class PackedSequence:
 
 		Returns
 		-------
-		X: PackedSequence, shape=(*batch, 4, length)
+		X: PackedSequence, shape=(..., 4, length)
 			The packed sequences, with their tensors on the CPU.
 		"""
 
 		if not isinstance(X, torch.Tensor) or X.ndim < 2 or X.shape[-2] != 4:
-			raise ValueError("X must be a torch.Tensor with shape (*batch, 4, "
+			raise ValueError("X must be a torch.Tensor with shape (..., 4, "
 				"length).")
 
 		_validate_input(X, "X", ohe=True, ohe_dim=-2, allow_N=True)
@@ -1469,14 +1471,15 @@ class PackedSequence:
 		Parameters
 		----------
 		device: str, torch.device or None, optional
-			The device to decode on. The packed bytes are moved there first,
-			so only they cross to the device. If None, decode on the device
-			of `data`. Default is None.
+			The device to decode on. The packed bytes and the runs of
+			unknown characters are moved there first, so the decoded tensor
+			is built on the device. If None, decode on the device of `data`.
+			Default is None.
 
 
 		Returns
 		-------
-		codes: torch.Tensor, dtype=torch.uint8, shape=(*batch, length)
+		codes: torch.Tensor, dtype=torch.uint8, shape=(..., length)
 			The index of each character in `alphabet`, or 4 for an unknown
 			character.
 		"""
@@ -1513,14 +1516,15 @@ class PackedSequence:
 			The dtype of the one-hot encoding. Default is torch.int8.
 
 		device: str, torch.device or None, optional
-			The device to decode on. The packed bytes are moved there first,
-			so only they cross to the device. If None, decode on the device
-			of `data`. Default is None.
+			The device to decode on. The packed bytes and the runs of
+			unknown characters are moved there first, so the decoded tensor
+			is built on the device. If None, decode on the device of `data`.
+			Default is None.
 
 
 		Returns
 		-------
-		X: torch.Tensor, shape=(*batch, 4, length)
+		X: torch.Tensor, shape=(..., 4, length)
 			The one-hot encoding, with an all-zero column for each unknown
 			character.
 		"""

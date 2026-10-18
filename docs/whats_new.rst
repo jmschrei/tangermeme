@@ -32,6 +32,8 @@ Claude Code skill
 
 	- ``references/deep_lift_shap.md`` gives the seeds ``deep_lift_shap`` draws its references with, ``random_state + k`` for reference ``k`` of every example, and how to precompute the same references with ``dinucleotide_shuffle``, whose ``random_state`` now takes one seed per sequence.
 
+	- ``SKILL.md`` gives the new ``PackedSequence`` and ``dinucleotide_shuffle``'s new ``return_packed`` and ``n_jobs`` keywords.
+
 	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
 
 deep_lift_shap
@@ -51,6 +53,10 @@ ersatz
 	- ``dinucleotide_shuffle`` shuffles every sequence of a call in one numba call, which releases the GIL. It used to call the kernel once per sequence and build each sequence's transition table in Python around the call. The shuffles are bit-identical, for seeds beyond 32 bits, unknown characters, ``start`` and ``end``, and ``n=0`` included. On 64 sequences of 2,114bp on the CPU, one shuffle of each took 2.9 ms against 17.1 ms, and twenty of each 52 ms against 71 ms. ``_dinucleotide_shuffle`` keeps its signature and output.
 
 	- ``dinucleotide_shuffle`` takes one ``random_state`` per sequence, as a list, array or tensor of integers, as well as a single integer. Sequence ``i`` is then shuffled as ``dinucleotide_shuffle(X[i:i+1], random_state=random_state[i])`` would shuffle it, whatever else is in the batch, which is how ``deep_lift_shap`` seeds its references.
+
+	- ``dinucleotide_shuffle`` takes ``n_jobs``, 1 by default, or -1 for one thread per thread numba allows, capped by numba's ``NUMBA_NUM_THREADS``, and splits the sequences across that many threads. Each sequence seeds the generator of the thread it runs on, so the shuffles are the same for every value. On 64 sequences of 2,114bp on the CPU, twenty shuffles of each took 17 ms with ``n_jobs=8`` against 54 ms with one thread. On 10,000 windows of 2,114bp around K562 ATAC-seq peak summits, twenty shuffles of each took 2.1 s against 7.7 s, or 1.1 s returned as a ``PackedSequence``, below.
+
+	- ``dinucleotide_shuffle`` returns its shuffles as a ``PackedSequence`` when given ``return_packed=True``, or when ``X`` is a ``PackedSequence``, for which ``return_packed=False`` returns them one-hot encoded in int8. Each shuffle is packed as it is drawn, so neither a one-hot encoding of the shuffles nor their character indices are built. The shuffles are the same as those of the one-hot encoding, unknown characters included. Twenty shuffles of each of the 10,000 windows above, 1.69 GB as an int8 one-hot encoding, took the process to a peak of 8.7 GB returned one-hot and 1.4 GB returned packed, and 0.7 GB when ``X`` was packed too. On one thread they took 7.7 s one-hot and 6.5 s packed, and on eight threads 2.1 s and 1.1 s.
 
 	- ``dinucleotide_shuffle`` raised a ``RuntimeError`` from taking the maximum of an empty tensor on a region of one or two characters. Such a region keeps both of its ends, so its only shuffle is itself: one shuffle now returns it, and more than one raises the ``ValueError`` for identical shuffles.
 
@@ -116,6 +122,8 @@ saturation_mutagenesis
 
 utils
 -----
+
+	- ``PackedSequence`` holds sequences over an alphabet of four characters at two bits a position, sixteen times less than an int8 one-hot encoding. Unknown characters are kept as runs, so sequences with an assembly gap pack too. It is built with ``PackedSequence.from_one_hot`` or ``PackedSequence.from_codes`` and decoded with ``to_one_hot`` or ``to_codes`` on any device, moving only the packed bytes and runs there. It can have several batch axes, such as a sequence and its shuffles; indexing them as a tensor would be indexed returns a ``PackedSequence``, so part of a large set is decoded without the rest. ``save`` writes it to a directory of ``.npy`` files and ``load`` reads it back, memory-mapping the bytes with ``mmap=True``. Soft encodings and PWMs cannot be packed.
 
 	- ``one_hot_encode`` is faster, most of all for an alphabet of four ASCII characters such as the default. Its byte lookup table is built once per alphabet and ignore list rather than on every call, and the result is wrapped as the transpose of a numpy array rather than transposed in torch, with ``.type`` skipped for int8. For four ASCII characters, the sequence is copied with ``str.encode('ascii')`` rather than into a UTF-8 ``bytearray``, and each base's row is written as one 32-bit value, two bases at a time from 8,192 bases on, into an array that is not zeroed first. An unknown character is caught through the same lookup. On upper-cased hg38, each in a fresh process on one thread, a 10bp call took 1.36 us against 4.14 us, a 2,114bp window 2.45 us against 6.66 us, a 2Mbp region 0.24 ms against 2.02 ms, and chr1 0.12 s against 0.38 s. A 20-letter protein alphabet gains only on short calls: 300 amino acids took 2.44 us against 5.80 us. The returned values, dtypes and strides, and the errors raised, are unchanged, on 88 configurations of input, dtype and thread count and on every sequence of hg38. A sequence with many unknown characters uses more memory than before: the array was zero-filled, and the pages of rows with no 1 were never written, while every row is now written. An all-N 10Mbp sequence peaked at 38 MiB against 10 MiB, and chr1 at 1,177 MiB against 1,111 MiB. The first call in a new environment compiles more numba kernels: importing ``tangermeme.utils`` and encoding 10bp took 0.70 s against 0.48 s, once.
 
