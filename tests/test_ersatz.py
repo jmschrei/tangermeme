@@ -1307,7 +1307,9 @@ def test_dinucleotide_shuffle_packed_verbose(return_packed):
 
 @pytest.mark.parametrize("n_jobs", [2, 4, -1])
 @pytest.mark.parametrize("return_packed", [False, True])
-def test_dinucleotide_shuffle_n_jobs(n_jobs, return_packed):
+def test_dinucleotide_shuffle_n_jobs(n_jobs, return_packed, monkeypatch):
+	# The threshold is lifted so that these small calls use the threads.
+	monkeypatch.setattr("tangermeme.ersatz._SHUFFLE_PARALLEL_MIN", 0)
 	X = _one_hot_with_N(9, 75, random_state=2)
 	X_shuf = dinucleotide_shuffle(X, n=3, random_state=4, allow_N=True,
 		return_packed=return_packed)
@@ -1324,13 +1326,53 @@ def test_dinucleotide_shuffle_n_jobs(n_jobs, return_packed):
 		assert torch.equal(X_shuf_jobs, X_shuf)
 
 
-def test_dinucleotide_shuffle_n_jobs_raises():
+def test_dinucleotide_shuffle_n_jobs_raises(monkeypatch):
 	# The check for identical shuffles still covers every sequence.
+	monkeypatch.setattr("tangermeme.ersatz._SHUFFLE_PARALLEL_MIN", 0)
 	X = random_one_hot((4, 4, 30), random_state=0)
 	X[2] = one_hot_encode('A' * 30)
 	assert_raises(ValueError, dinucleotide_shuffle, X, n=3, n_jobs=2)
 	assert_raises(ValueError, dinucleotide_shuffle, X, n=3, n_jobs=2,
 		return_packed=True)
+
+
+@pytest.mark.parametrize("return_packed", [False, True])
+def test_dinucleotide_shuffle_n_jobs_threshold(return_packed, monkeypatch):
+	# A call that shuffles fewer than _SHUFFLE_PARALLEL_MIN positions in all
+	# runs the serial kernel whatever n_jobs is, and a larger one the
+	# parallel kernel, with the same shuffles.
+	import tangermeme.ersatz
+
+	name = "_fast_shuffle_packed_parallel" if return_packed else \
+		"_fast_shuffle_parallel"
+	kernel, calls = getattr(tangermeme.ersatz, name), []
+
+	def counted(*args):
+		calls.append(1)
+		return kernel(*args)
+
+	monkeypatch.setattr(tangermeme.ersatz, name, counted)
+	X = _one_hot_with_N(4, 400, random_state=1)
+
+	# 4 sequences x 2 shuffles x 399 positions = 3,192 < 4,096.
+	X_small = dinucleotide_shuffle(X, end=-2, n=2, random_state=0,
+		allow_N=True, return_packed=return_packed, n_jobs=4)
+	assert len(calls) == 0
+
+	# 4 sequences x 3 shuffles x 400 positions = 4,800.
+	X_large = dinucleotide_shuffle(X, n=3, random_state=0, allow_N=True,
+		return_packed=return_packed, n_jobs=4)
+	assert len(calls) == 1
+
+	for X_, kw in ((X_small, dict(end=-2, n=2)), (X_large, dict(n=3))):
+		X_serial = dinucleotide_shuffle(X, random_state=0, allow_N=True,
+			return_packed=return_packed, n_jobs=1, **kw)
+		if return_packed:
+			_assert_packed_equal(X_, X_serial)
+		else:
+			assert torch.equal(X_, X_serial)
+
+	assert len(calls) == 1
 
 
 def test_dinucleotide_shuffle_packed_device(device):

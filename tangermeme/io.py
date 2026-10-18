@@ -860,7 +860,7 @@ def extract_loci(
 	exclusion_lists: str | os.PathLike | pandas.DataFrame | list | None = None,
 	return_mask: bool = False,
 	verbose: bool = False,
-	n_jobs: int = 8,
+	n_jobs: int = 4,
 	return_packed: bool = False,
 ) -> torch.Tensor | PackedSequence | list[torch.Tensor | PackedSequence]:
 	"""Extract sequence and signal information for each provided locus.
@@ -1058,7 +1058,7 @@ def extract_loci(
 		paths with, and that the sequences of a fasta file are read and
 		one-hot encoded with, or -1 for one per CPU. The encoding threads are
 		also capped by numba's NUMBA_NUM_THREADS. The returned values do not
-		depend on it. Default is 8.
+		depend on it. Default is 4.
 
 	return_packed: bool, optional
 		Whether to return the sequences as a PackedSequence rather than a

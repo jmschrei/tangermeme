@@ -71,8 +71,8 @@ no dedicated reference file, but here is where to look:
   length; `start`/`end` confine shuffles to a region). All but the two
   dinucleotide shuffles accept unknown characters in `X` as all-zero columns;
   `dinucleotide_shuffle` does with `allow_N=True`, shuffling each as a fifth
-  character. `dinucleotide_shuffle`'s `n_jobs` splits the sequences across
-  threads without changing the shuffles.
+  character. `dinucleotide_shuffle`'s `n_jobs` (default 4) splits the sequences
+  across threads without changing the shuffles.
 - `tangermeme.utils.PackedSequence` — four-letter sequences at 2 bits a
   position, 16x less than int8 one-hot; unknown characters kept as runs; soft
   encodings and PWMs cannot be packed. Make one with `from_one_hot(X)` or

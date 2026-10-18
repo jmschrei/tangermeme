@@ -26,7 +26,7 @@ extract_loci(
     exclusion_lists=None,  # BED path, DataFrame, or list of them
     return_mask=False,
     verbose=False,
-    n_jobs=8,             # threads for bigWig paths and FASTA windows; -1 = every CPU
+    n_jobs=4,             # threads for bigWig paths and FASTA windows; -1 = every CPU
     return_packed=False,  # True: element 0 is a PackedSequence, read and packed by chunk
 )
 ```
@@ -93,7 +93,7 @@ pybigtools object and 0.35 s with the path, at `n_jobs=8`.
 
 ### Threads and readers
 
-`n_jobs` (default 8) is the most threads `extract_loci` uses: figwig reads the
+`n_jobs` (default 4) is the most threads `extract_loci` uses: figwig reads the
 bigWig paths on them, and the windows of a FASTA path are read and one-hot
 encoded on them. The results are identical for every value. Pass `n_jobs=1`
 inside a DataLoader worker or any other process that already runs in

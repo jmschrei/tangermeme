@@ -21,7 +21,7 @@ def annotate_seqlets(
 	seqlets: pandas.DataFrame,
 	motifs: str | dict,
 	n_nearest: int = 1,
-	n_jobs: int = -1,
+	n_jobs: int = 4,
 	**kwargs: Any,
 ) -> tuple[pandas.DataFrame, list[str]]:
 	"""Annotate a set of seqlets according to a motif database using TOMTOM.
@@ -62,7 +62,7 @@ def annotate_seqlets(
 
 	n_jobs: int, optional
 		The number of threads to run TOMTOM on in parallel. -1 means use all
-		available threads. Default is -1.
+		available threads. Default is 4.
 
 	``**kwargs``: arguments, optional
 		Any other arguments to pass into the TOMTOM algorithm.

@@ -915,6 +915,12 @@ def _check_conserved(any_conserved, all_conserved, n_shuffles, verbose,
 			"sequences, potentially due to a lack of diversity in sequence.")
 
 
+# A call that shuffles fewer positions than this in all, the sequences times
+# the shuffles times the length of the region, runs on one thread: below it,
+# starting the threads took longer than they saved.
+_SHUFFLE_PARALLEL_MIN = 4096
+
+
 def _thread_count(n_jobs):
 	"""The threads `n_jobs` asks for, with -1 meaning one per thread numba
 	allows."""
@@ -929,10 +935,10 @@ def _shuffle_packed(codes, start, end, n_shuffles, random_states,
 	character, `n_shuffles` times, seeding sequence i with random_states[i].
 
 	The shuffles are those the one-hot path of `dinucleotide_shuffle` draws
-	for the same seeds.
-	Each is packed as it is drawn, so neither the shuffled character indices
-	nor a one-hot encoding of them is held for more than one sequence at a
-	time. Returns a PackedSequence of shape (n, n_shuffles, 4, length).
+	for the same seeds. Each is packed as it is drawn, so neither the
+	shuffled character indices nor a one-hot encoding of them is held for
+	more than one sequence at a time. Returns a PackedSequence of shape
+	(n, n_shuffles, 4, length).
 	"""
 
 	codes = numpy.ascontiguousarray(codes.cpu().numpy(), dtype=numpy.uint8)
@@ -952,7 +958,8 @@ def _shuffle_packed(codes, start, end, n_shuffles, random_states,
 
 	args = (codes, start, end, n_shuffles, random_states, run_ptr, data,
 		run_starts, run_ends, flags)
-	if n_jobs == 1 or n_seqs < 2:
+	if (n_jobs == 1 or n_seqs < 2 or
+			n_seqs * n_shuffles * (end - start) < _SHUFFLE_PARALLEL_MIN):
 		_fast_shuffle_packed(*args)
 	else:
 		with _numba_threads(_thread_count(n_jobs)):
@@ -1021,7 +1028,7 @@ def dinucleotide_shuffle(
 	verbose: bool = False,
 	allow_N: bool = False,
 	return_packed: bool | None = None,
-	n_jobs: int = 1,
+	n_jobs: int = 4,
 ) -> torch.Tensor | PackedSequence:
 	"""Given a one-hot encoded sequence, dinucleotide shuffle it.
 
@@ -1096,8 +1103,11 @@ def dinucleotide_shuffle(
 
 	n_jobs: int, optional
 		The number of threads to shuffle the sequences on, or -1 for one per
-		thread numba allows, capped by numba's NUMBA_NUM_THREADS. The shuffles
-		are the same for every value. Default is 1.
+		thread numba allows, capped by numba's NUMBA_NUM_THREADS. A call that
+		shuffles fewer than 4,096 positions in all, the sequences times the
+		shuffles times the length of the region, runs on one thread, since
+		starting the threads took longer than they saved. The shuffles are
+		the same for every value. Default is 4.
 
 
 	Returns
@@ -1162,7 +1172,7 @@ def dinucleotide_shuffle(
 
 	shuffled = numpy.empty((X.shape[0], n, idxs.shape[-1]), dtype=numpy.int32)
 	args = idxs, X.shape[1] + 1, n, random_states, shuffled
-	if n_jobs == 1 or X.shape[0] < 2:
+	if n_jobs == 1 or X.shape[0] < 2 or shuffled.size < _SHUFFLE_PARALLEL_MIN:
 		_fast_shuffle(*args)
 	else:
 		with _numba_threads(_thread_count(n_jobs)):
