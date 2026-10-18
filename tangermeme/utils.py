@@ -104,6 +104,10 @@ def _validate_input(
 		The same object, unmodified, for convenience.
 	"""
 	
+	if isinstance(X, PackedSequence):
+		return _validate_packed(X, name, shape, dtype, min_value, max_value,
+			ohe, allow_N, only_warn)
+
 	if not isinstance(X, torch.Tensor):
 		_warn_or_raise(ValueError, "{} must be a torch.Tensor object".format(
 			name), only_warn)
@@ -151,6 +155,59 @@ def _validate_input(
 					" characters.", only_warn)
 
 	return X
+
+
+def _validate_packed(X, name, shape, dtype, min_value, max_value, ohe,
+	allow_N, only_warn):
+	"""The checks of `_validate_input` for a PackedSequence, which decodes to
+	a one-hot encoding of any dtype, and so of values 0 and 1, without reading
+	its bytes."""
+
+	if shape is not None and (len(shape) != X.ndim or any(s != -1 and s != x
+		for s, x in zip(shape, X.shape))):
+		_warn_or_raise(ValueError, "{} has shape {} but must have shape {}"
+			.format(name, tuple(X.shape), shape), only_warn)
+
+	if dtype is not None:
+		_warn_or_raise(ValueError, "{} is a PackedSequence but must be a tensor "
+			"with dtype {}".format(name, dtype), only_warn)
+
+	if min_value is not None and min_value > 0:
+		_warn_or_raise(ValueError, "{} cannot have a value below {}".format(
+			name, min_value), only_warn)
+
+	if max_value is not None and max_value < 1:
+		_warn_or_raise(ValueError, "{} cannot have a value above {}".format(
+			name, max_value), only_warn)
+
+	if ohe and not allow_N and len(X.n_runs) > 0:
+		_warn_or_raise(ValueError, "{} must be one-hot encoded and cannot have "
+			"unknown characters.".format(name), only_warn)
+
+	return X
+
+
+def _accepts_packed(func):
+	"""Mark `func` as taking a PackedSequence as `X`, so that a function
+	given it as `func` can pass a PackedSequence on rather than decode it."""
+
+	func._accepts_packed = True
+	return func
+
+
+def _for_func(X, func):
+	"""Return `X` as `func` should be given it: a PackedSequence when `func`,
+	or the function a functools.partial wraps, was marked by
+	`_accepts_packed`, and otherwise its int8 one-hot encoding."""
+
+	if not isinstance(X, PackedSequence):
+		return X
+
+	inner = func
+	while isinstance(inner, functools.partial):
+		inner = inner.func
+
+	return X if getattr(inner, "_accepts_packed", False) else X.to_one_hot()
 
 
 def validate_input(
