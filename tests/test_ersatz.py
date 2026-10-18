@@ -1990,3 +1990,39 @@ def test_randomize_packed_raises_probs_width(width):
 	assert_raises(ValueError, randomize, PackedSequence.from_one_hot(X), 5, 15,
 		probs=probs)
 
+
+@pytest.mark.parametrize("name", list(_ERSATZ_CALLS) + ["dinucleotide_shuffle",
+	"local_dinucleotide_shuffle"])
+def test_ersatz_packed_alphabet(name):
+	# A PackedSequence over another alphabet gives packed output over that
+	# alphabet, with the sequences of the one-hot path.
+	calls = dict(_ERSATZ_CALLS, dinucleotide_shuffle=lambda X, **kw:
+		dinucleotide_shuffle(X, n=2, random_state=0, allow_N=True, **kw),
+		local_dinucleotide_shuffle=lambda X, **kw: local_dinucleotide_shuffle(
+		X, n=2, random_state=0, **kw))
+	X = _ersatz_X()
+	if name == "local_dinucleotide_shuffle":
+		X = random_one_hot((3, 4, 1200), random_state=1)
+
+	alphabet = ('A', 'C', 'G', 'U')
+	Y = calls[name](PackedSequence.from_one_hot(X, alphabet=alphabet))
+	assert Y.alphabet == alphabet
+	assert torch.equal(Y.to_one_hot(), calls[name](X).to(torch.int8))
+
+
+def test_local_dinucleotide_shuffle_packed_verbose_bins():
+	# Under verbose, every bin of three or more positions warns that its
+	# shuffle kept every position, as on the one-hot path, including bins of
+	# exactly three.
+	X = random_one_hot((2, 4, 30), random_state=0)
+
+	def count(X_):
+		with warnings.catch_warnings(record=True) as record:
+			warnings.simplefilter("always")
+			local_dinucleotide_shuffle(X_, n=1, bin_size=3, min_bin_size=3,
+				random_state=0, verbose=True)
+		return sum("identical across" in str(w.message) for w in record)
+
+	n_warnings = count(X)
+	assert n_warnings == 20
+	assert count(PackedSequence.from_one_hot(X)) == n_warnings

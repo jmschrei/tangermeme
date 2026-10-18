@@ -2294,3 +2294,15 @@ def test_chunk_packed_raises_batch_axes():
 
 	with pytest.raises(ValueError, match="one sequence"):
 		chunk([X[0]])
+
+
+@pytest.mark.parametrize("return_packed", [False, True])
+def test_random_one_hot_random_state(return_packed):
+	# The same seed gives the same sequences and another seed others.
+	def draw(seed):
+		X = random_one_hot((5, 4, 40), random_state=seed,
+			return_packed=return_packed)
+		return X.to_one_hot() if return_packed else X
+
+	assert torch.equal(draw(3), draw(3))
+	assert not torch.equal(draw(3), draw(4))

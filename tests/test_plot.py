@@ -732,3 +732,24 @@ def test_plot_attributions_packed():
 		PackedSequence.from_one_hot(X[0]), attribute_kwargs=kwargs)
 	assert torch.equal(X_attrs_packed, X_attrs)
 	plt.close('all')
+
+
+def test_plot_attributions_packed_user_func():
+	# A func of the user's is given the int8 one-hot encoding of a packed X.
+	from tangermeme.plot import plot_attributions
+	from tangermeme.utils import PackedSequence
+	from tangermeme.utils import random_one_hot
+
+	seen = []
+
+	def func(model, X, **kwargs):
+		seen.append(X.dtype)
+		return X.float() * 2
+
+	X = random_one_hot((2, 4, 30), random_state=0)
+	_, X_attrs = plot_attributions([None, None], X[0], func=func)
+	_, X_attrs_packed = plot_attributions([None, None],
+		PackedSequence.from_one_hot(X[0]), func=func)
+
+	assert seen[2:] == [torch.int8, torch.int8]
+	assert torch.equal(X_attrs_packed, X_attrs)

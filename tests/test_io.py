@@ -4408,3 +4408,39 @@ def test_one_hot_to_fasta_packed_raises_batch_axes(tmp_path):
 		random_state=1)).reshape(2, 3)
 	with pytest.raises(ValueError, match="must have shape"):
 		one_hot_to_fasta(X, str(tmp_path / "out.fa"))
+
+
+@pytest.mark.parametrize("reader", ["dict", "pyfaidx"])
+def test_extract_loci_packed_chunks_bounded(reader, dict_sequences,
+	monkeypatch):
+	# The windows of a dict or a pyfaidx.Fasta are read and packed a chunk at
+	# a time, two windows of 10 here, with the result of the one-hot path.
+	sequences = dict_sequences if reader == "dict" else pyfaidx.Fasta(
+		"tests/data/test.fa")
+	X = extract_loci("tests/data/test.bed", sequences, in_window=10)
+
+	monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", 25)
+	sizes, from_one_hot = [], PackedSequence.from_one_hot
+
+	def counted(X_, *args, **kwargs):
+		sizes.append(len(X_))
+		return from_one_hot(X_, *args, **kwargs)
+
+	monkeypatch.setattr(PackedSequence, "from_one_hot", counted)
+	X_packed = extract_loci("tests/data/test.bed", sequences, in_window=10,
+		return_packed=True)
+
+	assert torch.equal(X_packed.to_one_hot(), X)
+	assert max(sizes) == 2 and sum(sizes) == len(X)
+
+
+def test_extract_loci_packed_alphabet():
+	# The packed windows are labelled with the alphabet they were encoded in.
+	alphabet = list("TGCA")
+	X = extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
+		alphabet=alphabet)
+	X_packed = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		in_window=10, alphabet=alphabet, return_packed=True)
+
+	assert X_packed.alphabet == tuple(alphabet)
+	assert torch.equal(X_packed.to_one_hot(), X)

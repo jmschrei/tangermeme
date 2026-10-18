@@ -232,3 +232,18 @@ def test_greedy_substitution_packed(X, motifs, device):
 		device=device, max_iter=2)
 	assert isinstance(X_hat_packed, PackedSequence)
 	assert torch.equal(X_hat_packed.to_one_hot(), X_hat)
+
+
+def test_greedy_substitution_packed_alphabet(X, device):
+	# The design comes back labelled with `alphabet`, here an order other
+	# than ACGT.
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	y = [[10]]
+	alphabet = ['C', 'A', 'T', 'G']
+	motifs = ["ACGT", "TTT"]
+	X_packed = PackedSequence.from_one_hot(X, alphabet=alphabet)
+
+	X_hat = greedy_substitution(model, X_packed, y, motifs,
+		alphabet=alphabet, device=device, max_iter=1)
+	assert X_hat.alphabet == tuple(alphabet)

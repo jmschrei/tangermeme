@@ -58,3 +58,16 @@ def test_greedy_marginalize_packed(X_marg, motifs, device):
 		y, motifs, device=device, max_iter=2)
 	assert isinstance(X_hat_packed, PackedSequence)
 	assert torch.equal(X_hat_packed.to_one_hot(), X_hat)
+
+
+def test_greedy_marginalize_packed_alphabet(X_marg, device):
+	# The design comes back labelled with `alphabet`, here an order other
+	# than ACGT.
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	alphabet = ['C', 'A', 'T', 'G']
+	X_packed = PackedSequence.from_one_hot(X_marg, alphabet=alphabet)
+
+	X_hat = greedy_marginalize(model, X_packed, [[10.0]], ["ACGT", "TTT"],
+		alphabet=alphabet, device=device, max_iter=1)
+	assert X_hat.alphabet == tuple(alphabet)
