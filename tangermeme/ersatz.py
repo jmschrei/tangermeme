@@ -12,6 +12,7 @@ import torch
 
 from tqdm import tqdm
 
+from .utils import _numba_threads
 from .utils import _validate_input
 from .utils import one_hot_encode
 from .utils import random_one_hot
@@ -518,6 +519,44 @@ def shuffle(
 
 
 @numba.njit(nogil=True, cache=True)
+def _shuffle_sequence(idxs, n_chars, n_shuffles, random_state, shuffled):
+	"""Shuffle the character indices `idxs` of one sequence `n_shuffles`
+	times into the rows of `shuffled`, after seeding the generator with
+	`random_state`."""
+
+	seq_len = idxs.shape[0]
+	if seq_len == 0:
+		return
+
+	numpy.random.seed(random_state)
+
+	next_idxs = numpy.zeros((n_chars, seq_len), dtype=numpy.int32)
+	next_idxs_counts = numpy.zeros(n_chars, dtype=numpy.int32)
+	for j in range(seq_len - 1):
+		char = idxs[j]
+		next_idxs[char, next_idxs_counts[char]] = j + 1
+		next_idxs_counts[char] += 1
+
+	for i in range(n_shuffles):
+		for char in range(n_chars):
+			n = next_idxs_counts[char]
+
+			next_idxs_ = numpy.arange(n)
+			next_idxs_[:-1] = numpy.random.permutation(n-1)  # Keep last index
+			next_idxs[char, :n] = next_idxs[char, :n][next_idxs_]
+
+		counters = numpy.zeros(n_chars, dtype=numpy.int32)
+		idx = 0
+		shuffled[i, 0] = idxs[idx]
+		for j in range(1, seq_len):
+			char = idxs[idx]
+			idx = next_idxs[char, counters[char]]
+
+			counters[char] += 1
+			shuffled[i, j] = idxs[idx]
+
+
+@numba.njit(nogil=True, cache=True)
 def _fast_shuffle(idxs, n_chars, n_shuffles, random_states, shuffled):
 	"""An internal function for fast dinucleotide shuffling using numba.
 
@@ -527,37 +566,21 @@ def _fast_shuffle(idxs, n_chars, n_shuffles, random_states, shuffled):
 	do not depend on the other rows in the call. The GIL is released.
 	"""
 
-	n_seqs, seq_len = idxs.shape
-	if seq_len == 0:
-		return
+	for k in range(idxs.shape[0]):
+		_shuffle_sequence(idxs[k], n_chars, n_shuffles, random_states[k],
+			shuffled[k])
 
-	for k in range(n_seqs):
-		numpy.random.seed(random_states[k])
 
-		next_idxs = numpy.zeros((n_chars, seq_len), dtype=numpy.int32)
-		next_idxs_counts = numpy.zeros(n_chars, dtype=numpy.int32)
-		for j in range(seq_len - 1):
-			char = idxs[k, j]
-			next_idxs[char, next_idxs_counts[char]] = j + 1
-			next_idxs_counts[char] += 1
+@numba.njit(nogil=True, parallel=True, cache=True)
+def _fast_shuffle_parallel(idxs, n_chars, n_shuffles, random_states,
+	shuffled):
+	"""`_fast_shuffle` with the rows split across numba's threads. Each row
+	seeds the generator of the thread it runs on, so the shuffles are those
+	of `_fast_shuffle` for any number of threads."""
 
-		for i in range(n_shuffles):
-			for char in range(n_chars):
-				n = next_idxs_counts[char]
-
-				next_idxs_ = numpy.arange(n)
-				next_idxs_[:-1] = numpy.random.permutation(n-1)  # Keep last index
-				next_idxs[char, :n] = next_idxs[char, :n][next_idxs_]
-
-			counters = numpy.zeros(n_chars, dtype=numpy.int32)
-			idx = 0
-			shuffled[k, i, 0] = idxs[k, idx]
-			for j in range(1, seq_len):
-				char = idxs[k, idx]
-				idx = next_idxs[char, counters[char]]
-
-				counters[char] += 1
-				shuffled[k, i, j] = idxs[k, idx]
+	for k in numba.prange(idxs.shape[0]):
+		_shuffle_sequence(idxs[k], n_chars, n_shuffles, random_states[k],
+			shuffled[k])
 
 
 def _random_states(random_state, n):
@@ -584,14 +607,17 @@ def _random_states(random_state, n):
 	return random_states.astype(numpy.int64).astype(numpy.int32)
 
 
-def _shuffle_characters(X, n_shuffles, random_states, verbose=False):
+def _shuffle_characters(X, n_shuffles, random_states, verbose=False,
+	n_jobs=1):
 	"""Dinucleotide shuffle each sequence of X, shape (n, len(alphabet),
 	length), `n_shuffles` times, seeding sequence i with random_states[i].
 
 	Returns the character index of every position of every shuffle, shape
 	(n, n_shuffles, length), on the CPU. An unknown character, an all-zero
 	column, is shuffled as a character of its own, with index len(alphabet),
-	since its maximum would read it as the first character.
+	since its maximum would read it as the first character. The sequences
+	are split across `n_jobs` threads, or one per thread numba allows when
+	-1, which does not change the shuffles.
 	"""
 
 	# `max` rather than `argmax`, which was 150 times slower along this axis
@@ -602,7 +628,13 @@ def _shuffle_characters(X, n_shuffles, random_states, verbose=False):
 
 	shuffled = numpy.empty((X.shape[0], n_shuffles, X.shape[-1]),
 		dtype=numpy.int32)
-	_fast_shuffle(idxs, X.shape[1] + 1, n_shuffles, random_states, shuffled)
+	args = idxs, X.shape[1] + 1, n_shuffles, random_states, shuffled
+	if n_jobs == 1 or X.shape[0] < 2:
+		_fast_shuffle(*args)
+	else:
+		with _numba_threads(_thread_count(n_jobs)):
+			_fast_shuffle_parallel(*args)
+
 	shuffled = torch.from_numpy(shuffled)
 
 	# The first and last characters are always kept. `conserved` marks the
@@ -618,6 +650,13 @@ def _shuffle_characters(X, n_shuffles, random_states, verbose=False):
 			"sequences, potentially due to a lack of diversity in sequence.")
 
 	return shuffled
+
+
+def _thread_count(n_jobs):
+	"""The threads `n_jobs` asks for, with -1 meaning one per thread numba
+	allows."""
+
+	return numba.config.NUMBA_NUM_THREADS if n_jobs == -1 else int(n_jobs)
 
 
 def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
@@ -677,6 +716,7 @@ def dinucleotide_shuffle(
 	random_state: int | Sequence[int] | None = None,
 	verbose: bool = False,
 	allow_N: bool = False,
+	n_jobs: int = 1,
 ) -> torch.Tensor:
 	"""Given a one-hot encoded sequence, dinucleotide shuffle it.
 
@@ -737,6 +777,11 @@ def dinucleotide_shuffle(
 		unknown characters therefore stays one run but can move. If False,
 		an unknown character raises a ValueError. Default is False.
 
+	n_jobs: int, optional
+		The number of threads to shuffle the sequences on, or -1 for one per
+		thread numba allows, capped by numba's NUMBA_NUM_THREADS. The shuffles
+		are the same for every value. Default is 1.
+
 
 	Returns
 	-------
@@ -751,7 +796,8 @@ def dinucleotide_shuffle(
 		end = X.shape[-1] + 1 + end
 
 	shuffled = _shuffle_characters(X[:, :, start:end], n,
-		_random_states(random_state, X.shape[0]), verbose=verbose)
+		_random_states(random_state, X.shape[0]), verbose=verbose,
+		n_jobs=n_jobs)
 
 	X_shufs = X.unsqueeze(1).repeat(1, n, 1, 1)
 	alphabet = torch.arange(X.shape[1], device=X.device)

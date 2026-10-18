@@ -1,6 +1,7 @@
 # test_io.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import numba
 import numpy
 import torch
 import pytest
@@ -1144,6 +1145,41 @@ def test_dinucleotide_shuffle_two_characters():
 		assert (X_shuf[:, 0] == X).all()
 
 		assert_raises(ValueError, dinucleotide_shuffle, X, n=3)
+
+
+def _one_hot_with_N(n, length, random_state=0):
+	"""Random sequences with unknown characters at the start of the first, in
+	a run in the middle of the second, at the end of the third and scattered
+	through the fourth."""
+
+	X = random_one_hot((n, 4, length), random_state=random_state)
+	X[0, :, :3] = 0
+	X[1, :, length // 3:length // 3 + 6] = 0
+	if n > 2:
+		X[2, :, -2:] = 0
+	if n > 3:
+		X[3, :, ::9] = 0
+	return X
+
+
+@pytest.mark.parametrize("n_jobs", [2, 4, -1])
+def test_dinucleotide_shuffle_n_jobs(n_jobs):
+	X = _one_hot_with_N(9, 75, random_state=2)
+	X_shuf = dinucleotide_shuffle(X, n=3, random_state=4, allow_N=True)
+
+	n_threads = numba.get_num_threads()
+	X_shuf_jobs = dinucleotide_shuffle(X, n=3, random_state=4, allow_N=True,
+		n_jobs=n_jobs)
+	assert numba.get_num_threads() == n_threads
+	assert X_shuf_jobs.dtype == X_shuf.dtype
+	assert torch.equal(X_shuf_jobs, X_shuf)
+
+
+def test_dinucleotide_shuffle_n_jobs_raises():
+	# The check for identical shuffles still covers every sequence.
+	X = random_one_hot((4, 4, 30), random_state=0)
+	X[2] = one_hot_encode('A' * 30)
+	assert_raises(ValueError, dinucleotide_shuffle, X, n=3, n_jobs=2)
 
 
 ###
