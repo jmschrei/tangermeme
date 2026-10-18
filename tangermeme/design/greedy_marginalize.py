@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from ..utils import _cast_as_tensor
 from ..utils import one_hot_encode
+from ..utils import PackedSequence
 from ..utils import reverse_complement as rc
 
 from ..ersatz import substitute
@@ -21,7 +22,7 @@ from ..predict import predict
 
 def greedy_marginalize(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	y: torch.Tensor | list[torch.Tensor],
 	motifs: list[str],
 	loss: Callable[..., Any] = torch.nn.MSELoss(reduction='none'),
@@ -68,9 +69,12 @@ def greedy_marginalize(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(1, len(alphabet), length)
+	X: torch.tensor, shape=(1, len(alphabet), length), or PackedSequence
 		A one-hot encoded sequence to use as the base for design. This must be
 		a single sequence and has the first dimension for broadcasting reasons.
+		A PackedSequence of background sequences stays packed while motifs are
+		substituted into it and predictions are made, and the designed
+		sequence is returned packed.
 
 	y: torch.Tensor or list of torch.Tensors
 		A tensor or list of Tensors providing the desired output from the model.
@@ -154,7 +158,10 @@ def greedy_marginalize(
 	if y.ndim == 1:
 		y = y.unsqueeze(0)
 
-	X = torch.clone(X)
+	packed = isinstance(X, PackedSequence)
+	if not packed:
+		X = torch.clone(X)
+
 	y_orig = predict(model, X, args=args, batch_size=batch_size, device=device, 
 		verbose=False)
 
@@ -189,7 +196,7 @@ def greedy_marginalize(
 		tic = time.time()
 		best_improvement, best_motif_idx, best_pos = 0, -1, -1
 
-		X_ = torch.clone(X) 
+		X_ = X if packed else torch.clone(X) 
 		for motif, pos in zip(chosen_motifs, chosen_pos):
 			X_ = substitute(X_, motif, start=pos)
 
@@ -243,4 +250,5 @@ def greedy_marginalize(
 	for motif, pos in zip(chosen_motifs, chosen_pos):
 		Xn[pos:pos+len(motif)] = list(motif)
 	Xn = ''.join(Xn).strip("N")
-	return one_hot_encode(Xn, alphabet=alphabet)
+	X = one_hot_encode(Xn, alphabet=alphabet)
+	return PackedSequence.from_one_hot(X, alphabet) if packed else X

@@ -5,6 +5,7 @@ import torch
 import pytest
 
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
 from tangermeme.predict import predict
 from tangermeme.design import greedy_substitution
 from tangermeme.io import read_meme
@@ -216,3 +217,16 @@ def test_greedy_substitution_rejects_batch(motifs, device):
 
 	with pytest.raises(ValueError, match="X.shape\\[0\\] == 1"):
 		greedy_substitution(model, X, y, motifs, device=device, max_iter=1)
+
+
+def test_greedy_substitution_packed(X, motifs, device):
+	# A packed sequence gives the design of its one-hot encoding, packed.
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	y = [[10]]
+
+	X_hat = greedy_substitution(model, X, y, motifs, device=device, max_iter=2)
+	X_hat_packed = greedy_substitution(model, PackedSequence.from_one_hot(X), y, motifs,
+		device=device, max_iter=2)
+	assert isinstance(X_hat_packed, PackedSequence)
+	assert torch.equal(X_hat_packed.to_one_hot(), X_hat)

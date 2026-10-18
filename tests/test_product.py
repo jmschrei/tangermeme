@@ -6,6 +6,7 @@ import torch
 import pytest
 
 from tangermeme.utils import one_hot_encode
+from tangermeme.utils import PackedSequence
 from tangermeme.utils import random_one_hot
 
 from tangermeme.space import space
@@ -914,3 +915,28 @@ def test_apply_product_saturation_mutagenesis(X, alpha, device):
 		  [ 0.0409,  0.0000,  0.0000,  0.0000],
 		  [-0.0000,  0.0068, -0.0000, -0.0000],
 		  [-0.0000, -0.0000,  0.0000,  0.0296]]]], 4)
+
+
+###
+# A PackedSequence is passed on to `func` a batch at a time and gives the
+# outputs of its one-hot encoding.
+
+
+def test_apply_pairwise_packed(X, alpha, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	y = apply_pairwise(predict, model, X[:5], args=(alpha[:5],), batch_size=3,
+		device=device)
+	y_packed = apply_pairwise(predict, model, PackedSequence.from_one_hot(
+		X[:5]), args=(alpha[:5],), batch_size=3, device=device)
+	assert torch.equal(y_packed, y)
+
+
+def test_apply_product_packed(X, alpha, beta, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	y = apply_product(predict, model, X[:4], args=(alpha[:3], beta[:2]),
+		batch_size=5, device=device)
+	y_packed = apply_product(predict, model, PackedSequence.from_one_hot(
+		X[:4]), args=(alpha[:3], beta[:2]), batch_size=5, device=device)
+	assert torch.equal(y_packed, y)

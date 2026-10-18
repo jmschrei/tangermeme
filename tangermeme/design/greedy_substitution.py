@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from ..utils import _cast_as_tensor
 from ..utils import one_hot_encode
+from ..utils import PackedSequence
 from ..utils import reverse_complement as rc
 
 from ..ersatz import substitute
@@ -23,7 +24,7 @@ from ._substitute import _fast_tile_substitute
 
 def greedy_substitution(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	y: torch.Tensor | list[torch.Tensor] | None = None,
 	motifs: list[str] | None = None,
 	loss: Callable[..., Any] = torch.nn.MSELoss(reduction='none'),
@@ -60,11 +61,13 @@ def greedy_substitution(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(1, len(alphabet), length)
+	X: torch.tensor, shape=(1, len(alphabet), length), or PackedSequence
 		A one-hot encoded sequence to use as the base for design. This must be
 		a single sequence and has the first dimension for broadcasting reasons.
 		A first dimension other than 1 raises a `ValueError`; loop over the
 		examples, passing `X[i:i+1]` to each call, to design more than one.
+		A PackedSequence of one sequence is decoded to int8 at the start, and
+		the designed sequences are returned packed.
 
 	y: torch.Tensor or list of torch.Tensors or None
 		A tensor or list of Tensors providing the desired output from the model.
@@ -158,7 +161,8 @@ def greedy_substitution(
 			f"{X.shape[0]}. Loop over the examples, passing X[i:i+1] to each "
 			"call.")
 
-	X = torch.clone(X)
+	packed = isinstance(X, PackedSequence)
+	X = X.to_one_hot() if packed else torch.clone(X)
 	y_orig = predict(model, X, args=args, batch_size=batch_size, device=device,
 		verbose=False)
 
@@ -246,4 +250,4 @@ def greedy_substitution(
 
 		iteration += 1
 
-	return X
+	return PackedSequence.from_one_hot(X, alphabet) if packed else X

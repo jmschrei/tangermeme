@@ -12,13 +12,20 @@ import torch
 from tqdm import tqdm
 
 from ._compat import _preserve_model_state, _resolve_device
+from .utils import _cat_packed
+from .utils import _for_func
+from .utils import PackedSequence
 
 
 def _apply(func, model, X, args, batch_size, device, verbose,
 	additional_func_kwargs, **kwargs):
 	"""An internal function for applying a function to a batch of data."""
 
-	X = torch.stack(X)
+	if isinstance(X[0], PackedSequence):
+		X = _for_func(_cat_packed([x.reshape(1) for x in X]), func)
+	else:
+		X = torch.stack(X)
+
 	args = [torch.stack(a) for a in args]
 
 	y = func(model, X, args=args, batch_size=batch_size, device=device,
@@ -30,7 +37,7 @@ def _apply(func, model, X, args, batch_size, device, verbose,
 def apply_pairwise(
 	func: Callable[..., Any],
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	args: Sequence[torch.Tensor] | None = None,
 	batch_size: int = 32,
 	device: str | torch.device | None = None,
@@ -68,8 +75,11 @@ def apply_pairwise(
 	model: torch.nn.Module
 		The PyTorch model to use to make predictions.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to make predictions for.
+		A PackedSequence with one batch axis is passed on to `func` a batch at
+		a time, packed when `func` takes one, such as `predict` and
+		`deep_lift_shap`, and as an int8 one-hot encoding otherwise.
 
 	args: tuple or list
 		A set of additional arguments, each of which is one input to the model.
@@ -197,7 +207,7 @@ def apply_pairwise(
 def apply_product(
 	func: Callable[..., Any],
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	args: Sequence[torch.Tensor],
 	batch_size: int = 32,
 	device: str | torch.device | None = None,
@@ -230,8 +240,11 @@ def apply_product(
 	model: torch.nn.Module
 		The PyTorch model to use to make predictions.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to make predictions for.
+		A PackedSequence with one batch axis is passed on to `func` a batch at
+		a time, packed when `func` takes one, such as `predict` and
+		`deep_lift_shap`, and as an int8 one-hot encoding otherwise.
 
 	args: tuple or list
 		A set of additional arguments to pass into the model. Each element in

@@ -11,6 +11,8 @@ import numpy
 import torch
 
 from ..utils import _cast_as_tensor
+from ..utils import _cat_packed
+from ..utils import PackedSequence
 from ..utils import random_one_hot
 
 from ..predict import predict
@@ -181,5 +183,8 @@ def screen(
 			random_state += 1
     
 	Xs = [heapq.heappop(pq)[1] for i in range(n_best)]
+	if isinstance(Xs[0], PackedSequence):
+		return _cat_packed([X.reshape(1) for X in Xs[::-1]])
+
 	X = torch.flip(torch.stack(Xs), dims=(0,))
 	return X

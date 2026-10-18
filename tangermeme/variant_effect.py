@@ -11,7 +11,10 @@ import numpy
 import torch
 
 from .utils import _cast_as_tensor
+from .utils import _for_func
+from .utils import PackedSequence
 
+from .ersatz import _map_rows
 from .predict import predict
 from .results import PerturbationResult
 
@@ -72,7 +75,7 @@ def _insertion_idxs(starts, positions, left, idxs, insertion_idxs):
 
 def substitution_effect(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	substitutions: torch.Tensor | numpy.ndarray,
 	args: tuple | None = None,
 	func: Callable[..., Any] = predict,
@@ -110,8 +113,12 @@ def substitution_effect(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to have substitutions included in.
+		A PackedSequence with one batch axis is passed on packed to `func`
+		when `func` takes one, such as `predict` and `deep_lift_shap`, and as
+		an int8 one-hot encoding otherwise. The substitutions are made in the
+		packed sequences a chunk at a time.
 
 	substitutions: torch.tensor, shape=(-1, 3)
 		A set of variants that should be substituted into each sequence. This
@@ -178,18 +185,32 @@ def substitution_effect(
 
 	additional_func_kwargs = dict(additional_func_kwargs or {})
 
-	X_var = torch.clone(X)
-	X_var[substitutions[:, 0], :, substitutions[:, 1]] = 0
-	X_var[substitutions[:, 0], substitutions[:, 2], substitutions[:, 1]] = 1
+	if isinstance(X, PackedSequence):
+		substitutions_ = substitutions.long().cpu()
 
-	y_before = func(model, X, args=args, **additional_func_kwargs, **kwargs)
-	y_after = func(model, X_var, args=args, **additional_func_kwargs, **kwargs)
+		def substitute_codes(codes, rows):
+			start, stop = rows.start, rows.start + codes.shape[0]
+			rows_ = substitutions_[(substitutions_[:, 0] >= start) &
+				(substitutions_[:, 0] < stop)]
+			codes[rows_[:, 0] - start, rows_[:, 1]] = rows_[:, 2].to(torch.uint8)
+			return codes
+
+		X_var = _map_rows(X, substitute_codes, X.shape[-1], X.alphabet)
+	else:
+		X_var = torch.clone(X)
+		X_var[substitutions[:, 0], :, substitutions[:, 1]] = 0
+		X_var[substitutions[:, 0], substitutions[:, 2], substitutions[:, 1]] = 1
+
+	y_before = func(model, _for_func(X, func), args=args,
+		**additional_func_kwargs, **kwargs)
+	y_after = func(model, _for_func(X_var, func), args=args,
+		**additional_func_kwargs, **kwargs)
 	return PerturbationResult(y_before=y_before, y_after=y_after)
 
 
 def deletion_effect(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	deletions: torch.Tensor | numpy.ndarray,
 	left: bool = False,
 	args: tuple | None = None,
@@ -241,8 +262,12 @@ def deletion_effect(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length + max_deletions)
+	X: torch.tensor, shape=(-1, len(alphabet), length + max_deletions), or PackedSequence
 		A one-hot encoded set of sequences to have deletions included in.
+		A PackedSequence with one batch axis is passed on packed to `func`
+		when `func` takes one, such as `predict` and `deep_lift_shap`, and as
+		an int8 one-hot encoding otherwise. The deletions are made in the
+		packed sequences a chunk at a time.
 
 	deletions: torch.tensor, shape=(-1, 2)
 		A set of deletions indicating characters that should be removed from
@@ -324,22 +349,31 @@ def deletion_effect(
 		dtype=numpy.int64)
 	_deletion_idxs(kept.numpy(), left == True, idxs)
 
-	idxs = torch.from_numpy(idxs).to(X.device)
-	X_var = torch.gather(X, 2, idxs[:, None].expand(-1, X.shape[1], -1))
-
-	if left == True:
-		X = X[:, :, -X_var.shape[-1]:]
+	if isinstance(X, PackedSequence):
+		idxs, width = torch.from_numpy(idxs), idxs.shape[1]
+		X_var = _map_rows(X, lambda codes, rows: torch.gather(codes, 1,
+			idxs[rows]), width, X.alphabet)
+		X = _map_rows(X, lambda codes, rows: codes[:, -width:] if left == True
+			else codes[:, :width], width, X.alphabet)
 	else:
-		X = X[:, :, :X_var.shape[-1]]
+		idxs = torch.from_numpy(idxs).to(X.device)
+		X_var = torch.gather(X, 2, idxs[:, None].expand(-1, X.shape[1], -1))
 
-	y_before = func(model, X, args=args, **additional_func_kwargs, **kwargs)
-	y_after = func(model, X_var, args=args, **additional_func_kwargs, **kwargs)
+		if left == True:
+			X = X[:, :, -X_var.shape[-1]:]
+		else:
+			X = X[:, :, :X_var.shape[-1]]
+
+	y_before = func(model, _for_func(X, func), args=args,
+		**additional_func_kwargs, **kwargs)
+	y_after = func(model, _for_func(X_var, func), args=args,
+		**additional_func_kwargs, **kwargs)
 	return PerturbationResult(y_before=y_before, y_after=y_after)
 
 
 def insertion_effect(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	insertions: torch.Tensor | numpy.ndarray,
 	left: bool = False,
 	args: tuple | None = None,
@@ -381,8 +415,12 @@ def insertion_effect(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to have insertions included in.
+		A PackedSequence with one batch axis is passed on packed to `func`
+		when `func` takes one, such as `predict` and `deep_lift_shap`, and as
+		an int8 one-hot encoding otherwise. The insertions are made in the
+		packed sequences a chunk at a time.
 
 	insertions: torch.tensor, shape=(-1, 3)
 		A set of insertions indicating characters that should be added to
@@ -475,6 +513,23 @@ def insertion_effect(
 	insertion_idxs = torch.from_numpy(insertion_idxs)
 	inside = insertion_idxs >= 0
 	idx, char, insertion_idxs = idx[inside], char[inside], insertion_idxs[inside]
+
+	if isinstance(X, PackedSequence):
+		idx, char = idx.long(), char.to(torch.uint8)
+
+		def insert_codes(codes, rows):
+			start = rows.start
+			in_rows = (idx >= start) & (idx < start + codes.shape[0])
+			codes = torch.gather(codes, 1, src_idxs[rows])
+			codes[idx[in_rows] - start, insertion_idxs[in_rows]] = char[in_rows]
+			return codes
+
+		X_var = _map_rows(X, insert_codes, length, X.alphabet)
+		y_before = func(model, _for_func(X, func), args=args,
+			**additional_func_kwargs, **kwargs)
+		y_after = func(model, _for_func(X_var, func), args=args,
+			**additional_func_kwargs, **kwargs)
+		return PerturbationResult(y_before=y_before, y_after=y_after)
 
 	# Kept for backwards compatibility: any insertion promotes X_var to at
 	# least float32.
