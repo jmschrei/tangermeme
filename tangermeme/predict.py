@@ -17,13 +17,15 @@ from .utils import PackedSequence
 
 
 def _to_device(X, dtype, device):
-	"""Move a batch to `device` in `dtype`, copying the narrower of the two.
+	"""Move a batch to `device` in `dtype`, decoding a PackedSequence there.
 
 	A cast of integers to a wider floating point dtype is exact, so it is made
-	on `device` after the copy. Any other cast is made before it, because a
-	GPU can give a float NaN different bits. On a CPU the order does not
-	matter, since the move is a no-op.
+	on `device` after the copy, which is then the smaller. Any other cast is
+	made before it, because a GPU can give a float NaN different bits.
 	"""
+
+	if isinstance(X, PackedSequence):
+		return X.to_one_hot(dtype=dtype, device=device)
 
 	if (dtype.is_floating_point and not X.dtype.is_floating_point and
 			X.element_size() < torch.finfo(dtype).bits // 8):
@@ -146,10 +148,7 @@ def predict(
 
 		for start in trange(0, X.shape[0], batch_size, disable=not verbose):
 			end = start + batch_size
-			if isinstance(X, PackedSequence):
-				X_ = X[start:end].to_one_hot(dtype=dtype, device=device)
-			else:
-				X_ = _to_device(X[start:end], dtype, device)
+			X_ = _to_device(X[start:end], dtype, device)
 
 			if X_.shape[0] == 0:
 				continue

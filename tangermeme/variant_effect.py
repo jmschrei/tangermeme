@@ -525,23 +525,21 @@ def insertion_effect(
 			return codes
 
 		X_var = _map_rows(X, insert_codes, length, X.alphabet)
-		y_before = func(model, _for_func(X, func), args=args,
-			**additional_func_kwargs, **kwargs)
-		y_after = func(model, _for_func(X_var, func), args=args,
-			**additional_func_kwargs, **kwargs)
-		return PerturbationResult(y_before=y_before, y_after=y_after)
+	else:
+		# Kept for backwards compatibility: any insertion promotes X_var to
+		# at least float32.
+		dtype = X.dtype
+		if len(pos) > 0:
+			dtype = torch.promote_types(X.dtype, torch.float32)
 
-	# Kept for backwards compatibility: any insertion promotes X_var to at
-	# least float32.
-	dtype = X.dtype
-	if len(pos) > 0:
-		dtype = torch.promote_types(X.dtype, torch.float32)
+		X_var = torch.gather(X, 2, src_idxs[:, None].expand(-1, X.shape[1],
+			-1))
+		X_var = X_var.to(dtype)
+		X_var[idx, :, insertion_idxs] = 0
+		X_var[idx, char, insertion_idxs] = 1
 
-	X_var = torch.gather(X, 2, src_idxs[:, None].expand(-1, X.shape[1], -1))
-	X_var = X_var.to(dtype)
-	X_var[idx, :, insertion_idxs] = 0
-	X_var[idx, char, insertion_idxs] = 1
-
-	y_before = func(model, X, args=args, **additional_func_kwargs, **kwargs)
-	y_after = func(model, X_var, args=args, **additional_func_kwargs, **kwargs)
+	y_before = func(model, _for_func(X, func), args=args,
+		**additional_func_kwargs, **kwargs)
+	y_after = func(model, _for_func(X_var, func), args=args,
+		**additional_func_kwargs, **kwargs)
 	return PerturbationResult(y_before=y_before, y_after=y_after)

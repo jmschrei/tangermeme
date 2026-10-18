@@ -209,12 +209,7 @@ def saliency(
 
 		for start in trange(0, X.shape[0], batch_size, disable=not verbose):
 			end = start + batch_size
-			if isinstance(X, PackedSequence):
-				X_ = X[start:end].to_one_hot(dtype=dtype, device=device)
-			else:
-				X_ = _to_device(X[start:end], dtype, device)
-
-			X_.requires_grad_()
+			X_ = _to_device(X[start:end], dtype, device).requires_grad_()
 
 			if args is not None:
 				args_ = [_to_device(a[start:end], dtype, device) for a in args]

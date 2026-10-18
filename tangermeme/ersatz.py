@@ -549,7 +549,7 @@ def randomize(
 		for i in range(n):
 			# The same draws, in the same order, as random_one_hot below.
 			codes_i = torch.from_numpy(_random_codes((X.shape[0], probs.shape[1],
-				end-start), probs, random_state)).to(torch.uint8)
+				end-start), probs, random_state))
 
 			def randomize_codes(codes, rows, codes_i=codes_i):
 				codes[:, start:end] = codes_i[rows]
@@ -891,15 +891,8 @@ def _check_conserved(any_conserved, all_conserved, n_shuffles, verbose,
 _SHUFFLE_PARALLEL_MIN = 4096
 
 
-def _thread_count(n_jobs):
-	"""The threads `n_jobs` asks for, with -1 meaning one per thread numba
-	allows."""
-
-	return numba.config.NUMBA_NUM_THREADS if n_jobs == -1 else int(n_jobs)
-
-
-def _shuffle_packed(codes, start, end, n_shuffles, random_states,
-	verbose=False, n_jobs=1, alphabet=('A', 'C', 'G', 'T')):
+def _shuffle_packed(codes, start, end, n_shuffles, random_states, verbose,
+	n_jobs, alphabet):
 	"""Dinucleotide shuffle positions `start` to `end` of each sequence of
 	character indices `codes`, shape (n, length) with 4 for an unknown
 	character, `n_shuffles` times, seeding sequence i with random_states[i].
@@ -932,7 +925,7 @@ def _shuffle_packed(codes, start, end, n_shuffles, random_states,
 			n_seqs * n_shuffles * (end - start) < _SHUFFLE_PARALLEL_MIN):
 		_fast_shuffle_packed(*args)
 	else:
-		with _numba_threads(_thread_count(n_jobs)):
+		with _numba_threads(n_jobs):
 			_fast_shuffle_packed_parallel(*args)
 
 	# A shuffle keeps the count of every dinucleotide and both ends of the
@@ -1091,27 +1084,10 @@ def dinucleotide_shuffle(
 		and its tensors on the CPU.
 	"""
 
-	if isinstance(X, PackedSequence):
-		if X.data.ndim != 2:
-			raise ValueError("X has shape {} but must have shape {}".format(
-				tuple(X.shape), (-1, 4, -1)))
-
-		if not allow_N and len(X.n_runs) > 0:
-			raise ValueError("X must be one-hot encoded and cannot have unknown"
-				" characters.")
-
-		packed, length = True, X.length
-	else:
-		_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1,
-			allow_N=allow_N)
-		packed, length = False, X.shape[-1]
-
-	if return_packed is None:
-		return_packed = packed
-
-	if return_packed and not packed and X.shape[1] != 4:
-		raise ValueError("return_packed=True needs an alphabet of four "
-			"characters, but X has {}.".format(X.shape[1]))
+	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1,
+		allow_N=allow_N)
+	packed, length = isinstance(X, PackedSequence), X.shape[-1]
+	return_packed, alphabet = _packed_output(X, return_packed, "ACGT")
 
 	if end < 0:
 		end = length + 1 + end
@@ -1119,16 +1095,15 @@ def dinucleotide_shuffle(
 	random_states = _random_states(random_state, X.shape[0])
 
 	if return_packed:
+		start, end, _ = slice(start, end).indices(length)
 		if packed:
-			codes, alphabet = X.to_codes(), X.alphabet
+			codes = X.to_codes()
 		else:
 			values, codes = X.max(dim=1)
 			codes[values == 0] = 4
-			alphabet = ('A', 'C', 'G', 'T')
 
-		start, end, _ = slice(start, end).indices(length)
 		return _shuffle_packed(codes, start, max(start, end), n, random_states,
-			verbose=verbose, n_jobs=n_jobs, alphabet=alphabet)
+			verbose, n_jobs, alphabet)
 
 	if packed:
 		X = X.to_one_hot()
@@ -1147,7 +1122,7 @@ def dinucleotide_shuffle(
 	if n_jobs == 1 or X.shape[0] < 2 or shuffled.size < _SHUFFLE_PARALLEL_MIN:
 		_fast_shuffle(*args)
 	else:
-		with _numba_threads(_thread_count(n_jobs)):
+		with _numba_threads(n_jobs):
 			_fast_shuffle_parallel(*args)
 
 	shuffled = torch.from_numpy(shuffled)
@@ -1274,7 +1249,6 @@ def _local_shuffle_packed(X, n, bin_size, min_bin_size, rng, verbose,
 	return Y, len(starts), n_unshuffled
 
 
-@_accepts_packed
 def local_dinucleotide_shuffle(
 	X: torch.Tensor | PackedSequence,
 	n: int = 20,

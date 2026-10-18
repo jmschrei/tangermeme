@@ -836,16 +836,18 @@ def one_hot_encode(
 
 @contextlib.contextmanager
 def _numba_threads(n_jobs):
-	"""Run numba's parallel kernels on at most `n_jobs` threads.
+	"""Run numba's parallel kernels on at most `n_jobs` threads, or on one
+	per thread numba allows when -1.
 
 	The count is capped by NUMBA_NUM_THREADS, above which numba raises, and
 	the caller's count is restored afterwards, including when the body
 	raises.
 	"""
 
+	n_max = numba.config.NUMBA_NUM_THREADS
 	previous = numba.get_num_threads()
-	numba.set_num_threads(max(1, min(int(n_jobs),
-		numba.config.NUMBA_NUM_THREADS)))
+	numba.set_num_threads(n_max if n_jobs == -1 else max(1, min(int(n_jobs),
+		n_max)))
 	try:
 		yield
 	finally:
@@ -1336,10 +1338,8 @@ def random_one_hot(
 def _random_code_rows(shape, probs, random_state):
 	"""Draw the character index of every position of `shape[0]` sequences
 	of length `shape[2]` over `shape[1]` characters, yielding one sequence
-	at a time, in the order `random_one_hot` draws them."""
-
-	if not isinstance(random_state, numpy.random.RandomState):
-		random_state = numpy.random.RandomState(random_state)
+	at a time from the numpy.random.RandomState `random_state`, in the
+	order `random_one_hot` draws them."""
 
 	if isinstance(probs, list):
 		probs = numpy.array(probs)
@@ -1358,11 +1358,10 @@ def _random_code_rows(shape, probs, random_state):
 
 
 def _random_codes(shape, probs, random_state):
-	"""The draws of `_random_code_rows` as one array of shape
-	(shape[0], shape[2]), in uint8 when the characters fit."""
+	"""The draws of `_random_code_rows` as one uint8 array of shape
+	(shape[0], shape[2])."""
 
-	codes = numpy.empty((shape[0], shape[2]), dtype=numpy.uint8 if
-		shape[1] <= 256 else numpy.int64)
+	codes = numpy.empty((shape[0], shape[2]), dtype=numpy.uint8)
 	for i, row in enumerate(_random_code_rows(shape, probs, random_state)):
 		codes[i] = row
 
@@ -1929,13 +1928,13 @@ class PackedSequence:
 			character.
 		"""
 
-		device = self.data.device if device is None else torch.device(device)
+		device = torch.device('cpu' if device is None else device)
 		batch, n_bytes = self.data.shape[:-1], self.data.shape[-1]
 		n_rows = math.prod(batch)
 		runs, run_ptr = self._runs()
 
 		if device.type == 'cpu':
-			data = numpy.ascontiguousarray(self.data.cpu().reshape(n_rows,
+			data = numpy.ascontiguousarray(self.data.reshape(n_rows,
 				n_bytes).numpy())
 			codes = numpy.empty((n_rows, self.length), dtype=numpy.uint8)
 			_unpack_codes_kernel(data, self.length, run_ptr, runs, codes)
@@ -1983,7 +1982,7 @@ class PackedSequence:
 			character.
 		"""
 
-		device = self.data.device if device is None else torch.device(device)
+		device = torch.device('cpu' if device is None else device)
 		if device.type != 'cpu':
 			codes = self.to_codes(device=device)
 			alphabet = torch.arange(4, dtype=torch.uint8, device=device)
@@ -1992,7 +1991,7 @@ class PackedSequence:
 		batch, n_bytes = self.data.shape[:-1], self.data.shape[-1]
 		n_rows = math.prod(batch)
 		runs, run_ptr = self._runs()
-		data = numpy.ascontiguousarray(self.data.cpu().reshape(n_rows,
+		data = numpy.ascontiguousarray(self.data.reshape(n_rows,
 			n_bytes).numpy())
 
 		kernel_dtype = dtype if dtype in _PACKED_KERNEL_DTYPES else torch.int8
