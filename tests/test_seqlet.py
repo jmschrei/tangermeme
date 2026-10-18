@@ -684,9 +684,33 @@ def test_recursive_seqlets_fdr_pooled(X_laplace, X_background):
 def test_recursive_seqlets_fdr_default_thresholds(X_laplace, X_background):
 	fdr = recursive_seqlets_fdr(X_laplace, X_background)
 
-	assert fdr.shape == (37, 4)
-	assert_array_almost_equal(fdr['threshold'].values[[0, -1]], [1e-1, 1e-10])
+	assert fdr.shape == (117, 4)
+	assert_allclose(fdr['threshold'].values[[0, -1]], [1e-1, 1e-30])
 	assert (numpy.diff(fdr['threshold']) < 0).all()
+
+
+def test_recursive_seqlets_fdr_strict_thresholds(X_laplace, X_background):
+	"""Rows past the first threshold that calls nothing on either input are
+	filled in without calling seqlets, and match calling at each alone."""
+
+	fdr = recursive_seqlets_fdr(X_laplace, X_background)
+
+	empty = ((fdr['n_seqlets'] == 0) & (fdr['n_control_seqlets'] == 0)).values
+	assert empty.any() and not empty.all()
+	first = empty.argmax()
+	assert empty[first:].all()
+
+	for _, (threshold, n_seqlets, _, _) in fdr.iterrows():
+		assert n_seqlets == recursive_seqlets(X_laplace,
+			threshold=threshold).shape[0]
+
+	for threshold in fdr['threshold'].values[first - 2:first + 3]:
+		alone = recursive_seqlets_fdr(X_laplace, X_background,
+			thresholds=[threshold])
+		row = fdr[fdr['threshold'] == threshold]
+		assert alone['n_seqlets'].iloc[0] == row['n_seqlets'].iloc[0]
+		assert alone['n_control_seqlets'].iloc[0] == \
+			row['n_control_seqlets'].iloc[0]
 
 
 def test_recursive_seqlets_fdr_unsorted_thresholds(X_laplace, X_background):

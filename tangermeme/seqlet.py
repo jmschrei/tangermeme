@@ -725,8 +725,11 @@ def recursive_seqlets_fdr(
 		itself. Default is None.
 
 	thresholds: numpy.ndarray or None, optional
-		The p-value thresholds to evaluate. If None, use 37 thresholds evenly
-		spaced in log space from 0.1 to 1e-10. Default is None.
+		The p-value thresholds to evaluate. If None, use 117 thresholds evenly
+		spaced in log space from 0.1 to 1e-30, four per decade. Once a
+		threshold calls no seqlet on `X` and none on `X_control`, no stricter
+		threshold can call any, so the remaining rows are filled in without
+		calling seqlets. Default is None.
 
 	min_seqlet_len: int, optional
 		The minimum length that a seqlet must be, as in `recursive_seqlets`.
@@ -756,15 +759,21 @@ def recursive_seqlets_fdr(
 		X_null = _as_attributions(X_null, "X_null", X.dtype)
 
 	if thresholds is None:
-		thresholds = numpy.logspace(-1, -10, 37)
+		thresholds = numpy.logspace(-1, -30, 117)
 	thresholds = numpy.sort(numpy.asarray(thresholds, dtype=numpy.float64))[::-1]
 
 	tables = _recursive_seqlet_tables(X, X_null, max_seqlet_len, n_bins)
 	scale = X.size / X_control.size
 
+	# With nothing called, nothing is masked, so a span passes exactly when
+	# its own triangle of p-values is below the threshold. Any span passing a
+	# stricter threshold would then have passed this one, so once neither
+	# input has a seqlet, no stricter threshold gives one.
+	exhausted = tables is None
+
 	rows = []
 	for threshold in thresholds:
-		if tables is None:
+		if exhausted:
 			n_seqlets, n_control = 0, 0
 		else:
 			xmin, bin_width, rcdfs = tables
@@ -772,6 +781,7 @@ def recursive_seqlets_fdr(
 				threshold, min_seqlet_len, max_seqlet_len, 0, n_bins))
 			n_control = len(_recursive_seqlet_decode(X_control, rcdfs, xmin,
 				bin_width, threshold, min_seqlet_len, max_seqlet_len, 0, n_bins))
+			exhausted = n_seqlets == 0 and n_control == 0
 
 		fdr = n_control * scale / n_seqlets if n_seqlets > 0 else numpy.nan
 		rows.append((threshold, n_seqlets, n_control, fdr))
