@@ -17,6 +17,11 @@ Three library functions already satisfy it and can be passed directly:
 - `tangermeme.deep_lift_shap.deep_lift_shap` — returns attributions.
 - `tangermeme.saturation_mutagenesis.saturation_mutagenesis` — returns ISM scores.
 
+With a `PackedSequence` as `X`, these three, `pisa`, and the `ersatz` shuffles
+given as `shuffle_fn=` (also inside `functools.partial`) receive it packed. Any
+other `func` or `shuffle_fn`, including your own, receives its int8 one-hot
+encoding.
+
 ## Where `func=` is accepted
 
 ```python

@@ -27,8 +27,12 @@ extract_loci(
     return_mask=False,
     verbose=False,
     n_jobs=8,             # threads for bigWig paths and FASTA windows; -1 = every CPU
+    return_packed=False,  # True: element 0 is a PackedSequence, read and packed by chunk
 )
 ```
+
+`return_packed=True` needs a four-letter alphabet; the characters in `ignore`
+become unknown characters. The signals and mask are unchanged.
 
 ### Return order (this is the footgun)
 

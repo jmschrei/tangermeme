@@ -86,6 +86,11 @@ refs = dinucleotide_shuffle(X_valid, n=20, random_state=0)  # (batch, 20, 4, len
 X_attr = deep_lift_shap(model, X, references=refs, only_warn=True)
 ```
 
+`references=` can also be a `PackedSequence` of batch shape `(batch, n_shuffles)`,
+such as `dinucleotide_shuffle(X, n=20, return_packed=True)`, which holds them at 2
+bits a position and is decoded a batch at a time. With `return_references=True`,
+the references come back packed when `X` or `references` is packed.
+
 Unknown characters (all-zero columns) have a direct route: with `only_warn=True`,
 `references=partial(dinucleotide_shuffle, allow_N=True)` shuffles each as a fifth
 character, and those positions get zero attribution. `pisa` has no `only_warn`
