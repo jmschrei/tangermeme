@@ -1189,11 +1189,13 @@ def dinucleotide_shuffle(
 	shuffled = torch.from_numpy(shuffled)
 
 	# The first and last characters are always kept. `conserved` marks the
-	# positions between them where every shuffle of a sequence agrees.
-	interior = shuffled[:, :, 1:-1]
-	conserved = (interior == interior[:, :1]).all(dim=1)
-	_check_conserved(conserved.any(dim=1), conserved.all(dim=1), n, verbose,
-		stacklevel=3)
+	# positions between them where every shuffle of a sequence agrees, which
+	# is checked only for a warning or for more than one shuffle.
+	if verbose or n > 1:
+		interior = shuffled[:, :, 1:-1]
+		conserved = (interior == interior[:, :1]).all(dim=1)
+		_check_conserved(conserved.any(dim=1), conserved.all(dim=1), n,
+			verbose, stacklevel=3)
 
 	X_shufs = X.unsqueeze(1).repeat(1, n, 1, 1)
 	alphabet = torch.arange(X.shape[1], device=X.device)
