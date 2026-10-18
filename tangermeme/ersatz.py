@@ -584,58 +584,13 @@ def _random_states(random_state, n):
 	return random_states.astype(numpy.int64).astype(numpy.int32)
 
 
-def _shuffle_characters(X, n_shuffles, random_states, verbose=False):
-	"""Dinucleotide shuffle each sequence of X, shape (n, len(alphabet),
-	length), `n_shuffles` times, seeding sequence i with random_states[i].
-
-	Returns the character index of every position of every shuffle, shape
-	(n, n_shuffles, length), on the CPU. An unknown character, an all-zero
-	column, is shuffled as a character of its own, with index len(alphabet),
-	since its maximum would read it as the first character.
-	"""
-
-	# `max` rather than `argmax`, which was 150 times slower along this axis
-	# on the CPU, for 64 sequences of 2,114bp.
-	values, idxs = X.max(dim=1)
-	idxs[values == 0] = X.shape[1]
-	idxs = idxs.cpu().numpy().astype(numpy.int32)
-
-	shuffled = numpy.empty((X.shape[0], n_shuffles, X.shape[-1]),
-		dtype=numpy.int32)
-	_fast_shuffle(idxs, X.shape[1] + 1, n_shuffles, random_states, shuffled)
-	shuffled = torch.from_numpy(shuffled)
-
-	# The first and last characters are always kept. `conserved` marks the
-	# positions between them where every shuffle of a sequence agrees.
-	interior = shuffled[:, :, 1:-1]
-	conserved = (interior == interior[:, :1]).all(dim=1)
-	if verbose and conserved.any():
-		warnings.warn("At least one position in dinucleotide shuffle is "
-			"identical across all positions.", TangermemeWarning, stacklevel=3)
-
-	if n_shuffles > 1 and conserved.all(dim=1).any():
-		raise ValueError("All dinucleotide shuffles yield identical " +
-			"sequences, potentially due to a lack of diversity in sequence.")
-
-	return shuffled
-
-
 def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 	"""An internal function for dinucleotide shuffling a single sequence.
 
-	This function takes in a one-hot encoded sequence (not a string) and
-	returns a set of one-hot encoded sequences that are dinucleotide
-	shuffled. The approach constructs a transition matrix between
-	nucleotides, keeps the first and last nucleotide constant, and then
-	randomly at uniform selects transitions until all nucleotides have
-	been observed. This is a Eulerian path. Because each nucleotide has
-	the same number of transitions into it as out of it (except for the
-	first and last nucleotides) the greedy algorithm does not need to
-	check at each step to make sure there is still a path.
-
-	This function has been adapted to work on PyTorch tensors instead of
-	numpy arrays. Code has been adapted from
-	https://github.com/kundajelab/deeplift/blob/master/deeplift/dinuc_shuffle.py
+	This is `dinucleotide_shuffle` on one sequence, with unknown characters
+	allowed, returning float32 on the CPU. gReLU imports this private
+	function (`grelu.data.dataset`), so its signature and output must stay
+	as they are.
 
 
 	Parameters
@@ -659,14 +614,11 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 	Returns
 	-------
 	shuffled_sequences: torch.tensor, shape=(n_shuffles, len(alphabet), length)
-		The shuffled sequences.
+		The shuffled sequences, float32, on the CPU.
 	"""
 
-	shuffled = _shuffle_characters(X.unsqueeze(0), n_shuffles,
-		_random_states(random_state, 1), verbose=verbose)[0]
-
-	alphabet = torch.arange(X.shape[0])
-	return (shuffled.unsqueeze(1) == alphabet[:, None]).to(torch.float32)
+	return dinucleotide_shuffle(X.unsqueeze(0).float().cpu(), n=n_shuffles,
+		random_state=random_state, verbose=verbose, allow_N=True)[0]
 
 
 def dinucleotide_shuffle(
@@ -750,8 +702,32 @@ def dinucleotide_shuffle(
 	if end < 0:
 		end = X.shape[-1] + 1 + end
 
-	shuffled = _shuffle_characters(X[:, :, start:end], n,
-		_random_states(random_state, X.shape[0]), verbose=verbose)
+	random_states = _random_states(random_state, X.shape[0])
+
+	# The character index of every position. An unknown character, an
+	# all-zero column, is shuffled as a character of its own, with index
+	# len(alphabet), since its maximum would read it as the first character.
+	# `max` rather than `argmax`, which was 150 times slower along this axis
+	# on the CPU, for 64 sequences of 2,114bp.
+	values, idxs = X[:, :, start:end].max(dim=1)
+	idxs[values == 0] = X.shape[1]
+	idxs = idxs.cpu().numpy().astype(numpy.int32)
+
+	shuffled = numpy.empty((X.shape[0], n, idxs.shape[-1]), dtype=numpy.int32)
+	_fast_shuffle(idxs, X.shape[1] + 1, n, random_states, shuffled)
+	shuffled = torch.from_numpy(shuffled)
+
+	# The first and last characters are always kept. `conserved` marks the
+	# positions between them where every shuffle of a sequence agrees.
+	interior = shuffled[:, :, 1:-1]
+	conserved = (interior == interior[:, :1]).all(dim=1)
+	if verbose and conserved.any():
+		warnings.warn("At least one position in dinucleotide shuffle is "
+			"identical across all positions.", TangermemeWarning, stacklevel=2)
+
+	if n > 1 and conserved.all(dim=1).any():
+		raise ValueError("All dinucleotide shuffles yield identical " +
+			"sequences, potentially due to a lack of diversity in sequence.")
 
 	X_shufs = X.unsqueeze(1).repeat(1, n, 1, 1)
 	alphabet = torch.arange(X.shape[1], device=X.device)
