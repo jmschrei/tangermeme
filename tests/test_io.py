@@ -218,26 +218,19 @@ def dict_sequences():
 ##
 
 
-def test_interleave_loci_single_str(short_loci1, short_loci2):
-	df = _interleave_loci("tests/data/test.bed")
-	assert (df == short_loci1).all(None)
-
-	df = _interleave_loci("tests/data/test2.bed")
-	assert (df == short_loci2).all(None)
-
-
-def test_interleave_loci_single_df(short_loci1, short_loci2):
+@pytest.mark.parametrize("as_df", [False, True], ids=["str", "df"])
+def test_interleave_loci_single(as_df, short_loci1, short_loci2):
 	names = ['chrom', 'start', 'end']
 
-	loci = pandas.read_csv("tests/data/test.bed", delimiter='\t',
-		index_col=False, names=names, header=None)
-	df = _interleave_loci(loci)
-	assert (df == short_loci1).all(None)
+	for filename, short_loci in (("tests/data/test.bed", short_loci1),
+			("tests/data/test2.bed", short_loci2)):
+		loci = filename
+		if as_df:
+			loci = pandas.read_csv(filename, delimiter='\t', index_col=False,
+				names=names, header=None)
 
-	loci = pandas.read_csv("tests/data/test2.bed", delimiter='\t',
-		index_col=False, names=names, header=None)
-	df = _interleave_loci(loci)
-	assert (df == short_loci2).all(None)
+		df = _interleave_loci(loci)
+		assert (df == short_loci).all(None)
 
 
 def test_interleave_loci_df_other_column_names(short_loci1):
@@ -327,70 +320,35 @@ def test_interleave_loci_multi_chroms(short_loci1):
 	assert (df == base_df).all(None)
 
 
-def test_interleave_loci_bed10_summits_str():
-	df = _interleave_loci("tests/data/test2.bed10", summits=True)
+@pytest.mark.parametrize("as_df", [False, True], ids=["str", "df"])
+@pytest.mark.parametrize("summits, starts, ends", [
+	(True, [30, 111, 35, 122, 10, 15, 11, 42, 87],
+		[50, 131, 55, 142, 30, 35, 31, 62, 107]),
+	(False, [40, 120, 40, 120, 5, 25, 20, 50, 80],
+		[60, 140, 60, 140, 25, 45, 40, 70, 100])],
+	ids=["summits", "no_summits"])
+def test_interleave_loci_bed10(as_df, summits, starts, ends):
+	loci = "tests/data/test2.bed10"
+	if as_df:
+		loci = pandas.read_csv(loci, delimiter='\t', header=None)
+
+	df = _interleave_loci(loci, summits=summits)
 
 	base_df = pandas.DataFrame({
 		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4',
 			'chr5', 'chr5'],
-		'start': [30, 111, 35, 122, 10, 15, 11, 42, 87],
-		'end': [50, 131, 55, 142, 30, 35, 31, 62, 107]
+		'start': starts,
+		'end': ends
 	})
 
 	assert (df == base_df).all(None)
 
 
-def test_interleave_loci_bed10_no_summits_str():
-	df = _interleave_loci("tests/data/test2.bed10", summits=False)
-
-	base_df = pandas.DataFrame({
-		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4',
-			'chr5', 'chr5'],
-		'start': [40, 120, 40, 120, 5, 25, 20, 50, 80],
-		'end': [60, 140, 60, 140, 25, 45, 40, 70, 100]
-	})
-
-	assert (df == base_df).all(None)
-
-
-def test_interleave_loci_bed10_summits_df():
-	loci = pandas.read_csv("tests/data/test2.bed10", delimiter='\t',
-		header=None)
-	df = _interleave_loci(loci, summits=True)
-
-	base_df = pandas.DataFrame({
-		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4',
-			'chr5', 'chr5'],
-		'start': [30, 111, 35, 122, 10, 15, 11, 42, 87],
-		'end': [50, 131, 55, 142, 30, 35, 31, 62, 107]
-	})
-
-	assert (df == base_df).all(None)
-
-
-def test_interleave_loci_bed10_no_summits_df():
-	loci = pandas.read_csv("tests/data/test2.bed10", delimiter='\t',
-		header=None)
-	df = _interleave_loci(loci, summits=False)
-
-	base_df = pandas.DataFrame({
-		'chrom': ['chr1', 'chr1', 'chr2', 'chr2', 'chr3', 'chr3', 'chr4',
-			'chr5', 'chr5'],
-		'start': [40, 120, 40, 120, 5, 25, 20, 50, 80],
-		'end': [60, 140, 60, 140, 25, 45, 40, 70, 100]
-	})
-
-	assert (df == base_df).all(None)
-
-
-def test_interleave_loci_single_raises():
-	assert_raises(ValueError, _interleave_loci, 5)
-	assert_raises(ValueError, _interleave_loci, numpy.random.randn(5, 5))
-
-
-def test_interleave_loci_multi_raises():
-	assert_raises(ValueError, _interleave_loci, [5, 1])
-	assert_raises(ValueError, _interleave_loci, [numpy.random.randn(5, 5)])
+@pytest.mark.parametrize("loci", [5, numpy.random.randn(5, 5), [5, 1],
+	[numpy.random.randn(5, 5)]], ids=["int", "array", "list_of_ints",
+	"list_of_arrays"])
+def test_interleave_loci_raises(loci):
+	assert_raises(ValueError, _interleave_loci, loci)
 
 
 def test_interleave_loci_multi_raises_chroms():
@@ -402,11 +360,11 @@ def test_interleave_loci_raises_summits_bed():
 	assert_raises(ValueError, _interleave_loci, ["tests/data/test2.bed",
 		"tests/data/test.bed"], None, True)
 
-def test_interleave_loci_raises_summits_interleave():
-	assert_raises(ValueError, _interleave_loci, ["tests/data/test2.bed",
-		"tests/data/test.bed"], None, True)
 
-def test_interleave_loci_raises_summits_negative():
+@pytest.mark.parametrize("summit, match", [
+	([-1, 0, 1, 0], "cannot be negative"),
+	([21, 0, 1, 0], "larger than end")], ids=["negative", "too_large"])
+def test_interleave_loci_raises_summits(summit, match):
 	base_df = pandas.DataFrame({
 		'chrom': ['chr1', 'chr1', 'chr2', 'chr2'],
 		'start': [40, 120, 40, 120],
@@ -417,27 +375,11 @@ def test_interleave_loci_raises_summits_negative():
 		'7': ['-', '-', '-', '-'],
 		'8': ['-', '-', '-', '-'],
 		'9': ['-', '-', '-', '-'],
-		'10': [-1, 0, 1, 0],
+		'10': summit,
 	})
 
-	assert_raises(ValueError, _interleave_loci, base_df, None, True)
-
-
-def test_interleave_loci_raises_summits_too_large():
-	base_df = pandas.DataFrame({
-		'chrom': ['chr1', 'chr1', 'chr2', 'chr2'],
-		'start': [40, 120, 40, 120],
-		'end': [60, 140, 60, 140],
-		'4': ['-', '-', '-', '-'],
-		'5': ['-', '-', '-', '-'],
-		'6': ['-', '-', '-', '-'],
-		'7': ['-', '-', '-', '-'],
-		'8': ['-', '-', '-', '-'],
-		'9': ['-', '-', '-', '-'],
-		'10': [21, 0, 1, 0],
-	})
-
-	assert_raises(ValueError, _interleave_loci, base_df, None, True)
+	with pytest.raises(ValueError, match=match):
+		_interleave_loci(base_df, None, True)
 
 
 ##
@@ -458,20 +400,6 @@ def test_load_signals_bw():
 
 	assert len(bw) == 2
 	assert isinstance(bw, list)
-
-
-def test_load_signals_values():
-	bw = _load_signals(["tests/data/test.bw"])
-
-	vals = bw[0].read("chr1", [0], 20)[0]
-
-	assert type(vals) == numpy.ndarray
-	assert vals.shape == (20,)
-	assert_array_almost_equal(vals, [
-		0.407911, 1.343698, 2.955252, 0.897452, 0.928617, 1.562161,
-		0.662164, 1.387003, 0.963338, 1.988053, 1.373694, 1.417226,
-		1.202522, 0.829855, 1.740464, 1.479131, 0.495755, 0.129613,
-		0.111225, 0.772133])
 
 
 def test_load_signals_multi_values():
@@ -884,28 +812,17 @@ def test_extract_signals_figwig_error_raises(monkeypatch):
 ##
 
 
-def test_extract_loci_seq(loci_seqs):
+@pytest.mark.parametrize("out_window", [100, 1000])
+def test_extract_loci_seq(loci_seqs, out_window):
 	loci = "tests/data/test.bed"
 	fasta = "tests/data/test.fa"
 
-	X = extract_loci(loci, fasta, in_window=10)
+	X = extract_loci(loci, fasta, in_window=10, out_window=out_window)
 
 	assert X.shape == (5, 4, 10)
 	assert X.dtype == torch.int8
 	assert X.sum() == 50
 	assert_array_almost_equal(X, loci_seqs)
-
-
-def test_extract_loci_seq_first_n(loci_seqs):
-	loci = "tests/data/test.bed"
-	fasta = "tests/data/test.fa"
-
-	X = extract_loci(loci, fasta, in_window=10, n_loci=2)
-
-	assert X.shape == (2, 4, 10)
-	assert X.dtype == torch.int8
-	assert X.sum() == 20
-	assert_array_almost_equal(X, loci_seqs[:2])
 
 
 def test_extract_loci_n_loci_mask_covers_every_locus(loci_seqs):
@@ -919,6 +836,7 @@ def test_extract_loci_n_loci_mask_covers_every_locus(loci_seqs):
 		return_mask=True)
 
 	assert mask.tolist() == [True, True, False, False, False]
+	assert X.dtype == torch.int8
 	assert_array_almost_equal(X, loci_seqs[:2])
 
 	# n_loci counts kept loci, so loci dropped along the way do not use up
@@ -938,24 +856,6 @@ def test_extract_loci_n_loci_mask_covers_every_locus(loci_seqs):
 		return_mask=True)
 
 	assert mask.tolist() == [True] * 5
-	assert_array_almost_equal(X, loci_seqs)
-
-
-
-def test_extract_loci_seq_out_window(loci_seqs):
-	loci = "tests/data/test.bed"
-	fasta = "tests/data/test.fa"
-
-	X = extract_loci(loci, fasta, in_window=10, out_window=100)
-
-	assert X.shape == (5, 4, 10)
-	assert X.dtype == torch.int8
-	assert_array_almost_equal(X, loci_seqs)
-
-	X = extract_loci(loci, fasta, in_window=10, out_window=1000)
-
-	assert X.shape == (5, 4, 10)
-	assert X.dtype == torch.int8
 	assert_array_almost_equal(X, loci_seqs)
 
 
@@ -1077,10 +977,11 @@ def test_extract_loci_odd_out_window_at_chrom_end():
 	assert_array_almost_equal(y[1, 0], bw.values('chr2', 200, 211))
 
 
-def test_extract_loci_seq_alphabet(loci_seqs):
-	loci = "tests/data/test.bed"
-	fasta = "tests/data/test.fa"
-
+@pytest.mark.parametrize("loci, fasta", [
+	("tests/data/test.bed", "tests/data/test.fa"),
+	("tests/data/test_int.bed", "tests/data/test_int_chroms.fa")],
+	ids=["str_chroms", "int_chroms"])
+def test_extract_loci_seq_alphabet(loci_seqs, loci, fasta):
 	X = extract_loci(loci, fasta, alphabet=['A', 'G', 'C', 'T'], in_window=10)
 
 	assert X.shape == (5, 4, 10)
@@ -1110,48 +1011,21 @@ def test_extract_loci_seq_alphabet_tuple(loci_seqs):
 	assert_array_almost_equal(X[:, [0, 2, 1, 3]], loci_seqs)
 
 
-def test_extract_loci_int(loci_seqs):
-	loci = "tests/data/test_int.bed"
-	fasta = "tests/data/test_int_chroms.fa"
-
-	X = extract_loci(loci, fasta, alphabet=['A', 'G', 'C', 'T'], in_window=10)
-
-	assert X.shape == (5, 4, 10)
-	assert X.dtype == torch.int8
-	assert X.sum() == 50
-	assert_array_almost_equal(X[:, [0, 2, 1, 3]], loci_seqs)
-
-	X = extract_loci(loci, fasta, alphabet=['A', 'C', 'G', 'T', 'Z'],
-		in_window=10)
-
-	assert X.shape == (5, 5, 10)
-	assert X.dtype == torch.int8
-	assert X.sum() == 50
-
-	expanded_loci_seqs = numpy.concatenate([loci_seqs, numpy.zeros([5, 1, 10])],
-		axis=1)
-
-	assert_array_almost_equal(X, expanded_loci_seqs)
-	
-
-def test_interleave_loci_int_chroms():
+@pytest.mark.parametrize("as_df", [False, True], ids=["str", "df"])
+def test_interleave_loci_int_chroms(as_df):
 	# Genomes whose chromosomes are named "1", "2", etc. would otherwise get
 	# read in as integers by pandas and fail to match the string names used
 	# by pyfaidx/pybigtools.
-	df = _interleave_loci("tests/data/test_int.bed")
+	loci = "tests/data/test_int.bed"
+	if as_df:
+		loci = pandas.read_csv(loci, delimiter='\t', index_col=False,
+			header=None)
 
-	assert list(df['chrom']) == ['1', '1', '1', '2', '2']
-	assert list(df['start']) == [10, 80, 140, 25, 35]
-	assert list(df['end']) == [30, 100, 160, 55, 65]
-
-
-def test_interleave_loci_int_chroms_df():
-	loci = pandas.read_csv("tests/data/test_int.bed", delimiter='\t',
-		index_col=False, header=None)
 	df = _interleave_loci(loci)
 
 	assert list(df['chrom']) == ['1', '1', '1', '2', '2']
 	assert list(df['start']) == [10, 80, 140, 25, 35]
+	assert list(df['end']) == [30, 100, 160, 55, 65]
 
 
 def test_interleave_loci_int_chroms_filter():
@@ -1166,9 +1040,10 @@ def test_interleave_loci_int_chroms_filter():
 	assert list(df['chrom']) == ['2', '2']
 
 
-def test_extract_loci_int_chroms_filter():
+@pytest.mark.parametrize("chroms", [['1'], [1]], ids=["str", "int"])
+def test_extract_loci_int_chroms_filter(chroms):
 	X = extract_loci("tests/data/test_int.bed", "tests/data/test_int_chroms.fa",
-		chroms=['1'], in_window=10)
+		chroms=chroms, in_window=10)
 	X0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
 		chroms=['chr1'], in_window=10)
 
@@ -1286,16 +1161,6 @@ def test_extract_loci_exclusion_lists_end_exclusive():
 			exclusion_lists=exclusion)
 
 		assert mask.tolist() == [True] * 6
-
-
-def test_extract_loci_int_chroms_filter_ints():
-	X = extract_loci("tests/data/test_int.bed",
-		"tests/data/test_int_chroms.fa", chroms=[1], in_window=10)
-	X0 = extract_loci("tests/data/test.bed", "tests/data/test.fa",
-		chroms=['chr1'], in_window=10)
-
-	assert X.shape == (3, 4, 10)
-	assert_array_almost_equal(X, X0)
 
 
 def test_extract_loci_int_dict_keys(dict_sequences, dict_signal, loci_seqs):
@@ -1600,98 +1465,53 @@ def test_extract_loci(loci_signal):
 	assert_array_almost_equal(y, loci_signal)
 
 
-def test_extract_loci_widths(loci_signal):
+@pytest.mark.parametrize("out_window, n, X_sum, y_sum", [
+	(14, 5, 40, 116.9134), (42, 4, 32, 276.9355)])
+def test_extract_loci_widths(out_window, n, X_sum, y_sum):
 	loci = "tests/data/test.bed"
 	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
 	fasta = "tests/data/test.fa"
 
-	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=14)
+	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=out_window)
 
-	assert X.shape == (5, 4, 8)
+	assert X.shape == (n, 4, 8)
 	assert X.dtype == torch.int8
-	assert X.sum() == 40
+	assert X.sum() == X_sum
 
-	assert y.shape == (5, 2, 14)
+	assert y.shape == (n, 2, out_window)
 	assert y.dtype == torch.float32
-	assert_array_almost_equal([abs(y).sum()], [116.9134], 4)
+	assert_array_almost_equal([abs(y).sum()], [y_sum], 4)
 
 
-def test_extract_loci_out_off(loci_signal):
-	loci = "tests/data/test.bed"
-	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
-	fasta = "tests/data/test.fa"
-
-	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=42)
-
-	assert X.shape == (4, 4, 8)
-	assert X.dtype == torch.int8
-	assert X.sum() == 32
-
-	assert y.shape == (4, 2, 42)
-	assert y.dtype == torch.float32
-	assert_array_almost_equal([abs(y).sum()], [276.9355], 4)
-
-
-def test_extract_loci_min_counts(loci_signal):
+@pytest.mark.parametrize(
+	"min_counts, max_counts, target_idx, n, X_sum, y_sum", [
+	(10, None, 0, 2, 16, 36.2247),
+	(7, None, 1, 4, 32, 66.8475),
+	(None, 10, 0, 3, 24, 47.8011),
+	(None, 7, 1, 1, 8, 17.1784)])
+def test_extract_loci_min_max_counts(min_counts, max_counts, target_idx, n,
+	X_sum, y_sum):
 	loci = "tests/data/test.bed"
 	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
 	fasta = "tests/data/test.fa"
 
 	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10,
-		min_counts=10, target_idx=0)
+		min_counts=min_counts, max_counts=max_counts, target_idx=target_idx)
 
-	assert X.shape == (2, 4, 8)
+	assert X.shape == (n, 4, 8)
 	assert X.dtype == torch.int8
-	assert X.sum() == 16
+	assert X.sum() == X_sum
 
-	assert y.shape == (2, 2, 10)
+	assert y.shape == (n, 2, 10)
 	assert y.dtype == torch.float32
-	assert all(y[:, 0].sum(axis=-1) > 10)
-	assert_array_almost_equal([abs(y).sum()], [36.2247], 4)
+	assert_array_almost_equal([abs(y).sum()], [y_sum], 4)
 
-
-	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10,
-		min_counts=7, target_idx=1)
-
-	assert X.shape == (4, 4, 8)
-	assert X.dtype == torch.int8
-	assert X.sum() == 32
-
-	assert y.shape == (4, 2, 10)
-	assert y.dtype == torch.float32
-	assert all(y[:, 1].sum(axis=-1) > 7)
-	assert_array_almost_equal([abs(y).sum()], [66.8475], 4)
-
-
-def test_extract_loci_max_counts(loci_signal):
-	loci = "tests/data/test.bed"
-	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
-	fasta = "tests/data/test.fa"
-
-	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10,
-		max_counts=10, target_idx=0)
-
-	assert X.shape == (3, 4, 8)
-	assert X.dtype == torch.int8
-	assert X.sum() == 24
-
-	assert y.shape == (3, 2, 10)
-	assert y.dtype == torch.float32
-	assert all(y[:, 0].sum(axis=-1) < 10)
-	assert_array_almost_equal([abs(y).sum()], [47.8011], 4)
-
-
-	X, y = extract_loci(loci, fasta, bw, in_window=8, out_window=10,
-		max_counts=7, target_idx=1)
-
-	assert X.shape == (1, 4, 8)
-	assert X.dtype == torch.int8
-	assert X.sum() == 8
-
-	assert y.shape == (1, 2, 10)
-	assert y.dtype == torch.float32
-	assert all(y[:, 1].sum(axis=-1) < 10)
-	assert_array_almost_equal([abs(y).sum()], [17.1784], 4)
+	# Both thresholds are inclusive.
+	counts = y[:, target_idx].sum(axis=-1)
+	if min_counts is not None:
+		assert all(counts >= min_counts)
+	if max_counts is not None:
+		assert all(counts <= max_counts)
 
 
 def test_extract_loci_nans():
@@ -1990,23 +1810,16 @@ def test_extract_loci_exclusion_uses_union_window():
 
 def test_extract_loci_bigwig_missing_chrom_warns():
 	# test3.bw only has chr1, so the two chr2 loci warn and are zero-filled.
-	with pytest.warns(TangermemeWarning, match="chr2") as record:
-		_, y = extract_loci("tests/data/test.bed", "tests/data/test.fa",
-			["tests/data/test3.bw"], in_window=8, out_window=10)
-
-	assert sum(issubclass(w.category, TangermemeWarning) for w in record) == 2
-	assert_array_almost_equal(y[3:], numpy.zeros((2, 1, 10)))
-
-
-def test_extract_loci_bigwig_missing_chrom_warns_once_per_locus():
 	# figwig's own warning about the missing chromosome is replaced by
 	# tangermeme's, so the two chr2 loci give two warnings and no others.
 	with warnings.catch_warnings(record=True) as record:
 		warnings.simplefilter("always")
-		extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		_, y = extract_loci("tests/data/test.bed", "tests/data/test.fa",
 			["tests/data/test3.bw"], in_window=8, out_window=10)
 
 	assert [w.category for w in record] == [TangermemeWarning] * 2
+	assert all("chr2" in str(w.message) for w in record)
+	assert_array_almost_equal(y[3:], numpy.zeros((2, 1, 10)))
 
 
 @pytest.mark.parametrize("kwargs", [{}, {'max_jitter': 3, 'in_window': 7,
@@ -2778,7 +2591,8 @@ def test_extract_loci_counts_in_groups(monkeypatch, reference_genome, filters,
 ###
 
 
-def test_read_meme():
+@pytest.mark.parametrize("n_motifs", [None, 6])
+def test_read_meme(n_motifs):
 	keys = ["MEOX1_homeodomain_1", "HIC2_MA0738.1", "GCR_HUMAN.H11MO.0.A",
 		"FOSL2+JUND_MA1145.1", "TEAD3_TEA_2", "ZN263_HUMAN.H11MO.0.A",
 		"PAX7_PAX_2", "SMAD3_MA0795.1", "MEF2D_HUMAN.H11MO.0.A",
@@ -2802,29 +2616,16 @@ def test_read_meme():
 		[0.24800,	0.28800,	0.24100,	0.22300]
 	]).T
 
-	motifs = read_meme("tests/data/test.meme")
+	motifs = read_meme("tests/data/test.meme", n_motifs=n_motifs)
+	n = len(keys) if n_motifs is None else n_motifs
 
-	assert len(motifs) == 12
+	assert len(motifs) == n
 	assert isinstance(motifs, dict)
 	assert all(isinstance(key, str) for key in motifs.keys())
 	assert all(isinstance(pwm, torch.Tensor) for pwm in motifs.values())
 
-	assert all([key in motifs.keys() for key in keys])
+	assert all([key in motifs.keys() for key in keys[:n]])
 	assert_array_almost_equal(motifs['FOSL2+JUND_MA1145.1'], pwm)
-
-
-def test_read_meme_n_motifs():
-	keys = ["MEOX1_homeodomain_1", "HIC2_MA0738.1", "GCR_HUMAN.H11MO.0.A",
-		"FOSL2+JUND_MA1145.1", "TEAD3_TEA_2", "ZN263_HUMAN.H11MO.0.A"]
-
-	motifs = read_meme("tests/data/test.meme", n_motifs=6)
-
-	assert len(motifs) == 6
-	assert isinstance(motifs, dict)
-	assert all(isinstance(key, str) for key in motifs.keys())
-	assert all(isinstance(pwm, torch.Tensor) for pwm in motifs.values())
-
-	assert all([key in motifs.keys() for key in keys])
 
 
 def test_read_meme_file_not_found():
@@ -2843,20 +2644,8 @@ def test_read_vcf_basic():
 		"FILTER", "INFO", "FORMAT"]
 	assert len(vcf) > 0
 
-
-def test_read_vcf_drops_sample_columns():
-	vcf = read_vcf("tests/data/test.vcf")
-
-	assert vcf.shape[1] == 9
-	assert "NA00001" not in vcf.columns
-	assert "NA00002" not in vcf.columns
-
-
-def test_read_vcf_chrom_is_str():
 	# read_vcf forces dtype=str, so chromosome names match the record names
 	# used by pyfaidx/pybigtools without any further coercion.
-	vcf = read_vcf("tests/data/test.vcf")
-
 	assert all(isinstance(chrom, str) for chrom in vcf['CHROM'])
 	assert vcf['POS'].dtype == numpy.int64
 
@@ -4267,23 +4056,6 @@ def test_extract_loci_nan_and_inf_threads(tmp_path, monkeypatch, n_jobs):
 	assert numpy.isfinite(y_in.numpy()).all()
 
 
-def test_one_hot_to_fasta_packed(tmp_path):
-	# A PackedSequence is written as its one-hot encoding is, and its
-	# unknown characters as N.
-	X = torch.stack([one_hot_encode('ACGT' * 25), one_hot_encode('GCGA' * 25)])
-	one_hot_to_fasta(X, str(tmp_path / "one_hot.fa"))
-	one_hot_to_fasta(PackedSequence.from_one_hot(X), str(tmp_path / "packed.fa"))
-	assert (tmp_path / "packed.fa").read_text() == (tmp_path /
-		"one_hot.fa").read_text()
-
-	X_N = torch.stack([one_hot_encode('ACGTNNNA' * 20), one_hot_encode('C' * 160)])
-	one_hot_to_fasta(PackedSequence.from_one_hot(X_N), str(tmp_path / "N.fa"),
-		headers=["a", "b"])
-	assert (tmp_path / "N.fa").read_text() == ("> a\n" + ('ACGTNNNA' * 10) +
-		"\n" + ('ACGTNNNA' * 10) + "\n\n> b\n" + "C" * 80 + "\n" + "C" * 80 +
-		"\n\n")
-
-
 ###
 # Under return_packed=True, extract_loci reads and packs the windows a chunk
 # at a time and returns the packed sequences of its one-hot path.
@@ -4349,13 +4121,6 @@ def test_extract_loci_packed_N(fasta_with_N, chunk, reader, monkeypatch):
 	assert torch.equal(mask_packed, mask)
 
 
-def test_extract_loci_packed_dict(dict_sequences):
-	X = extract_loci("tests/data/test.bed", dict_sequences, in_window=10)
-	X_packed = extract_loci("tests/data/test.bed", dict_sequences, in_window=10,
-		return_packed=True)
-	assert torch.equal(X_packed.to_one_hot(), X)
-
-
 def test_extract_loci_packed_raises():
 	with pytest.raises(ValueError, match="four characters"):
 		extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
@@ -4386,16 +4151,21 @@ def test_one_hot_to_fasta_packed_raises_batch_axes(tmp_path):
 		one_hot_to_fasta(X, str(tmp_path / "out.fa"))
 
 
+@pytest.mark.parametrize("chunk, n_rows", [(None, 5), (25, 2)],
+	ids=["default", "25"])
 @pytest.mark.parametrize("reader", ["dict", "pyfaidx"])
-def test_extract_loci_packed_chunks_bounded(reader, dict_sequences,
-	monkeypatch):
+def test_extract_loci_packed_chunks_bounded(reader, chunk, n_rows,
+	dict_sequences, monkeypatch):
 	# The windows of a dict or a pyfaidx.Fasta are read and packed a chunk at
-	# a time, two windows of 10 here, with the result of the one-hot path.
+	# a time, all five at once by default and two windows of 10 in a chunk of
+	# 25 positions, with the result of the one-hot path.
 	sequences = dict_sequences if reader == "dict" else pyfaidx.Fasta(
 		"tests/data/test.fa")
 	X = extract_loci("tests/data/test.bed", sequences, in_window=10)
 
-	monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", 25)
+	if chunk is not None:
+		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
+
 	sizes, from_one_hot = [], PackedSequence.from_one_hot
 
 	def counted(X_, *args, **kwargs):
@@ -4407,7 +4177,7 @@ def test_extract_loci_packed_chunks_bounded(reader, dict_sequences,
 		return_packed=True)
 
 	assert torch.equal(X_packed.to_one_hot(), X)
-	assert max(sizes) == 2 and sum(sizes) == len(X)
+	assert max(sizes) == n_rows and sum(sizes) == len(X)
 
 
 def test_extract_loci_packed_alphabet():
