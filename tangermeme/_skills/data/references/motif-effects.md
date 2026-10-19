@@ -1,142 +1,55 @@
-# Measuring motif effects (marginalize / ablate / space)
+# Motif effects (marginalize, ablate, space)
 
-These are tangermeme's flagship "what has the model learned" tools. All three
-apply a function before and after a sequence edit and return both, so you compute
-the effect as the delta. (Start with the vignette "Inspecting what Cis-Regulatory
-Features a Model has Learned" — it is the canonical use case.)
-
-## marginalize — add a motif into backgrounds
-
-```python
-from tangermeme.marginalize import marginalize
-
-y_before, y_after = marginalize(model, X, "CTCAGTGATG")   # PerturbationResult
-effect = y_after - y_before
-```
-
-- `motif` may be a string or a one-hot tensor; it is **substituted** (length
-  preserved). `start=` is the **first position** of the substitution (not the
-  center); the default centers the motif.
-- `X` should be background sequences so the delta reflects the motif "in isolation".
-- `X` may carry unknown characters as all-zero columns, as `extract_loci` returns for
-  a locus over an assembly gap; they survive the substitution unless the motif covers
-  them. Multi-hot columns are still rejected.
-
-### Choosing backgrounds — the GC mirage (important)
-
-Uniformly random sequences are **much higher in GC content** than real genomic DNA,
-and models are sensitive to local GC — so substituting a motif into the wrong
-background can produce a "mirage" effect driven entirely by the GC change, not the
-motif. In order of preference:
-
-1. Real inactive regions matched on GC/dinucleotide content (best).
-2. `random_one_hot(..., probs=...)` with genomic base frequencies (e.g. hg38
-   ≈ `[0.291, 0.209, 0.209, 0.291]`), or `dinucleotide_shuffle` /
-   `local_dinucleotide_shuffle` of real sequences. `probs` must sum to exactly
-   1 — numpy raises otherwise, so don't round the frequencies independently.
-   The two shuffles differ in scale: `dinucleotide_shuffle` conserves
-   composition across the whole window, `local_dinucleotide_shuffle` within
-   consecutive bins, which matters when GC or repeat content drifts across the
-   window.
-3. Uniform random — prototyping only.
-
-Returns diminish past ~100 backgrounds.
-
-## ablate — shuffle out a region
+Each applies `func` (default `predict`) before and after an edit and returns
+both; the effect is the delta. Swap `func=deep_lift_shap` for the effect on
+attributions, with its kwargs in `additional_func_kwargs`
+(`references/func-pattern.md`); attribution runs before and after, each
+with `n_shuffles` references, so restrict examples rather than positions
+(`deep_lift_shap` has no window argument).
 
 ```python
-from tangermeme.ablate import ablate
-
+y_before, y_after = marginalize(model, X, "CACGTG", start=None)   # PerturbationResult
 y_before, y_after = ablate(model, X, start=990, end=1010, n=20, random_state=0)
+y_before, y_afters = space(model, X, ["AGATAA", "CAGCTG"], spacing=[[5], [10], [20]])  # SpaceResult
 ```
 
-- Replaces `[start:end]` with `n` shuffles and reports before/after.
-- The internal shuffle is **non-deterministic without `random_state=`** — always
-  pass a seed when you need reproducible / regression values.
-- Conceptual opposite of marginalize: ablate removes signal from real sequences;
-  marginalize adds signal into backgrounds.
-- `X` may carry unknown characters, as with marginalize. `dinucleotide_shuffle`
-  rejects them unless bound with `allow_N=True`, which shuffles each as a fifth
-  character: `shuffle_fn=partial(dinucleotide_shuffle, allow_N=True)`.
-  `local_dinucleotide_shuffle` has no such flag, and `deep_lift_shap` and `pisa`
-  reject them in `X` itself (Footgun #3 in `references/deep_lift_shap.md`).
+- `marginalize` substitutes (length preserved); `start` is the motif's
+  first base; the default centers it at `length // 2 - len(motif) // 2`
+  (a 6-mer in 2,114 bp sits at 1054:1060). `X` may hold all-zero columns.
+- `ablate` shuffles `[start, end)` `n` times per example; pass `random_state`
+  or it differs per call. `shuffle_fn=partial(dinucleotide_shuffle, allow_N=True)`
+  for sequences with unknown characters.
+- `space`: `spacing` has shape `(n_spacings, n_motifs - 1)`, nested even
+  for one gap (`[[10]]`; a flat list raises `ValueError`); sweep with
+  `torch.arange(50)[:, None]`. A spacing is the number of background bases
+  left between motif `i` and `i + 1`. With `start=None` the whole
+  arrangement is re-centered per spacing, so the first motif moves; fix
+  `start` to compare against a single-motif marginalization at one
+  position. `y_afters` is `(n_examples, n_spacings, ...)`.
+- Multi-task models return lists; index before subtracting.
+- `marginalize_annotations(model, X, X0, annotations)` and
+  `ablate_annotations(model, X, annotations)` take `(n, 3)` rows
+  `(example_idx, start, end)` and return `PerturbationAnnotationsResult`
+  with a leading annotation axis: `ablate_annotations` gives
+  `(n_annotations, 1, ...)` before and `(n_annotations, 1, n, ...)` after,
+  the `1` being the single example each row is cut from;
+  `marginalize_annotations` gives `(n_annotations, len(X0), ...)` for both.
 
-## space — distance dependence between motifs
+## Backgrounds for marginalize
 
-```python
-from tangermeme.space import space
+The delta should reflect the motif, not the background's composition.
+Uniform random sequence is GC-richer than a genome and gives a GC-driven
+effect on some models; in one test on a MAX ChIP-seq cherimoya, non-peaks,
+dinucleotide-shuffled peaks and uniform random agreed within 0.06 log
+counts, so measure it on yours. In order of preference:
 
-# motifs are SEQUENCES, not TF names; spacing is nested even for one gap
-y_before, y_afters = space(model, X, motifs=["AGATAA", "CAGCTG"],
-                           spacing=[[5], [10], [20], [40]])   # SpaceResult
-```
+1. GC-matched inactive regions: `extract_matching_loci` (`references/io-loci.md`), then `extract_loci`.
+2. `dinucleotide_shuffle(X_real, n=1, random_state=0)[:, 0]` or
+   `local_dinucleotide_shuffle` (keeps composition per bin) of real regions.
+3. `random_one_hot((n, 4, L), probs=numpy.array([[0.295, 0.205, 0.205, 0.295]]))`
+   at genome frequencies. `probs` must be 2-D and float64: a Python list is
+   cast to float32 and numpy then rejects the sum (`references/ersatz.md`).
+4. Uniform random, for prototyping.
 
-Returns `SpaceResult(y_before, y_afters)` where `y_afters` covers each spacing —
-use it to find cooperative/competitive distance preferences (output axis is
-`(n_examples, n_spacings, ...)`).
-
-- **`spacing` shape is `(n_spacings, n_motifs-1)`** — entry `[i, j]` is the gap in
-  experiment `i` between motif `j` and `j+1`. Even a single two-motif experiment
-  needs the nested form `[[10]]`; a flat list raises `ValueError: spacing has shape
-  ... but must have shape (-1, 1)`. Sweep one gap with `torch.arange(50)[:, None]`.
-- Characters **inside the gaps are left as background** (not overwritten).
-
-## Multi-task and multi-input models
-
-- **Multi-task:** when the model returns multiple outputs, `y_before`/`y_after`
-  come back as a **list of tensors**, one per output. Index before subtracting.
-- **Multi-input:** pass extra model inputs through `args=(tensor, ...)` (ablate)
-  or kwargs forwarded to `func`; each arg's batch dim aligns with `X`.
-
-## Return type
-
-`marginalize` and `ablate` return `PerturbationResult(y_before, y_after)`;
-`space` returns `SpaceResult(y_before, y_afters)`. Both are NamedTuples — unpack
-positionally (`y_before, y_after = ...`) or by attribute (`r.y_before`), and
-`isinstance(r, tuple)` is True.
-
-### Annotation variants (per-region, in batch)
-
-`marginalize_annotations(model, X, X0, annotations)` (X0 = backgrounds) and
-`ablate_annotations(model, X, annotations)` apply the effect to each annotated
-region individually and return `PerturbationAnnotationsResult(y_befores, y_afters)`.
-`annotations` is a `(n_annotations, 3)` tensor `(example_idx, start, end)`. Both
-loop one annotation at a time and stack, so the output carries an **extra leading
-axis** and the second axis differs between them:
-
-- `ablate_annotations` → `(n_annotations, 1, ...)` and
-  `(n_annotations, 1, n_shuffles, ...)`. The `1` is real, not `n_examples`: each
-  annotation is ablated on its own single example `X[idx:idx+1]`, so you almost
-  always want to squeeze it.
-- `marginalize_annotations` → `(n_annotations, len(X0), ...)` for both, since each
-  annotation's span is substituted into every background in `X0`.
-
-Index carefully before taking deltas. See `references/annotate.md` for building
-the annotation tensor.
-
-## Attributions instead of predictions
-
-All three take `func=`. Swap in `deep_lift_shap` to see the effect on
-attributions rather than predictions; route attribution kwargs through
-`additional_func_kwargs=` (see `references/func-pattern.md`):
-
-```python
-from tangermeme.deep_lift_shap import deep_lift_shap
-attr_before, attr_after = marginalize(model, X, "CTCAGTGATG", func=deep_lift_shap,
-                                      additional_func_kwargs={'target': 0})
-```
-
-- **Set `target` explicitly** — `deep_lift_shap`'s default is output 0, so on a
-  multi-task model you silently attribute the wrong head.
-- **Cost blows up:** attribution runs before *and* after, each building `n_shuffles`
-  (default 20) references — 5 examples ≈ 200 forward/backward passes. Shrink the
-  attributed window via `additional_func_kwargs={'start': ..., 'end': ...}`.
-- **Backgrounds-as-references trick:** `func=deep_lift_shap` with `n_shuffles=1` over
-  many background sequences trades per-example reference averaging for more examples,
-  giving cleaner aggregate attributions cheaply.
-
-## Related references
-
-`references/func-pattern.md`, `references/deep_lift_shap.md`,
-`references/saturation_mutagenesis.md`,
-`references/model-wrapping.md`.
+With `func=deep_lift_shap` and `n_shuffles=1` over many backgrounds, the
+backgrounds themselves stand in for reference averaging.

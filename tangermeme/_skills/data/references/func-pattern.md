@@ -1,119 +1,50 @@
-# The `func=` plug-point in tangermeme
-
-tangermeme's perturbation functions are built around one contract so any analysis
-can be swapped for any other. Master this and the rest of the library composes.
-
-## The contract
-
-Any function passed as `func=` must satisfy:
+# The `func=` plug-point
 
 ```python
 func(model, X, args=None, **kwargs) -> torch.Tensor | list[torch.Tensor]
 ```
 
-Four library functions already satisfy it and can be passed directly:
+`predict`, `deep_lift_shap`, `saliency` and `saturation_mutagenesis` satisfy
+it. `ablate`, `marginalize`, `space`, `variant_effect.*` and the
+`*_annotations` variants default `func=predict`; `dependency_map` defaults
+`func=saliency` and requires `(-1, len(alphabet), length)` back, so
+`predict` is invalid there. The outer function returns whatever `func`
+returns, before and after the edit, so `marginalize(..., func=deep_lift_shap)`
+gives attributions before and after in the same `PerturbationResult`.
 
-- `tangermeme.predict.predict` — the default; returns model predictions.
-- `tangermeme.deep_lift_shap.deep_lift_shap` — returns attributions.
-- `tangermeme.saturation_mutagenesis.saturation_mutagenesis` — returns ISM scores.
-- `tangermeme.saliency.saliency` — returns input × gradient attributions.
+`product.apply_pairwise` / `apply_product` take `func` as a required first
+positional argument and so do not satisfy the contract themselves; bind
+first, `func=partial(apply_pairwise, predict)`, or put the product on the
+outside: `apply_pairwise(marginalize, model, X, args=(...), motif="TGACGTCA")`
+(`references/product.md`).
 
-With a `PackedSequence` as `X`, these four, `pisa`, and the `ersatz` shuffles
-given as `shuffle_fn=` (also inside `functools.partial`) receive it packed. Any
-other `func` or `shuffle_fn`, including your own, receives its int8 one-hot
-encoding.
+**Other `func=` arguments are not this contract.** `design.screen(func=random_one_hot)`
+is a candidate generator `func(shape, random_state=)`. `predict`,
+`saliency` and `saturation_mutagenesis` take `func=` as a post-processing
+hook on each batch of predictions (pick a head, apply a non-linearity),
+applied identically to the reference and every perturbation.
+`plot_attributions(func=deep_lift_shap)` names the attribution function.
 
-## Where `func=` is accepted
+## Routing kwargs
 
-```python
-ablate(model, X, start, end, func=...)
-marginalize(model, X, motif, func=...)
-space(model, X, motifs, spacing, func=...)
-variant_effect.substitution_effect(model, X, subs, func=...)
-variant_effect.deletion_effect(...)   ;  variant_effect.insertion_effect(...)
-dependency_map(model, X, func=...)            # defaults to saliency, not predict
-product.apply_pairwise(func, model, X, ...)   # func is FIRST positional here
-product.apply_product(func, model, X, ...)
-```
+Bare `**kwargs` on the outer function are forwarded to `func`, so
+`marginalize(model, X, motif, func=deep_lift_shap, target=3, random_state=0)`
+does reach `deep_lift_shap`. The collision is a name both layers consume
+(`func` inside `dependency_map`, `random_state` in `ablate`, `batch_size`
+in `screen`): put anything meant for `func` in `additional_func_kwargs={...}`,
+which goes only to `func`. Default `None`; the dict is copied, not mutated.
 
-`func` defaults to `predict` on `ablate`, `marginalize`, `space` and the three
-`variant_effect` functions, and to `saliency` on `dependency_map` — which also
-requires that `func` return `(-1, len(alphabet), length)`, so `predict` is not a
-valid choice there; see `references/dependency_map.md`.
-On `product.apply_pairwise` / `apply_product` it is a
-**required first positional argument** with no default — and because of that
-position they do **not** themselves satisfy the contract; see
-`references/product.md`.
+## Extra model inputs
 
-**Elsewhere in the library `func=` is a different contract entirely.** None of these
-take the `func(model, X)` predictor contract above:
+`args=(tensor, ...)` pairs row `i` of each arg with example `i` and flows
+through to `model(X, *args)`; `deep_lift_shap` reuses example `i`'s args for
+its references. `marginalize` and `space` have no `args` parameter of their
+own; it reaches `predict` through `**kwargs`. In `product.*`, `args` are the
+axes to sweep, not per-example rows.
 
-- `design.screen(func=random_one_hot)` — a *sequence generator*
-  `func(shape_tuple, random_state=, **kwargs)` that produces candidates. Don't pass
-  `predict`/`deep_lift_shap` here.
-- `predict(func=None)`, `saliency(func=None)` and
-  `saturation_mutagenesis(func=None)` — a *post-processing*
-  hook applied to each batch of predictions, e.g. to pick a head or apply a final
-  non-linearity. In `saturation_mutagenesis` it is applied identically to the
-  reference and to every perturbation, so attributions are computed on the
-  post-processed values.
-- `plot.plot_attributions(models, X, func=deep_lift_shap)` — the *attribution*
-  function to run before plotting.
+## Packed sequences
 
-## The key idea: the return type follows `func`
-
-The outer function returns whatever `func` returns, before and after the edit.
-`marginalize` with the default `predict` gives predictions before/after; swap in
-`deep_lift_shap` and you get *attributions* before/after — same call, same
-`PerturbationResult(y_before, y_after)` container.
-
-```python
-from tangermeme.marginalize import marginalize
-from tangermeme.deep_lift_shap import deep_lift_shap
-
-# Effect of a motif on PREDICTIONS
-y_before, y_after = marginalize(model, X, "CTCAGTGATG")
-
-# Effect of the same motif on ATTRIBUTIONS
-attr_before, attr_after = marginalize(model, X, "CTCAGTGATG", func=deep_lift_shap)
-```
-
-## The collision footgun: `additional_func_kwargs`
-
-Extra `**kwargs` on the outer function are forwarded to `func`. This breaks when
-a kwarg name means different things to the outer function and to `func` (e.g.
-`random_state`, `batch_size`, `target`). Disambiguate by routing kwargs meant for
-`func` through `additional_func_kwargs=`:
-
-```python
-# Tell deep_lift_shap to attribute output #3, not the marginalize-level kwargs
-marginalize(model, X, motif, func=deep_lift_shap,
-            additional_func_kwargs={'target': 3, 'n_shuffles': 50})
-```
-
-- Default is `None`, **not** `{}`.
-- The dict is copied defensively in `ablate`, `marginalize`, `space`,
-  `product.*`, `variant_effect.*`, and `design.screen` — passing it will not
-  mutate your caller-side dict.
-- Anything in `additional_func_kwargs` goes only to `func`; bare `**kwargs` may
-  be consumed by the outer function first.
-
-Rule of thumb: if a name could plausibly belong to either layer, put it in
-`additional_func_kwargs` to be explicit.
-
-## Multi-input models
-
-`args=(tensor, ...)` carries extra model inputs through the whole stack; the i-th
-example is paired with the i-th row of each arg. It flows from the outer function
-into `func` into `model(X, *args)`.
-
-`product.apply_pairwise` / `apply_product` are the exception: there `args` defines
-the axes to sweep over rather than per-example inputs, so its rows are *not* aligned
-to `X` (see `references/product.md`).
-
-## Related references
-
-`references/motif-effects.md` for marginalize/ablate/space specifics,
-`references/deep_lift_shap.md` and
-`references/saturation_mutagenesis.md` for the attribution
-methods, `references/model-wrapping.md` for adapting multi-output models.
+A `PackedSequence` as `X` reaches `predict`, `deep_lift_shap`, `pisa`,
+`saliency`, `saturation_mutagenesis` and the `ersatz` shuffles given as
+`shuffle_fn=` packed (also inside `functools.partial`). Any other `func` or
+`shuffle_fn`, including one you write, receives its int8 one-hot encoding.

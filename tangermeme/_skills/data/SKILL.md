@@ -1,111 +1,61 @@
 ---
 name: tangermeme
-description: Use for any task involving the tangermeme library — post-training analysis of genomic sequence-to-function (S2F) deep learning models. Triggers on predictions, DeepLIFT/SHAP attributions, marginalization/ablation/spacing of motifs, saturation mutagenesis (ISM), variant effect scoring, sequence design, seqlet calling, loading loci/FASTA/bigWig/MEME/VCF, or wrapping a PyTorch genomic model for these analyses. This is a router skill — read the relevant file under references/ for details and footguns before writing tangermeme code.
+description: Use for any task involving the tangermeme library — post-training analysis of genomic sequence-to-function (S2F) deep learning models. Triggers on predictions, DeepLIFT/SHAP attributions, saliency, PISA, dependency maps, marginalization/ablation/spacing of motifs, saturation mutagenesis (ISM), variant effect scoring, sequence design, seqlet calling, motif annotation, loading loci/FASTA/bigWig/MEME/VCF, GC-matched backgrounds, packed sequences, or wrapping a PyTorch genomic model for these analyses. This is a router skill — read the relevant file under references/ for details and footguns before writing tangermeme code.
 ---
 
 # tangermeme
 
-`tangermeme` answers the "what did my genomic model learn, and what do I do with
-it after training" question. It provides atomic sequence operations, batched
-prediction, attribution, perturbation experiments, and sequence design — all
-deliberately assumption-free (any PyTorch model, any alphabet, raw outputs
-returned rather than distances).
+Post-training analysis of any PyTorch sequence model: batched prediction,
+attribution, perturbation experiments, sequence design, on raw outputs with
+no distance baked in. This file routes; the reference files hold the
+signatures, defaults and silent failures. Read the file for the task before
+writing code: several defaults select the wrong output, return a variable
+number of objects, or run zero iterations without a word.
 
-This skill is a **router**. Each topic below has a detailed reference file with
-the exact signatures and footguns. **Read the relevant reference file before 
-writing code** — do not rely on memory of the API, because several functions 
-have non-obvious defaults (silent wrong-output selection, variable-length returns, 
-reproducibility traps).
+## Task to reference file
 
-## Two cross-cutting concepts (read these first if unsure)
-
-- **The `func=` plug-point** (`references/func-pattern.md`) — `ablate`,
-  `marginalize`, `space`, `variant_effect.*`, `dependency_map`, and `product.*`
-  (where it is the first positional argument) all accept
-  `func(model, X, args=, **kwargs)`.
-  Swapping `predict` for
-  `deep_lift_shap` turns a "predictions before/after" experiment into an
-  "attributions before/after" one. Covers the `additional_func_kwargs` collision
-  trap. **This is what makes the library compose.**
-
-- **Wrapping models** (`references/model-wrapping.md`) — tangermeme assumes
-  `y = model(X)` returns a single tensor; `deep_lift_shap` and `pisa` need it
-  to be `(batch, n_outputs)`. Real multi-input / multi-output models must be
-  wrapped first. Read this before attribution or design on any non-trivial
-  model. Data preprocessing or output post-processing should be handled in
-  custom wrappers rather than in custom functions.
-
-## Task → reference file
-
-| If the task is… | Read |
+| task | read |
 |---|---|
-| **starting from scratch** — set up a notebook to load a model and run predictions → attributions → seqlets → motif tests, end to end | `references/notebook-walkthrough.md` |
-| attribution via **DeepLIFT/SHAP** — "which bases drive this prediction", attribution logos, hypothetical contributions for CWMs | `references/deep_lift_shap.md` |
-| attribution via **ISM / saturation mutagenesis** — the forward-pass alternative; use it when DeepLIFT/SHAP convergence deltas are too high, an op can't be registered, or the model is massively multi-task; `fast=True` (fastISM) is the default | `references/saturation_mutagenesis.md` |
-| attribution via **saliency** (input × gradient) — the one-backward-pass option; use it when there are far more sequences than DeepLIFT/SHAP or ISM can afford, or an op has no DeepLIFT rule | `references/dependency_map.md` |
-| **dependency maps** — which bases decide whether the other bases matter; epistasis, motif–flank and motif–motif interactions | `references/dependency_map.md` |
-| comparing predictions/attributions **across N models** (replicates, architectures, ensembles) | `references/comparing-models.md` |
-| effect of a motif / region: marginalize, ablate, spacing between motifs | `references/motif-effects.md` |
-| scoring **variant effects** (substitution / deletion / insertion, from a VCF) | `references/variant-effect.md` |
-| **calling seqlets** from attributions (recursive / TF-MoDISco) | `references/seqlets.md` |
-| **annotating / counting motifs** — TOMTOM/FIMO labels, co-occurrence, spacing | `references/annotate.md` |
-| running a function over a **product of inputs** (sequence × cell-state × …) | `references/product.md` |
-| **plotting logos** and drawing seqlet/motif annotations on them | `references/plot.md` |
-| composing predict / deep_lift_shap / saturation_mutagenesis through a perturbation fn | `references/func-pattern.md` |
-| adapting a multi-input/output PyTorch model to the tangermeme contract | `references/model-wrapping.md` |
-| loading sequences/signals at loci, reading FASTA/bigWig/BED/MEME/VCF | `references/io-loci.md` |
-| designing sequences to hit a target output (screen / greedy / beam substitution) | `references/design.md` |
+| attribution via **DeepLIFT/SHAP**: which bases drive this prediction, logos, hypothetical scores for CWMs, references, memory | `references/deep_lift_shap.md` |
+| a **convergence delta warning**, a transformer, attention pooling, a functional softmax or product, a custom module, "are these attributions correct" | `references/deep_lift_shap-unhooked-ops.md` and `scripts/audit_deeplift.py` |
+| **ISM / saturation mutagenesis**, `fast=True` | `references/saturation_mutagenesis.md` |
+| **saliency** (input x gradient, one backward pass) and **dependency maps** (epistasis, motif-flank interactions) | `references/dependency_map.md` |
+| **PISA**: attribution of every output position | `references/pisa.md` |
+| effect of a motif or region: **marginalize, ablate, spacing**; choosing backgrounds | `references/motif-effects.md` |
+| **variant effects** from a VCF: substitution, deletion, insertion | `references/variant-effect.md` |
+| **seqlets** from attributions, choosing a threshold with a control | `references/seqlets.md` |
+| **motif labels and counts**: TOMTOM, co-occurrence, spacing | `references/annotate.md` |
+| **logos** with seqlet or motif annotations | `references/plot.md` |
+| a function over a **product of inputs** (sequence x cell state x depth) | `references/product.md` |
+| composing predict / attribution through a perturbation (`func=`, `additional_func_kwargs`, `args=`) | `references/func-pattern.md` |
+| a model with **several inputs or outputs**, a profile head, a control track; N models in one sweep | `references/model-wrapping.md` |
+| **loading** loci, FASTA, bigWig, MEME, VCF; GC-matched background loci; window to genome coordinates | `references/io-loci.md` |
+| **editing sequences**: insert, substitute, delete, shuffle, random draws, reverse complement, one-hot, `PackedSequence` | `references/ersatz.md` |
+| **designing** sequences to a target output: screen, greedy, beam | `references/design.md` |
 
-## Quick orientation (the rest of the library)
+The one script, `scripts/audit_deeplift.py` (path relative to this skill's
+root), lists the operations in a model's forward pass that DeepLIFT has no
+rule for and measures summation-to-delta relative to the output scale; run
+it before trusting attributions of an unfamiliar architecture.
 
-These are well-covered by the official tutorials and are mostly single-call ops —
-no dedicated reference file, but here is where to look:
+## Conventions
 
-- `tangermeme.predict.predict` — batched, memory-efficient inference. Returns the
-  model's parameter dtype (override with `dtype=`) and upcasts each batch from `X`,
-  so int8 sequences go straight in; multi-output models return a list. Satisfies the
-  `func=` contract.
-- `tangermeme.ersatz` — atomic sequence ops: `insert`, `substitute`,
-  `multisubstitute`, `delete`, `randomize`, `shuffle`, `dinucleotide_shuffle`,
-  `local_dinucleotide_shuffle` (most motif-add ops *substitute*, preserving
-  length; `start`/`end` confine shuffles to a region). All but the two
-  dinucleotide shuffles accept unknown characters in `X` as all-zero columns;
-  `dinucleotide_shuffle` does with `allow_N=True`, shuffling each as a fifth
-  character. `dinucleotide_shuffle`'s `n_jobs` (default 1) splits the sequences
-  across threads without changing the shuffles.
-- `tangermeme.utils.PackedSequence` — four-letter sequences at 2 bits a
-  position, 16x less than int8 one-hot; unknown characters kept as runs; soft
-  encodings and PWMs cannot be packed. Make one with `from_one_hot(X)` or
-  `return_packed=True` on `one_hot_encode`, `random_one_hot`, `extract_loci`
-  and every `ersatz` function; decode with `to_one_hot(dtype=, device=)`;
-  index it along its batch axes; `save`/`load(mmap=True)`. Every function that
-  takes one-hot sequences as `X` takes one and gives the result of its one-hot
-  encoding; those that take PWMs, attributions or predictions (`entropy`,
-  `information_content`, `pwm_consensus`, `unchunk`) do not. Sequences
-  come back packed (`ersatz`, `references` of `deep_lift_shap`/`pisa`,
-  designs); predictions and attributions are tensors as before. A `func=` or
-  `shuffle_fn=` you write receives int8 one-hot (`references/func-pattern.md`).
-- `tangermeme.utils` — `one_hot_encode` (returns int8; `n_jobs` > 1
-  helped only for sequences of about 8 Mbp or more), `characters`,
-  `random_one_hot`, `reverse_complement` (single sequence), `pwm_consensus`,
-  `set_seed`, `gc_content`, etc.
-- `tangermeme.pisa.pisa` — per-position (PISA) attribution reusing the DLS hooks.
-  Footguns: some paths return tensors on the **input device**, not CPU; and it does
-  **not** upcast `X`, so pass float — it is the one entry point int8 fails on.
-- `tangermeme.kmers` — k-mer counts, batched k-mers, gapped k-mers.
-
-(Motif *scanning* — FIMO/TOMTOM — is not in tangermeme; it lives in the external
-`memelite` / memesuite-lite package. `annotate_seqlets` wraps TOMTOM internally.)
-
-## Conventions used throughout
-
-- Tensor layout: `(batch, channels, length)`; channels = one-hot alphabet axis
-  (default `['A','C','G','T']`).
-- Variable naming: `X`/`y` observed, `X_bar`/`y_bar` designed/target,
-  `y_hat` predictions, `X_attr` attributions.
-- Device defaults: `predict`, `deep_lift_shap`, `pisa`, `design.*`,
-  `saturation_mutagenesis`, `saliency`, `dependency_map`, `product.*` take
-  `device=None` → CUDA if available else CPU; the model's original device +
-  training mode are restored afterward.
-- Perturbation functions return NamedTuples (`PerturbationResult`, etc.) — unpack
-  positionally or by attribute; `isinstance(result, tuple)` is True.
+- Layout `(batch, channels, length)`, channels the one-hot alphabet, default
+  `ACGT`. `X`/`y` observed, `X_bar`/`y_bar` designed or target, `y_hat`
+  predictions, `X_attr` attributions.
+- `predict(model, X, args=None, func=None, batch_size=32, dtype=None, device=None)`
+  upcasts each batch from int8 and returns the model's dtype; a
+  multi-output model returns a list. `device=None` means CUDA if available
+  on every function that takes it; the model's device and train/eval mode
+  are restored afterward. The first GPU call in a process pays 15 to 35 s
+  of warm-up.
+- Perturbation functions return NamedTuples (`PerturbationResult(y_before, y_after)`,
+  `SpaceResult`, `AttributionReferencesResult`); unpack positionally or by
+  attribute. `extract_loci` returns one to four objects depending on its arguments.
+- `PackedSequence` (`tangermeme.utils`): four-letter sequences at 2 bits a
+  base, 16x smaller than int8 one-hot, unknown characters kept as runs.
+  Every function that takes one-hot `X` takes one and returns what the
+  one-hot gives; sequences come back packed (`ersatz`, references, designs),
+  predictions and attributions as tensors. `kmers`, `gapped_kmers`,
+  `gc_content`, `chunk` and `unchunk` live in `tangermeme.kmers` and
+  `tangermeme.utils`; FIMO and TOMTOM scanning live in `memelite`.

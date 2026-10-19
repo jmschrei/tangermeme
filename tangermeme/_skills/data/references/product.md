@@ -1,70 +1,37 @@
-# Cartesian product over inputs (apply_pairwise / apply_product)
-
-`tangermeme.product` applies any `func` across combinations of `X` and additional
-inputs — e.g. running a single-cell model over (sequence × cell-state × read-depth).
-Both take `func` as a **required first positional argument**, and both need `args`
-(`apply_pairwise` nominally defaults it to `None`, but `None` raises).
+# Cartesian products over inputs (tangermeme.product)
 
 ```python
-from tangermeme.product import apply_pairwise, apply_product
-from tangermeme.predict import predict
-
-apply_pairwise(predict, model, X, args=(cell_states, read_depths))
-apply_product(predict, model, X, args=(cell_states, read_depths))
+apply_pairwise(func, model, X, args=(a, b), ...)   # (len(X), len(a), ...)   a[j] with b[j]
+apply_product(func, model, X, args=(a, b), ...)    # (len(X), len(a), len(b), ...)  every (a[j], b[k])
 ```
 
-## pairwise vs product is a CORRECTNESS choice, not a perf choice
+`func` is the first positional argument, required. `args` is required too
+(`None` raises `TypeError`); the args must all have the same length and are
+independent of `len(X)`. `apply_pairwise` zips the args with each other and
+crosses the pairs with every example; `apply_product` crosses everything.
+Metadata measured in the same cell (a cell state and its read depth) is
+paired, and `apply_product` on it fabricates cells. Batches are built
+iteratively; the product is never materialized.
 
-- **`apply_pairwise`** zips the args *with each other* — row `j` of every arg belongs
-  together (e.g. the cell state and read depth measured from the *same* cell) — and
-  crosses that paired list with **every** example: `(X_i, (a_j, b_j))` for all `i, j`.
-  `X` is not zipped in, so `len(X)` and `len(args[0])` are independent; all args must
-  be the same length as each other. Output gains **one** axis, length =
-  `len(args[0])`, giving `(len(X), len(args[0]), ...)`.
-- **`apply_product`** takes the full Cartesian product: every `(X_i, a_j, b_k)`.
-  Output gains **one axis per arg**, giving `(len(X), len(a), len(b), ...)`.
-
-Using `apply_product` on metadata that is actually paired is a **silent scientific
-bug** — it fabricates examples where the read depth and cell state come from
-different cells. Reach for product only when the axes are genuinely independent.
-
-## Output indexing trap
-
-The extra axes mean a batch-of-one arg still adds a length-1 axis. To recover plain
-`predict`-shaped output you must index it away:
-
-```python
-y = apply_pairwise(predict, model, X, args=(a,))[:, 0]        # one paired arg
-y = apply_product(predict, model, X, args=(a, b))[:, 0, 0]    # two product args
-```
-
-## Composing and nesting
-
-**Product on the outside** — any `func` works: `predict`, `deep_lift_shap`, even
-`marginalize` (which returns its `(y_before, y_after)` pair through the product).
-Route the *inner* function through `additional_func_kwargs` so the outer product
-doesn't intercept it:
+- A single arg still adds an axis: `apply_pairwise(predict, model, X, args=(a,))[:, 0]`.
+- `device=` goes to the outer call; it is forwarded to `func`.
+- Any plug-point `func` works on the inside: `predict`, `deep_lift_shap`
+  (`target=`, `random_state=` pass through `**kwargs`), `marginalize`
+  (`motif=` passes through). A NamedTuple from the inner function
+  (`PerturbationResult`, `AttributionReferencesResult`) comes back as a
+  plain list, so unpack positionally. Route the inner function's own `func`
+  through `additional_func_kwargs`:
 
 ```python
 apply_pairwise(marginalize, model, X, args=(cell_states,),
-               additional_func_kwargs={'func': deep_lift_shap}, motif="TGACGTCA")
+	additional_func_kwargs={'func': deep_lift_shap}, motif="TGACGTCA")
 ```
 
-**Product on the inside** — because `func` is positional here, these two do **not**
-satisfy the `func=` contract themselves. Passing `apply_pairwise` straight to
-`marginalize(..., func=...)` misaligns every positional argument and raises
-`TypeError: apply_pairwise() missing 1 required positional argument: 'X'`. Bind the
-inner `func` first:
+- Product on the inside needs `func` bound first; passing `apply_pairwise`
+  bare as `marginalize(..., func=apply_pairwise)` misaligns the positionals
+  and raises `TypeError: apply_pairwise() missing 1 required positional argument: 'X'`:
 
 ```python
 from functools import partial
-marginalize(model, X, motif, func=partial(apply_pairwise, predict),
-            args=(cell_states,))
+marginalize(model, X, motif, func=partial(apply_pairwise, predict), args=(cell_states,))
 ```
-
-Batches are built iteratively, so the full product is never materialized in memory.
-
-## Related references
-
-`references/func-pattern.md` (the `func`/`additional_func_kwargs` contract),
-`references/model-wrapping.md` (passing per-example extra inputs).
