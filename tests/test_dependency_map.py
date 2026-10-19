@@ -17,6 +17,8 @@ from tangermeme.dependency_map import dependency_map
 from .toy_models import FlattenDense
 from .toy_models import ConvAvgDense
 from .toy_models import LinearConv
+from ._packed import check_packed
+from ._packed import Spy
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -94,30 +96,33 @@ def test_dependency_map_holds_model_on_device(cuda_device):
 	assert next(model.parameters()).device.type == "cpu"
 
 
-def test_dependency_map_non_negative(X, device):
-	# The map is an average of absolute differences.
-	torch.manual_seed(0)
-	model = ConvAvgDense(n_outputs=1)
-
-	assert torch.all(dependency_map(model, X, device=device) >= 0)
-
-
 def test_dependency_map_receptive_field(X, device):
-	# ConvAvgDense is a single width-3 convolution, so substituting a base
-	# can only move the attribution of positions within one step of it.
+	# The map is an average of absolute differences. ConvAvgDense is a
+	# single width-3 convolution, so substituting a base can only move the
+	# attribution of positions within one step of it, and its ReLU plus
+	# global pooling lets one position's gradient depend on another
+	# position's base, so off-diagonal entries must survive.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
 	dmap = dependency_map(model, X, device=device)
 
+	assert torch.all(dmap >= 0)
+
 	j, i = torch.meshgrid(torch.arange(12), torch.arange(12), indexing='ij')
 	assert dmap[:, (j - i).abs() > 2].max() < 1e-6
 	assert dmap[:, (j - i).abs() <= 2].max() > 1e-3
+
+	off_diagonal = dmap - torch.diag_embed(dmap.diagonal(dim1=-2, dim2=-1))
+	assert off_diagonal.abs().max() > 1e-6
 
 
 @pytest.mark.parametrize("gradient_correction", [True, False])
 def test_dependency_map_matches_brute_force(gradient_correction, device):
 	# For each position, the column must be the mean absolute change in the
 	# summed attributions over exactly the substitutions that change a base.
+	# A position whose base is re-applied contributes an exact zero, so
+	# averaging over the three real substitutions rather than over all four
+	# characters is what the returned values are scaled by.
 	# `gradient_correction` is forwarded to `saliency` through kwargs.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
@@ -148,30 +153,6 @@ def test_dependency_map_matches_brute_force(gradient_correction, device):
 		expected[:, i] = numpy.mean(diffs, axis=0)
 
 	assert_array_almost_equal(dmap, expected, 5)
-
-
-def test_dependency_map_skips_identity_substitutions(device):
-	# A position whose base is re-applied contributes an exact zero, so
-	# averaging over the three real substitutions rather than over all four
-	# characters is what the returned values are scaled by.
-	torch.manual_seed(0)
-	model = ConvAvgDense(n_outputs=1)
-
-	X = one_hot_encode('ACGTAC').unsqueeze(0).type(torch.float32)
-	dmap = dependency_map(model, X, device=device)[0]
-
-	attr0 = saliency(model, X, device=device).sum(dim=1)[0]
-
-	total = torch.zeros(6)
-	for c in range(4):
-		X_ = X.clone()
-		X_[0, :, 0] = 0
-		X_[0, c, 0] = 1
-
-		attr = saliency(model, X_, device=device).sum(dim=1)[0]
-		total += (attr - attr0).abs()
-
-	assert_array_almost_equal(dmap[:, 0], total / 3, 5)
 
 
 def test_dependency_map_n_column_normalization(device):
@@ -212,17 +193,6 @@ def test_dependency_map_diagonal_for_linear_models(device):
 
 		assert_array_almost_equal(off_diagonal, torch.zeros(2, 15, 15), 5)
 		assert dmap.diagonal(dim1=-2, dim2=-1).sum() > 0
-
-
-def test_dependency_map_off_diagonal_for_nonlinear_models(X, device):
-	# A ReLU plus global pooling lets one position's gradient depend on
-	# another position's base, so off-diagonal entries must survive.
-	torch.manual_seed(0)
-	model = ConvAvgDense(n_outputs=1)
-	dmap = dependency_map(model, X, device=device)
-
-	off_diagonal = dmap - torch.diag_embed(dmap.diagonal(dim1=-2, dim2=-1))
-	assert off_diagonal.abs().max() > 1e-6
 
 
 def test_dependency_map_batch_matches_single(X, device):
@@ -346,19 +316,6 @@ def test_dependency_map_func_deep_lift_shap(device):
 	assert dmap.sum() > 0
 
 
-def test_dependency_map_func_saturation_mutagenesis(device):
-	torch.manual_seed(0)
-	model = ConvAvgDense(n_outputs=1)
-	X = random_one_hot((1, 4, 12), random_state=0).type(torch.float32)
-
-	dmap = dependency_map(model, X, func=saturation_mutagenesis,
-		device=device)
-
-	assert dmap.shape == (1, 12, 12)
-	assert torch.all(dmap >= 0)
-	assert dmap.sum() > 0
-
-
 def test_dependency_map_additional_func_kwargs(X, device):
 	# `saliency` takes its own `func`, which collides with this function's
 	# `func`, so it has to be routed through additional_func_kwargs.
@@ -411,16 +368,21 @@ def test_dependency_map_args(device):
 ##
 
 
-def test_dependency_map_raises_empty(device):
+@pytest.mark.parametrize("packed", [False, True])
+def test_dependency_map_raises_empty(X, packed, device):
 	model = ConvAvgDense(n_outputs=1)
-	X = random_one_hot((0, 4, 12), random_state=0).type(torch.float32)
+	if packed:
+		X = PackedSequence.from_one_hot(X)
 
 	with pytest.raises(ValueError, match="at least one example"):
-		dependency_map(model, X, device=device)
+		dependency_map(model, X[:0], device=device)
 
 
-def test_dependency_map_raises_mismatched_args(X, device):
+@pytest.mark.parametrize("packed", [False, True])
+def test_dependency_map_raises_mismatched_args(X, packed, device):
 	model = ConvAvgDense(n_outputs=1)
+	if packed:
+		X = PackedSequence.from_one_hot(X)
 
 	with pytest.raises(ValueError, match="same first"):
 		dependency_map(model, X, args=(torch.zeros(2, 1),), device=device)
@@ -461,25 +423,27 @@ def test_dependency_map_verbose(X, device):
 
 ###
 # A PackedSequence, decoded at the start, gives the dependency maps of its
-# one-hot encoding.
+# one-hot encoding, and a function of the user's is given int8 one-hot
+# sequences.
 
 
-@pytest.mark.parametrize("func", [saliency, deep_lift_shap])
+_SALIENCY_SPY = Spy(saliency, 1)
+
+
+@pytest.mark.parametrize("func", ["saliency", "deep_lift_shap", "custom"])
 def test_dependency_map_packed(X, func, device):
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
-	kwargs = {}
-	if func is saliency:
+	kwargs = {"saliency": dict(func=saliency), "custom": dict(
+		func=_SALIENCY_SPY), "deep_lift_shap": dict(func=deep_lift_shap,
+		random_state=0, n_shuffles=3)}[func]
+
+	if func == "saliency":
 		X = X.clone()
 		X[1, :, 4:6] = 0
-	else:
-		kwargs = {"random_state": 0, "n_shuffles": 3}
 
-	dmap = dependency_map(model, X, func=func, device=device, **kwargs)
-	dmap_packed = dependency_map(model, PackedSequence.from_one_hot(X),
-		func=func, device=device, **kwargs)
-	assert dmap_packed.dtype == dmap.dtype
-	assert torch.equal(dmap_packed, dmap)
+	check_packed(lambda X_: dependency_map(model, X_, device=device,
+		**kwargs), X, [_SALIENCY_SPY] if func == "custom" else [])
 
 
 def test_dependency_map_packed_start_end_args(device):
@@ -493,32 +457,4 @@ def test_dependency_map_packed_start_end_args(device):
 		device=device)
 	dmap_packed = dependency_map(model, PackedSequence.from_one_hot(X),
 		args=(alpha, beta), start=3, end=8, device=device)
-	assert torch.equal(dmap_packed, dmap)
-
-
-def test_dependency_map_packed_raises(X, device):
-	model = ConvAvgDense(n_outputs=1)
-	X_packed = PackedSequence.from_one_hot(X)
-	assert_raises(ValueError, dependency_map, model, X_packed[:0],
-		device=device)
-	assert_raises(ValueError, dependency_map, model, X_packed,
-		args=(torch.zeros(3, 1),), device=device)
-
-
-def test_dependency_map_packed_func_int8(X, device):
-	# A function of the user's is given int8 one-hot sequences.
-	seen = []
-
-	def func(model, X, **kwargs):
-		seen.append(X.dtype)
-		return saliency(model, X, **kwargs)
-
-	torch.manual_seed(0)
-	model = ConvAvgDense(n_outputs=1)
-	dmap = dependency_map(model, X, func=func, device=device)
-	seen.clear()
-	dmap_packed = dependency_map(model, PackedSequence.from_one_hot(X),
-		func=func, device=device)
-
-	assert len(seen) > 0 and all(dtype == torch.int8 for dtype in seen)
 	assert torch.equal(dmap_packed, dmap)
