@@ -245,6 +245,20 @@ def test_apply_rejects_empty_args_entry(X, alpha, apply_fn):
 		apply_fn(predict, model, X[:5], args=(alpha[:0],))
 
 
+@pytest.mark.parametrize("apply_fn", [apply_pairwise, apply_product])
+def test_apply_additional_func_kwargs(X, alpha, beta, apply_fn, device):
+	# `func` also names apply_fn's first parameter, so predict's `func` can
+	# only be given through additional_func_kwargs.
+	torch.manual_seed(0)
+	model = FlattenDense()
+	args = (alpha[:3], beta[:3])
+
+	y = apply_fn(predict, model, X[:4], args=args, device=device)
+	y_func = apply_fn(predict, model, X[:4], args=args, device=device,
+		additional_func_kwargs={'func': lambda y_: y_[:, 1:]})
+	assert torch.equal(y_func, y[..., 1:])
+
+
 def test_apply_pairwise_requires_args(X):
 	# args is the axis X is paired with, so there is no call without it.
 	model = FlattenDense()
@@ -877,7 +891,12 @@ def test_apply_product_ablate(X, alpha, device):
 	y_before, y_after = result
 	# 3 X * 3 alpha = 9 calls; per call: y_before=(1, 3), y_after=(1, 2, 3)
 	assert y_before.shape == (3, 3, 3)
+	assert y_before.dtype == torch.float32
+	assert_array_almost_equal(y_before, predict(model, X[:3],
+		device=device)[:, None] + alpha[:3][None])
+
 	assert y_after.shape == (3, 3, 2, 3)
+	assert y_after.dtype == torch.float32
 
 	assert_array_almost_equal(y_after[:2, :2], [
 		[[[1.9837, 2.1161, 1.6115], [1.8558, 2.1473, 1.6128]],
