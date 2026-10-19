@@ -94,6 +94,7 @@ from ._packed import MixedReferences
 from ._packed import soft_references
 
 from numpy.testing import assert_raises
+from numpy.testing import assert_allclose
 from numpy.testing import assert_array_almost_equal
 
 
@@ -447,8 +448,7 @@ def test_deep_lift_shap_local_dinucleotide_shuffle_bin_size(X, device):
 		X, references=local_dinucleotide_shuffle, n_shuffles=2, device=device)
 
 
-@pytest.mark.parametrize("entry_point", ["tensor", "callable"])
-def test_deep_lift_shap_all_zeros_reference(X, device, entry_point):
+def test_deep_lift_shap_all_zeros_reference(X, device):
 	"""An all-zeros baseline has to work through both `references=` paths.
 
 	A reference tensor is validated and a reference callable's output is not,
@@ -463,16 +463,19 @@ def test_deep_lift_shap_all_zeros_reference(X, device, entry_point):
 	def zeros(X, n, random_state=None):
 		return torch.zeros(X.shape[0], n, *X.shape[1:])
 
-	if entry_point == "tensor":
-		references = torch.zeros(X.shape[0], 1, *X.shape[1:])
-	else:
-		references = zeros
-
-	X_attr = deep_lift_shap(model, X, references=references, n_shuffles=1,
+	X_attr = deep_lift_shap(model, X, references=torch.zeros(X.shape[0], 1,
+		*X.shape[1:]), n_shuffles=1, device=device, random_state=0)
+	X_attr_ = deep_lift_shap(model, X, references=zeros, n_shuffles=1,
 		device=device, random_state=0)
 
 	assert X_attr.shape == X.shape
 	assert X_attr.dtype == torch.float32
+	assert torch.equal(X_attr, X_attr_)
+
+	# With nothing subtracted, a linear model's attributions are its weights
+	# at the observed characters.
+	assert_array_almost_equal(X_attr,
+		model.dense.weight.detach().reshape(4, 100) * X, 6)
 
 
 def test_deep_lift_shap_non_ohe_reference_tensor_raises(X, device):
@@ -1163,6 +1166,54 @@ def test_deep_lift_shap_sequential(X, device, layers, threshold, expected):
 	assert_array_almost_equal(X_attr[:2, :, :10], expected, 4)
 
 
+def _deep_lift_by_layer(model, X, references, device):
+	"""DeepLIFT through a Sequential one layer at a time, without hooks.
+
+	A ReLU takes the rescale rule. A max pool routes the change in each
+	window's max to the position that won the window in the observed input
+	and in the reference, and divides by the change in each position; where
+	that change is exactly zero it takes the ordinary gradient. Every other
+	layer is linear and passes the multipliers back through its gradient. The
+	gradient of a max pool adds up everything sent to one position, so it
+	does the routing, independently of `_unpool` and `max_unpool`.
+	"""
+
+	n, k = references.shape[:2]
+	x = X.repeat_interleave(k, dim=0).to(device)
+	r = references.reshape(n * k, *X.shape[1:]).to(device)
+	model = model.to(device)
+
+	inputs, h = [], torch.cat([x, r])
+	with torch.no_grad():
+		for layer in model:
+			inputs.append(h)
+			h = layer(h)
+
+	m = torch.ones(n * k, 1, device=device)
+	for layer, h in zip(reversed(model), reversed(inputs)):
+		hx, hr = h.chunk(2)
+		delta = hx - hr
+
+		hx, hr = hx.clone().requires_grad_(), hr.clone().requires_grad_()
+		yx, yr = layer(hx), layer(hr)
+		grad, = torch.autograd.grad(yx, hx, m, retain_graph=True)
+
+		if isinstance(layer, torch.nn.ReLU):
+			m = torch.where(delta.abs() < 1e-6, grad, m * (yx - yr) / delta)
+		elif isinstance(layer, (torch.nn.MaxPool1d, torch.nn.MaxPool2d)):
+			y = torch.maximum(yx, yr)
+			routed_x, = torch.autograd.grad(yx, hx, m * (y - yr))
+			routed_r, = torch.autograd.grad(yr, hr, m * (yx - y))
+			m = torch.where(delta == 0, grad, (routed_x + routed_r) / delta)
+		else:
+			m = grad
+
+		m = m.detach()
+
+	X_attr = hypothetical_attributions((m,), (x,), (r,))[0].cpu()
+	return X_attr.reshape(n, k, *X.shape[1:]).mean(dim=1) * X
+
+
 # Max-pool layers whose windows overlap, skip positions, or are stacked. Each
 # entry is (layers, length of X, seed, n_shuffles, n_outside), where the last
 # n_outside positions fall outside every window and so get no attribution.
@@ -1254,13 +1305,20 @@ def test_deep_lift_shap_max_pool_1d(X, device, layers, length, seed,
 	n_shuffles, n_outside):
 	torch.manual_seed(seed)
 	model = torch.nn.Sequential(*layers())
+	X = X[:, :, :length]
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X[:, :, :length], device=device,
-			random_state=0, n_shuffles=n_shuffles, warning_threshold=1e-5)
+		X_attr, references = deep_lift_shap(model, X, device=device,
+			random_state=0, n_shuffles=n_shuffles, warning_threshold=1e-5,
+			return_references=True)
 
+	# Convergence is a sum over positions, so it cannot tell which position a
+	# window's change was routed to. The oracle matches to the last bit on
+	# the CPU; on a GPU its larger batch may run different kernels.
 	assert X_attr.shape == (16, 4, length)
+	assert_array_almost_equal(X_attr, _deep_lift_by_layer(model, X,
+		references, device), 6 if device == "cpu" else 4)
 
 	if n_outside > 0:
 		assert_array_almost_equal(X_attr[:, :, -n_outside:],
@@ -1290,10 +1348,12 @@ def test_deep_lift_shap_max_pool_2d(X, device, kernel_size, stride):
 	# floating-point residual scales with it.
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = deep_lift_shap(model, X, device=device, random_state=0,
-			warning_threshold=1e-4)
+		X_attr, references = deep_lift_shap(model, X, device=device,
+			random_state=0, warning_threshold=1e-4, return_references=True)
 
 	assert X_attr.shape == X.shape
+	assert_array_almost_equal(X_attr, _deep_lift_by_layer(model, X,
+		references, device), 6 if device == "cpu" else 4)
 
 
 def test_maxpool_rule_returns_the_same_multiplier_for_both_halves(device):
@@ -3748,27 +3808,24 @@ def test_deep_lift_shap_autocast_float16(X, references, cuda_device, rule):
 	assert X_attr.dtype == torch.float16
 
 
-def test_deep_lift_shap_autocast_matches_full_precision(X, references, device):
-	torch.manual_seed(0)
-	model = ConvPoolDense()
+# Each tolerance is a small multiple of the largest difference measured
+# between the bf16 and fp32 attributions.
+AUTOCAST_ATOL = {
+	"nonlinear": 3e-5,
+	"maxpool": 2e-3,
+	"layernorm": 1.5e-3,
+	"rmsnorm": 7e-3,
+	"softmax": 1e-3,
+	"bilinear": 2e-4,
+	"attention": 2e-3,
+	"attention_pool": 5e-4,
+	"transformer": 3e-3,
+}
 
-	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
-		device=device, random_state=0)
-	X_attr_ = deep_lift_shap(model, X[:4], references=references[:4],
-		device=device, dtype=torch.bfloat16, random_state=0,
-		warning_threshold=1e9)
 
-	# Casting the multipliers back must not change which attributions come
-	# out, only their precision.
-	assert_array_almost_equal(X_attr, X_attr_.float(), 2)
-
-
-@pytest.mark.parametrize("rule, atol", [("softmax", 1e-3),
-	("attention_pool", 5e-4), ("attention", 2e-3), ("transformer", 3e-3)])
-def test_deep_lift_shap_autocast_softmax_matches_full_precision(X, references,
-	device, rule, atol):
-	# The softmax rule computes in float32 under bf16 autocast. In bf16 it was
-	# off by up to 3e-2 on ConvSoftmax, whose attributions reach 6e-2.
+@pytest.mark.parametrize("rule", AUTOCAST_MODELS)
+def test_deep_lift_shap_autocast_matches_full_precision(X, references, device,
+	rule):
 	torch.manual_seed(0)
 	model = AUTOCAST_MODELS[rule]()
 
@@ -3778,7 +3835,9 @@ def test_deep_lift_shap_autocast_softmax_matches_full_precision(X, references,
 		device=device, dtype=torch.bfloat16, random_state=0,
 		warning_threshold=1e9)
 
-	assert (X_attr_.float() - X_attr).abs().max() < atol
+	# Casting the multipliers back must not change which attributions come
+	# out, only their precision.
+	assert_allclose(X_attr_.float(), X_attr, rtol=0, atol=AUTOCAST_ATOL[rule])
 
 
 def test_deep_lift_shap_autocast_additional_nonlinear_ops(X, references,
@@ -3834,8 +3893,14 @@ def test_deep_lift_shap_packed_outputs(X, hypothetical, raw_outputs, device):
 
 
 def test_deep_lift_shap_packed_references(X, references, device):
+	# Runs of unknown characters in references that land in different
+	# batches, one of them running to the end of the sequence.
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
+	references = references.clone()
+	references[0, 4, :, 50:53] = 0
+	references[1, 2, :, 10:15] = 0
+	references[14, 3, :, 95:] = 0
 	refs_packed = PackedSequence.from_one_hot(references)
 
 	X_attr = deep_lift_shap(model, X, references=references, device=device)
