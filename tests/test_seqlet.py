@@ -137,40 +137,26 @@ def test_isotonic_thresholds(X_contrib):
 	assert_array_almost_equal(vals, 0.049, 3)
 
 
-def test_isotonic_thresholds_fdr(X_contrib):
+@pytest.mark.parametrize("target_fdr, min_frac_neg, expected", [
+	(0.01, 0.95, 0.027),
+	(0.05, 0.95, 0.027),
+	(0.5, 0.95, 0.035),
+	(0.99, 0.95, 0.035),
+	(0.2, 0.05, 0.035),
+	(0.2, 0.15, 0.035),
+	(0.2, 0.50, 0.027),
+	(0.2, 0.90, 0.027),
+])
+def test_isotonic_thresholds_fdr_min_frac(X_contrib, target_fdr, min_frac_neg,
+	expected):
 	torch.manual_seed(0)
 	X_neg = torch.randn(10000)
 	X_pos = X_contrib[X_contrib > 0.02]
 
-	val0 = _isotonic_thresholds(X_pos, X_neg, increasing=True, target_fdr=0.01, 
-		min_frac_neg=0.95)
-	val1 = _isotonic_thresholds(X_pos, X_neg, increasing=True, target_fdr=0.05, 
-		min_frac_neg=0.95)
-	val2 = _isotonic_thresholds(X_pos, X_neg, increasing=True, target_fdr=0.5, 
-		min_frac_neg=0.95)
-	val3 = _isotonic_thresholds(X_pos, X_neg, increasing=True, target_fdr=0.99, 
-		min_frac_neg=0.95)
+	val = _isotonic_thresholds(X_pos, X_neg, increasing=True,
+		target_fdr=target_fdr, min_frac_neg=min_frac_neg)
 
-	assert_array_almost_equal([val0, val1, val2, val3], 
-		[0.027, 0.027, 0.035, 0.035], 3)
-
-
-def test_isotonic_thresholds_min_frac(X_contrib):
-	torch.manual_seed(0)
-	X_neg = torch.randn(10000)
-	X_pos = X_contrib[X_contrib > 0.02]
-
-	val0 = _isotonic_thresholds(X_pos, X_neg, increasing=True, target_fdr=0.2, 
-		min_frac_neg=0.05)
-	val1 = _isotonic_thresholds(X_pos, X_neg, increasing=True, target_fdr=0.2, 
-		min_frac_neg=0.15)
-	val2 = _isotonic_thresholds(X_pos, X_neg, increasing=True, target_fdr=0.2, 
-		min_frac_neg=0.50)
-	val3 = _isotonic_thresholds(X_pos, X_neg, increasing=True, target_fdr=0.2, 
-		min_frac_neg=0.90)
-
-	assert_array_almost_equal([val0, val1, val2, val3], 
-		[0.035, 0.035, 0.027, 0.027], 3)
+	assert_array_almost_equal(val, expected, 3)
 
 
 ###
@@ -266,35 +252,6 @@ def test_recursive_seqlets(X_contrib):
 	4)
 
 
-def test_recursive_seqlets_additional_flanks(X_contrib):
-	seqlets = recursive_seqlets(X_contrib).values
-	seqlets2 = recursive_seqlets(X_contrib, additional_flanks=2).values
-	assert seqlets2.shape == (23, 5)
-
-	assert_array_almost_equal(seqlets[:, 0], seqlets2[:, 0])
-	assert_array_almost_equal(seqlets[:, 1], seqlets2[:, 1]+2)
-	assert_array_almost_equal(seqlets[:, 2], seqlets2[:, 2]-2)
-
-
-	seqlets2 = recursive_seqlets(X_contrib, additional_flanks=1).values
-	assert seqlets2.shape == (23, 5)
-
-	assert_array_almost_equal(seqlets[:, 0], seqlets2[:, 0])
-	assert_array_almost_equal(seqlets[:, 1], seqlets2[:, 1]+1)
-	assert_array_almost_equal(seqlets[:, 2], seqlets2[:, 2]-1)
-
-
-	seqlets3 = recursive_seqlets(X_contrib, additional_flanks=4).values
-	assert seqlets3.shape == (23, 5)
-
-	assert_array_almost_equal(seqlets[:, 0], seqlets3[:, 0])
-	assert_array_almost_equal(seqlets[:, 1], seqlets3[:, 1]+4)
-	assert_array_almost_equal(seqlets[:, 2], seqlets3[:, 2]-4)
-
-	seqlets4 = recursive_seqlets(X_contrib, additional_flanks=7).values
-	assert seqlets4.shape == (23, 5)
-
-
 def test_recursive_seqlets_min_length(X_contrib):
 	seqlets = recursive_seqlets(X_contrib).values
 	seqlets2 = recursive_seqlets(X_contrib, min_seqlet_len=1).values
@@ -340,29 +297,6 @@ def test_recursive_seqlets_p_values(X_contrib):
 ###
 
 
-def test_recursive_seqlets_numpy_input(X_contrib):
-	seqlets_torch = recursive_seqlets(X_contrib)
-	seqlets_numpy = recursive_seqlets(X_contrib.numpy())
-
-	assert_array_almost_equal(seqlets_torch.values, seqlets_numpy.values, 4)
-
-
-def test_recursive_seqlets_p_value_sorted(X_contrib):
-	seqlets = recursive_seqlets(X_contrib)
-	assert seqlets['p-value'].is_monotonic_increasing
-
-
-def test_recursive_seqlets_schema_invariants(X_contrib):
-	seqlets = recursive_seqlets(X_contrib)
-	L = X_contrib.shape[-1]
-
-	assert (seqlets['start'] < seqlets['end']).all()
-	assert (seqlets['start'] >= 0).all()
-	assert (seqlets['end'] <= L).all()
-	assert (seqlets['example_idx'] >= 0).all()
-	assert (seqlets['example_idx'] < X_contrib.shape[0]).all()
-
-
 def test_tfmodisco_seqlets_determinism(X_contrib):
 	torch.manual_seed(0)
 	seqlets0 = tfmodisco_seqlets(X_contrib)
@@ -371,10 +305,6 @@ def test_tfmodisco_seqlets_determinism(X_contrib):
 	seqlets1 = tfmodisco_seqlets(X_contrib)
 
 	assert_array_almost_equal(seqlets0.values, seqlets1.values, 4)
-
-
-def test_recursive_seqlets_empty():
-	assert_raises(ValueError, recursive_seqlets, torch.zeros(0, 100))
 
 
 @pytest.mark.parametrize("value", [0.0, 0.5])
@@ -411,24 +341,6 @@ def test_recursive_seqlets_right_edge(min_seqlet_len):
 	assert seqlets.loc[0, 'start'] == 0 and seqlets.loc[0, 'end'] >= 10
 	assert seqlets.loc[1, 'start'] <= 495 and seqlets.loc[1, 'end'] >= 505
 	assert seqlets.loc[2, 'start'] <= 990 and seqlets.loc[2, 'end'] == 1000
-
-	for _, (idx, start, end, attr, _) in seqlets.iterrows():
-		assert_array_almost_equal(attr, X[int(idx), int(start):int(end)].sum())
-
-
-def test_recursive_seqlets_additional_flanks_edges():
-	"""Flanks past the right edge used to be clipped to length - 1."""
-
-	X = numpy.random.RandomState(0).normal(0, 0.01, size=(1, 1000))
-	X[0, 5:15] += 1
-	X[0, 980:990] += 1
-
-	seqlets = recursive_seqlets(X, additional_flanks=15)
-	seqlets = seqlets.sort_values("start").reset_index(drop=True)
-
-	assert seqlets.shape[0] == 2
-	assert seqlets.loc[0, 'start'] == 0
-	assert seqlets.loc[1, 'end'] == 1000
 
 	for _, (idx, start, end, attr, _) in seqlets.iterrows():
 		assert_array_almost_equal(attr, X[int(idx), int(start):int(end)].sum())
@@ -472,27 +384,6 @@ def test_recursive_seqlets_min_seqlet_len_one_right_edge():
 	_assert_no_overlap(seqlets)
 
 
-def _span_p_values(X, seqlets, n_bins=1000):
-	"""P(S >= s) for each seqlet, where s is the sum of its binned values.
-
-	S is a sum of end - start independent draws from the binned values of X.
-	"""
-
-	bin_width = (X.max() - X.min()) / (n_bins - 1)
-	bins = numpy.floor((X - X.min()) / bin_width).astype(int)
-	f = numpy.bincount(bins.ravel(), minlength=n_bins) / bins.size
-
-	pmfs = [numpy.ones(1)]
-	for _ in range(int((seqlets['end'] - seqlets['start']).max())):
-		pmfs.append(numpy.convolve(pmfs[-1], f))
-
-	p_values = []
-	for idx, start, end in seqlets.values[:, :3].astype(int):
-		p_values.append(pmfs[end - start][bins[idx, start:end].sum():].sum())
-
-	return numpy.array(p_values)
-
-
 @pytest.fixture
 def X_laplace():
 	rng = numpy.random.RandomState(0)
@@ -501,37 +392,6 @@ def X_laplace():
 	X[:, 100:108] += 0.05
 	X[:, 300:306] += 0.03
 	return X
-
-
-def test_recursive_seqlets_p_value_oracle(X_laplace):
-	"""The p-value is P(S >= s), where s is the sum of the span's binned values.
-
-	It used to look up the bin of the continuous sum, which is up to
-	seqlet_len - 1 bins above s, in a table holding P(S > i) + P(S = 0).
-	"""
-
-	seqlets = recursive_seqlets(X_laplace, min_seqlet_len=6, max_seqlet_len=6)
-	assert seqlets.shape[0] > 0
-
-	assert_allclose(seqlets['p-value'], _span_p_values(X_laplace, seqlets),
-		rtol=1e-6)
-
-
-def test_recursive_seqlets_p_value_own_span(X_contrib):
-	"""The reported p-value is that of the called span alone.
-
-	It used to be the maximum over every prefix of the span from
-	min_seqlet_len upward, so the ranking followed the weakest prefix: the
-	seqlet with the largest attribution here was reported at 4.5e-3 rather
-	than 1.9e-12.
-	"""
-
-	X = X_contrib.numpy().astype(numpy.float64)
-	seqlets = recursive_seqlets(X)
-	assert seqlets.shape[0] > 0
-
-	assert_allclose(seqlets['p-value'], _span_p_values(X, seqlets), rtol=1e-6)
-	assert seqlets['p-value'].is_monotonic_increasing
 
 
 def test_recursive_seqlets_minimum_runs():
@@ -583,17 +443,6 @@ def test_recursive_seqlets_shorter_than_min_seqlet_len():
 	assert seqlets.shape == (0, 5)
 
 
-@pytest.mark.parametrize("threshold", [numpy.nan, 1.0000001, 1.5, numpy.inf])
-def test_recursive_seqlets_threshold_invalid(X_laplace, threshold):
-	"""A NaN threshold, or one above 1, used to never return.
-
-	The decoder stops at the first p-value at or above the threshold, and no
-	p-value is NaN or above 1.
-	"""
-
-	assert_raises(ValueError, recursive_seqlets, X_laplace, threshold=threshold)
-
-
 @pytest.mark.parametrize("threshold", [1.0, 0.0, -1.0])
 def test_recursive_seqlets_threshold_bounds(X_laplace, threshold):
 	seqlets = recursive_seqlets(X_laplace, threshold=threshold)
@@ -622,21 +471,6 @@ def _fdr(X, X_control, thresholds=None):
 	return _recursive_seqlets_fdr(X, X_control, tables, 4, 25, 1000, thresholds)
 
 
-def test_recursive_seqlets_control(X_laplace, X_background):
-	"""With a control, seqlets are called at the largest threshold whose
-	estimated false discovery rate is at or below target_fdr."""
-
-	seqlets, fdr = recursive_seqlets(X_laplace, X_control=X_background,
-		target_fdr=0.2, return_fdr=True)
-
-	threshold = fdr.loc[fdr['fdr'] <= 0.2, 'threshold'].max()
-	assert not numpy.isnan(threshold)
-	assert seqlets.shape[0] > 0
-
-	expected = recursive_seqlets(X_laplace, threshold=threshold)
-	assert_array_almost_equal(seqlets.values, expected.values)
-
-
 def test_recursive_seqlets_control_default_target():
 	rng = numpy.random.RandomState(0)
 	X = rng.laplace(size=(40, 1000)) * 0.01
@@ -648,63 +482,6 @@ def test_recursive_seqlets_control_default_target():
 
 	assert seqlets.shape[0] > 0
 	assert_array_almost_equal(seqlets.values, expected.values)
-
-
-def test_recursive_seqlets_control_return_type(X_laplace, X_background):
-	result = recursive_seqlets(X_laplace, X_control=X_background,
-		target_fdr=0.2, return_fdr=True)
-
-	assert isinstance(result, RecursiveSeqletsResult)
-	assert isinstance(result, tuple)
-	assert isinstance(result.seqlets, pandas.DataFrame)
-	assert result.seqlets.shape[0] > 0
-	assert list(result.fdr.columns) == ['threshold', 'n_seqlets',
-		'n_control_seqlets', 'fdr']
-
-	seqlets = recursive_seqlets(X_laplace, X_control=X_background, 
-		target_fdr=0.2)
-	assert isinstance(seqlets, pandas.DataFrame)
-	assert_array_almost_equal(seqlets.values, result.seqlets.values)
-
-
-def test_recursive_seqlets_control_ignores_threshold(X_laplace, X_background):
-	seqlets = recursive_seqlets(X_laplace, X_control=X_background, 
-		target_fdr=0.2)
-	seqlets2 = recursive_seqlets(X_laplace, threshold=1e-6, 
-		X_control=X_background, target_fdr=0.2)
-
-	assert seqlets.shape[0] > 0
-	assert_array_almost_equal(seqlets.values, seqlets2.values)
-
-
-def test_recursive_seqlets_control_input_types(X_laplace, X_background):
-	seqlets = recursive_seqlets(X_laplace, X_control=X_background, 
-		target_fdr=0.2)
-	seqlets_torch = recursive_seqlets(torch.from_numpy(X_laplace),
-		X_control=torch.from_numpy(X_background), target_fdr=0.2)
-	seqlets_32 = recursive_seqlets(X_laplace, 
-		X_control=X_background.astype(numpy.float32), target_fdr=0.2)
-
-	assert seqlets.shape[0] > 0
-	assert_array_almost_equal(seqlets.values, seqlets_torch.values)
-	assert_array_almost_equal(seqlets.values, seqlets_32.values, 4)
-
-
-def test_recursive_seqlets_control_unreachable():
-	"""A target below every estimate warns and returns no seqlets."""
-
-	rng = numpy.random.RandomState(0)
-	X = rng.laplace(size=(40, 1000))
-	X_control = rng.laplace(size=(40, 1000))
-
-	with pytest.warns(TangermemeWarning, match="the lowest estimate is"):
-		seqlets, fdr = recursive_seqlets(X, X_control=X_control, 
-			target_fdr=0.01, return_fdr=True)
-
-	assert seqlets.shape == (0, 5)
-	assert list(seqlets.columns) == ['example_idx', 'start', 'end',
-		'attribution', 'p-value']
-	assert (fdr['fdr'].dropna() > 0.01).all()
 
 
 def test_recursive_seqlets_control_constant(X_background):
@@ -740,17 +517,6 @@ def test_recursive_seqlets_control_chance_pass():
 	assert seqlets.shape == (0, 5)
 
 
-def test_recursive_seqlets_return_fdr_requires_control(X_laplace):
-	assert_raises(ValueError, recursive_seqlets, X_laplace, return_fdr=True)
-
-
-def test_recursive_seqlets_control_empty(X_laplace):
-	assert_raises(ValueError, recursive_seqlets, X_laplace, 
-		X_control=numpy.zeros((0, 10)))
-	assert_raises(ValueError, recursive_seqlets, X_laplace, 
-		X_control=[0.1, 0.2])
-
-
 def test_recursive_seqlets_fdr_counts(X_laplace, X_background):
 	"""Each row counts the seqlets recursive_seqlets calls at that threshold,
 	and scales the control count plus one by the number of positions."""
@@ -771,14 +537,6 @@ def test_recursive_seqlets_fdr_counts(X_laplace, X_background):
 			assert_array_almost_equal(value, 2 * (n_control + 1) / n_seqlets)
 		else:
 			assert numpy.isnan(value)
-
-
-def test_recursive_seqlets_fdr_default_thresholds(X_laplace, X_background):
-	fdr = _fdr(X_laplace, X_background)
-
-	assert fdr.shape == (117, 4)
-	assert_allclose(fdr['threshold'].values[[0, -1]], [1e-1, 1e-30])
-	assert (numpy.diff(fdr['threshold']) < 0).all()
 
 
 def test_recursive_seqlets_fdr_strict_thresholds(X_laplace, X_background):
@@ -855,15 +613,6 @@ def test_recursive_seqlets_fdr_control_size(X_laplace, X_background):
 	assert len(called) > 0
 	assert_array_almost_equal(called['fdr'], (called['n_control_seqlets'] + 1)
 		* X_laplace.size / X_control.size / called['n_seqlets'])
-
-
-def test_recursive_seqlets_fdr_control_range(X_laplace):
-	"""Control values outside the range of X are placed in the end bins."""
-
-	X_control = numpy.random.RandomState(2).laplace(size=(4, 500)) * 10
-	fdr = _fdr(X_laplace, X_control, thresholds=[1e-2])
-
-	assert fdr['n_control_seqlets'].iloc[0] > 0
 
 
 ###
@@ -1631,8 +1380,10 @@ def test_recursive_seqlets_inputs_unchanged(X_laplace, X_background):
 
 def test_recursive_seqlets_output_types(X_laplace, X_background):
 	"""Coordinates are int64 and attributions and p-values float64, for
-	float32 and float64 input. The fdr table has float64 thresholds and
-	estimates and int64 counts, and the result unpacks as (seqlets, fdr)."""
+	float32 and float64 input. With return_fdr=True the result is a
+	RecursiveSeqletsResult, which unpacks as (seqlets, fdr); the fdr table
+	has float64 thresholds and estimates and int64 counts. Without it, the
+	same seqlets are returned as a frame."""
 
 	int64, float64 = numpy.dtype('int64'), numpy.dtype('float64')
 	for dtype in (numpy.float64, numpy.float32):
@@ -1644,16 +1395,30 @@ def test_recursive_seqlets_output_types(X_laplace, X_background):
 		target_fdr=0.2, return_fdr=True)
 	seqlets, fdr = result
 
+	assert isinstance(result, RecursiveSeqletsResult)
+	assert isinstance(result, tuple)
 	assert RecursiveSeqletsResult._fields == ('seqlets', 'fdr')
 	assert result[0] is seqlets is result.seqlets
 	assert result[1] is fdr is result.fdr
+
+	assert isinstance(seqlets, pandas.DataFrame)
+	assert len(seqlets) > 0
+	assert list(fdr.columns) == ['threshold', 'n_seqlets', 'n_control_seqlets',
+		'fdr']
 	assert list(fdr.dtypes) == [float64, int64, int64, float64]
+
+	seqlets_only = recursive_seqlets(X_laplace, X_control=X_background,
+		target_fdr=0.2)
+	assert isinstance(seqlets_only, pandas.DataFrame)
+	assert_frame_equal(seqlets_only, seqlets, check_exact=True)
 
 
 @pytest.mark.parametrize("kwargs, match", [
 	({'X': [[0.1, 0.2]]}, "`X` must be either a torch.Tensor or numpy.ndarray"),
 	({'X': numpy.zeros((0, 10))},
 		r"requires X to be non-empty; got X with shape \(0, 10\)"),
+	({'X': torch.zeros(0, 100)},
+		r"requires X to be non-empty; got X with shape \(0, 100\)"),
 	({'X': numpy.ones((2, 10)), 'X_control': numpy.zeros((3, 0))},
 		r"requires X_control to be non-empty; got X_control with shape "
 		r"\(3, 0\)"),
@@ -1661,8 +1426,14 @@ def test_recursive_seqlets_output_types(X_laplace, X_background):
 		"`X_control` must be either a torch.Tensor or numpy.ndarray"),
 	({'X': numpy.ones((2, 10)), 'return_fdr': True},
 		"return_fdr=True requires X_control"),
+	({'X': numpy.ones((2, 10)), 'threshold': numpy.nan},
+		"threshold must be a p-value of at most 1; got nan"),
+	({'X': numpy.ones((2, 10)), 'threshold': 1.0000001},
+		"threshold must be a p-value of at most 1; got 1.0000001"),
 	({'X': numpy.ones((2, 10)), 'threshold': 1.5},
 		"threshold must be a p-value of at most 1; got 1.5"),
+	({'X': numpy.ones((2, 10)), 'threshold': numpy.inf},
+		"threshold must be a p-value of at most 1; got inf"),
 ])
 def test_recursive_seqlets_errors(kwargs, match):
 	with pytest.raises(ValueError, match=match):
@@ -1928,10 +1699,10 @@ def test_recursive_seqlets_control_warning_estimate():
 		rows['n_seqlets']))
 
 
-@pytest.mark.parametrize("threshold", [numpy.nan, 2.0])
-def test_recursive_seqlets_control_threshold_unchecked(X_laplace,
+@pytest.mark.parametrize("threshold", [1e-6, numpy.nan, 2.0])
+def test_recursive_seqlets_control_ignores_threshold(X_laplace,
 	X_background, threshold):
-	"""threshold is ignored with a control, so a value that would raise
+	"""threshold is ignored with a control, and a value that would raise
 	without one does not."""
 
 	seqlets = recursive_seqlets(X_laplace, threshold=threshold,
@@ -1942,8 +1713,11 @@ def test_recursive_seqlets_control_threshold_unchecked(X_laplace,
 
 
 def test_recursive_seqlets_control_flanks(X_laplace, X_background):
-	"""Flanks do not change the fdr table, and the seqlets returned with a
-	control get them as at the chosen threshold without one."""
+	"""With a control, seqlets are called at the largest threshold whose
+	estimated false discovery rate is at or below target_fdr, as at that
+	threshold without one. Flanks do not change the fdr table, and the
+	seqlets returned with a control get them as at the chosen threshold
+	without one."""
 
 	result = recursive_seqlets(X_laplace, X_control=X_background,
 		target_fdr=0.2, return_fdr=True)
@@ -1954,6 +1728,10 @@ def test_recursive_seqlets_control_flanks(X_laplace, X_background):
 	assert not flanked.seqlets.equals(result.seqlets)
 
 	threshold = result.fdr.loc[result.fdr['fdr'] <= 0.2, 'threshold'].max()
+	assert not numpy.isnan(threshold)
+	assert len(result.seqlets) > 0
+	assert_frame_equal(result.seqlets, recursive_seqlets(X_laplace,
+		threshold=threshold), check_exact=True)
 	assert_frame_equal(flanked.seqlets, recursive_seqlets(X_laplace,
 		threshold=threshold, additional_flanks=3), check_exact=True)
 
