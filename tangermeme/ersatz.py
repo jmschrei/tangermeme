@@ -21,6 +21,7 @@ from .utils import _numba_threads
 from .utils import _random_codes
 from .utils import _stack_packed
 from .utils import _pack_row
+from .utils import _row_runs
 from .utils import _validate_input
 from .utils import one_hot_encode
 from .utils import PackedSequence
@@ -743,8 +744,8 @@ def _shuffle_sequence_packed(codes, start, end, n_shuffles, random_state,
 	every shuffle keeps it: those of shuffle i are written to positions i * m
 	to (i + 1) * m. `flags` receives whether any position between the ends
 	of the region is the same in every shuffle, whether all of them are, and
-	whether a shuffle had a number of runs other than m, in which case the
-	rest of its runs are not written.
+	whether a shuffle had a number of runs other than m, in which case its
+	runs are not written.
 	"""
 
 	seq_len = codes.shape[0]
@@ -772,30 +773,10 @@ def _shuffle_sequence_packed(codes, start, end, n_shuffles, random_state,
 		for j in range(region_len):
 			row[start + j] = shuffled[i, j]
 
-		r, r_end = i * n_runs, (i + 1) * n_runs
-		byte = 0
-		for j in range(seq_len):
-			# An unknown character, 4, is stored as 4 & 3 = 0.
-			byte = (byte << 2) | (row[j] & 3)
-			if j % 4 == 3:
-				data[i, j // 4] = byte
-				byte = 0
-
-			if row[j] == 4 and (j == 0 or row[j-1] != 4):
-				if r == r_end:
-					wrong_runs = True
-					break
-
-				run_starts[r] = j
-
-			if row[j] == 4 and (j == seq_len - 1 or row[j+1] != 4):
-				run_ends[r] = j + 1
-				r += 1
-
-		if seq_len % 4 != 0:
-			data[i, seq_len // 4] = byte << (2 * (4 - seq_len % 4))
-
-		wrong_runs = wrong_runs or r != r_end
+		if _pack_row(row, data, i, seq_len) != n_runs:
+			wrong_runs = True
+		elif n_runs > 0:
+			_row_runs(row, seq_len, run_starts, run_ends, i * n_runs)
 
 	flags[0] = any_conserved
 	flags[1] = all_conserved

@@ -1462,27 +1462,37 @@ def _pack_one_hot_kernel(X, data, n_runs):
 
 
 @numba.njit(nogil=True, cache=True)
+def _row_runs(codes, length, starts, ends, r):
+	"""Write the start and end of each run of 4 in `codes[:length]` to
+	`starts` and `ends` from position `r`, and return the position after the
+	last."""
+
+	for j in range(length):
+		if codes[j] != 4:
+			continue
+
+		if j == 0 or codes[j - 1] != 4:
+			starts[r] = j
+
+		if j == length - 1 or codes[j + 1] != 4:
+			ends[r] = j + 1
+			r += 1
+
+	return r
+
+
+@numba.njit(nogil=True, cache=True)
 def _codes_runs_kernel(codes, run_ptr, runs):
 	"""Write the runs of 4 in each row i of `codes` to `runs` from row
 	`run_ptr[i]`, as (row, start, end)."""
 
-	n_rows, length = codes.shape
-	for i in range(n_rows):
-		r = run_ptr[i]
-		if r == run_ptr[i + 1]:
+	for i in range(codes.shape[0]):
+		if run_ptr[i] == run_ptr[i + 1]:
 			continue
 
-		for j in range(length):
-			if codes[i, j] != 4:
-				continue
-
-			if j == 0 or codes[i, j - 1] != 4:
-				runs[r, 0] = i
-				runs[r, 1] = j
-
-			if j == length - 1 or codes[i, j + 1] != 4:
-				runs[r, 2] = j + 1
-				r += 1
+		_row_runs(codes[i], codes.shape[1], runs[:, 1], runs[:, 2], run_ptr[i])
+		for r in range(run_ptr[i], run_ptr[i + 1]):
+			runs[r, 0] = i
 
 
 @numba.njit(nogil=True, cache=True)
