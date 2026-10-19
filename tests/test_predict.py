@@ -227,27 +227,16 @@ def test_predict_batch_size(X, device):
 	assert y.shape == (64, 100, 4)
 
 
-def test_predict_raises_shape(X, device):
+def test_predict_raises_args(X, alpha, beta):
 	torch.manual_seed(0)
-	model = Scatter().to(device)
-	assert_raises(RuntimeError, predict, model, X[0], device=device)
-	assert_raises(RuntimeError, predict, model, X[:, 0], device=device)
-	assert_raises(RuntimeError, predict, model, X.unsqueeze(0), device=device)
-
-
-def test_predict_raises_args(X, alpha, beta, device):
-	torch.manual_seed(0)
-	model = FlattenDense().to(device)
-	assert_raises(TypeError, predict, model, X, batch_size=2, args=5,
-		device=device)
-	assert_raises(AttributeError, predict, model, X, batch_size=2, args=(5,),
-		device=device)
+	model = FlattenDense()
+	assert_raises(TypeError, predict, model, X, batch_size=2, args=5)
+	assert_raises(AttributeError, predict, model, X, batch_size=2, args=(5,))
+	assert_raises(ValueError, predict, model, X, batch_size=2, args=alpha)
 	assert_raises(ValueError, predict, model, X, batch_size=2,
-		args=alpha, device=device)
+		args=(alpha[:5],))
 	assert_raises(ValueError, predict, model, X, batch_size=2,
-		args=(alpha[:5],), device=device)
-	assert_raises(ValueError, predict, model, X, batch_size=2,
-		args=(alpha, beta[:5]), device=device)
+		args=(alpha, beta[:5]))
 
 
 def test_predict_flattendense_fp64(X, device):
@@ -1049,12 +1038,11 @@ def test_predict_verbose(X, device):
 	assert_array_almost_equal(y0, y1)
 
 
-def test_predict_empty_X(device):
+def test_predict_empty_X():
 	model = FlattenDense()
 	X_empty = torch.zeros((0, 4, 100))
 
-	assert_raises(ValueError, predict, model, X_empty, batch_size=8,
-		device=device)
+	assert_raises(ValueError, predict, model, X_empty, batch_size=8)
 
 
 def test_predict_batch_size_zero(X, device):
@@ -1191,9 +1179,8 @@ def test_predict_stored_dtype(X, alpha, beta, dtype, device):
 	assert_same(y, y0)
 
 
-def test_predict_packed_raises(X, device):
+def test_predict_packed_raises(X):
 	model = FlattenDense()
 	X_packed = PackedSequence.from_one_hot(X)
-	assert_raises(ValueError, predict, model, X_packed[:0], device=device)
-	assert_raises(ValueError, predict, model, X_packed, args=(X[:5],),
-		device=device)
+	assert_raises(ValueError, predict, model, X_packed[:0])
+	assert_raises(ValueError, predict, model, X_packed, args=(X[:5],))
