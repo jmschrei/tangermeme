@@ -349,6 +349,8 @@ def test_extract_matching_loci_n_jobs_parallel():
 
 
 def test_extract_matching_loci_chroms_none():
+	# Without chroms, the loci are matched on the chromosomes of the peaks,
+	# chr1 alone here, as when chroms names them.
 	peaks = pandas.DataFrame({
 		'chrom': ['chr1', 'chr1', 'chr1'],
 		'start': [10, 50, 100],
@@ -360,6 +362,13 @@ def test_extract_matching_loci_chroms_none():
 
 	assert isinstance(regions, pandas.DataFrame)
 	assert tuple(regions.columns) == ('chrom', 'start', 'end')
+	assert tuple(regions['chrom']) == ('chr1', 'chr1', 'chr1')
+	assert tuple(regions['start']) == (80, 250, 260)
+	assert tuple(regions['end']) == (90, 260, 270)
+
+	pandas.testing.assert_frame_equal(regions, extract_matching_loci(peaks,
+		"tests/data/test.fa", chroms=['chr1'], in_window=10, out_window=10,
+		random_state=0))
 
 
 ##
