@@ -437,7 +437,8 @@ _PROTEIN = list('ACDEFGHIKLMNPQRSTVWY')
 _ASCII = [chr(i) for i in range(128)]
 
 
-@pytest.mark.parametrize("length", [0, 1, 2, 7, 63, 64, 65, 1000, 100003])
+@pytest.mark.parametrize("length", [0, 1, 2, 7, 63, 64, 65, 1000, 2**13 - 1,
+	2**13, 10000, 100003])
 def test_one_hot_encode_matches_reference_length(length):
 	seq = _random_sequence(length, seed=length)
 	X = one_hot_encode(seq)
@@ -477,19 +478,6 @@ def test_one_hot_encode_matches_reference_large():
 	chars = numpy.frombuffer(seq.encode('ascii'), dtype='S1')
 	X_ref = chars[None, :] == numpy.array([b'A', b'C', b'G', b'T'])[:, None]
 	assert numpy.array_equal(X.numpy(), X_ref.astype(numpy.int8))
-
-
-def test_one_hot_encode_column_sums():
-	# Each column of a character in the alphabet has exactly one 1, and each
-	# column of an ignored character is all zeros.
-	seq = _random_sequence(10000, 'ACGTN', seed=3)
-	X = one_hot_encode(seq)
-
-	is_n = numpy.array([char == 'N' for char in seq])
-	sums = X.sum(dim=0).numpy()
-	assert (sums[is_n] == 0).all()
-	assert (sums[~is_n] == 1).all()
-	assert set(numpy.unique(X.numpy())) <= {0, 1}
 
 
 def test_one_hot_encode_characters_round_trip():
@@ -740,7 +728,7 @@ def test_fast_one_hot_encode_raises():
 
 
 @pytest.mark.parametrize("n_jobs", [1, 2, 3, 4, -1, 1000])
-@pytest.mark.parametrize("length", [10, 2**18 - 1, 2**18 + 7])
+@pytest.mark.parametrize("length", [10, 2**18 - 1, 2**18 + 7, 2**18 + 8])
 def test_one_hot_encode_n_jobs(n_jobs, length):
 	# The result does not depend on n_jobs, which only splits sequences of
 	# at least 2**18 characters across threads.
@@ -1037,9 +1025,14 @@ def test_pwm_consensus_zero_column():
 	])
 	Y = pwm_consensus(pwm)
 
-	# The all-zero column stays all-zero.
-	assert int(Y[:, 1].sum()) == 0
-	assert int(Y[:, 0].sum()) == 1
+	# Each column is set at its largest value, except the all-zero column,
+	# which stays all-zero.
+	assert torch.equal(Y, torch.tensor([
+		[1.0, 0.0, 0.0, 0.0],
+		[0.0, 0.0, 1.0, 0.0],
+		[0.0, 0.0, 0.0, 1.0],
+		[0.0, 0.0, 0.0, 0.0],
+	]))
 
 
 def test_random_one_hot_with_probs():
