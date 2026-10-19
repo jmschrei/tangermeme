@@ -7,9 +7,9 @@ import pytest
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
-from tangermeme.utils import PackedSequence
 
 from tangermeme.space import space
+from tangermeme.predict import predict
 from tangermeme.ersatz import multisubstitute
 from tangermeme.deep_lift_shap import deep_lift_shap
 from tangermeme.saturation_mutagenesis import saturation_mutagenesis
@@ -20,6 +20,8 @@ from .toy_models import Conv
 from .toy_models import Scatter
 from .toy_models import ConvDense
 from .toy_models import SmallDeepSEA
+from ._packed import check_packed
+from ._packed import Spy
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -299,30 +301,12 @@ def test_space_convdense(X, device):
         [-0.1292,  0.1851,  0.2033],
         [-0.2042,  0.1904,  0.2121]], 4)
 
-
-def test_space_convdense_batch_size(X, device):
-	torch.manual_seed(0)
-	model = ConvDense()
-	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		batch_size=68, device=device)
-
-	assert len(y_before) == 2
-	assert y_before[0].shape == (64, 12, 98)
-	assert y_before[1].shape == (64, 3)
-
-	assert len(y_after) == 2
-	assert y_after[0].shape == (64, 1, 12, 98)
-	assert y_after[1].shape == (64, 1, 3)
-
-
-def test_space_scatter_batch_size(X, device):
-	torch.manual_seed(0)
-	model = Scatter()
-	y_before, y_after = space(model, X, ["ACGTC", "GAGA"], [[1]], 
-		batch_size=68, device=device)
-
-	assert y_before.shape == (64, 100, 4)
-	assert y_after.shape == (64, 1, 100, 4)
+	y_before2, y_after2 = space(model, X, ["ACGTC", "GAGA"], [[1]],
+		start=0, batch_size=68, device=device)
+	assert_array_almost_equal(y_before[0], y_before2[0])
+	assert_array_almost_equal(y_before[1], y_before2[1])
+	assert_array_almost_equal(y_after[0], y_after2[0])
+	assert_array_almost_equal(y_after[1], y_after2[1])
 
 
 def test_space_raises_shape(X, device):
@@ -782,41 +766,22 @@ def test_space_returns_named_tuple(X, device):
 
 
 ###
-# A PackedSequence gives the predictions of its one-hot encoding.
+# A PackedSequence gives the predictions of its one-hot encoding, and a
+# function of the user's is given the int8 one-hot encoding of the packed
+# copies that space makes.
 
 
-def test_space_packed(X, device):
+_PREDICT_SPY = Spy(predict, 1)
+
+
+@pytest.mark.parametrize("func", [predict, _PREDICT_SPY], ids=["predict",
+	"spy"])
+def test_space_packed(X, func, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	X = X.clone()
 	X[5, :, 50:55] = 0
 	motifs, spacing = ["ACG", "TTNA"], [[2], [5], [9]]
 
-	y = space(model, X, motifs, spacing, device=device)
-	y_packed = space(model, PackedSequence.from_one_hot(X), motifs, spacing,
-		device=device)
-	assert torch.equal(y_packed.y_before, y.y_before)
-	assert torch.equal(y_packed.y_afters, y.y_afters)
-
-
-def test_space_packed_func_int8(X, device):
-	# A function of the user's is given the int8 one-hot encoding of the
-	# packed copies that space makes.
-	from tangermeme.predict import predict
-
-	seen = []
-
-	def func(model, X, **kwargs):
-		seen.append(X.dtype)
-		return predict(model, X, **kwargs)
-
-	torch.manual_seed(0)
-	model = FlattenDense()
-	y = space(model, X, ["ACG", "TT"], [[2], [5]], func=func, device=device)
-	seen.clear()
-	y_packed = space(model, PackedSequence.from_one_hot(X), ["ACG", "TT"],
-		[[2], [5]], func=func, device=device)
-
-	assert len(seen) > 0 and all(dtype == torch.int8 for dtype in seen)
-	assert torch.equal(y_packed.y_before, y.y_before)
-	assert torch.equal(y_packed.y_afters, y.y_afters)
+	check_packed(lambda X_: space(model, X_, motifs, spacing, func=func,
+		device=device), X, [func] if func is _PREDICT_SPY else [])
