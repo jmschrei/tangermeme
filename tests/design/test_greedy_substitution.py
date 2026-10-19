@@ -243,3 +243,8 @@ def test_greedy_substitution_packed_alphabet(X, device):
 	X_hat = greedy_substitution(model, X_packed, y, motifs,
 		alphabet=alphabet, device=device, max_iter=1)
 	assert X_hat.alphabet == tuple(alphabet)
+
+	X_hat_dense = greedy_substitution(model, X_packed.to_one_hot(), y, motifs,
+		alphabet=alphabet, device=device, max_iter=1)
+	assert torch.equal(X_hat.to_one_hot(), X_hat_dense)
+	assert not torch.equal(X_hat_dense, X)
