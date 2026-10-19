@@ -540,9 +540,9 @@ def test_pisa_args_one_dimensional(X, references, device):
 def test_pisa_preserves_model_state(X, device):
 	# After pisa returns the model should be back on its original device
 	# and in its original training mode, with no _NON_LINEAR_OPS attributes
-	# or hook handles leaked onto its modules.
+	# or hook handles leaked onto its modules. Its ReLUs and pools get hooks.
 	torch.manual_seed(0)
-	model = FlattenDense(n_outputs=1)
+	model = SmallDeepSEA()
 	model.train()  # explicitly leave model in train mode
 	orig_device = next(model.parameters()).device
 
@@ -554,8 +554,9 @@ def test_pisa_preserves_model_state(X, device):
 	for module in model.modules():
 		assert not hasattr(module, "_NON_LINEAR_OPS"), \
 			"_NON_LINEAR_OPS attribute leaked onto module"
-		if hasattr(module, "handles"):
-			assert len(module.handles) == 0
+		assert len(getattr(module, "handles", [])) == 0
+		assert len(module._forward_hooks) == 0
+		assert len(module._backward_hooks) == 0
 
 
 def test_pisa_cleans_up_hooks_on_exception(X, device):
@@ -805,7 +806,7 @@ SEQUENTIAL_IDS = ["linear", "linear_bias", "conv", "conv_dilated",
 
 @pytest.mark.parametrize("layers,threshold", SEQUENTIAL_MODELS,
 	ids=SEQUENTIAL_IDS)
-def test_pisa_sequential(X, device, layers, threshold):
+def test_pisa_sequential(X, references, device, layers, threshold):
 	if isinstance(threshold, dict):
 		threshold = threshold[device]
 
@@ -814,8 +815,14 @@ def test_pisa_sequential(X, device, layers, threshold):
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		pisa(model, X, device=device, random_state=0,
+		X_attr = pisa(model, X, references=references, device=device,
 			warning_threshold=threshold)
+
+	# Every model has one output, which deep_lift_shap explains too. The two
+	# differ by up to 2e-4 for the padded convolution on CUDA.
+	decimal = 6 if device == "cpu" else 3
+	assert_array_almost_equal(X_attr[:, 0], deep_lift_shap(model, X,
+		references=references, device=device), decimal)
 
 ###
 
