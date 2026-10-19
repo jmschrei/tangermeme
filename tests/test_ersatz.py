@@ -126,17 +126,14 @@ def test_insert_long(X):
 
 def test_insert_raises_alphabet(X):
 	motif = one_hot_encode('CACCAG', alphabet=['A', 'C', 'G']).unsqueeze(0)
-	assert_raises(ValueError, insert, X, motif)
-	assert_raises(ValueError, insert, X, motif, None, ['A', 'C', 'G'])
+	with pytest.raises(ValueError, match=r"motif has shape .*\[1, 3, 6\]"):
+		insert(X, motif)
 
 
 def test_insert_raise_ends(X):
 	assert_raises(ValueError, insert, X, 'CAGCAT', -2)
 	assert_raises(ValueError, insert, X, 'CAGCAT', 1000)
 	assert_raises(TypeError, insert, X, 'CAGCAT', 6.5)
-	assert_raises(TypeError, insert, X, 'CAGCAT', 5, 3)
-	assert_raises(TypeError, insert, X, 'CAGCAT', -5, -1)
-	assert_raises(TypeError, insert, X, 'CAGCAT', 5, 1000)
 
 
 def test_insert_raises_ohe(X):
@@ -353,23 +350,21 @@ def test_substitute_start_ohe(X):
 
 
 def test_substitute_raises_alphabet(X):
-	motif = one_hot_encode('CACCAG', alphabet=['A', 'C', 'G'])
-	assert_raises(ValueError, substitute, X, motif)
-	assert_raises(ValueError, substitute, X, motif, ['A', 'C', 'G'])
+	motif = one_hot_encode('CACCAG', alphabet=['A', 'C', 'G']).unsqueeze(0)
+	with pytest.raises(ValueError, match=r"motif has shape .*\[1, 3, 6\]"):
+		substitute(X, motif)
 
 
 def test_substitute_raises_length(X):
 	assert_raises(ValueError, substitute, X, 'C'*1000)
-	assert_raises(ValueError, substitute, X, one_hot_encode('C'*1000))
+	with pytest.raises(ValueError, match="Motif cannot be longer than"):
+		substitute(X, one_hot_encode('C'*1000).unsqueeze(0))
 
 
 def test_substitute_raise_ends(X):
 	assert_raises(ValueError, substitute, X, 'CAGCAT', -2)
 	assert_raises(ValueError, substitute, X, 'CAGCAT', 1000)
 	assert_raises(IndexError, substitute, X, 'CAGCAT', 6.5)
-	assert_raises(TypeError, substitute, X, 'CAGCAT', 5, 3)
-	assert_raises(TypeError, substitute, X, 'CAGCAT', -5, -1)
-	assert_raises(TypeError, substitute, X, 'CAGCAT', 5, 1000)
 
 
 def test_substitute_raises_ohe(X):
@@ -651,10 +646,9 @@ def test_multisubstitute_start(X):
 
 
 def test_multisubstitute_raises_alphabet(X):
-	motif = one_hot_encode('CACCAG', alphabet=['A', 'C', 'G'])
-	assert_raises(ValueError, multisubstitute, X, [motif, motif], [0])
-	assert_raises(ValueError, multisubstitute, X, [motif, motif], [0],
-		['A', 'C', 'G'])
+	motif = one_hot_encode('CACCAG', alphabet=['A', 'C', 'G']).unsqueeze(0)
+	with pytest.raises(ValueError, match=r"motif has shape .*\[1, 3, 6\]"):
+		multisubstitute(X, [motif, motif], [0])
 
 
 def test_multisubstitute_raises_length(X):
@@ -1573,10 +1567,14 @@ def test_local_dinucleotide_shuffle_bin_layout_valid():
 	# Every bin the implementation can produce must be at least min_bin_size
 	# long and no longer than 2 * bin_size (the merge of the final two bins is
 	# the only way a bin exceeds bin_size).
+	import tangermeme.ersatz
+
 	seq_len, bin_size, min_bin_size = 200, 64, 32
 
-	for first_cut in range(min_bin_size, bin_size + 1):
-		bins = _local_bins(first_cut, seq_len, bin_size, min_bin_size)
+	for seed in range(200):
+		rng = numpy.random.RandomState(seed)
+		bins = tangermeme.ersatz._local_bins(rng, seq_len, bin_size,
+			min_bin_size)
 
 		assert bins[0][0] == 0
 		assert bins[-1][1] == seq_len

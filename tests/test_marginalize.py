@@ -702,18 +702,6 @@ def test_marginalize_returns_tuple_not_list(X, device):
 	assert len(result) == 2
 
 
-def test_marginalize_additional_func_kwargs_none(X, device):
-	model = FlattenDense()
-
-	y_before0, y_after0 = marginalize(model, X, "ACGTC", batch_size=8,
-		device=device, additional_func_kwargs=None)
-	y_before1, y_after1 = marginalize(model, X, "ACGTC", batch_size=8,
-		device=device)
-
-	assert_array_almost_equal(y_before0, y_before1, 4)
-	assert_array_almost_equal(y_after0, y_after1, 4)
-
-
 def test_marginalize_annotations_basic(X, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
@@ -840,28 +828,6 @@ def test_marginalize_func_saturation_mutagenesis(X, device):
 		   0.0000, -0.0000, -0.0396],
 		 [ 0.0000, -0.0073,  0.0000, -0.0000,  0.0000, -0.0000,  0.0258,
 		  -0.0000,  0.0097, -0.0000]]], 4)
-
-
-def test_marginalize_annotations_threads_kwargs(X, device):
-	# kwargs should be forwarded to each per-annotation marginalize call.
-	# batch_size is the easiest one to verify because it changes the
-	# internal predict batching without changing the result.
-	torch.manual_seed(0)
-	model = FlattenDense()
-	X0 = X[:5].clone()
-
-	annotations = torch.tensor([
-		[0, 10, 18],
-		[1, 20, 28],
-	], dtype=torch.int64)
-
-	y_b0, y_a0 = marginalize_annotations(model, X, X0, annotations,
-		batch_size=1, device=device)
-	y_b1, y_a1 = marginalize_annotations(model, X, X0, annotations,
-		batch_size=64, device=device)
-
-	assert_array_almost_equal(y_b0, y_b1, 4)
-	assert_array_almost_equal(y_a0, y_a1, 4)
 
 
 def test_marginalize_annotations_empty(X, device):

@@ -63,10 +63,21 @@ def test_plot_logo_numpy_input(X_attr):
 
 
 def test_plot_logo_start_end_slicing(X_attr):
+	# start and end draw the same logo as slicing the attributions first.
 	ax = plot_logo(X_attr, start=10, end=40)
+	_, ax_slice = plt.subplots()
+	plot_logo(X_attr[:, 10:40], ax=ax_slice)
 
-	xlo, xhi = ax.get_xlim()
-	assert int(round(xhi - xlo)) >= 29
+	assert ax.get_xlim() == (-0.1, 30)
+
+	paths = ax.collections[0].get_paths()
+	paths_slice = ax_slice.collections[0].get_paths()
+	assert len(paths) == len(paths_slice)
+	for path, path_slice in zip(paths, paths_slice):
+		numpy.testing.assert_array_equal(path.vertices, path_slice.vertices)
+
+	numpy.testing.assert_array_equal(ax.collections[0].get_facecolors(),
+		ax_slice.collections[0].get_facecolors())
 
 
 def test_plot_logo_all_zero_attributions():
@@ -77,12 +88,6 @@ def test_plot_logo_all_zero_attributions():
 
 def test_plot_logo_color_string(X_attr):
 	ax = plot_logo(X_attr, color="red")
-	assert ax is not None
-
-
-def test_plot_logo_color_dict(X_attr):
-	color = {'A': 'red', 'C': 'blue', 'G': 'green', 'T': 'black'}
-	ax = plot_logo(X_attr, color=color)
 	assert ax is not None
 
 

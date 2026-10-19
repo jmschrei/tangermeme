@@ -142,29 +142,25 @@ def test_greedy_substitution_output_mask(X, device):
 
 
 def test_greedy_substitution_reverse_complement(X, device):
+	# reverse_complement=True searches each motif and its reverse complement.
 	torch.manual_seed(0)
-	output_mask = torch.zeros(4, dtype=bool)
-	output_mask[3] = True
-
 	model = SmallDeepSEA()
 	y = [[10]]
 
-	X_hat = greedy_substitution(model, X, y, ['A', 'C'], device=device, max_iter=101,
-		reverse_complement=False)
+	X_hat = greedy_substitution(model, X, y, ['AAC', 'CTG'], device=device,
+		max_iter=101, reverse_complement=True)
+	X_hat_both = greedy_substitution(model, X, y, ['AAC', 'CTG', 'GTT', 'CAG'],
+		device=device, max_iter=101, reverse_complement=False)
+	X_hat_fwd = greedy_substitution(model, X, y, ['AAC', 'CTG'], device=device,
+		max_iter=101, reverse_complement=False)
 
-	n_count = X.sum(dim=(0, 2))
-	n_hat_count = X_hat.sum(dim=(0, 2))
-	
-	assert n_count[0] < n_hat_count[0]
-	assert n_count[1] < n_hat_count[1]
-	assert n_count[2] > n_hat_count[2]
-	assert n_count[3] > n_hat_count[3]
+	assert torch.equal(X_hat, X_hat_both)
+	assert not torch.equal(X_hat, X_hat_fwd)
 
 
 def test_greedy_substitution_no_y(X, device):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
-	y = [[10]]
 
 	X_hat = greedy_substitution(model, X, device=device, max_iter=15)
 	y_hat = predict(model, X_hat, device=device)

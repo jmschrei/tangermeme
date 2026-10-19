@@ -176,6 +176,39 @@ def test_default_dest_is_under_home_and_isolated(tmp_path, monkeypatch):
 
 
 ###
+# Console-script main, called in process (always into a temporary destination)
+
+
+def test_main_print_path(capsys):
+	assert install_mod.main(["--print-path"]) == 0
+	assert capsys.readouterr().out == "{}\n".format(_bundled_skill_dir())
+
+
+def test_main_dest(tmp_path, capsys):
+	dest = tmp_path / "tangermeme"
+	assert install_mod.main(["--dest", str(dest)]) == 0
+	assert str(dest) in capsys.readouterr().out
+
+	bundled = {p.name for p in (_bundled_skill_dir() / "references").glob("*.md")}
+	installed = {p.name for p in (dest / "references").glob("*.md")}
+	assert (dest / "SKILL.md").is_file()
+	assert installed == bundled
+
+
+def test_main_existing_dest(tmp_path, capsys):
+	# A second install to the same place is an error unless --force is given.
+	dest = tmp_path / "tangermeme"
+	assert install_mod.main(["--dest", str(dest)]) == 0
+	capsys.readouterr()
+
+	assert install_mod.main(["--dest", str(dest)]) == 1
+	assert capsys.readouterr().err.startswith("error:")
+
+	assert install_mod.main(["--dest", str(dest), "--force"]) == 0
+	assert (dest / "SKILL.md").is_file()
+
+
+###
 # Console-script entry point (opt-in; does not install anything)
 
 

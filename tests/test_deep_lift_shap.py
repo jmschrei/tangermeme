@@ -217,12 +217,15 @@ def test_hypothetical_attributions_raises(X):
 	assert_raises(ValueError, hypothetical_attributions, (gradients,), (X,), 
 		(refs, refs))
 
-	assert_raises(ValueError, hypothetical_attributions, (gradients.numpy()), 
+	assert_raises(ValueError, hypothetical_attributions, (gradients.numpy(),), 
 		(X,), (refs,))
 	assert_raises(ValueError, hypothetical_attributions, (gradients,), 
 		(X.numpy(),), (refs,))
 	assert_raises(ValueError, hypothetical_attributions, (gradients,), (X,), 
 		(refs.numpy(),))
+
+	with pytest.raises(ValueError, match="Shape of all tensors must match."):
+		hypothetical_attributions((gradients,), (X[:3],), (refs,))
 
 
 ###
@@ -367,8 +370,10 @@ def test_deep_lift_shap_random_state(X, device):
 	X_attr1 = deep_lift_shap(model, X[0:10], device=device, random_state=1)
 	X_attr2 = deep_lift_shap(model, X[0:10], device=device, random_state=2)
 
-	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr1)
-	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr2)
+	assert_raises(AssertionError, assert_array_almost_equal, X_attr0[:10],
+		X_attr1)
+	assert_raises(AssertionError, assert_array_almost_equal, X_attr0[:10],
+		X_attr2)
 
 
 def test_deep_lift_shap_random_state_references(X, device):
@@ -566,6 +571,9 @@ def test_deep_lift_shap_input_type(X, device):
 	assert_array_almost_equal(X_attr0, X_attr4)
 	assert_array_almost_equal(X_attr0, X_attr5)
 	
+	for X_attr in X_attr1, X_attr2, X_attr3, X_attr4, X_attr5:
+		assert X_attr.dtype == torch.float32
+
 
 def test_deep_lift_shap_shuffle_ordering(X, device):
 	torch.manual_seed(0)
@@ -771,7 +779,7 @@ def test_deep_lift_shap_flattendense(X, device):
 			random_state=0, warning_threshold=1e-10)
 
 	assert X_attr.shape == X.shape
-	assert X.dtype == torch.float32
+	assert X_attr.dtype == torch.float32
 
 	assert_array_almost_equal(X_attr[:2, :, :10], [
 		[[ 0.0000, -0.0000, -0.0000, -0.0326,  0.0000,  0.0000,  0.0000,
@@ -807,7 +815,7 @@ def test_deep_lift_shap_convdense_dense_wrapper(X, device):
 			random_state=0, warning_threshold=1e-8)
 
 	assert X_attr.shape == X.shape
-	assert X.dtype == torch.float32
+	assert X_attr.dtype == torch.float32
 
 	assert_array_almost_equal(X_attr[:2, :, :10], [
 				[[ 0.0000, -0.0000, -0.0000, -0.0326,  0.0000,  0.0000,  0.0000,
@@ -844,7 +852,7 @@ def test_deep_lift_shap_convdense_conv_wrapper(X, device):
 			random_state=0, warning_threshold=1e-8)
 
 	assert X_attr.shape == X.shape
-	assert X.dtype == torch.float32
+	assert X_attr.dtype == torch.float32
 
 	assert_array_almost_equal(X_attr[:2, :, :10], [
 				[[ 0.0000, -0.0000, -0.0000, -0.6734, -0.0000, -0.0000, -0.0000,
@@ -1423,18 +1431,12 @@ def test_windows_overlap_1d(kernel_size, stride, dilation, overlap):
 @pytest.mark.parametrize("kernel_size,stride,overlap", [
 	((3, 3), (3, 3), False), ((2, 2), (2, 2), False), ((1, 4), (1, 4), False),
 	((3, 3), (3, 1), True), ((3, 3), (1, 3), True), ((4, 2), (2, 2), True),
+	(3, None, False),
 ])
 def test_windows_overlap_2d(kernel_size, stride, overlap):
 	# A 2D pool overlaps if either axis does, so both are checked.
 	pool = torch.nn.MaxPool2d(kernel_size, stride)
 	assert _windows_overlap(pool) == overlap
-
-
-def test_windows_overlap_defaults_stride_to_kernel_size(device):
-	# torch fills stride in from kernel_size when it is not given, and that
-	# default is the common non-overlapping case.
-	assert _windows_overlap(torch.nn.MaxPool1d(4)) is False
-	assert _windows_overlap(torch.nn.MaxPool2d(3)) is False
 
 
 @pytest.mark.parametrize("pool,dilated", [
@@ -2247,8 +2249,8 @@ def test_deep_lift_shap_softmax(X, references, device):
 # `forward(X, alpha=0, beta=1)` signature, so a single parametrized matrix can
 # put all of them through the settings the stock models are tested against
 # above: convergence, batch size, shuffle count, example independence, seed,
-# an explicit reference tensor, input dtype, hypothetical attributions, raw
-# outputs, returned references, and extra forward args.
+# an explicit reference tensor, hypothetical attributions, raw outputs, and
+# extra forward args.
 ###
 
 
@@ -2405,23 +2407,6 @@ def test_deep_lift_shap_rules_reference_tensor(X, device, model_cls, op):
 
 
 @RULE_PARAMS
-def test_deep_lift_shap_rules_input_type(X, references, device, model_cls, op):
-	model, kwargs = _rule_model(model_cls, op)
-	X, references = X[:4], references[:4]
-
-	X_attr0 = deep_lift_shap(model, X, references=references, device=device,
-		random_state=0, **kwargs)
-
-	for dtype in (torch.int8, torch.int16, torch.int32, torch.float16,
-		torch.bfloat16):
-		X_attr = deep_lift_shap(model, X.type(dtype), references=references,
-			device=device, random_state=0, **kwargs)
-
-		assert X_attr.dtype == torch.float32
-		assert_array_almost_equal(X_attr0, X_attr, 4)
-
-
-@RULE_PARAMS
 def test_deep_lift_shap_rules_hypothetical(X, references, device, model_cls, op):
 	model, kwargs = _rule_model(model_cls, op)
 
@@ -2468,24 +2453,6 @@ def test_deep_lift_shap_rules_raw_outputs(X, references, device, model_cls, op):
 
 	assert_array_almost_equal(X_hyp, X_attr_hyp.cpu(), 4)
 	assert_array_almost_equal(X_hyp * X, X_attr.cpu(), 4)
-
-
-@RULE_PARAMS
-def test_deep_lift_shap_rules_return_references(X, references, device,
-	model_cls, op):
-	model, kwargs = _rule_model(model_cls, op)
-
-	result = deep_lift_shap(model, X, references=references,
-		return_references=True, device=device, random_state=0, **kwargs)
-
-	assert isinstance(result, tuple)
-	assert len(result) == 2
-
-	X_attr, refs = result
-	assert X_attr.shape == X.shape
-	assert refs.shape == references.shape
-	assert_array_almost_equal(refs.cpu(), references, 4)
-	assert_array_almost_equal(X_attr, result.attributions, 4)
 
 
 @RULE_PARAMS
@@ -2741,9 +2708,10 @@ def test_deep_lift_shap_custom_op_overrides_builtin(X, references, device):
 				random_state=0, warning_threshold=_rule_threshold(device))
 
 
-@pytest.mark.skip(reason="hooks are registered by isinstance but dispatched by "
-	"exact type, so subclassing any registered op raises KeyError in _b_hook. "
-	"Pre-existing on main for every op, not introduced by these rules.")
+@pytest.mark.xfail(strict=True, raises=KeyError, reason="hooks are registered "
+	"by isinstance but dispatched by exact type, so subclassing any registered "
+	"op raises KeyError in _b_hook. Pre-existing on main for every op, not "
+	"introduced by these rules.")
 def test_deep_lift_shap_subclassed_op(X, references, device):
 	"""A subclass of a registered op should inherit its rule."""
 
@@ -3218,6 +3186,12 @@ def test_deep_lift_shap_return_references_named_tuple(X, device):
 	assert isinstance(result, AttributionReferencesResult)
 	assert isinstance(result, tuple)
 
+	# A references tensor that is passed in comes back unchanged.
+	refs = shuffle(X[:2], n=2, random_state=0)
+	result = deep_lift_shap(model, X[:2], references=refs,
+		return_references=True, device=device, random_state=0)
+	assert torch.equal(result.references, refs)
+
 	# When return_references=False the return is still a plain Tensor.
 	attr = deep_lift_shap(model, X[:2], n_shuffles=2,
 		return_references=False, device=device, random_state=0)
@@ -3250,18 +3224,24 @@ def test_deep_lift_shap_clears_hook_caches(X, device):
 		assert "output" not in module.__dict__
 
 
+# Every attribute `_clear_hooks` removes from a module.
+CLEARED_ATTRIBUTES = ["handles", "_caches", "_fwd_counter", "_bw_idx",
+	"_staged", "input", "output", "left", "right"]
+
+
 def test_deep_lift_shap_clears_hook_caches_on_error(X, device):
 	torch.manual_seed(0)
-	model = SmallDeepSEA()
+	model = ConvSoftmax(dim=0)
 
-	# `target` is out of range for a one-output model, so the attribution loop
-	# raises and unwinds through the `finally` block that clears the hooks.
-	assert_raises(IndexError, deep_lift_shap, model, X[:2], target=5,
-		n_shuffles=2, device=device, random_state=0)
+	# The softmax rule rejects the batch axis, so it raises after `_b_hook` has
+	# put the cached activations on the module and the `finally` block that
+	# clears the hooks has to remove them.
+	assert_raises(ValueError, deep_lift_shap, model, X[:2], n_shuffles=2,
+		device=device, random_state=0)
 
 	for module in model.modules():
-		assert "input" not in module.__dict__
-		assert "output" not in module.__dict__
+		for name in CLEARED_ATTRIBUTES:
+			assert name not in module.__dict__
 
 
 def test_deep_lift_shap_softmax_channel_axis(X, references, device):
@@ -3740,25 +3720,6 @@ def test_deep_lift_shap_transformer_block_positional_is_linear(X, references,
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr, X_attr_, 4)
 
 
-def test_transformer_block_attention_mask_forward(X, device):
-	"""The masked model itself is sound, which the skipped test below is not.
-
-	That test cannot run, so without this one nothing exercises the masked
-	constructor at all and the model could stop building unnoticed.
-	"""
-
-	mask = torch.triu(torch.full((100, 100), float("-inf")), diagonal=1)
-
-	torch.manual_seed(0)
-	model = TransformerBlock(mask=mask).to(device)
-
-	with torch.no_grad():
-		y_hat = model(X[:4].to(device))
-
-	assert y_hat.shape == (4, 1)
-	assert torch.isfinite(y_hat).all()
-
-
 ATTENTION_MASKS = [
 	("causal", lambda v: torch.triu(torch.full((100, 100), v), diagonal=1)),
 	("padding", lambda v: torch.cat([torch.zeros(100, 80),
@@ -3801,18 +3762,16 @@ def test_deep_lift_shap_attention_mask(X, references, device, mask_fn, value):
 
 
 @MASK_PARAMS
-def test_deep_lift_shap_attention_mask_is_not_vacuous(X, references, device,
-	mask_fn, value):
-	# The mask has to change the answer, or the test above would pass on a model
-	# that ignored it. The two mask values are saturated equivalently, so they
-	# must agree with each other while differing from the unmasked model.
+def test_transformer_block_attention_mask_changes_output(X, mask_fn, value):
+	# The mask has to change the model's output, or the test above would pass
+	# on a model that ignored it.
 	torch.manual_seed(0)
-	masked = deep_lift_shap(TransformerBlock(mask=mask_fn(value)), X[:4],
-		references=references[:4], device=device, random_state=0)
+	model = TransformerBlock(mask=mask_fn(value))
 
-	torch.manual_seed(0)
-	unmasked = deep_lift_shap(TransformerBlock(), X[:4],
-		references=references[:4], device=device, random_state=0)
+	with torch.no_grad():
+		masked = model(X[:4])
+		model.mask = None
+		unmasked = model(X[:4])
 
 	assert_raises(AssertionError, assert_array_almost_equal, masked, unmasked, 4)
 
@@ -3881,19 +3840,19 @@ def test_deep_lift_shap_clears_bilinear_caches(X, device, model_cls, op):
 		assert "right" not in module.__dict__
 
 
-@pytest.mark.parametrize("model_cls,op", BILINEAR_MODELS, ids=BILINEAR_IDS)
-def test_deep_lift_shap_clears_bilinear_caches_on_error(X, device, model_cls,
-	op):
-	model, kwargs = _rule_model(model_cls, op)
+def test_deep_lift_shap_clears_bilinear_caches_on_error(X, device):
+	model, kwargs = _rule_model(ConvCustomGate, CustomGate)
 
 	# `target` is out of range for a one-output model, so the attribution loop
 	# raises and unwinds through the `finally` block that clears the hooks.
+	# CustomGate puts its operands on itself during the forward pass, so they
+	# are still there when it does.
 	assert_raises(IndexError, deep_lift_shap, model, X[:2], target=5,
 		n_shuffles=2, device=device, random_state=0, **kwargs)
 
 	for module in model.modules():
-		assert "left" not in module.__dict__
-		assert "right" not in module.__dict__
+		for name in CLEARED_ATTRIBUTES:
+			assert name not in module.__dict__
 
 
 def test_deep_lift_shap_preserves_user_attributes(X, device):

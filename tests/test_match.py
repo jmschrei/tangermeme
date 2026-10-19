@@ -128,11 +128,8 @@ def test_extract_and_filter_chrom_gc_content_large():
 
 		df = pandas.DataFrame({'chrom': chroms, 'start': start, 'end': end})
 
-		try:
-			X = extract_loci(df, "tests/data/test.fa", in_window=50)
-			X = X.type(torch.float32)
-		except:
-			continue
+		X = extract_loci(df, "tests/data/test.fa", in_window=50)
+		X = X.type(torch.float32)
 
 		assert_array_almost_equal(X[:, [1, 2]].mean(axis=-1).sum(axis=1), 
 			[key * 0.02]*X.shape[0])
@@ -205,11 +202,8 @@ def test_extract_and_filter_chrom_N_in_windows_even():
 
 			df = pandas.DataFrame({'chrom': chroms, 'start': start, 'end': end})
 
-			try:
-				X = extract_loci(df, "tests/data/test.fa", in_window=window)
-				X = X.type(torch.float32)
-			except:
-				continue
+			X = extract_loci(df, "tests/data/test.fa", in_window=window)
+			X = X.type(torch.float32)
 
 			assert_array_almost_equal(X[:, [1, 2]].mean(axis=-1).sum(axis=1), 
 				[key * 1./window]*X.shape[0])
@@ -228,11 +222,8 @@ def test_extract_and_filter_chrom_N_in_windows_odd():
 
 			df = pandas.DataFrame({'chrom': chroms, 'start': start, 'end': end})
 
-			try:
-				X = extract_loci(df, "tests/data/test.fa", in_window=window)
-				X = X.type(torch.float32)
-			except:
-				continue
+			X = extract_loci(df, "tests/data/test.fa", in_window=window)
+			X = X.type(torch.float32)
 				
 			assert_array_almost_equal(X[:, [1, 2]].mean(axis=-1).sum(axis=1), 
 				[key * 1./window]*X.shape[0])
@@ -250,20 +241,23 @@ def test_extract_and_filter_chrom_N_out_windows():
 
 			df = pandas.DataFrame({'chrom': chroms, 'start': start, 'end': end})
 
-			try:
-				X = extract_loci(df, "tests/data/test.fa", in_window=10)
-				X = X.type(torch.float32)
-			except:
-				continue
+			X = extract_loci(df, "tests/data/test.fa", in_window=10)
+			X = X.type(torch.float32)
 
 			assert_array_almost_equal(X[:, [1, 2]].mean(axis=-1).sum(axis=1), 
 				[key * 0.1]*X.shape[0])
 
 
-def test_extract_and_filter_chrom_signal_threshold():
+# The 14 windows of chr1 have signal sums from 11.6 to 21.5, so 10 keeps none
+# and 30 keeps all of them.
+@pytest.mark.parametrize("signal_threshold, n_windows", [(10, 0), (15, 9),
+	(21, 13), (30, 14)])
+def test_extract_and_filter_chrom_signal_threshold(signal_threshold, n_windows):
 	regions = _extract_and_filter_chrom("tests/data/test.fa", 
 		chrom='chr1', in_window=20, out_window=18, gc_bin_width=1.1,
-		bigwig="tests/data/test.bw", signal_threshold=30)
+		bigwig="tests/data/test.bw", signal_threshold=signal_threshold)
+
+	assert sum(len(values) for values in regions.values()) == n_windows
 
 	for key, values in regions.items():
 		chroms = ['chr1']*len(values)
@@ -274,25 +268,8 @@ def test_extract_and_filter_chrom_signal_threshold():
 		_, y = extract_loci(df, "tests/data/test.fa", ["tests/data/test.bw"], 
 			in_window=20, out_window=18)
 
-		assert len(y) == 14
-		assert all(y.sum(axis=-1) <= 30)
-
-
-	regions = _extract_and_filter_chrom("tests/data/test.fa", 
-		chrom='chr1', in_window=20, out_window=18, gc_bin_width=1.1,
-		bigwig="tests/data/test.bw", signal_threshold=10)
-
-	for key, values in regions.items():
-		chroms = ['chr1']*len(values)
-		start = numpy.array(values)*20
-		end = (numpy.array(values)+1)*20
-
-		df = pandas.DataFrame({'chrom': chroms, 'start': start, 'end': end})
-		_, y = extract_loci(df, "tests/data/test.fa", ["tests/data/test.bw"], 
-			in_window=20, out_window=18)
-		
-		assert len(y) == 9
-		assert all(y.sum(axis=-1) <= 15)
+		assert len(y) == n_windows
+		assert all(y.sum(axis=-1) <= signal_threshold)
 
 
 ###

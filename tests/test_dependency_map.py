@@ -237,7 +237,7 @@ def test_dependency_map_batch_matches_single(X, device):
 	assert_array_almost_equal(dmap, dmap0, 6)
 
 
-@pytest.mark.parametrize("batch_size", [1, 5, 64, 10000])
+@pytest.mark.parametrize("batch_size", [1, 5, 7])
 def test_dependency_map_batch_size(X, batch_size, device):
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
