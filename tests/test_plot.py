@@ -41,11 +41,18 @@ def X_attr():
 
 
 def test_plot_logo_smoke_onehot():
-	X = one_hot_encode("ACGTACGTACGTACGTACGT").type(torch.float32)
+	# One glyph per position, since the zeros fall below the height threshold,
+	# in the default color of its character.
+	sequence = "ACGTACGTACGTACGTACGT"
+	X = one_hot_encode(sequence).type(torch.float32)
 	ax = plot_logo(X)
 
-	assert ax is not None
 	assert len(ax.collections) >= 1
+	assert len(ax.collections[0].get_paths()) == 20
+
+	colors = {'A': [0, .5, 0], 'C': [0, 0, 1], 'G': [1, .65, 0], 'T': [1, 0, 0]}
+	numpy.testing.assert_array_equal(ax.collections[0].get_facecolors()[:, :3],
+		[colors[char] for char in sequence])
 
 
 def test_plot_logo_smoke_random_attributions(X_attr):
@@ -57,9 +64,19 @@ def test_plot_logo_smoke_random_attributions(X_attr):
 
 
 def test_plot_logo_numpy_input(X_attr):
-	X_np = X_attr.numpy()
-	ax = plot_logo(X_np)
-	assert ax is not None
+	# A numpy array draws the same logo as the same values in a tensor.
+	ax = plot_logo(X_attr.numpy())
+	_, ax_tensor = plt.subplots()
+	plot_logo(X_attr, ax=ax_tensor)
+
+	paths = ax.collections[0].get_paths()
+	paths_tensor = ax_tensor.collections[0].get_paths()
+	assert len(paths) == len(paths_tensor)
+	for path, path_tensor in zip(paths, paths_tensor):
+		numpy.testing.assert_array_equal(path.vertices, path_tensor.vertices)
+
+	numpy.testing.assert_array_equal(ax.collections[0].get_facecolors(),
+		ax_tensor.collections[0].get_facecolors())
 
 
 def test_plot_logo_start_end_slicing(X_attr):
@@ -88,7 +105,11 @@ def test_plot_logo_all_zero_attributions():
 
 def test_plot_logo_color_string(X_attr):
 	ax = plot_logo(X_attr, color="red")
-	assert ax is not None
+	facecolors = ax.collections[0].get_facecolors()
+
+	assert len(facecolors) > 0
+	numpy.testing.assert_array_equal(facecolors,
+		numpy.tile(matplotlib.colors.to_rgba('red'), (len(facecolors), 1)))
 
 
 def test_plot_logo_ax_passed():
@@ -247,10 +268,25 @@ def test_base_path_cache():
 	assert codes0 is codes1
 
 
-def test_get_glyph_path_returns_path():
+@pytest.mark.parametrize("char", ['A', 'C', 'G', 'T'])
+def test_get_glyph_path_returns_path(char):
+	# The glyph fills the box (x, y, x + width, y + height), and a flipped
+	# glyph is its mirror image across the box's horizontal midline.
 	from matplotlib.path import Path as MplPath
-	p = get_glyph_path('C', x=0.0, y=0.0, width=1.0, height=2.0)
+	x, y, width, height = 3.0, -2.0, 0.95, 1.5
+
+	p = get_glyph_path(char, x=x, y=y, width=width, height=height)
+	p_flip = get_glyph_path(char, x=x, y=y, width=width, height=height,
+		flip=True)
 	assert isinstance(p, MplPath)
+
+	for path in p, p_flip:
+		numpy.testing.assert_allclose(path.get_extents().extents,
+			[x, y, x + width, y + height], atol=1e-12)
+
+	numpy.testing.assert_array_equal(p_flip.vertices[:, 0], p.vertices[:, 0])
+	numpy.testing.assert_allclose(p_flip.vertices[:, 1],
+		2 * y + height - p.vertices[:, 1], atol=1e-12)
 
 
 ###
@@ -263,7 +299,15 @@ def test_plot_pwm_smoke():
 		[0.1, 0.1, 0.7, 0.1],
 		[0.1, 0.1, 0.1, 0.7],
 	]).T
-	plot_pwm(pwm, name="toy")
+	ax = plot_pwm(pwm, name="toy")
+
+	# Each column holds 2 - H(0.7, 0.1, 0.1, 0.1) bits, the height of the
+	# tallest stack.
+	p = numpy.array([0.7, 0.1, 0.1, 0.1])
+	ic = 2 + numpy.sum(p * numpy.log2(p))
+
+	assert ax.get_title() == "toy"
+	assert ax.get_ylim() == pytest.approx((0, ic), abs=1e-5)
 
 
 def test_place_new_box_does_not_mutate_input():
@@ -273,19 +317,27 @@ def test_place_new_box_does_not_mutate_input():
 	box = Bbox.from_extents(0.0, 0.0, 10.0, 5.0)
 	original = (box.x0, box.y0, box.x1, box.y1)
 
+	# A new box goes one box height below `box`, then a height lower for each
+	# step until it overlaps no box in the list.
+	height = 5.0
+
 	# Empty box_list path: should still return a (shifted) result without
 	# mutating the input.
-	new_box, _ = place_new_box(box, [])
+	new_box, steps = place_new_box(box, [])
 	assert (box.x0, box.y0, box.x1, box.y1) == original, \
 		"place_new_box mutated the caller's box on the empty path"
 	assert new_box is not box, "expected a fresh Bbox to be returned"
+	assert tuple(new_box.extents) == (0.0, -height, 10.0, 0.0)
+	assert steps == 0
 
 	# Non-empty box_list path: same guarantee under the overlap loop.
 	overlap = Bbox.from_extents(0.0, -5.0, 10.0, 0.0)
 	box2 = Bbox.from_extents(0.0, 0.0, 10.0, 5.0)
 	original2 = (box2.x0, box2.y0, box2.x1, box2.y1)
-	new_box, _ = place_new_box(box2, [overlap])
+	new_box, steps = place_new_box(box2, [overlap])
 	assert (box2.x0, box2.y0, box2.x1, box2.y1) == original2
+	assert tuple(new_box.extents) == (0.0, -2 * height, 10.0, -height)
+	assert steps == 1
 
 
 def test_place_new_bar_does_not_mutate_input():
@@ -295,9 +347,19 @@ def test_place_new_bar_does_not_mutate_input():
 	box = Bbox.from_extents(0.0, 5.0, 10.0, 5.0)
 	original = (box.x0, box.y0, box.x1, box.y1)
 
-	new_box, _ = place_new_bar(box, [], y_step=1.0)
+	# A bar stays where it is unless it shares its height with a bar that it
+	# overlaps along x, and then moves down y_step for each step.
+	new_box, steps = place_new_bar(box, [], y_step=1.0)
 	assert (box.x0, box.y0, box.x1, box.y1) == original
 	assert new_box is not box
+	assert tuple(new_box.extents) == original
+	assert steps == 0
+
+	new_box, steps = place_new_bar(box, [Bbox.from_extents(*original)],
+		y_step=1.0)
+	assert (box.x0, box.y0, box.x1, box.y1) == original
+	assert tuple(new_box.extents) == (0.0, 5.0 - 1.0, 10.0, 5.0 - 1.0)
+	assert steps == 1
 
 
 def test_plot_categorical_scatter_respects_ax():
@@ -394,7 +456,9 @@ def test_plot_attributions_uses_provided_func():
 	axs, X_attrs = plot_attributions(model, X, func=fake_attribute)
 
 	assert len(calls) == 1, "fake_attribute should have been called once"
+	assert calls[0][0] is model
 	assert X_attrs.shape == X.shape
+	assert torch.equal(X_attrs, torch.zeros(1, 4, 20))
 
 
 ###
@@ -712,8 +776,13 @@ def test_plot_attributions_packed_user_func():
 
 	X = random_one_hot((2, 4, 30), random_state=0)
 	_, X_attrs = plot_attributions([None, None], X[0], func=func)
-	_, X_attrs_packed = plot_attributions([None, None],
+	axs, X_attrs_packed = plot_attributions([None, None],
 		PackedSequence.from_one_hot(X[0]), func=func)
 
 	assert seen[2:] == [torch.int8, torch.int8]
+	assert torch.equal(X_attrs, (X[0].float() * 2).repeat(2, 1, 1))
 	assert torch.equal(X_attrs_packed, X_attrs)
+
+	# Each logo draws one glyph of height 2 at each position.
+	for ax in axs:
+		assert ax.get_ylim() == (0.0, 2.0)
