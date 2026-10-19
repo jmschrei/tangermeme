@@ -827,8 +827,13 @@ def _softmax(module, grad_input, grad_output):
 			"DeepLIFT stacks each example with its reference along that axis, "
 			"so normalizing over it would mix the two.")
 
-	x, x_ref = module.input.chunk(2, dim=0)
-	grad_out, grad_out_ref = grad_output[0].chunk(2, dim=0)
+	# Under autocast the activations can be half precision, which holds the
+	# differences divided below to about three digits and in which the 1e-6
+	# guards are below the resolution. The rule computes in at least float32;
+	# `_b_hook` casts the result back.
+	dtype = torch.promote_types(module.input.dtype, torch.float32)
+	x, x_ref = module.input.to(dtype).chunk(2, dim=0)
+	grad_out, grad_out_ref = grad_output[0].to(dtype).chunk(2, dim=0)
 
 	# Picking c = max(x, x_ref) makes the largest exponent exactly exp(0)=1,
 	# so nothing overflows.
