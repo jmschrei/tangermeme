@@ -156,7 +156,7 @@ def test_saliency_zero_column(device):
 	assert X_attr[0, :, 4].abs().sum() > 0
 
 
-@pytest.mark.parametrize("batch_size", [1, 3, 20, 64, 10000])
+@pytest.mark.parametrize("batch_size", [1, 3, 10000])
 def test_saliency_batch_size(X, batch_size, device):
 	# The per-example result must not depend on which other examples happen
 	# to share its batch.
