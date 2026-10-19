@@ -505,11 +505,14 @@ def test_space_deep_lift_shap_alpha_beta(X, alpha, beta, device):
 	assert y_before0.dtype == torch.float32
 	assert_raises(AssertionError, assert_array_almost_equal, y_before0, 
 		y_before1, 4)
+	assert_array_almost_equal(y_before1, y_before0 * beta[:8, :, None], 6)
 
 	assert y_after0.shape == (8, 1, 4, 100)
 	assert y_after0.dtype == torch.float32
 	assert_raises(AssertionError, assert_array_almost_equal, y_after0, 
 		y_after1, 4)
+	assert_array_almost_equal(y_after1, y_after0 * beta[:8, :, None, None],
+		6)
 
 
 def test_space_deep_lift_shap_n_shuffles(X, device):
@@ -672,6 +675,12 @@ def test_space_multiple_motifs_multiple_spacings(X, device):
 
 	assert yb.shape == (64, 3)
 	assert ya.shape == (64, 3, 3)
+	assert torch.equal(yb, predict(model, X, batch_size=8, device=device))
+
+	for k in range(3):
+		X_sub = multisubstitute(X, motifs, spacing[k])
+		assert torch.equal(ya[:, k], predict(model, X_sub, batch_size=8,
+			device=device))
 
 
 def test_space_func_saturation_mutagenesis(X, device):
