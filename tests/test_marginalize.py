@@ -545,11 +545,13 @@ def test_marginalize_deep_lift_shap_alpha_beta(X, alpha, beta, device):
 	assert y_before0.dtype == torch.float32
 	assert_raises(AssertionError, assert_array_almost_equal, y_before0, 
 		y_before1, 4)
+	assert_array_almost_equal(y_before1, y_before0 * beta[:8, :, None], 6)
 
 	assert y_after0.shape == (8, 4, 100)
 	assert y_after0.dtype == torch.float32
 	assert_raises(AssertionError, assert_array_almost_equal, y_after0, 
 		y_after1, 4)
+	assert_array_almost_equal(y_after1, y_after0 * beta[:8, :, None], 6)
 
 
 def test_marginalize_deep_lift_shap_n_shuffles(X, device):
@@ -722,6 +724,13 @@ def test_marginalize_annotations_multi_output(X, n_annotations, device):
 	assert y_afters[0].shape == (n_annotations, 4, 12, 98)
 	assert y_afters[1].shape == (n_annotations, 4, 3)
 
+	for i, (idx, start, end) in enumerate(annotations):
+		seq = X[idx, :, start:end].unsqueeze(0)
+		yb, ya = marginalize(model, X0, seq, batch_size=2, device=device)
+		for j in range(2):
+			assert torch.equal(y_befores[j][i], yb[j])
+			assert torch.equal(y_afters[j][i], ya[j])
+
 
 def test_marginalize_annotations_deep_lift_shap(X, device):
 	torch.manual_seed(0)
@@ -740,6 +749,13 @@ def test_marginalize_annotations_deep_lift_shap(X, device):
 	assert y_afters.shape == (2, 3, 4, 100)
 	assert y_befores.dtype == torch.float32
 	assert y_afters.dtype == torch.float32
+
+	for i, (idx, start, end) in enumerate(annotations):
+		seq = X[idx, :, start:end].unsqueeze(0)
+		yb, ya = marginalize(model, X0, seq, func=deep_lift_shap,
+			n_shuffles=3, device=device, random_state=0)
+		assert torch.equal(y_befores[i], yb)
+		assert torch.equal(y_afters[i], ya)
 
 
 def test_marginalize_func_saturation_mutagenesis(X, device):

@@ -652,6 +652,20 @@ def test_saturation_mutagenesis_length_one(device):
 	X_attr = saturation_mutagenesis(model, X, device=device)
 	assert X_attr.shape == (2, 4, 1)
 
+	y0, y_hat = saturation_mutagenesis(model, X, raw_outputs=True,
+		device=device)
+	assert torch.equal(y0, predict(model, X, device=device))
+
+	for base in range(4):
+		X_sub = torch.zeros_like(X)
+		X_sub[:, base] = 1
+		assert torch.equal(y_hat[:, base, 0], predict(model, X_sub,
+			device=device))
+
+	attr = y_hat[:, :, 0, 0] - y0
+	attr = attr - attr.mean(dim=1, keepdim=True)
+	assert_array_almost_equal(X_attr[:, :, 0], attr * X[:, :, 0], 6)
+
 
 def test_saturation_mutagenesis_multi_output_requires_raw(X0, device):
 	# Attribution aggregation assumes a single output tensor; a tuple-output
@@ -682,6 +696,8 @@ def test_saturation_mutagenesis_func_collapses_multi_output(X0, device):
 	attr = saturation_mutagenesis(model, X0, func=lambda ys: ys[1],
 		device=device)
 	assert attr.shape == (2, 4, 100)
+	assert torch.equal(attr, saturation_mutagenesis(_DenseHead(model), X0,
+		device=device))
 
 
 def test_saturation_mutagenesis_warns_on_non_integer_input(device):

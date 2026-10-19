@@ -932,6 +932,11 @@ def test_ablate_dinucleotide_shuffle(X, device):
 	assert y_after.shape == (64, 5, 3)
 	assert y_after.dtype == torch.float32
 
+	X_shuf = dinucleotide_shuffle(X, start=20, end=80, n=5, random_state=0)
+	y_shuf = predict(model, X_shuf.reshape(-1, 4, 100), batch_size=8,
+		device=device)
+	assert torch.equal(y_after, y_shuf.reshape(64, 5, 3))
+
 	_, y_after_default = ablate(model, X, 20, 80, random_state=0, n=5,
 		batch_size=8, device=device)
 	assert_raises(AssertionError, assert_array_almost_equal, y_after,

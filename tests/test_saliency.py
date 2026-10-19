@@ -217,6 +217,12 @@ def test_saliency_func_reduces_multi_output_model(X, device):
 	X_attr = saliency(model, X, func=lambda y: y[1], device=device)
 	assert X_attr.shape == X.shape
 
+	# The second output is a Linear layer over the flattened X, so the
+	# gradient of target 0 is the first row of its weights, which the default
+	# gradient correction centers over the alphabet.
+	W = model.dense.weight[0].detach().reshape(4, 100)
+	assert_array_almost_equal(X_attr, (W - W.mean(dim=0)) * X, 5)
+
 
 def test_saliency_dtype(X, cuda_device):
 	torch.manual_seed(0)

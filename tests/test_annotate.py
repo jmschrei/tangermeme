@@ -78,6 +78,10 @@ def test_annotate_seqlets(X, gata_seqlets):
 
 
 def test_annotate_seqlets_n_nearest(X, gata_seqlets):
+	# The matches come in order of p-value, so the first n_nearest columns of
+	# a larger n_nearest are the result of the smaller one, and asking for
+	# all 12 motifs in test.meme returns each motif once.
+	idxs1, pvals1 = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme")
 	idxs, pvals = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme",
 		n_nearest=3)
 	
@@ -87,7 +91,10 @@ def test_annotate_seqlets_n_nearest(X, gata_seqlets):
 	assert pvals.shape == (24, 3)
 	assert pvals.dtype == torch.float64
 
+	assert torch.equal(pvals[:, :1], pvals1)
+	assert (pvals[:, 1:] >= pvals[:, :-1]).all()
 
+	idxs3, pvals3 = idxs, pvals
 	idxs, pvals = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme",
 		n_nearest=12)
 	
@@ -96,6 +103,16 @@ def test_annotate_seqlets_n_nearest(X, gata_seqlets):
 
 	assert pvals.shape == (24, 12)
 	assert pvals.dtype == torch.float64
+
+	assert (pvals[:, 1:] >= pvals[:, :-1]).all()
+	assert (idxs.sort(dim=1).values == torch.arange(12)).all()
+	assert torch.equal(pvals[:, :3], pvals3)
+
+	# Motifs tied in p-value may come in either order, so each motif chosen
+	# with a smaller n_nearest is checked through the p-value it gets here.
+	pvals_by_motif = pvals.gather(1, idxs.argsort(dim=1))
+	assert torch.equal(pvals_by_motif.gather(1, idxs3.long()), pvals3)
+	assert torch.equal(pvals_by_motif.gather(1, idxs1.long()), pvals1)
 
 
 def test_annotate_seqlets_reverse_complement(X, gata_seqlets):
@@ -144,22 +161,27 @@ def test_count_annotations_dim(annotations, dim, length):
 
 
 def test_count_annotations_dtype(annotations):
-	X = count_annotations(annotations)
-	assert X.dtype == torch.uint8
+	X0 = count_annotations(annotations)
+	assert X0.dtype == torch.uint8
 
 	X = count_annotations(annotations, dtype=torch.int64)
 	assert X.dtype == torch.int64
+	assert torch.equal(X, X0.type(torch.int64))
 
 	X = count_annotations(annotations, dtype=torch.float32)
 	assert X.dtype == torch.float32
+	assert torch.equal(X, X0.type(torch.float32))
 
 
 def test_count_annotations_shape(annotations):
-	X = count_annotations(annotations)
-	assert X.shape == (25, 7)
+	X0 = count_annotations(annotations)
+	assert X0.shape == (25, 7)
 
 	X = count_annotations(annotations, shape=(30, 30))
 	assert X.shape == (30, 30)
+	assert torch.equal(X[:25, :7], X0)
+	assert X[25:].sum() == 0
+	assert X[:, 7:].sum() == 0
 
 	assert_raises(RuntimeError, count_annotations, annotations, shape=(3, 3))
 	assert_raises(RuntimeError, count_annotations, annotations, shape=(3, 10))
@@ -217,11 +239,14 @@ def test_pairwise_annotations(annotations):
 
 
 def test_pairwise_annotations_shape(annotations):
-	y = pairwise_annotations(annotations)
-	assert y.shape == (7, 7)
+	y0 = pairwise_annotations(annotations)
+	assert y0.shape == (7, 7)
 
 	y = pairwise_annotations(annotations, shape=20)
 	assert y.shape == (20, 20)
+	assert torch.equal(y[:7, :7], y0)
+	assert y[7:].sum() == 0
+	assert y[:, 7:].sum() == 0
 
 	assert_raises(RuntimeError, pairwise_annotations, annotations, shape=3)
 

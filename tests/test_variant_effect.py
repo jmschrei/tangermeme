@@ -519,6 +519,12 @@ def test_deletion_effect_packed(X_del, deletions, func, left, chunk, device,
 	if chunk is not None:
 		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
 
+	# Unknown characters at a deleted position, next to a deletion, in the
+	# middle and in both trimmed flanks.
+	X_del[0, :, 4] = 0
+	X_del[1, :, 9] = 0
+	X_del[2, :, [0, 50, 51, 102]] = 0
+
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	check_packed(lambda X_: deletion_effect(model, X_, deletions, left=left,
@@ -532,6 +538,13 @@ def test_insertion_effect_packed(X, substitutions, func, left, chunk, device,
 	monkeypatch):
 	if chunk is not None:
 		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
+
+	# Unknown characters on both sides of an insertion, in front of another,
+	# at ends that trimming drops and at the ends of a sequence without
+	# insertions.
+	X[0, :, [3, 4, 99]] = 0
+	X[1, :, [0, 8]] = 0
+	X[2, :, [0, 99]] = 0
 
 	torch.manual_seed(0)
 	model = SmallDeepSEA()

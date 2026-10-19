@@ -347,6 +347,8 @@ Testing
 
 	- Tests that another test fully covers are removed, and tests that differ only in an input or a parameter are merged into parametrized tests, keeping every assertion of the tests they replace. Each removal was checked with a break of the library that both the removed test and the test covering it catch. Among the removals are fifteen older ``recursive_seqlets`` tests that the brute-force reference tests cover, and among the merges the single-model tables of ``deep_lift_shap``, ``pisa`` and ``predict``. The suite loses 256 test functions, 104 collected cases and 2,935 lines.
 
+	- Tests that checked only a shape, that an axis came back, or that two results differed now check values, each against the strongest reference available and each shown to fail with the property it guards broken. Among them: the max-pool rules of ``deep_lift_shap`` against DeepLIFT computed one layer at a time through torch's own max-pool gradient; ``pisa`` on single-output models against ``deep_lift_shap``; ``gapped_kmers`` against a brute-force enumeration; ``recursive_seqlets`` on real attributions against the brute-force reference; ``one_hot_encode`` against the reference at the boundary of its two-bases-at-a-time path and at even lengths beyond it, where every length tested before was odd; and ``plot_logo``, ``plot_pwm`` and the glyph helpers by what they draw. ``read_vcf`` on a gzipped file, ``one_hot_to_fasta`` in append mode, ``additional_func_kwargs`` in ``apply_pairwise`` and ``apply_product``, a non-contiguous control in ``recursive_seqlets``, and unknown characters in packed deletion, insertion and reference inputs are tested for the first time.
+
 
 Version 1.5.0
 =============
