@@ -3,6 +3,7 @@
 
 import os
 import sys
+import gzip
 import numpy
 import numba
 import torch
@@ -2650,38 +2651,49 @@ def test_read_vcf_basic():
 	assert vcf['POS'].dtype == numpy.int64
 
 
+def test_read_vcf_gzip(tmp_path):
+	path = tmp_path / "test.vcf.gz"
+	path.write_bytes(gzip.compress(pathlib.Path(
+		"tests/data/test.vcf").read_bytes()))
+
+	pandas.testing.assert_frame_equal(read_vcf(str(path)),
+		read_vcf("tests/data/test.vcf"))
+
+
 ###
 
 
+def _fasta_text(sequences, headers):
+	return "".join("> {}\n".format(header) + "".join(sequence[i:i+80] + "\n"
+		for i in range(0, len(sequence), 80)) + "\n" for header, sequence in
+		zip(headers, sequences))
+
+
 def test_one_hot_to_fasta_basic(tmp_path):
-	X = torch.stack([
-		one_hot_encode('ACGT' * 25),
-		one_hot_encode('GCGC' * 25),
-	])
+	# Default headers are sequence indices, which start again at 0 in a write
+	# that mode='a' appends. The default mode overwrites the file.
+	sequences = ['ACGT' * 25, 'GCGC' * 25]
+	X = torch.stack([one_hot_encode(sequence) for sequence in sequences])
 
 	path = tmp_path / "out.fa"
 	one_hot_to_fasta(X, str(path))
+	assert path.read_text() == _fasta_text(sequences, [0, 1])
 
-	contents = path.read_text()
-	assert "ACGT" in contents
-	assert "GCGC" in contents
-	# default headers are sequence indices
-	assert "0" in contents
-	assert "1" in contents
+	one_hot_to_fasta(X[1:], str(path), mode='a')
+	assert path.read_text() == _fasta_text(sequences + sequences[1:],
+		[0, 1, 0])
+
+	one_hot_to_fasta(X[1:], str(path))
+	assert path.read_text() == _fasta_text(sequences[1:], [0])
 
 
 def test_one_hot_to_fasta_headers(tmp_path):
-	X = torch.stack([
-		one_hot_encode('A' * 100),
-		one_hot_encode('C' * 100),
-	])
+	sequences = ['A' * 100, 'C' * 100]
+	X = torch.stack([one_hot_encode(sequence) for sequence in sequences])
 
 	path = tmp_path / "out.fa"
 	one_hot_to_fasta(X, str(path), headers=["seq_a", "seq_c"])
-
-	contents = path.read_text()
-	assert "seq_a" in contents
-	assert "seq_c" in contents
+	assert path.read_text() == _fasta_text(sequences, ["seq_a", "seq_c"])
 
 
 def test_one_hot_to_fasta_headers_length_mismatch(tmp_path):
@@ -2692,12 +2704,6 @@ def test_one_hot_to_fasta_headers_length_mismatch(tmp_path):
 
 	path = tmp_path / "out.fa"
 	assert_raises(IndexError, one_hot_to_fasta, X, str(path), headers=["only_one"])
-
-
-def _fasta_text(sequences, headers):
-	return "".join("> {}\n".format(header) + "".join(sequence[i:i+80] + "\n"
-		for i in range(0, len(sequence), 80)) + "\n" for header, sequence in
-		zip(headers, sequences))
 
 
 @pytest.mark.parametrize("dtype", [torch.int8, torch.float32])
