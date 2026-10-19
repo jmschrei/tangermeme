@@ -2967,6 +2967,15 @@ def test_one_hot_to_fasta_N(dtype, tmp_path):
 		[0])
 
 
+def test_one_hot_to_fasta_numpy(tmp_path):
+	# A numpy array is written as its tensor is, unknown characters included.
+	sequences = ['NNACGTNNNA' * 20, 'ACGT' * 49 + 'ACNN']
+	X = torch.stack([one_hot_encode(s) for s in sequences])
+	one_hot_to_fasta(X.numpy(), str(tmp_path / "numpy.fa"), headers=["a", "b"])
+	assert (tmp_path / "numpy.fa").read_text() == _fasta_text(sequences,
+		["a", "b"])
+
+
 def test_one_hot_to_fasta_N_only_all_zero(tmp_path):
 	# Only an all-zero column is written as N. A column that sums to zero
 	# without being zero has a largest value, whose character is written.

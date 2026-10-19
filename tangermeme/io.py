@@ -1374,7 +1374,7 @@ def one_hot_to_fasta(
 
 	Parameters
 	----------
-	X: torch.Tensor, shape=(-1, len(alphabet), length), or PackedSequence
+	X: torch.Tensor or numpy.ndarray, shape=(-1, len(alphabet), length), or PackedSequence
 		A set of one-hot encoded sequences to write out. A position whose
 		column is all zeros, such as an unknown character, is written as N.
 		A position whose largest value is tied between characters raises a
@@ -1399,6 +1399,9 @@ def one_hot_to_fasta(
 		the index into the one-hot encoding. Default is ['A', 'C', 'G', 'T'].
 	"""
 	
+	if isinstance(X, numpy.ndarray):
+		X = torch.from_numpy(numpy.ascontiguousarray(X))
+
 	if isinstance(X, PackedSequence):
 		_check_one_batch_axis(X)
 		chars = numpy.frombuffer((''.join(X.alphabet) + 'N').encode('ascii'),
