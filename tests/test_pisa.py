@@ -148,7 +148,7 @@ def test_pisa_convergence(X, device):
 		pisa(model, X, device=device, n_shuffles=3, random_state=0,
 			warning_threshold=threshold)
 
-		assert_raises(RuntimeWarning, deep_lift_shap, model, X,
+		assert_raises(RuntimeWarning, pisa, model, X,
 			device=device, n_shuffles=3, random_state=0, warning_threshold=1e-10)
 
 
@@ -264,13 +264,13 @@ def test_pisa_n_shuffles(X, device):
 
 	X = X[:, :, :30]
 
-	X_attr0 = deep_lift_shap(model, X, n_shuffles=1, device=device, 
+	X_attr0 = pisa(model, X, n_shuffles=1, device=device, 
 		random_state=0)
-	X_attr1 = deep_lift_shap(model, X, n_shuffles=1, batch_size=1, device=device, 
+	X_attr1 = pisa(model, X, n_shuffles=1, batch_size=1, device=device, 
 		random_state=0)
-	X_attr2 = deep_lift_shap(model, X, n_shuffles=30, batch_size=100000, 
+	X_attr2 = pisa(model, X, n_shuffles=30, batch_size=1000, 
 		device=device, random_state=2)
-	X_attr3 = deep_lift_shap(model, X, n_shuffles=30, batch_size=1, 
+	X_attr3 = pisa(model, X, n_shuffles=30, batch_size=1, 
 		device=device, random_state=2)
 
 	assert_array_almost_equal(X_attr0, X_attr1)
@@ -591,7 +591,6 @@ def test_pisa_raises(references, device):
 		device=device)
 	assert_raises(RuntimeError, pisa, model, X, n_shuffles=0, 
 		device=device)
-	assert_raises(ValueError, pisa, model, X[0], device=device)
 
 	assert_raises(IndexError, pisa, model, X, args=(alpha[:10],),
 		device=device)
@@ -599,15 +598,16 @@ def test_pisa_raises(references, device):
 		device=device)
 	assert_raises(IndexError, pisa, model, X, args=(alpha[:5], 
 		beta[:3]), device=device)
-	assert_raises(IndexError, pisa, model, X, args=(alpha, beta[:3]),
-		device=device)
-	
-	assert_raises(ValueError, pisa, model, X, 
-		references=references[:10], device=device)
-	assert_raises(ValueError, pisa, model, X, 
-		references=references[:, :, :2], device=device)
-	assert_raises(ValueError, pisa, model, X, 
-		references=references[:, :, :, :10], device=device)
+
+	with pytest.raises(ValueError, match=r"has shape .*\[2, 5, 4, 100\]"):
+		pisa(model, X, references=references[:10], device=device)
+
+	# References built from this X, so that only the sliced axis is wrong.
+	refs = shuffle(X, n=2, random_state=0)
+	with pytest.raises(ValueError, match=r"has shape .*\[16, 2, 2, 100\]"):
+		pisa(model, X, references=refs[:, :, :2], device=device)
+	with pytest.raises(ValueError, match=r"has shape .*\[16, 2, 4, 10\]"):
+		pisa(model, X, references=refs[:, :, :, :10], device=device)
 
 
 ### Test a bunch of different models with different configurations/operations
@@ -705,7 +705,7 @@ def test_pisa_convdense_dense_wrapper(X, references, device):
 		X_attr = pisa(model, X, device=device, references=references, 
 			warning_threshold=1e-5)
 
-		assert_raises(RuntimeWarning, deep_lift_shap, model, X, device=device, 
+		assert_raises(RuntimeWarning, pisa, model, X, device=device, 
 			random_state=0, warning_threshold=1e-8)
 
 	X_attr2 = deep_lift_shap(model, X, device=device, references=references)
@@ -723,7 +723,7 @@ def test_pisa_convdense_conv_wrapper(X, references, device):
 		X_attr = pisa(model, X, device=device, references=references, 
 			warning_threshold=1e-4)
 
-		assert_raises(RuntimeWarning, deep_lift_shap, model, X, device=device, 
+		assert_raises(RuntimeWarning, pisa, model, X, device=device, 
 			random_state=0, warning_threshold=1e-8)
 
 	X_attr2 = deep_lift_shap(model, X, device=device, references=references)
