@@ -219,84 +219,6 @@ def test_tfmodisco_seqlets(X_contrib):
 ###
 
 
-def test_recursive_seqlets(X_contrib):
-	seqlets = recursive_seqlets(X_contrib)
-
-	assert seqlets.shape == (23, 5)
-
-	column_names = ['example_idx', 'start', 'end', 'attribution', 'p-value']
-	for name1, name2 in zip(seqlets.columns, column_names):
-		assert name1 == name2
-
-	assert_array_almost_equal(seqlets.values[:20], [
-		[0.0, 1051.0, 1063.0, 0.306, 1.864e-12],
-		[1.0, 1051.0, 1063.0, 0.2828, 1.269e-11],
-		[4.0, 1042.0, 1055.0, 0.2294, 2.97e-09],
-		[4.0, 1060.0, 1071.0, 0.1999, 1.778e-08],
-		[5.0, 1069.0, 1080.0, 0.1817, 8.533e-08],
-		[1.0, 913.0, 923.0, 0.1585, 9.749e-07],
-		[2.0, 968.0, 978.0, 0.1317, 7.38e-06],
-		[2.0, 1028.0, 1037.0, 0.0955, 7.669e-05],
-		[0.0, 1520.0, 1531.0, 0.0903, 0.0003],
-		[5.0, 1034.0, 1042.0, 0.0568, 0.0026],
-		[1.0, 1537.0, 1544.0, 0.0529, 0.0028],
-		[2.0, 1247.0, 1253.0, 0.0481, 0.0035],
-		[2.0, 929.0, 935.0, 0.0478, 0.0037],
-		[3.0, 1268.0, 1274.0, 0.0452, 0.0047],
-		[0.0, 578.0, 585.0, 0.0441, 0.0057],
-		[0.0, 1247.0, 1254.0, 0.041, 0.0066],
-		[1.0, 1607.0, 1613.0, 0.0369, 0.0067],
-		[4.0, 635.0, 641.0, 0.0359, 0.007],
-		[4.0, 1222.0, 1228.0, 0.0343, 0.0076],
-		[5.0, 885.0, 891.0, 0.0332, 0.0079]],
-	4)
-
-
-def test_recursive_seqlets_min_length(X_contrib):
-	seqlets = recursive_seqlets(X_contrib).values
-	seqlets2 = recursive_seqlets(X_contrib, min_seqlet_len=1).values
-	seqlets3 = recursive_seqlets(X_contrib, min_seqlet_len=3).values
-	seqlets4 = recursive_seqlets(X_contrib, min_seqlet_len=5).values
-	seqlets5 = recursive_seqlets(X_contrib, min_seqlet_len=7).values
-	seqlets6 = recursive_seqlets(X_contrib, min_seqlet_len=9).values
-	seqlets7 = recursive_seqlets(X_contrib, min_seqlet_len=11).values
-
-	assert (seqlets[:, 2] - seqlets[:, 1]).min() == 4
-	assert (seqlets2[:, 2] - seqlets2[:, 1]).min() == 1
-	assert (seqlets3[:, 2] - seqlets3[:, 1]).min() == 3
-	assert (seqlets4[:, 2] - seqlets4[:, 1]).min() == 6
-	assert (seqlets5[:, 2] - seqlets5[:, 1]).min() == 7
-	assert (seqlets6[:, 2] - seqlets6[:, 1]).min() == 9
-	assert (seqlets7[:, 2] - seqlets7[:, 1]).min() == 11
-
-
-def test_recursive_seqlets_max_length(X_contrib):
-	seqlets = recursive_seqlets(X_contrib).values
-	seqlets2 = recursive_seqlets(X_contrib, max_seqlet_len=10).values
-	seqlets3 = recursive_seqlets(X_contrib, max_seqlet_len=8).values
-	seqlets4 = recursive_seqlets(X_contrib, max_seqlet_len=6).values
-	seqlets5 = recursive_seqlets(X_contrib, max_seqlet_len=4).values
-
-	assert (seqlets[:, 2] - seqlets[:, 1]).max() == 13
-	assert (seqlets2[:, 2] - seqlets2[:, 1]).max() == 10
-	assert (seqlets3[:, 2] - seqlets3[:, 1]).max() == 8
-	assert (seqlets4[:, 2] - seqlets4[:, 1]).max() == 6
-	assert (seqlets5[:, 2] - seqlets5[:, 1]).max() == 4
-
-
-def test_recursive_seqlets_p_values(X_contrib):
-	seqlets = recursive_seqlets(X_contrib).values
-	seqlets2 = recursive_seqlets(X_contrib, threshold=0.1).values
-	seqlets3 = recursive_seqlets(X_contrib, threshold=0.001).values
-
-	assert seqlets.shape == (23, 5)
-	assert seqlets2.shape == (228, 5)
-	assert seqlets3.shape == (8, 5)
-
-
-###
-
-
 def test_tfmodisco_seqlets_determinism(X_contrib):
 	torch.manual_seed(0)
 	seqlets0 = tfmodisco_seqlets(X_contrib)
@@ -1005,6 +927,41 @@ def test_recursive_seqlets_reference_float32_bins(X_laplace):
 	_assert_seqlets_equal(recursive_seqlets(X), rows)
 
 
+@pytest.mark.parametrize("min_seqlet_len, max_seqlet_len, threshold", [
+	(4, 25, 0.01),
+	(1, 25, 0.01),
+	(3, 25, 0.01),
+	(5, 25, 0.01),
+	(7, 25, 0.01),
+	(9, 25, 0.01),
+	(11, 25, 0.01),
+	(4, 10, 0.01),
+	(4, 8, 0.01),
+	(4, 6, 0.01),
+	(4, 4, 0.01),
+	(4, 25, 0.1),
+	(4, 25, 0.001),
+])
+def test_recursive_seqlets_reference_attributions(X_contrib, min_seqlet_len,
+	max_seqlet_len, threshold):
+	"""recursive_seqlets matches the reference on real attributions, a float32
+	tensor of six examples of length 2114, at the default n_bins, with
+	min_seqlet_len, max_seqlet_len or threshold changed from the defaults."""
+
+	spans = _reference_spans(X_contrib.numpy(), min_seqlet_len,
+		max_seqlet_len, 1000)
+
+	# At 0.1, two p-values of lengths 7 and 15 are 3e-10 apart, closer than
+	# the guard allows, but the calls match.
+	if threshold != 0.1:
+		_assert_unambiguous(spans, [threshold])
+
+	rows = _reference_decode(spans, threshold)
+	assert len(rows) > 5
+	_assert_seqlets_equal(recursive_seqlets(X_contrib, threshold=threshold,
+		min_seqlet_len=min_seqlet_len, max_seqlet_len=max_seqlet_len), rows)
+
+
 @pytest.mark.parametrize("dtype", [numpy.int64, numpy.int32])
 def test_recursive_seqlets_integer_input(dtype):
 	"""Integer attributions give the same output as the same values in
@@ -1328,18 +1285,34 @@ def test_recursive_seqlets_scale(X_laplace, scale):
 	assert_frame_equal(scaled, expected, check_exact=True)
 
 
+@pytest.mark.parametrize("arrays", ["X", "X_control", "both"])
 @pytest.mark.parametrize("layout", ["fortran", "strided"])
-def test_recursive_seqlets_layout(X_laplace, layout):
+def test_recursive_seqlets_layout(X_laplace, X_background, layout, arrays):
 	"""A Fortran-ordered or strided X gives the same frame as a C-contiguous
-	one, bit for bit."""
+	one, bit for bit, and such an X_control, alone or with such an X, the
+	same seqlets and fdr table. numba compiles a kernel for each layout of
+	its inputs."""
 
-	if layout == "fortran":
-		X = numpy.asfortranarray(X_laplace)
-	else:
-		X = numpy.repeat(X_laplace, 2, axis=1)[:, ::2]
+	def relayout(A):
+		if layout == "fortran":
+			return numpy.asfortranarray(A)
+		return numpy.repeat(A, 2, axis=1)[:, ::2]
 
-	assert_frame_equal(recursive_seqlets(X, threshold=0.05),
-		recursive_seqlets(X_laplace, threshold=0.05), check_exact=True)
+	if arrays == "X":
+		assert_frame_equal(recursive_seqlets(relayout(X_laplace),
+			threshold=0.05), recursive_seqlets(X_laplace, threshold=0.05),
+			check_exact=True)
+		return
+
+	X = relayout(X_laplace) if arrays == "both" else X_laplace
+	result = recursive_seqlets(X, X_control=relayout(X_background),
+		target_fdr=0.2, return_fdr=True)
+	expected = recursive_seqlets(X_laplace, X_control=X_background,
+		target_fdr=0.2, return_fdr=True)
+
+	assert len(expected.seqlets) > 0
+	assert_frame_equal(result.seqlets, expected.seqlets, check_exact=True)
+	assert_frame_equal(result.fdr, expected.fdr, check_exact=True)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
