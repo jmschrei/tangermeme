@@ -1661,14 +1661,15 @@ _ERSATZ_CALLS = {
 
 
 @pytest.mark.parametrize("name", list(_ERSATZ_CALLS))
+@pytest.mark.parametrize("dtype", [torch.int8, torch.float32])
 @pytest.mark.parametrize("chunk", [None, 50])
-def test_ersatz_packed(name, chunk, monkeypatch):
+def test_ersatz_packed(name, dtype, chunk, monkeypatch):
 	if chunk is not None:
 		# Several chunks of sequences per call.
 		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
 
 	call = _ERSATZ_CALLS[name]
-	X = _ersatz_X()
+	X = _ersatz_X().to(dtype)
 	X_packed = PackedSequence.from_one_hot(X)
 	Y = call(X)
 	Y_packed = PackedSequence.from_one_hot(Y)
@@ -1679,11 +1680,11 @@ def test_ersatz_packed(name, chunk, monkeypatch):
 	Y_one_hot = call(X_packed, return_packed=False)
 	assert Y_one_hot.dtype == torch.int8
 	assert torch.equal(Y_one_hot, Y.to(torch.int8))
-	assert torch.equal(X_packed.to_one_hot(), X)
+	assert torch.equal(X_packed.to_one_hot(dtype=dtype), X)
 
 
 @pytest.mark.parametrize("name", ["substitute", "insert", "delete",
-	"randomize", "shuffle", "multisubstitute"])
+	"randomize", "shuffle", "multisubstitute", "local_dinucleotide_shuffle"])
 def test_ersatz_packed_raises_alphabet(name):
 	X = random_one_hot((3, 5, 60), random_state=0)
 	with pytest.raises(ValueError, match="four characters"):
@@ -1691,6 +1692,11 @@ def test_ersatz_packed_raises_alphabet(name):
 			_ERSATZ_CALLS[name](X, return_packed=True, alphabet=list("ACGTU"))
 		elif name == "multisubstitute":
 			multisubstitute(X, ["ACG", "TT"], 3, alphabet=list("ACGTU"),
+				return_packed=True)
+		elif name == "local_dinucleotide_shuffle":
+			# bin_size is checked first, and must be below the length for the
+			# alphabet to be checked.
+			local_dinucleotide_shuffle(X, bin_size=20, min_bin_size=10,
 				return_packed=True)
 		else:
 			_ERSATZ_CALLS[name](X, return_packed=True)
@@ -1738,7 +1744,7 @@ def test_local_dinucleotide_shuffle_packed_raises_N():
 
 
 @pytest.mark.parametrize("name", ["insert", "substitute", "multisubstitute",
-	"delete", "randomize", "shuffle"])
+	"delete", "randomize", "shuffle", "local_dinucleotide_shuffle"])
 def test_ersatz_packed_raises_batch_axes(name):
 	# A PackedSequence with two batch axes is rejected, as the matching 4-D
 	# one-hot tensor is, rather than edited along the wrong axis.
@@ -1751,6 +1757,8 @@ def test_ersatz_packed_raises_batch_axes(name):
 		"delete": lambda: delete(X, 1, 4),
 		"randomize": lambda: randomize(X, 1, 4, random_state=0),
 		"shuffle": lambda: shuffle(X, 1, 10, random_state=0),
+		"local_dinucleotide_shuffle": lambda: local_dinucleotide_shuffle(X,
+			bin_size=20, min_bin_size=10, random_state=0),
 	}
 
 	with pytest.raises(ValueError, match="X has shape"):
