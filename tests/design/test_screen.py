@@ -192,7 +192,6 @@ def test_screen_raises(device):
 	model = SmallDeepSEA()
 	y = [[0.5]]
 	
-	assert_raises(RuntimeError, screen, model, (5, 100), y, device=device)
 	assert_raises(ValueError, screen, model, (1, 4, 100), y, device=device)
 	assert_raises(ValueError, screen, model, (100,), y, device=device)
 

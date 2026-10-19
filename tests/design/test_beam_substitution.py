@@ -106,6 +106,11 @@ def test_beam_substitution_max_iter_default(X, motifs, device):
 
 	assert X_hat.shape == (1, 4, 100)
 	assert X_hat.dtype == torch.int8
+	assert not torch.equal(X_hat, X)
+
+	y_orig = predict(model, X, device=device)
+	y_hat = predict(model, X_hat, device=device)
+	assert abs(y_hat - 10).sum() < abs(y_orig - 10).sum()
 
 
 def test_beam_substitution_not_worse_than_greedy(X, motifs, device):
@@ -155,6 +160,7 @@ def test_beam_substitution_input_mask(X, device):
 
 	assert_array_almost_equal(X[:, :, :54], X_hat[:, :, :54])
 	assert_array_almost_equal(X[:, :, 58:], X_hat[:, :, 58:])
+	assert abs(X[:, :, 54:58] - X_hat[:, :, 54:58]).sum() == 8
 
 
 def test_beam_substitution_rejects_batch(motifs, device):
