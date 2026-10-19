@@ -2,6 +2,7 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import os
+import sys
 import numpy
 import numba
 import torch
@@ -3648,8 +3649,10 @@ def test_extract_loci_fasta_bgzip(tmp_path):
 	assert torch.equal(X, _encode_windows(genome, loci, 7))
 
 
-@pytest.mark.skipif(_has_biopython(), reason="BioPython is installed")
-def test_extract_loci_fasta_bgzip_without_biopython(tmp_path):
+def test_extract_loci_fasta_bgzip_without_biopython(tmp_path, monkeypatch):
+	# pyfaidx imports BioPython only when it opens a block-gzip file, so a
+	# None in sys.modules stands in for an environment without it.
+	monkeypatch.setitem(sys.modules, "Bio", None)
 	genome, path = _bgzf_genome(tmp_path)
 	loci = _every_window(genome, 7)
 	with pytest.raises(ImportError, match="BioPython"):
