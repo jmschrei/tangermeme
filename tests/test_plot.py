@@ -95,12 +95,17 @@ def test_plot_logo_ax_passed():
 
 
 def test_plot_logo_alphabet_custom():
+	# A character outside A, C, G and T is drawn gray by the default coloring.
 	alphabet = ['A', 'C', 'G', 'T', 'N']
 	X = torch.zeros(5, 20)
 	X[0, :] = 1.0
+	X[4, :10] = 0.5
 
 	ax = plot_logo(X, alphabet=alphabet)
-	assert ax is not None
+	facecolors = ax.collections[0].get_facecolors()[:, :3]
+	assert len(facecolors) == 30
+	assert (facecolors == [0.5, 0.5, 0.5]).all(axis=1).sum() == 10
+	assert (facecolors == [0, 0.5, 0]).all(axis=1).sum() == 20
 
 
 def test_plot_logo_color_per_position_name_list():

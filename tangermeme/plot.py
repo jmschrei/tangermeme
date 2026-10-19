@@ -189,7 +189,8 @@ def plot_logo(
 			The coloring for the glyphs, which can be specified per character or
 			per position depending on the form passed in:
 
-					- None: color each character according to the standard coloring.
+					- None: color A, C, G and T according to the standard coloring,
+					  and any other character gray.
 					- str: color every character with this single color.
 					- dict: color each character according to a mapping from the
 					  character to a color (e.g. ``{'A': 'red', 'C': 'blue', ...}``).
@@ -302,6 +303,8 @@ def plot_logo(
 		'C': [0, 0, 1],
 		'A': [0, .5, 0]
 	}
+	default_color = {char: default_color.get(char, [.5, .5, .5]) for char in
+		alphabet}
 
 	# `color` can be a per-character mapping (None/str/dict) or a per-position
 	# array-like. Resolve which case we are in here; the per-position colors are
