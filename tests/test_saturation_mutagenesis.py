@@ -218,7 +218,7 @@ def test_saturation_mutagenesis_ordering(X0, device):
 	assert X_attr.dtype == torch.float32
 
 	X_attr2 = saturation_mutagenesis(model, X0[1:], device=device)
-	assert_array_almost_equal(X_attr[1:, :, :], X_attr2, 2)
+	assert_array_almost_equal(X_attr[1:, :, :], X_attr2, 4)
 
 
 def test_saturation_mutagenesis_raw_output(X0, device):
@@ -808,14 +808,6 @@ def test_saturation_mutagenesis_warns_on_non_integer_input(device):
 		saturation_mutagenesis(model, X * 0.5, device=device)
 
 
-def test_saturation_mutagenesis_no_warning_on_hard_one_hot(X0, device):
-	# A valid hard one-hot must not trigger the truncation warning.
-	model = SmallDeepSEA(1)
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", TangermemeWarning)
-		saturation_mutagenesis(model, X0, device=device)
-
-
 def test_saturation_mutagenesis_skips_identity_forward_passes(X0, device):
 	# Identity substitutions are not run through the model: only the 3 true
 	# edits per position are predicted, plus one reference pass for y0.
@@ -1202,15 +1194,19 @@ def test_saturation_mutagenesis_fast_fallback_error(X0, device, force_fast,
 @pytest.mark.parametrize("fast", [False, True])
 @pytest.mark.parametrize("kwargs", [{}, {"hypothetical": True}, {"start": 20,
 	"end": 60}, {"raw_outputs": True}])
-def test_saturation_mutagenesis_packed(X0, fast, kwargs, device):
+def test_saturation_mutagenesis_packed(X0, fast, kwargs, device, force_fast):
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	X0 = X0.clone()
 	X0[1, :, 30:33] = 0
 
-	y = saturation_mutagenesis(model, X0, fast=fast, device=device, **kwargs)
-	y_packed = saturation_mutagenesis(model, PackedSequence.from_one_hot(X0),
-		fast=fast, device=device, **kwargs)
+	# force_fast makes fast=True use the fast path, which warns if it cannot.
+	with warnings.catch_warnings():
+		warnings.simplefilter("error", TangermemeWarning)
+		y = saturation_mutagenesis(model, X0, fast=fast, device=device,
+			**kwargs)
+		y_packed = saturation_mutagenesis(model,
+			PackedSequence.from_one_hot(X0), fast=fast, device=device, **kwargs)
 
 	if kwargs.get("raw_outputs"):
 		assert torch.equal(y_packed.y0, y.y0)
