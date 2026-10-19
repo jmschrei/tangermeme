@@ -41,7 +41,7 @@ seqlets, fdr = recursive_seqlets(attr_sums, X_control=attr_control, target_fdr=0
 The estimate is (control calls + 1, scaled to the size of `X`) over calls
 on `X`, per threshold; `fdr` has one row per threshold from 0.1 to 1e-30.
 When no threshold reaches the target the call warns and returns an empty
-frame with object dtypes, which downstream code crashes on. A model that
+frame (typed columns; object columns on 1.5.0 and earlier). A model that
 responds to composition (an accessibility count head) calls as many seqlets
 on shuffles as on peaks: on a K562 ChromBPNet the estimate bottomed out at
 0.16. Look at `fdr` first; fall back to `threshold`. More shuffles steady

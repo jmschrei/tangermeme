@@ -8,9 +8,9 @@ plot_logo(X_attr[i], ax=ax, start=900, end=1200, annotations=None, score_key='sc
 - One example, `(len(alphabet), length)`; positives stack up, negatives
   down. Probability PWMs go to `plot_pwm` (information content).
 - Without `ax=` it draws on `plt.gca()`; pass `ax=` in a loop.
-- `ylim` is read only when `annotations` is given, and then as a scalar
-  half-range, whatever the type hint says; for a shared axis call
-  `ax.set_ylim(lo, hi)` after `plot_logo`.
+- `ylim=(lo, hi)` sets the axis, with or without annotations; a single
+  number `y` means `(-y, y)`. On 1.5.0 and earlier it was read only with
+  annotations and as a scalar, so set the limits after the call there.
 - `color=`: one color, a `{char: color}` dict, or a per-position array of
   colors or numbers mapped through `color_cmap` (`color_vmin`/`color_vmax`).
 - `plot_attributions(models, X, func=deep_lift_shap, attribute_kwargs=, plot_kwargs=, layout=)`

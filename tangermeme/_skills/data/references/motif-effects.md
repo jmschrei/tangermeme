@@ -47,8 +47,7 @@ counts, so measure it on yours. In order of preference:
 2. `dinucleotide_shuffle(X_real, n=1, random_state=0)[:, 0]` or
    `local_dinucleotide_shuffle` (keeps composition per bin) of real regions.
 3. `random_one_hot((n, 4, L), probs=numpy.array([[0.295, 0.205, 0.205, 0.295]]))`
-   at genome frequencies. `probs` must be 2-D and float64: a Python list is
-   cast to float32 and numpy then rejects the sum (`references/ersatz.md`).
+   at genome frequencies; `probs` is 2-D (`references/ersatz.md`).
 4. Uniform random, for prototyping.
 
 With `func=deep_lift_shap` and `n_shuffles=1` over many backgrounds, the

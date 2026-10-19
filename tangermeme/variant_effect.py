@@ -390,9 +390,12 @@ def insertion_effect(
 	for the results to be different.
 
 	The insertions provided must be individual characters, i.e., each row
-	in the tensor corresponds to a single insertion in a single example, but one
-	can encode longer insertions (e.g., entire motifs or just multiple
-	characters) by passing in multiple rows with adjacent positions.
+	in the tensor corresponds to a single insertion in a single example. A
+	longer insertion is several rows at the same position, which are inserted
+	in reverse of the order given, so the last row given ends up first: to
+	insert `S` before position `p`, pass the rows `(k, p, S[-1])`, ...,
+	`(k, p, S[0])`. Rows at adjacent positions interleave the inserted
+	characters with the original ones instead.
 
 	Because models assume a fixed input window but insertions are by definition
 	changing the length of the sequence, characters must be trimmed off after

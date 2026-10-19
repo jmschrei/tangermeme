@@ -10,7 +10,7 @@ window `X`, not genome coordinates; alphabet indices follow `alphabet`
 |---|---|---|---|
 | `substitution_effect(model, X, subs)` | `(example_idx, position, new_char_idx)` | model length | rows on one example are applied together, one score; duplicate `(example, position)` raises `ValueError` |
 | `deletion_effect(model, X, dels, left=False)` | `(example_idx, position)` | model length + max deletions per example | every sequence is trimmed to the same post-deletion length; `y_before` is on the trimmed slice, `X[:, :, :model_length]` for `left=False` |
-| `insertion_effect(model, X, ins, left=False)` | `(example_idx, position, char_idx)` | model length | result trimmed back; several rows at one position are all inserted, the last given ending up first |
+| `insertion_effect(model, X, ins, left=False)` | `(example_idx, position, char_idx)` | model length | result trimmed back; a string `S` is the rows `(k, p, S[-1])`, ..., `(k, p, S[0])`: rows at one position go in reversed, adjacent positions interleave |
 
 Independent scores need one example copy per variant: `X[0:1].repeat(n, 1, 1)`
 with row `i` on copy `i`. Slicing `X[k:k+1]` means re-basing `example_idx` to 0.

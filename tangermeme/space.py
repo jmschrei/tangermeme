@@ -57,8 +57,8 @@ def space(
 	----------
 	model: torch.nn.Module
 		A PyTorch model to use for making predictions. These models can take in
-		any number of inputs and make any number of outputs. The additional
-		inputs must be specified in the `args` parameter.
+		any number of inputs and make any number of outputs. Additional
+		inputs are passed to `func` through `kwargs`, as `args=` for `predict`.
 
 	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to have motifs inserted into.

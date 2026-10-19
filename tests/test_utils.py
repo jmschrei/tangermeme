@@ -909,6 +909,15 @@ def test_reverse_complement():
 	assert_array_almost_equal(f('ACGT'), reverse_complement(f('ACGT')))
 
 
+def test_reverse_complement_raises_batched():
+	X = random_one_hot((8, 4, 100), random_state=0)
+	assert_raises(ValueError, reverse_complement, X)
+	assert_raises(ValueError, reverse_complement, X[0, 0])
+
+	X_rc = torch.stack([reverse_complement(x) for x in X])
+	assert_array_almost_equal(X_rc, X.flip(1).flip(2))
+
+
 def test_reverse_complement_mapping():
 	assert 'AAAAAA' == reverse_complement('GGTCAA', 
 		complement_map={'A': 'A', 'C': 'A', 'G': 'A', 'T': 'A'})

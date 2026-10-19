@@ -34,12 +34,12 @@ dropped, any other trailing axis (a profile) raises `ValueError`. Wrap first:
   `dinucleotide_shuffle(X, n=n_shuffles, random_state=r)` gives different ones.
   Comparing attributions across models or tasks needs the same references:
   precompute once and pass `references=` the tensor.
-- The convergence warning compares each delta with the absolute
-  `warning_threshold`. A model whose outputs are of order 1e-3 can be 30%
-  wrong with no warning. Check the relative error yourself:
+- `warning_threshold` is absolute; a model whose outputs are of order 1e-3
+  can be 30% wrong under it. After 1.5.0 a second warning fires when the
+  mean delta exceeds 1% of the mean output difference; on older versions
+  check the relative error yourself with
   `python scripts/audit_deeplift.py --model module:expr` (skill root
-  relative; see the next section), or `attr.sum((1, 2))` against
-  `model(X)[:, target] - model(refs).mean over references`.
+  relative; next section).
 - The seed fixes the references, not the kernels: on a GPU two calls with
   the same seed differ at 1e-8 to 1e-5. For bit-identity set
   `torch.backends.cudnn.deterministic = True` and `benchmark = False`

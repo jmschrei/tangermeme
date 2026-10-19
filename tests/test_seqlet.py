@@ -8,6 +8,7 @@ import itertools
 import numpy
 import scipy.stats
 import torch
+import warnings
 import pandas
 import pytest
 
@@ -1996,3 +1997,27 @@ def test_recursive_seqlets_control_dtype(X_laplace, X_background):
 		assert len(result.seqlets) > 0
 		assert_frame_equal(result.seqlets, expected.seqlets, check_exact=True)
 		assert_frame_equal(result.fdr, expected.fdr, check_exact=True)
+
+
+def test_recursive_seqlets_control_no_threshold_typed_empty_frame():
+	# A control identical to X estimates a false discovery rate above 1 at
+	# every threshold, so no seqlets are returned; the empty frame keeps the
+	# dtypes of a full one rather than object columns.
+	torch.manual_seed(0)
+	X = torch.randn(8, 200).abs()
+
+	with warnings.catch_warnings(record=True) as caught:
+		warnings.simplefilter("always")
+		seqlets, fdr = recursive_seqlets(X, X_control=X, target_fdr=0.1,
+			return_fdr=True)
+
+	assert any(issubclass(c.category, TangermemeWarning) for c in caught)
+	assert len(seqlets) == 0
+	assert list(seqlets.columns) == ['example_idx', 'start', 'end',
+		'attribution', 'p-value']
+	assert seqlets['example_idx'].dtype == numpy.int64
+	assert seqlets['start'].dtype == numpy.int64
+	assert seqlets['end'].dtype == numpy.int64
+	assert seqlets['attribution'].dtype == numpy.float64
+	assert seqlets['p-value'].dtype == numpy.float64
+	assert len(fdr) > 0
