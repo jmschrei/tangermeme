@@ -667,11 +667,12 @@ def shuffle(
 	return torch.stack(X_shufs).permute(1, 0, 2, 3)
 
 
-@numba.njit(nogil=True, cache=True)
+@numba.njit(nogil=True, cache=True, inline='always')
 def _shuffle_sequence(idxs, n_chars, n_shuffles, random_state, shuffled):
 	"""Shuffle the character indices `idxs` of one sequence `n_shuffles`
 	times into the rows of `shuffled`, after seeding the generator with
-	`random_state`."""
+	`random_state`. It is inlined into each caller rather than compiled as
+	a kernel of its own, which a first shuffle would otherwise load."""
 
 	seq_len = idxs.shape[0]
 	if seq_len == 0:
