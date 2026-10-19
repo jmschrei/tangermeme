@@ -13,6 +13,7 @@ import torch
 from tqdm import tqdm
 
 from .utils import _accepts_packed
+from .utils import _check_packable
 from .utils import _codes_of
 from .utils import _map_rows
 from .utils import _one_hot_codes
@@ -44,10 +45,7 @@ def _packed_output(X, return_packed, alphabet):
 	if return_packed is None:
 		return_packed = packed
 
-	if return_packed and not packed and X.shape[1] != 4:
-		raise ValueError("return_packed=True needs an alphabet of four "
-			"characters, but X has {}.".format(X.shape[1]))
-
+	_check_packable(return_packed and not packed, X.shape[1], "X")
 	return return_packed, X.alphabet if packed else tuple(alphabet)
 
 

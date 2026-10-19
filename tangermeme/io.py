@@ -30,6 +30,7 @@ from .utils import _one_hot_encode_fasta
 from .utils import _cat_packed
 from .utils import _chunk_rows
 from .utils import _check_one_batch_axis
+from .utils import _check_packable
 from .utils import characters
 from .utils import PackedSequence
 from .utils import TangermemeWarning
@@ -1107,9 +1108,7 @@ def extract_loci(
 	if n_loci is not None and n_loci < 1:
 		raise ValueError("n_loci must be at least 1 or None.")
 
-	if return_packed and len(alphabet) != 4:
-		raise ValueError("return_packed=True needs an alphabet of four "
-			"characters, but the alphabet has {}.".format(len(alphabet)))
+	_check_packable(return_packed, len(alphabet), "the alphabet")
 
 	if isinstance(n_jobs, bool) or not isinstance(n_jobs, (int, numpy.integer)):
 		raise TypeError("n_jobs must be an integer.")

@@ -203,6 +203,15 @@ def _check_one_batch_axis(X, name="X"):
 			tuple(X.shape), (-1, len(X.alphabet), -1)))
 
 
+def _check_packable(return_packed, n_chars, name):
+	"""Raise when `return_packed` asks to pack `name`, whose alphabet has
+	`n_chars` characters rather than the four a PackedSequence holds."""
+
+	if return_packed and n_chars != 4:
+		raise ValueError("return_packed=True needs an alphabet of four "
+			"characters, but {} has {}.".format(name, n_chars))
+
+
 # The functions marked by _accepts_packed, by id. An attribute would be
 # copied by functools.wraps onto a wrapper that may not take a
 # PackedSequence; holding the functions keeps their ids from being reused.
@@ -765,11 +774,8 @@ def one_hot_encode(
 
 	n, m = len(sequence), len(alphabet)
 
+	_check_packable(return_packed, m, "the alphabet")
 	if return_packed:
-		if m != 4:
-			raise ValueError("return_packed=True needs an alphabet of four "
-				"characters, but the alphabet has {}.".format(m))
-
 		codes = one_hot_mapping[numpy.frombuffer(bytearray(sequence, e),
 			dtype=numpy.uint8)]
 		if (codes == -2).any():
@@ -1301,9 +1307,7 @@ def random_one_hot(
 	if not isinstance(shape, tuple) or len(shape) != 3:
 		raise ValueError("Shape must be a tuple with 3 dimensions.")
 
-	if return_packed and shape[1] != 4:
-		raise ValueError("return_packed=True needs an alphabet of four "
-			"characters, but shape has {}.".format(shape[1]))
+	_check_packable(return_packed, shape[1], "shape")
 
 	if not isinstance(random_state, numpy.random.RandomState):
 		random_state = numpy.random.RandomState(random_state)
