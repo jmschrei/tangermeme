@@ -144,13 +144,18 @@ def test_deletion_effect_rejects_X_too_short():
 		deletion_effect(model, X, deletions)
 
 
-def test_deletion_effect_rejects_empty_X():
-	# Empty X previously crashed cryptically inside the mask reduction.
+@pytest.mark.parametrize("effect_fn, length, n_columns", [
+	(substitution_effect, 100, 3),
+	(deletion_effect, 105, 2),
+	(insertion_effect, 100, 3)
+], ids=["substitution", "deletion", "insertion"])
+def test_variant_effect_rejects_empty_X(effect_fn, length, n_columns):
+	# substitution_effect routes through predict's empty-input check.
 	model = FlattenDense()
-	X = torch.zeros(0, 4, 105, dtype=torch.float32)
-	deletions = torch.zeros(0, 2, dtype=torch.int64)
+	X = torch.zeros(0, 4, length, dtype=torch.float32)
+	variants = torch.zeros(0, n_columns, dtype=torch.int64)
 	with pytest.raises(ValueError, match="at least one example"):
-		deletion_effect(model, X, deletions)
+		effect_fn(model, X, variants)
 
 
 def _return_X(model, X, args=None, **kwargs):
@@ -188,15 +193,6 @@ def test_deletion_effect_deletion_at_trimmed_end():
 	assert characters(X_var[0]) == "AAAAAAAAACG"
 
 
-def test_substitution_effect_rejects_empty_X():
-	# Routes through predict's empty-input check.
-	model = FlattenDense()
-	X = torch.zeros(0, 4, 100, dtype=torch.float32)
-	subs = torch.zeros(0, 3, dtype=torch.int64)
-	with pytest.raises(ValueError, match="at least one example"):
-		substitution_effect(model, X, subs)
-
-
 def test_insertion_effect_multibase_rows_reversed():
 	# Rows at one position are inserted in reverse of the order given, so
 	# the string S goes in as the rows (k, p, S[-1]), ..., (k, p, S[0]).
@@ -212,16 +208,6 @@ def test_insertion_effect_multibase_rows_reversed():
 	X_before, X_after = insertion_effect(SumModel(), X, rows, func=identity,
 		left=True)
 	assert characters(X_after[0]) == "AAACGAAAAA"
-
-
-def test_insertion_effect_rejects_empty_X():
-	# Empty X is rejected before any sequence is built; any ValueError is
-	# acceptable here.
-	model = FlattenDense()
-	X = torch.zeros(0, 4, 100, dtype=torch.float32)
-	insertions = torch.zeros(0, 3, dtype=torch.int64)
-	with pytest.raises(ValueError):
-		insertion_effect(model, X, insertions)
 
 
 def test_insertion_effect_rejects_positions_outside_X():
@@ -362,19 +348,17 @@ def test_insertion_effect_sequences(left):
 	assert characters(X_var[2]) == "ACGTACGTAC"
 
 
-def test_insertion_effect_X_on_device(X, substitutions, device):
-	_, X_var = insertion_effect(None, X, substitutions, func=_return_X)
-	_, X_var_device = insertion_effect(None, X.to(device), substitutions,
-		func=_return_X)
+@pytest.mark.parametrize("effect_fn", [substitution_effect, deletion_effect,
+	insertion_effect])
+def test_variant_effect_X_on_device(X, X_del, substitutions, deletions,
+	effect_fn, device):
+	if effect_fn is deletion_effect:
+		X, variants = X_del, deletions
+	else:
+		variants = substitutions
 
-	assert X_var_device.device.type == device
-	assert torch.equal(X_var_device.cpu(), X_var)
-
-
-def test_deletion_effect_X_on_device(X_del, deletions, device):
-	_, X_var = deletion_effect(None, X_del, deletions, func=_return_X)
-	_, X_var_device = deletion_effect(None, X_del.to(device), deletions,
-		func=_return_X)
+	_, X_var = effect_fn(None, X, variants, func=_return_X)
+	_, X_var_device = effect_fn(None, X.to(device), variants, func=_return_X)
 
 	assert X_var_device.device.type == device
 	assert torch.equal(X_var_device.cpu(), X_var)

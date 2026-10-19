@@ -40,31 +40,15 @@ def X():
 ###
 
 
-def test_insert_str(X):
-	motif = 'CATCAG'
-	X_insert = insert(X, motif)
+def _motif(seq, form):
+	"""A motif as a string or as its one-hot encoding."""
 
-	assert X_insert.shape[:2] == X.shape[:2]
-	assert X_insert.shape[-1] != X.shape[-1]
-	assert X_insert.sum() != X.sum()
-
-	assert_raises(AssertionError, assert_array_almost_equal,
-		X_insert.sum(dim=-1), X.sum(dim=-1))
-	assert_raises(AssertionError, assert_array_almost_equal, X_insert, X)
-
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACTGACGTACAT' +
-		'CAGGTCTGACTGACTGACTGACTACTGACTGACTGAC')
-	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
-
-	assert X_insert.shape == new_seq_ohe.shape
-	assert X_insert.sum() == new_seq_ohe.sum()
-	assert_array_almost_equal(X_insert.sum(dim=-1), new_seq_ohe.sum(dim=-1))
-	assert_array_almost_equal(X_insert, new_seq_ohe)
+	return seq if form == "str" else one_hot_encode(seq).unsqueeze(0)
 
 
-def test_insert_ohe(X):
-	motif = one_hot_encode('CATCAG').unsqueeze(0)
-	X_insert = insert(X, motif)
+@pytest.mark.parametrize("form", ["str", "one_hot"])
+def test_insert(X, form):
+	X_insert = insert(X, _motif('CATCAG', form))
 
 	assert X_insert.shape[:2] == X.shape[:2]
 	assert X_insert.shape[-1] != X.shape[-1]
@@ -136,17 +120,6 @@ def test_insert_raise_ends(X):
 	assert_raises(TypeError, insert, X, 'CAGCAT', 6.5)
 
 
-def test_insert_raises_ohe(X):
-	motif = one_hot_encode('CATCAG').unsqueeze(0)
-	motif[0, 0, 0] = 1
-	assert_raises(ValueError, insert, X, motif)
-
-	motif = one_hot_encode('CATCAG').unsqueeze(0)
-	motif[0, 1, 0] = 2
-	assert_raises(ValueError, insert, X, motif)
-	assert_raises(ValueError, insert, X, torch.randn(1, 4, 8))
-
-
 def test_insert_X_with_N(X):
 	# Unknown characters in X are all-zero columns. The insertion splices
 	# the sequence in two and so carries them through unchanged.
@@ -162,15 +135,6 @@ def test_insert_X_with_N(X):
 	assert_array_almost_equal(X_insert[0, :, start:start+6],
 		one_hot_encode('CATCAG'))
 	assert_array_almost_equal(X_insert[:, :, start+6:], X_n[:, :, start:])
-
-
-def test_insert_raises_ohe_X(X):
-	X_multi = torch.clone(X)
-	X_multi[0, :, 5] = 1
-	assert_raises(ValueError, insert, X_multi, 'CATCAG')
-
-	assert_raises(ValueError, insert, torch.clone(X) * 2, 'CATCAG')
-	assert_raises(ValueError, insert, torch.randn(1, 4, 68), 'CATCAG')
 
 
 def test_insert_str_alphabet():
@@ -192,29 +156,9 @@ def test_insert_str_raises_N(X):
 ###
 
 
-def test_substitute_str(X):
-	motif = 'CATCAG'
-	X_substitute = substitute(X, motif)
-
-	assert X_substitute.shape == X.shape
-	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal,
-		X_substitute.sum(dim=-1), X.sum(dim=-1))
-	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
-
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACTGACCAT' +
-		'CAGTGACTGACTGACTGACTACTGACTGACTGAC')
-	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
-
-	assert X_substitute.shape == new_seq_ohe.shape
-	assert X_substitute.sum() == new_seq_ohe.sum()
-	assert_array_almost_equal(X_substitute.sum(dim=-1), new_seq_ohe.sum(dim=-1))
-	assert_array_almost_equal(X_substitute, new_seq_ohe)
-
-
-def test_substitute_ohe(X):
-	motif = one_hot_encode('CATCAG').unsqueeze(0)
-	X_substitute = substitute(X, motif)
+@pytest.mark.parametrize("form", ["str", "one_hot"])
+def test_substitute(X, form):
+	X_substitute = substitute(X, _motif('CATCAG', form))
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
@@ -287,9 +231,9 @@ def test_substitute_str_multi_seqs_multi_motifs():
          [0, 0, 0, 1, 0, 0, 0, 0]]])
 
 
-def test_substitute_start_str(X):
-	motif = 'CATCAG'
-	X_substitute = substitute(X, motif, start=0)
+@pytest.mark.parametrize("form", ["str", "one_hot"])
+def test_substitute_start(X, form):
+	X_substitute = substitute(X, _motif('CATCAG', form), start=0)
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
@@ -303,39 +247,7 @@ def test_substitute_start_str(X):
 	assert_array_almost_equal(X_substitute, new_seq_ohe)
 
 
-	motif = 'CATCAGCCC'
-	X_substitute = substitute(X, motif, start=10)
-
-	assert X_substitute.shape == X.shape
-	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal,
-		X_substitute.sum(dim=-1), X.sum(dim=-1))
-	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
-
-	new_seq = ('CACATCATCTCATCAGCCCCTGACTACTGACGTA' +
-		'GTCTGACTGACTGACTGACTACTGACTGACTGAC')
-	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
-	assert_array_almost_equal(X_substitute, new_seq_ohe)
-
-
-def test_substitute_start_ohe(X):
-	motif = one_hot_encode('CATCAG').unsqueeze(0)
-	X_substitute = substitute(X, motif, start=0)
-
-	assert X_substitute.shape == X.shape
-	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal,
-		X_substitute.sum(dim=-1), X.sum(dim=-1))
-	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
-
-	new_seq = ('CATCAGATCTCATCATCTGCTGACTACT' +
-		'GACGTAGTCTGACTGACTGACTGACTACTGACTGACTGAC')
-	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
-	assert_array_almost_equal(X_substitute, new_seq_ohe)
-
-
-	motif = one_hot_encode('CATCAGCCC').unsqueeze(0)
-	X_substitute = substitute(X, motif, start=10)
+	X_substitute = substitute(X, _motif('CATCAGCCC', form), start=10)
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
@@ -367,17 +279,6 @@ def test_substitute_raise_ends(X):
 	assert_raises(IndexError, substitute, X, 'CAGCAT', 6.5)
 
 
-def test_substitute_raises_ohe(X):
-	motif = one_hot_encode('CATCAG').unsqueeze(0)
-	motif[0, 0, 0] = 1
-	assert_raises(ValueError, substitute, X, motif)
-
-	motif = one_hot_encode('CATCAG').unsqueeze(0)
-	motif[0, 1, 0] = 2
-	assert_raises(ValueError, substitute, X, motif)
-	assert_raises(ValueError, substitute, X, torch.randn(1, 4, 8))
-
-
 def test_substitute_X_with_N(X):
 	# Unknown characters in X are all-zero columns, as `one_hot_encode`
 	# produces for the characters in its `ignore` list. They are valid
@@ -405,17 +306,6 @@ def test_substitute_X_with_N_under_motif(X):
 
 	assert_array_almost_equal(X_substitute[0, :, start:start+6],
 		one_hot_encode('CATCAG'))
-
-
-def test_substitute_raises_ohe_X(X):
-	# Allowing all-zero columns must not also allow multi-hot columns or
-	# values outside {0, 1}.
-	X_multi = torch.clone(X)
-	X_multi[0, :, 5] = 1
-	assert_raises(ValueError, substitute, X_multi, 'CATCAG')
-
-	assert_raises(ValueError, substitute, torch.clone(X) * 2, 'CATCAG')
-	assert_raises(ValueError, substitute, torch.randn(1, 4, 68), 'CATCAG')
 
 
 def test_substitute_str_ignore_keeps_sequence(X):
@@ -490,20 +380,21 @@ def test_delete_X_with_N(X):
 	assert (X_delete.sum(dim=1) == 0).sum() == 0
 
 
-def test_delete_raises_ohe_X(X):
-	X_multi = torch.clone(X)
-	X_multi[0, :, 5] = 1
-	assert_raises(ValueError, delete, X_multi, start=0, end=5)
-
-	assert_raises(ValueError, delete, torch.clone(X) * 2, start=0, end=5)
-
-
 ###
 
 
-def test_multisubstitute_str(X):
-	motifs = ['CATCAG', 'CATCAG']
-	X_substitute = multisubstitute(X, motifs, spacing=0)
+@pytest.mark.parametrize("spacing, new_seq", [
+	(0, 'CACATCATCTCATCATCTGCTGACTACTCATCAG' +
+		'CATCAGCTGACTGACTGACTACTGACTGACTGAC'),
+	(4, 'CACATCATCTCATCATCTGCTGACTACATCAGTA' +
+		'GTCATCAGGACTGACTGACTACTGACTGACTGAC'),
+	(5, 'CACATCATCTCATCATCTGCTGACTACATCAGTA' +
+		'GTCCATCAGACTGACTGACTACTGACTGACTGAC'),
+], ids=["spacing_0", "spacing_4", "spacing_5"])
+@pytest.mark.parametrize("form", ["str", "one_hot"])
+def test_multisubstitute(X, spacing, new_seq, form):
+	motif = _motif('CATCAG', form)
+	X_substitute = multisubstitute(X, [motif, motif], spacing=spacing)
 
 	assert X_substitute.shape == X.shape
 	assert X_substitute.sum() == X.sum()
@@ -511,68 +402,6 @@ def test_multisubstitute_str(X):
 		X_substitute.sum(dim=-1), X.sum(dim=-1))
 	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
 
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACTCATCAG' +
-		'CATCAGCTGACTGACTGACTACTGACTGACTGAC')
-	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
-
-	assert X_substitute.shape == new_seq_ohe.shape
-	assert X_substitute.sum() == new_seq_ohe.sum()
-	assert_array_almost_equal(X_substitute.sum(dim=-1), new_seq_ohe.sum(dim=-1))
-	assert_array_almost_equal(X_substitute, new_seq_ohe)
-
-
-def test_multisubstitute_str_even(X):
-	motifs = ['CATCAG', 'CATCAG']
-	X_substitute = multisubstitute(X, motifs, spacing=4)
-
-	assert X_substitute.shape == X.shape
-	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal,
-		X_substitute.sum(dim=-1), X.sum(dim=-1))
-	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
-
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACATCAGTA' +
-		'GTCATCAGGACTGACTGACTACTGACTGACTGAC')
-	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
-
-	assert X_substitute.shape == new_seq_ohe.shape
-	assert X_substitute.sum() == new_seq_ohe.sum()
-	assert_array_almost_equal(X_substitute.sum(dim=-1), new_seq_ohe.sum(dim=-1))
-	assert_array_almost_equal(X_substitute, new_seq_ohe)
-
-
-def test_multisubstitute_str_odd(X):
-	motifs = ['CATCAG', 'CATCAG']
-	X_substitute = multisubstitute(X, motifs, spacing=5)
-
-	assert X_substitute.shape == X.shape
-	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal,
-		X_substitute.sum(dim=-1), X.sum(dim=-1))
-	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
-
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACATCAGTA' +
-		'GTCCATCAGACTGACTGACTACTGACTGACTGAC')
-	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
-
-	assert X_substitute.shape == new_seq_ohe.shape
-	assert X_substitute.sum() == new_seq_ohe.sum()
-	assert_array_almost_equal(X_substitute.sum(dim=-1), new_seq_ohe.sum(dim=-1))
-	assert_array_almost_equal(X_substitute, new_seq_ohe)
-
-
-def test_multisubstitute_ohe(X):
-	motif = one_hot_encode('CATCAG').unsqueeze(0)
-	X_substitute = multisubstitute(X, [motif, motif], spacing=0)
-
-	assert X_substitute.shape == X.shape
-	assert X_substitute.sum() == X.sum()
-	assert_raises(AssertionError, assert_array_almost_equal,
-		X_substitute.sum(dim=-1), X.sum(dim=-1))
-	assert_raises(AssertionError, assert_array_almost_equal, X_substitute, X)
-
-	new_seq = ('CACATCATCTCATCATCTGCTGACTACTCATCAG' +
-		'CATCAGCTGACTGACTGACTACTGACTGACTGAC')
 	new_seq_ohe = one_hot_encode(new_seq).unsqueeze(0)
 
 	assert X_substitute.shape == new_seq_ohe.shape
@@ -790,14 +619,6 @@ def test_randomize_X_with_N(X):
 	assert (X_rand[0, 0].sum(dim=0) == 0).sum() == 0
 
 
-def test_randomize_raises_ohe_X(X):
-	X_multi = torch.clone(X)
-	X_multi[0, :, 5] = 1
-	assert_raises(ValueError, randomize, X_multi, start=20, end=30)
-
-	assert_raises(ValueError, randomize, torch.clone(X) * 2, start=20, end=30)
-
-
 ###
 
 
@@ -851,14 +672,6 @@ def test_shuffle_X_with_N(X):
 	assert_array_almost_equal(X_shuf[0, 0, :, 10:14], torch.zeros(4, 4))
 
 
-def test_shuffle_raises_ohe_X(X):
-	X_multi = torch.clone(X)
-	X_multi[0, :, 5] = 1
-	assert_raises(ValueError, shuffle, X_multi, start=5, end=20)
-
-	assert_raises(ValueError, shuffle, torch.clone(X) * 2, start=5, end=20)
-
-
 ###
 
 
@@ -877,23 +690,22 @@ def test_dinucleotide_shuffle():
 	assert dimotif.shape == (8, 7, 4, 13)
 
 
-def test_dinucleotide_shuffle_composition():
-	X = random_one_hot((8, 4, 30), random_state=0)
+@pytest.mark.parametrize("X, alphabet", [
+	(random_one_hot((8, 4, 30), random_state=0), ['A', 'C', 'G', 'T']),
+	(one_hot_encode('CGATCAGCANNCACATCAGCATANNAAT', alphabet=['A', 'C', 'G',
+		'T', 'N'], ignore=[]).unsqueeze(0), ['A', 'C', 'G', 'T', 'N']),
+	(one_hot_encode('ATATATTAAAATTATTATATATTTATATATTTAAAAATTTTTAATA'
+		).unsqueeze(0), ['A', 'C', 'G', 'T']),
+], ids=["random", "large_alphabet", "missing_alphabet"])
+def test_dinucleotide_shuffle_composition(X, alphabet):
 	X_shuf = dinucleotide_shuffle(X, random_state=0)
 
 	for i in range(X.shape[0]):
-		seq = characters(X[i])
-
-		dinucs = collections.defaultdict(int)
-		for j in range(len(seq)-1):
-			dinucs[seq[j:j+2]] += 1
+		dinucs = _dinuc_counts(characters(X[i], alphabet=alphabet))
 
 		for j in range(20):
-			dinucs_shuffled = collections.defaultdict(int)
-			dinucs_seq = characters(X_shuf[i, j])
-
-			for k in range(len(seq)-1):
-				dinucs_shuffled[dinucs_seq[k:k+2]] += 1
+			dinucs_shuffled = _dinuc_counts(characters(X_shuf[i, j],
+				alphabet=alphabet))
 
 			for key, value in dinucs_shuffled.items():
 				assert dinucs[key] == value
@@ -925,50 +737,11 @@ def test_dinucleotide_shuffle_start_end():
 				assert dinucs[key] == value
 
 
-def test_dinucleotide_shuffle_large_alphabet():
-	alpha = ['A', 'C', 'G', 'T', 'N']
-	seq = 'CGATCAGCANNCACATCAGCATANNAAT'
-	motif = one_hot_encode(seq, alphabet=alpha, ignore=[]).unsqueeze(0)
-	dimotif = dinucleotide_shuffle(motif, random_state=0)
-
-	dinucs = collections.defaultdict(int)
-	for i in range(len(seq)-1):
-		dinucs[seq[i:i+2]] += 1
-
-	for j in range(20):
-		dinucs_shuffled = collections.defaultdict(int)
-		dinucs_seq = characters(dimotif[0, j], alphabet=alpha)
-
-		for i in range(len(seq)-1):
-			dinucs_shuffled[dinucs_seq[i:i+2]] += 1
-
-		for key, value in dinucs_shuffled.items():
-			assert dinucs[key] == value
-
-
-def test_dinucleotide_shuffle_missing_alphabet():
-	seq = 'ATATATTAAAATTATTATATATTTATATATTTAAAAATTTTTAATA'
+@pytest.mark.parametrize("seq", ['AATA', 'A' * 30])
+def test_dinucleotide_shuffle_raises_identical(seq):
 	motif = one_hot_encode(seq).unsqueeze(0)
-	dimotif = dinucleotide_shuffle(motif, random_state=0)
-
-	dinucs = collections.defaultdict(int)
-	for i in range(len(seq)-1):
-		dinucs[seq[i:i+2]] += 1
-
-	for j in range(20):
-		dinucs_shuffled = collections.defaultdict(int)
-		dinucs_seq = characters(dimotif[0, j])
-
-		for i in range(len(dinucs_seq)-1):
-			dinucs_shuffled[dinucs_seq[i:i+2]] += 1
-
-		for key, value in dinucs_shuffled.items():
-			assert dinucs[key] == value
-
-
-def test_dinucleotide_shuffle_raises_short():
-	motif = one_hot_encode('AATA').unsqueeze(0)
-	assert_raises(ValueError, dinucleotide_shuffle, motif)
+	with pytest.raises(ValueError, match="identical"):
+		dinucleotide_shuffle(motif)
 
 
 def test_dinucleotide_shuffle_raises_ohe():
@@ -988,11 +761,6 @@ def test_dinucleotide_shuffle_raises_N():
 	motif = one_hot_encode(seq).unsqueeze(0)
 	assert_raises(ValueError, dinucleotide_shuffle, motif)
 	assert_raises(ValueError, dinucleotide_shuffle, motif, allow_N=False)
-
-
-def test_dinucleotide_shuffle_homopolymer():
-	seq_ohe = one_hot_encode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA').unsqueeze(0)
-	assert_raises(ValueError, dinucleotide_shuffle, seq_ohe)
 
 
 def test_dinucleotide_shuffle_allow_N():
@@ -1474,12 +1242,15 @@ def _dinuc_counts(seq):
 	return dinucs
 
 
-def test_local_dinucleotide_shuffle():
-	X = random_one_hot((2, 4, 200), random_state=0)
-	X_shuf = local_dinucleotide_shuffle(X, n=5, bin_size=64, min_bin_size=32,
+@pytest.mark.parametrize("n_characters, n", [(4, 5), (20, 3)])
+def test_local_dinucleotide_shuffle(n_characters, n):
+	# Any one-hot alphabet is accepted, matching dinucleotide_shuffle, which
+	# this function otherwise mirrors.
+	X = random_one_hot((2, n_characters, 200), random_state=0)
+	X_shuf = local_dinucleotide_shuffle(X, n=n, bin_size=64, min_bin_size=32,
 		random_state=0)
 
-	assert X_shuf.shape == (2, 5, 4, 200)
+	assert X_shuf.shape == (2, n, n_characters, 200)
 	assert X_shuf.dtype == X.dtype
 
 	# The output is still one-hot encoded and the per-sequence nucleotide
@@ -1511,9 +1282,11 @@ def test_local_dinucleotide_shuffle_changes_sequence():
 
 def test_local_dinucleotide_shuffle_composition():
 	# Each bin is shuffled independently, so the dinucleotide composition is
-	# only conserved within a bin, not across bin boundaries. Rather than
+	# only conserved within a bin, not across bin boundaries, and a
+	# dinucleotide shuffle keeps the first and last character of the region
+	# it is applied to, so the bin endpoints are conserved too. Rather than
 	# guessing the cut points, check that *some* valid set of bins explains
-	# each shuffle: the first cut is the only random boundary choice.
+	# both in each shuffle: the first cut is the only random boundary choice.
 	seq_len, bin_size, min_bin_size = 200, 64, 32
 
 	X = random_one_hot((2, 4, seq_len), random_state=0)
@@ -1531,36 +1304,16 @@ def test_local_dinucleotide_shuffle_composition():
 			matches = []
 			for first_cut in cuts:
 				bins = _local_bins(first_cut, seq_len, bin_size, min_bin_size)
+				idxs = [s for s, _ in bins] + [e-1 for _, e in bins]
 
 				if all(_dinuc_counts(seq[s:e]) == _dinuc_counts(shuf_seq[s:e])
-					for s, e in bins):
+					for s, e in bins) and (X_shuf[i, j, :, idxs] ==
+					X[i, :, idxs]).all():
 					matches.append(first_cut)
 
 			assert len(matches) > 0, ("No bin layout preserves the per-bin "
-				"dinucleotide composition of shuffle {}".format(j))
-
-
-def test_local_dinucleotide_shuffle_bin_endpoints():
-	# A dinucleotide shuffle keeps the first and last character of the region
-	# it is applied to, so the bin endpoints must be conserved. As above, at
-	# least one valid first cut must be consistent with the shuffle.
-	seq_len, bin_size, min_bin_size = 200, 64, 32
-
-	X = random_one_hot((2, 4, seq_len), random_state=0)
-	X_shuf = local_dinucleotide_shuffle(X, n=3, bin_size=bin_size,
-		min_bin_size=min_bin_size, random_state=0)
-
-	for i in range(X.shape[0]):
-		for j in range(X_shuf.shape[1]):
-			matches = []
-			for first_cut in range(min_bin_size, bin_size + 1):
-				bins = _local_bins(first_cut, seq_len, bin_size, min_bin_size)
-				idxs = [s for s, _ in bins] + [e-1 for _, e in bins]
-
-				if (X_shuf[i, j, :, idxs] == X[i, :, idxs]).all():
-					matches.append(first_cut)
-
-			assert len(matches) > 0
+				"dinucleotide composition and endpoints of shuffle "
+				"{}".format(j))
 
 
 def test_local_dinucleotide_shuffle_bin_layout_valid():
@@ -1709,20 +1462,6 @@ def test_local_dinucleotide_shuffle_raises_shape():
 		20, 64, 32)
 
 
-def test_local_dinucleotide_shuffle_alphabet():
-	# Any one-hot alphabet is accepted, matching dinucleotide_shuffle, which
-	# this function otherwise mirrors.
-	X = random_one_hot((2, 20, 200), random_state=0)
-	X_shuf = local_dinucleotide_shuffle(X, n=3, bin_size=64, min_bin_size=32,
-		random_state=0)
-
-	assert X_shuf.shape == (2, 3, 20, 200)
-	assert X_shuf.dtype == X.dtype
-
-	assert (X_shuf.sum(dim=2) == 1).all()
-	assert (X_shuf.sum(dim=-1) == X.sum(dim=-1).unsqueeze(1)).all()
-
-
 def test_local_dinucleotide_shuffle_raises_bin_size():
 	X = random_one_hot((2, 4, 200), random_state=0)
 
@@ -1735,16 +1474,6 @@ def test_local_dinucleotide_shuffle_raises_min_bin_size():
 	X = random_one_hot((2, 4, 200), random_state=0)
 
 	assert_raises(ValueError, local_dinucleotide_shuffle, X, 20, 64, 65)
-
-
-def test_local_dinucleotide_shuffle_preserves_cuda_device(cuda_device):
-	X = random_one_hot((2, 4, 200), random_state=0).type(
-		torch.float32).to(cuda_device)
-	X_shuf = local_dinucleotide_shuffle(X, n=2, bin_size=64, min_bin_size=32,
-		random_state=0)
-
-	assert X_shuf.device.type == 'cuda'
-	assert X_shuf.shape == (2, 2, 4, 200)
 
 
 ###
@@ -1837,6 +1566,36 @@ def test_substitute_returns_clone_not_view(X):
 	assert_array_almost_equal(X, X_orig)
 
 
+@pytest.mark.parametrize("func", [insert, substitute])
+def test_ersatz_raises_ohe(X, func):
+	motif = one_hot_encode('CATCAG').unsqueeze(0)
+	motif[0, 0, 0] = 1
+	assert_raises(ValueError, func, X, motif)
+
+	motif = one_hot_encode('CATCAG').unsqueeze(0)
+	motif[0, 1, 0] = 2
+	assert_raises(ValueError, func, X, motif)
+	assert_raises(ValueError, func, X, torch.randn(1, 4, 8))
+
+
+@pytest.mark.parametrize("call", [
+	lambda X: insert(X, 'CATCAG'),
+	lambda X: substitute(X, 'CATCAG'),
+	lambda X: delete(X, start=0, end=5),
+	lambda X: randomize(X, start=20, end=30),
+	lambda X: shuffle(X, start=5, end=20),
+], ids=["insert", "substitute", "delete", "randomize", "shuffle"])
+def test_ersatz_raises_ohe_X(X, call):
+	# Allowing all-zero columns must not also allow multi-hot columns or
+	# values outside {0, 1}.
+	X_multi = torch.clone(X)
+	X_multi[0, :, 5] = 1
+	assert_raises(ValueError, call, X_multi)
+
+	assert_raises(ValueError, call, torch.clone(X) * 2)
+	assert_raises(ValueError, call, torch.randn(1, 4, 68))
+
+
 def test_ersatz_ops_preserve_cuda_device(cuda_device):
 	# All public ersatz ops should accept a CUDA-resident X and return a
 	# tensor on the same device. Previously dinucleotide_shuffle crashed
@@ -1844,6 +1603,8 @@ def test_ersatz_ops_preserve_cuda_device(cuda_device):
 	X = random_one_hot((2, 4, 100), random_state=0).type(
 		torch.float32).to(cuda_device)
 	motif = one_hot_encode("ACGT").unsqueeze(0).to(cuda_device)
+	X_local = local_dinucleotide_shuffle(X, n=2, bin_size=64, min_bin_size=32,
+		random_state=0)
 
 	for name, out in [
 		('substitute', substitute(X, motif)),
@@ -1853,8 +1614,11 @@ def test_ersatz_ops_preserve_cuda_device(cuda_device):
 		('shuffle', shuffle(X, start=20, end=30, n=2, random_state=0)),
 		('randomize', randomize(X, start=20, end=30, n=2, random_state=0)),
 		('dinucleotide_shuffle', dinucleotide_shuffle(X, n=2, random_state=0)),
+		('local_dinucleotide_shuffle', X_local),
 	]:
 		assert out.device.type == 'cuda', f"{name} produced device {out.device}"
+
+	assert X_local.shape == (2, 2, 4, 100)
 
 
 ###
@@ -2007,15 +1771,13 @@ def test_randomize_packed_raises_probs_width(width):
 		probs=probs)
 
 
-@pytest.mark.parametrize("name", list(_ERSATZ_CALLS) + ["dinucleotide_shuffle",
-	"local_dinucleotide_shuffle"])
+@pytest.mark.parametrize("name", list(_ERSATZ_CALLS) +
+	["local_dinucleotide_shuffle"])
 def test_ersatz_packed_alphabet(name):
 	# A PackedSequence over another alphabet gives packed output over that
 	# alphabet, with the sequences of the one-hot path.
-	calls = dict(_ERSATZ_CALLS, dinucleotide_shuffle=lambda X, **kw:
-		dinucleotide_shuffle(X, n=2, random_state=0, allow_N=True, **kw),
-		local_dinucleotide_shuffle=lambda X, **kw: local_dinucleotide_shuffle(
-		X, n=2, random_state=0, **kw))
+	calls = dict(_ERSATZ_CALLS, local_dinucleotide_shuffle=lambda X, **kw:
+		local_dinucleotide_shuffle(X, n=2, random_state=0, **kw))
 	X = _ersatz_X()
 	if name == "local_dinucleotide_shuffle":
 		X = random_one_hot((3, 4, 1200), random_state=1)

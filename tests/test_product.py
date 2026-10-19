@@ -23,6 +23,8 @@ from .toy_models import FlattenDense
 from .toy_models import Conv
 from .toy_models import Scatter
 from .toy_models import ConvDense
+from ._packed import check_packed
+from ._packed import Spy
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -227,17 +229,20 @@ def test_apply_pairwise_rejects_mismatched_args_lengths(X, alpha, beta):
 		apply_pairwise(predict, model, X[:5], args=(alpha[:5], beta[:3]))
 
 
-def test_apply_pairwise_rejects_empty_X(alpha):
+@pytest.mark.parametrize("apply_fn, n_args", [(apply_pairwise, 0),
+	(apply_product, 5)], ids=["apply_pairwise", "apply_product"])
+def test_apply_rejects_empty_X(alpha, apply_fn, n_args):
 	model = FlattenDense()
 	X = torch.zeros(0, 4, 100, dtype=torch.float32)
 	with pytest.raises(ValueError, match="at least one example"):
-		apply_pairwise(predict, model, X, args=(alpha[:0],))
+		apply_fn(predict, model, X, args=(alpha[:n_args],))
 
 
-def test_apply_pairwise_rejects_empty_args_entry(X, alpha):
+@pytest.mark.parametrize("apply_fn", [apply_pairwise, apply_product])
+def test_apply_rejects_empty_args_entry(X, alpha, apply_fn):
 	model = FlattenDense()
 	with pytest.raises(ValueError, match="non-empty"):
-		apply_pairwise(predict, model, X[:5], args=(alpha[:0],))
+		apply_fn(predict, model, X[:5], args=(alpha[:0],))
 
 
 def test_apply_pairwise_requires_args(X):
@@ -245,19 +250,6 @@ def test_apply_pairwise_requires_args(X):
 	model = FlattenDense()
 	with pytest.raises(TypeError, match="args"):
 		apply_pairwise(predict, model, X[:5])
-
-
-def test_apply_product_rejects_empty_X(alpha):
-	model = FlattenDense()
-	X = torch.zeros(0, 4, 100, dtype=torch.float32)
-	with pytest.raises(ValueError, match="at least one example"):
-		apply_product(predict, model, X, args=(alpha[:5],))
-
-
-def test_apply_product_rejects_empty_args_entry(X, alpha):
-	model = FlattenDense()
-	with pytest.raises(ValueError, match="non-empty"):
-		apply_product(predict, model, X[:5], args=(alpha[:0],))
 
 
 ###
@@ -926,17 +918,21 @@ def test_apply_product_saturation_mutagenesis(X, alpha, device):
 
 ###
 # A PackedSequence is passed on to `func` a batch at a time and gives the
-# outputs of its one-hot encoding.
+# outputs of its one-hot encoding. A function of the user's is given the int8
+# one-hot encoding of each packed batch.
 
 
-def test_apply_pairwise_packed(X, alpha, device):
+_PREDICT_SPY = Spy(predict, 1)
+
+
+@pytest.mark.parametrize("func", [predict, _PREDICT_SPY], ids=["predict",
+	"spy"])
+def test_apply_pairwise_packed(X, alpha, func, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
-	y = apply_pairwise(predict, model, X[:5], args=(alpha[:5],), batch_size=3,
-		device=device)
-	y_packed = apply_pairwise(predict, model, PackedSequence.from_one_hot(
-		X[:5]), args=(alpha[:5],), batch_size=3, device=device)
-	assert torch.equal(y_packed, y)
+	check_packed(lambda X_: apply_pairwise(func, model, X_, args=(alpha[:5],),
+		batch_size=3, device=device), X[:5], [func] if func is _PREDICT_SPY
+		else [])
 
 
 def test_apply_product_packed(X, alpha, beta, device):
@@ -960,24 +956,3 @@ def test_apply_packed_raises_batch_axes():
 
 	with pytest.raises(ValueError, match="must have shape"):
 		apply_product(predict, model, X, args=(alpha, beta), device='cpu')
-
-
-def test_apply_pairwise_packed_func_int8(X, alpha, device):
-	# A function of the user's is given the int8 one-hot encoding of each
-	# packed batch.
-	seen = []
-
-	def func(model, X, **kwargs):
-		seen.append(X.dtype)
-		return predict(model, X, **kwargs)
-
-	torch.manual_seed(0)
-	model = FlattenDense()
-	y = apply_pairwise(func, model, X[:5], args=(alpha[:5],), batch_size=3,
-		device=device)
-	seen.clear()
-	y_packed = apply_pairwise(func, model, PackedSequence.from_one_hot(X[:5]),
-		args=(alpha[:5],), batch_size=3, device=device)
-
-	assert len(seen) > 0 and all(dtype == torch.int8 for dtype in seen)
-	assert torch.equal(y_packed, y)

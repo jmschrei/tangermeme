@@ -278,7 +278,7 @@ def test_pisa_n_shuffles(X, device):
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr3)
 
 
-def test_deep_lift_shap_shuffle_ordering(X, device):
+def test_pisa_shuffle_ordering(X, device):
 	torch.manual_seed(0)
 	model = Conv1()
 	X = X[:1]
@@ -540,7 +540,7 @@ def test_pisa_args_one_dimensional(X, references, device):
 def test_pisa_preserves_model_state(X, device):
 	# After pisa returns the model should be back on its original device
 	# and in its original training mode, with no _NON_LINEAR_OPS attributes
-	# leaked onto its modules.
+	# or hook handles leaked onto its modules.
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 	model.train()  # explicitly leave model in train mode
@@ -554,6 +554,8 @@ def test_pisa_preserves_model_state(X, device):
 	for module in model.modules():
 		assert not hasattr(module, "_NON_LINEAR_OPS"), \
 			"_NON_LINEAR_OPS attribute leaked onto module"
+		if hasattr(module, "handles"):
+			assert len(module.handles) == 0
 
 
 def test_pisa_cleans_up_hooks_on_exception(X, device):
@@ -744,334 +746,76 @@ class TorchSum(torch.nn.Module):
 			return torch.sum(X, dim=(-1, -2)).unsqueeze(-1)
 
 
-def test_pisa_linear(X, device):
-	torch.manual_seed(0)
+# Each model is built from its layers after the seed is set. fp32
+# attribution residuals on CUDA are a few orders of magnitude larger than on
+# CPU, so the padded convolution's threshold is loosened for the cuda pass.
+SEQUENTIAL_MODELS = [
+	(lambda: [torch.nn.Flatten(), torch.nn.Linear(400, 5), torch.nn.ReLU(),
+		TorchSum()], 1e-5),
+	(lambda: [torch.nn.Flatten(), torch.nn.Linear(400, 5, bias=False),
+		torch.nn.ReLU(), TorchSum()], 1e-5),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,)), torch.nn.ReLU(), TorchSum()],
+		1e-5),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,), dilation=5), torch.nn.ReLU(),
+		TorchSum()], 1e-5),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,), stride=5), torch.nn.ReLU(),
+		TorchSum()], 1e-5),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,), bias=False), torch.nn.ReLU(),
+		TorchSum()], 1e-4),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,), padding=5), torch.nn.ReLU(),
+		TorchSum()], {"cpu": 1e-4, "cuda": 1e-2}),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,), padding='same'),
+		torch.nn.Flatten(), torch.nn.ReLU(), torch.nn.Linear(800, 1)], 1e-5),
+	(lambda: [torch.nn.MaxPool1d(4), TorchSum()], 1e-5),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,)), torch.nn.ReLU(),
+		torch.nn.MaxPool1d(4), TorchSum()], 1e-5),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,)), torch.nn.Tanh(),
+		torch.nn.MaxPool1d(4), TorchSum()], 1e-5),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,)), torch.nn.ELU(),
+		torch.nn.MaxPool1d(4), TorchSum()], 1e-5),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,)), torch.nn.ReLU(),
+		torch.nn.MaxPool1d(4), torch.nn.ReLU(), TorchSum()], 1e-5),
+	(lambda: [torch.nn.ReLU(), torch.nn.Conv1d(4, 8, (5,)), torch.nn.ReLU(),
+		torch.nn.MaxPool1d(4), torch.nn.ReLU(), TorchSum()], 1e-5),
+	(lambda: [torch.nn.ReLU(), torch.nn.Conv1d(4, 8, (5,)),
+		torch.nn.MaxPool1d(4), torch.nn.ReLU(), TorchSum()], 1e-5),
+	(lambda: [torch.nn.ReLU(), torch.nn.Conv1d(4, 8, (5,)),
+		torch.nn.MaxPool1d(4), torch.nn.ReLU(), torch.nn.ReLU(), TorchSum()],
+		1e-5),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,)), torch.nn.ReLU(), torch.nn.Tanh(),
+		torch.nn.MaxPool1d(4), TorchSum()], 1e-5),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,)), torch.nn.ReLU(),
+		torch.nn.MaxPool1d(4), torch.nn.Flatten(), torch.nn.Linear(192, 1)],
+		1e-5),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,)), torch.nn.ReLU(),
+		torch.nn.MaxPool1d(4), torch.nn.Flatten(), torch.nn.Linear(192, 10),
+		torch.nn.Linear(10, 1)], 1e-5),
+	(lambda: [torch.nn.Conv1d(4, 8, (5,)), torch.nn.ReLU(),
+		torch.nn.MaxPool1d(4), torch.nn.Flatten(), torch.nn.Linear(192, 10),
+		torch.nn.ReLU(), torch.nn.Linear(10, 1)], 1e-5),
+]
 
-	model = torch.nn.Sequential(
-		torch.nn.Flatten(),
-		torch.nn.Linear(400, 5),
-		torch.nn.ReLU(),
-		TorchSum()
-	)
+SEQUENTIAL_IDS = ["linear", "linear_bias", "conv", "conv_dilated",
+	"conv_stride", "conv_bias", "conv_padding", "conv_padding_same",
+	"max_pool", "conv_relu_pool", "conv_tanh_pool", "conv_elu_pool",
+	"conv_relu_pool_relu", "relu_conv_relu_pool_relu", "relu_conv_pool_relu",
+	"relu_conv_pool_relu_relu", "conv_relu_tanh_pool", "conv_relu_pool_linear",
+	"conv_relu_pool_linear_linear", "conv_relu_pool_linear_relu_linear"]
+
+
+@pytest.mark.parametrize("layers,threshold", SEQUENTIAL_MODELS,
+	ids=SEQUENTIAL_IDS)
+def test_pisa_sequential(X, device, layers, threshold):
+	if isinstance(threshold, dict):
+		threshold = threshold[device]
+
+	torch.manual_seed(0)
+	model = torch.nn.Sequential(*layers())
 
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_linear_bias(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Flatten(),
-		torch.nn.Linear(400, 5, bias=False),
-		torch.nn.ReLU(),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_conv(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,)),
-		torch.nn.ReLU(),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_conv_dilated(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,), dilation=5),
-		torch.nn.ReLU(),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_conv_stride(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,), stride=5),
-		torch.nn.ReLU(),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_conv_bias(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,), bias=False),
-		torch.nn.ReLU(),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-4)
-
-
-def test_pisa_conv_padding(X, device):
-	# fp32 attribution residuals on CUDA are a few orders of magnitude larger
-	# than on CPU, so the convergence threshold is loosened for the cuda pass.
-	threshold = 1e-4 if device == "cpu" else 1e-2
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,), padding=5),
-		torch.nn.ReLU(),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0,
+		pisa(model, X, device=device, random_state=0,
 			warning_threshold=threshold)
-
-
-def test_pisa_conv_padding_same(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,), padding='same'),
-		torch.nn.Flatten(),
-		torch.nn.ReLU(),
-		torch.nn.Linear(800, 1)
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_max_pool(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.MaxPool1d(4),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_conv_relu_pool(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,)),
-		torch.nn.ReLU(),
-		torch.nn.MaxPool1d(4),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_conv_tanh_pool(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,)),
-		torch.nn.Tanh(),
-		torch.nn.MaxPool1d(4),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_conv_elu_pool(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,)),
-		torch.nn.ELU(),
-		torch.nn.MaxPool1d(4),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_conv_relu_pool_relu(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,)),
-		torch.nn.ReLU(),
-		torch.nn.MaxPool1d(4),
-		torch.nn.ReLU(),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_relu_conv_relu_pool_relu(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.ReLU(),
-		torch.nn.Conv1d(4, 8, (5,)),
-		torch.nn.ReLU(),
-		torch.nn.MaxPool1d(4),
-		torch.nn.ReLU(),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_relu_conv_pool_relu(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.ReLU(),
-		torch.nn.Conv1d(4, 8, (5,)),
-		torch.nn.MaxPool1d(4),
-		torch.nn.ReLU(),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_relu_conv_pool_relu_relu(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.ReLU(),
-		torch.nn.Conv1d(4, 8, (5,)),
-		torch.nn.MaxPool1d(4),
-		torch.nn.ReLU(),
-		torch.nn.ReLU(),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_conv_relu_tanh_pool(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,)),
-		torch.nn.ReLU(),
-		torch.nn.Tanh(),
-		torch.nn.MaxPool1d(4),
-		TorchSum()
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_conv_relu_pool_linear(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,)),
-		torch.nn.ReLU(),
-		torch.nn.MaxPool1d(4),
-		torch.nn.Flatten(),
-		torch.nn.Linear(192, 1)
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_conv_relu_pool_linear_linear(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,)),
-		torch.nn.ReLU(),
-		torch.nn.MaxPool1d(4),
-		torch.nn.Flatten(),
-		torch.nn.Linear(192, 10),
-		torch.nn.Linear(10, 1)
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0, 
-			warning_threshold=1e-5)
-
-
-def test_pisa_conv_relu_pool_linear_relu_linear(X, device):
-	torch.manual_seed(0)
-
-	model = torch.nn.Sequential(
-		torch.nn.Conv1d(4, 8, (5,)),
-		torch.nn.ReLU(),
-		torch.nn.MaxPool1d(4),
-		torch.nn.Flatten(),
-		torch.nn.Linear(192, 10),
-		torch.nn.ReLU(),
-		torch.nn.Linear(10, 1)
-	)
-
-	with warnings.catch_warnings():
-		warnings.simplefilter("error", category=RuntimeWarning)
-		X_attr = pisa(model, X, device=device, random_state=0,
-			warning_threshold=1e-5)
-
 
 ###
 
@@ -1087,21 +831,6 @@ def test_pisa_n_outputs_lt_batch_size(X, device):
 
 	assert X_attr_big.shape == (X.shape[0], 3, 4, 100)
 	assert_array_almost_equal(X_attr_big, X_attr_small, 4)
-
-
-def test_pisa_references_ignores_random_state(X, references, device):
-	torch.manual_seed(0)
-	model = FlattenDense(n_outputs=1)
-
-	X_attr0 = pisa(model, X, references=references, device=device,
-		random_state=0)
-
-	torch.manual_seed(0)
-	model = FlattenDense(n_outputs=1)
-	X_attr1 = pisa(model, X, references=references, device=device,
-		random_state=42)
-
-	assert_array_almost_equal(X_attr0, X_attr1, 4)
 
 
 def test_pisa_hypothetical_vs_projection_equivalence(X, device):
@@ -1120,18 +849,6 @@ def test_pisa_hypothetical_vs_projection_equivalence(X, device):
 	# recover the non-hypothetical attributions.
 	manual = X_attr_hyp * X.unsqueeze(1)
 	assert_array_almost_equal(X_attr_proj, manual, 4)
-
-
-def test_pisa_model_unchanged_after_call(X, device):
-	torch.manual_seed(0)
-	model = FlattenDense(n_outputs=1)
-
-	pisa(model, X[:1], n_shuffles=2, device=device, random_state=0)
-
-	for module in model.modules():
-		assert not hasattr(module, "_NON_LINEAR_OPS")
-		if hasattr(module, "handles"):
-			assert len(module.handles) == 0
 
 
 def test_pisa_empty_X(device):
@@ -1242,7 +959,7 @@ PISA_REGRESSION = {
 
 
 @pytest.mark.parametrize("rule", PISA_RULES)
-def test_pisa_rules_convergence(X, device, rule):
+def test_pisa_rules(X, device, rule):
 	torch.manual_seed(0)
 	model = ConvRuleSeq(rule=rule)
 	X = X[:, :, :15]
@@ -1256,17 +973,6 @@ def test_pisa_rules_convergence(X, device, rule):
 
 	assert X_attr.shape == (2, 13, 4, 15)
 	assert X_attr.dtype == torch.float32
-
-
-@pytest.mark.parametrize("rule", PISA_RULES)
-def test_pisa_rules_regression(X, device, rule):
-	torch.manual_seed(0)
-	model = ConvRuleSeq(rule=rule)
-	X = X[:, :, :15]
-
-	X_attr = pisa(model, X, device=device, n_shuffles=3, random_state=0,
-		batch_size=4)
-
 	assert_array_almost_equal(X_attr[0, :2, :, :4], PISA_REGRESSION[rule], 4)
 
 

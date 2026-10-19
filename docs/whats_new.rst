@@ -345,6 +345,8 @@ Testing
 
 	- Tests that never ran now do: the check of the error raised for a block-gzip FASTA without BioPython, which was skipped whenever BioPython was installed and now hides it through ``sys.modules``; the install-skills console script, through in-process calls of ``main()``; and the four skipped cases of the ``PackedSequence.from_one_hot`` value check. ``test_deep_lift_shap_subclassed_op`` is a strict xfail instead of a skip.
 
+	- Tests that another test fully covers are removed, and tests that differ only in an input or a parameter are merged into parametrized tests, keeping every assertion of the tests they replace. Each removal was checked with a break of the library that both the removed test and the test covering it catch. Among the removals are fifteen older ``recursive_seqlets`` tests that the brute-force reference tests cover, and among the merges the single-model tables of ``deep_lift_shap``, ``pisa`` and ``predict``. The suite loses 256 test functions, 104 collected cases and 2,935 lines.
+
 
 Version 1.5.0
 =============

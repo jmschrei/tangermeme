@@ -129,22 +129,18 @@ def test_count_annotations(annotations):
 		3, 5, 2, 6, 2, 5, 4, 4, 3, 1, 3, 9, 3])
 
 
-def test_count_annotations_dim0(annotations):
+@pytest.mark.parametrize("dim, length", [(0, 7), (1, 25)])
+def test_count_annotations_dim(annotations, dim, length):
 	X0 = count_annotations(annotations)
-	X = count_annotations(annotations, dim=0)
+	X = count_annotations(annotations, dim=dim)
 
-	assert X.shape == (7,)
+	assert X.shape == (length,)
 	assert X.sum() == 100
-	assert_array_almost_equal(X, X0.sum(dim=0))
+	assert_array_almost_equal(X, X0.sum(dim=dim))
 
-
-def test_count_annotations_dim1(annotations):
-	X0 = count_annotations(annotations)
-	X = count_annotations(annotations, dim=1)
-
-	assert X.shape == (25,)
-	assert X.sum() == 100
-	assert_array_almost_equal(X, X0.sum(dim=1))
+	X = count_annotations(annotations, dim=dim, shape=(30, 30))
+	assert X.shape == (30,)
+	assert_array_almost_equal(X[:length], X0.sum(dim=dim))
 
 
 def test_count_annotations_dtype(annotations):
@@ -170,12 +166,13 @@ def test_count_annotations_shape(annotations):
 	assert_raises(RuntimeError, count_annotations, annotations, shape=(39, 3))
 
 
-def test_count_annotations_raises(annotations):
-	assert_raises(ValueError, count_annotations, annotations - 10)
-	assert_raises(ValueError, count_annotations, annotations.T)
-	assert_raises(ValueError, count_annotations, torch.randn(100, 2))
-	assert_raises(ValueError, count_annotations, torch.cat([annotations, 
-		annotations], dim=1))
+@pytest.mark.parametrize("func", [count_annotations, pairwise_annotations])
+def test_annotations_raises(annotations, func):
+	assert_raises(ValueError, func, annotations - 10)
+	assert_raises(ValueError, func, annotations.T)
+	assert_raises(ValueError, func, torch.randn(100, 2))
+	assert_raises(ValueError, func, torch.cat([annotations, annotations],
+		dim=1))
 
 
 ###
@@ -198,12 +195,12 @@ def test_pairwise_annotations(annotations):
 
 	assert_array_almost_equal(y, [
 		[0, 8, 7, 4, 6, 4, 7],
-        [8, 0, 6, 4, 7, 6, 4],
-        [7, 6, 0, 3, 7, 6, 3],
-        [4, 4, 3, 0, 7, 3, 2],
-        [6, 7, 7, 7, 0, 5, 3],
-        [4, 6, 6, 3, 5, 0, 3],
-        [7, 4, 3, 2, 3, 3, 0]
+		[8, 0, 6, 4, 7, 6, 4],
+		[7, 6, 0, 3, 7, 6, 3],
+		[4, 4, 3, 0, 7, 3, 2],
+		[6, 7, 7, 7, 0, 5, 3],
+		[4, 6, 6, 3, 5, 0, 3],
+		[7, 4, 3, 2, 3, 3, 0]
 	])
 
 	y = pairwise_annotations(annotations, unique=False)
@@ -219,14 +216,6 @@ def test_pairwise_annotations(annotations):
 	])
 
 
-def test_pairwise_annotations_raises(annotations):
-	assert_raises(ValueError, pairwise_annotations, annotations - 10)
-	assert_raises(ValueError, pairwise_annotations, annotations.T)
-	assert_raises(ValueError, pairwise_annotations, torch.randn(100, 2))
-	assert_raises(ValueError, pairwise_annotations, torch.cat([annotations,
-		annotations], dim=1))
-
-
 def test_pairwise_annotations_shape(annotations):
 	y = pairwise_annotations(annotations)
 	assert y.shape == (7, 7)
@@ -235,23 +224,6 @@ def test_pairwise_annotations_shape(annotations):
 	assert y.shape == (20, 20)
 
 	assert_raises(RuntimeError, pairwise_annotations, annotations, shape=3)
-
-
-def test_pairwise_annotations_self_loops():
-	X = torch.tensor([[0, 0], [0, 0], [0, 0]], dtype=torch.int64)
-	y = pairwise_annotations(X, unique=False)
-	assert int(y[0, 0]) == 3
-
-	y = pairwise_annotations(X, unique=True)
-	assert int(y[0, 0]) == 0
-
-
-def test_count_annotations_dim_with_shape(annotations):
-	X = count_annotations(annotations, dim=0, shape=(30, 30))
-	assert X.shape == (30,)
-
-	X = count_annotations(annotations, dim=1, shape=(30, 30))
-	assert X.shape == (30,)
 
 
 def test_count_annotations_tuple_input_numpy(annotations):
@@ -267,7 +239,8 @@ def test_count_annotations_tuple_input_numpy(annotations):
 ###
 
 
-def test_pairwise_annotations_spacing_basic():
+@pytest.mark.parametrize("symmetric", [True, False])
+def test_pairwise_annotations_spacing(symmetric):
 	# (example_idx, annotation_idx, start, end)
 	X = torch.tensor([
 		[0, 0, 0, 5],
@@ -275,38 +248,18 @@ def test_pairwise_annotations_spacing_basic():
 		[0, 1, 20, 25],
 	], dtype=torch.int64)
 
-	y = pairwise_annotations_spacing(X)
+	y = pairwise_annotations_spacing(X, symmetric=symmetric)
 
 	assert y.shape == (2, 2, 100)
 	assert y.dtype == torch.uint8
 
 	assert int(y[0, 1, 5]) == 1
-	assert int(y[1, 0, 5]) == 1
+	assert int(y[1, 0, 5]) == int(symmetric)
 	assert int(y[0, 1, 15]) == 1
-	assert int(y[1, 0, 15]) == 1
+	assert int(y[1, 0, 15]) == int(symmetric)
 	assert int(y[1, 1, 5]) == 1
 
-	assert int(y.sum()) == 5
-
-
-def test_pairwise_annotations_spacing_symmetric_false():
-	X = torch.tensor([
-		[0, 0, 0, 5],
-		[0, 1, 10, 15],
-		[0, 1, 20, 25],
-	], dtype=torch.int64)
-
-	y = pairwise_annotations_spacing(X, symmetric=False)
-
-	assert y.shape == (2, 2, 100)
-
-	assert int(y[0, 1, 5]) == 1
-	assert int(y[1, 0, 5]) == 0
-	assert int(y[0, 1, 15]) == 1
-	assert int(y[1, 0, 15]) == 0
-	assert int(y[1, 1, 5]) == 1
-
-	assert int(y.sum()) == 3
+	assert int(y.sum()) == (5 if symmetric else 3)
 
 
 def test_pairwise_annotations_spacing_at_max_distance():

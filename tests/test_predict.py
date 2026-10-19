@@ -175,6 +175,7 @@ def test_predict_scatter(X, device):
 	assert_array_almost_equal(y, model(X.to(device)).cpu().detach())
 	assert_array_almost_equal(y, predict(model, X, batch_size=1, device=device))
 	assert_array_almost_equal(y, predict(model, X, batch_size=64, device=device))
+	assert_array_almost_equal(y, predict(model, X, batch_size=68, device=device))
 
 
 def test_predict_convdense(X, device):
@@ -182,6 +183,7 @@ def test_predict_convdense(X, device):
 	model = ConvDense().to(device)
 	y = predict(model, X, batch_size=2, device=device)
 
+	assert isinstance(y, list)
 	assert len(y) == 2
 	assert y[0].shape == (64, 12, 98)
 	assert y[1].shape == (64, 3)
@@ -206,25 +208,14 @@ def test_predict_convdense(X, device):
         [-0.1408,  0.0105,  0.0673],
         [-0.2375, -0.0069,  0.0835]], 4)
 
+	for batch_size in (8, 64):
+		y_ = predict(model, X, batch_size=batch_size, device=device)
 
-def test_predict_convdense_batch_size(X, device):
-	torch.manual_seed(0)
-	model = ConvDense().to(device)
-	y = predict(model, X, batch_size=64, device=device)
-
-	assert len(y) == 2
-	assert y[0].shape == (64, 12, 98)
-	assert y[1].shape == (64, 3)
-
-	assert y[0].dtype == torch.float32
-	assert y[1].dtype == torch.float32
-
-
-def test_predict_batch_size(X, device):
-	torch.manual_seed(0)
-	model = Scatter().to(device)
-	y = predict(model, X, batch_size=68, device=device)
-	assert y.shape == (64, 100, 4)
+		assert isinstance(y_, list)
+		assert len(y_) == 2
+		for head, head_ in zip(y, y_):
+			assert head_.dtype == head.dtype
+			assert_array_almost_equal(head_, head, 4)
 
 
 def test_predict_raises_args(X, alpha, beta):
@@ -237,20 +228,6 @@ def test_predict_raises_args(X, alpha, beta):
 		args=(alpha[:5],))
 	assert_raises(ValueError, predict, model, X, batch_size=2,
 		args=(alpha, beta[:5]))
-
-
-def test_predict_flattendense_fp64(X, device):
-	# Predict accepts fp64 inputs and returns fp32 per docstring contract.
-	torch.manual_seed(0)
-	model = FlattenDense().to(device)
-	X64 = X.type(torch.float64)
-	y = predict(model, X64, batch_size=8, device=device)
-
-	assert y.shape == (64, 3)
-	assert y.dtype == torch.float32
-
-	y_ref = predict(model, X, batch_size=8, device=device)
-	assert_array_almost_equal(y, y_ref, 4)
 
 
 def test_predict_flattendense_16bit(X, device):
@@ -283,138 +260,64 @@ def test_predict_flattendense_16bit(X, device):
 # multi-input/multi-output).
 
 
-def test_predict_residual_conv(X, device):
-	torch.manual_seed(0)
-	model = ResidualConv().to(device)
-	y = predict(model, X, batch_size=8, device=device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float32
-	assert_array_almost_equal(y[:4], [
+@pytest.mark.parametrize("model_factory, expected", [
+	(ResidualConv, [
 		[-0.4900],
 		[ 0.0663],
 		[-0.6028],
-		[-0.1464]], 4)
-	assert_array_almost_equal(y, model(X.to(device)).cpu().detach(), 4)
-
-
-def test_predict_transformer(X, device):
-	torch.manual_seed(0)
-	model = Transformer().to(device).eval()
-	y = predict(model, X, batch_size=8, device=device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float32
-	assert_array_almost_equal(y[:4], [
+		[-0.1464]]),
+	(lambda: Transformer().eval(), [
 		[-0.5057],
 		[ 0.7587],
 		[-0.1567],
-		[ 0.4629]], 4)
-	assert_array_almost_equal(y, model(X.to(device)).cpu().detach(), 4)
-
-
-def test_predict_conv2d_expand(X, device):
-	torch.manual_seed(0)
-	model = Conv2DExpand().to(device)
-	y = predict(model, X, batch_size=8, device=device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float32
-	assert_array_almost_equal(y[:4], [
+		[ 0.4629]]),
+	(Conv2DExpand, [
 		[ 0.0659],
 		[ 0.0002],
 		[-0.0613],
-		[-0.0342]], 4)
-	assert_array_almost_equal(y, model(X.to(device)).cpu().detach(), 4)
-
-
-def test_predict_custom_linear(X, device):
-	torch.manual_seed(0)
-	model = CustomLinear().to(device)
-	y = predict(model, X, batch_size=8, device=device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float32
-	assert_array_almost_equal(y[:4], [
+		[-0.0342]]),
+	(CustomLinear, [
 		[-0.0962],
 		[ 0.2408],
 		[ 0.1910],
-		[ 0.2657]], 4)
-	assert_array_almost_equal(y, model(X.to(device)).cpu().detach(), 4)
-
-
-def test_predict_custom_sqrt(X, device):
-	torch.manual_seed(0)
-	model = CustomSqrt().to(device)
-	y = predict(model, X, batch_size=8, device=device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float32
-	assert_array_almost_equal(y[:4], [
+		[ 0.2657]]),
+	(CustomSqrt, [
 		[-0.2022],
 		[-0.1220],
 		[-0.1642],
-		[-0.1508]], 4)
-	assert_array_almost_equal(y, model(X.to(device)).cpu().detach(), 4)
-
-
-def test_predict_dilated_conv(X, device):
-	torch.manual_seed(0)
-	model = DilatedConv().to(device)
-	y = predict(model, X, batch_size=8, device=device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float32
-	assert_array_almost_equal(y[:4], [
+		[-0.1508]]),
+	(DilatedConv, [
 		[0.0683],
 		[0.0574],
 		[0.0644],
-		[0.0379]], 4)
-	assert_array_almost_equal(y, model(X.to(device)).cpu().detach(), 4)
-
-
-def test_predict_conv_batch_norm(X, device):
-	torch.manual_seed(0)
-	model = ConvBatchNorm().to(device).eval()
-	y = predict(model, X, batch_size=8, device=device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float32
-	assert_array_almost_equal(y[:4], [
+		[0.0379]]),
+	(lambda: ConvBatchNorm().eval(), [
 		[ 0.0440],
 		[-0.0024],
 		[ 0.0094],
-		[ 0.0306]], 4)
-	assert_array_almost_equal(y, model(X.to(device)).cpu().detach(), 4)
-
-
-def test_predict_conv_layer_norm(X, device):
-	torch.manual_seed(0)
-	model = ConvLayerNorm().to(device)
-	y = predict(model, X, batch_size=8, device=device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float32
-	assert_array_almost_equal(y[:4], [
+		[ 0.0306]]),
+	(ConvLayerNorm, [
 		[ 0.2170],
 		[ 0.3098],
 		[-0.6040],
-		[-0.1358]], 4)
-	assert_array_almost_equal(y, model(X.to(device)).cpu().detach(), 4)
-
-
-def test_predict_multi_activation(X, device):
+		[-0.1358]]),
+	(MultiActivation, [
+		[0.0712],
+		[0.0853],
+		[0.0732],
+		[0.0559]])
+], ids=[
+	"ResidualConv", "Transformer", "Conv2DExpand", "CustomLinear",
+	"CustomSqrt", "DilatedConv", "ConvBatchNorm", "ConvLayerNorm",
+	"MultiActivation"])
+def test_predict_architectures(X, model_factory, expected, device):
 	torch.manual_seed(0)
-	model = MultiActivation().to(device)
+	model = model_factory().to(device)
 	y = predict(model, X, batch_size=8, device=device)
 
 	assert y.shape == (64, 1)
 	assert y.dtype == torch.float32
-	assert_array_almost_equal(y[:4], [
-		[0.0712],
-		[0.0853],
-		[0.0732],
-		[0.0559]], 4)
+	assert_array_almost_equal(y[:4], expected, 4)
 	assert_array_almost_equal(y, model(X.to(device)).cpu().detach(), 4)
 
 
@@ -472,107 +375,82 @@ def test_predict_multi_input_multi_output(X, alpha, beta, device):
 # autocast path or the underlying GPU kernels.
 
 
-def test_predict_summodel_fp16(X, cuda_device):
+@pytest.mark.parametrize("dtype, decimal", [(torch.float16, 3),
+	(torch.bfloat16, 2)], ids=["fp16", "bf16"])
+def test_predict_summodel_low_precision(X, dtype, decimal, cuda_device):
 	torch.manual_seed(0)
 	model = SumModel().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
+	y = predict(model, X, batch_size=8, dtype=dtype, device=cuda_device)
 
 	# torch.autocast promotes reduction ops like .sum() to fp32 for numerical
-	# stability, so y comes back in fp32 even when fp16 was requested.
+	# stability, so y comes back in fp32 even when fp16 or bf16 was requested.
 	assert y.shape == (64, 4)
 	assert y.dtype == torch.float32
 	assert_array_almost_equal(y[:4], [
 		[25., 24., 19., 32.],
 		[26., 18., 29., 27.],
 		[28., 25., 21., 26.],
-		[21., 33., 19., 27.]], 3)
+		[21., 33., 19., 27.]], decimal)
 
 
-def test_predict_summodel_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = SumModel().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	# torch.autocast promotes reduction ops like .sum() to fp32 for numerical
-	# stability, so y comes back in fp32 even when bf16 was requested.
-	assert y.shape == (64, 4)
-	assert y.dtype == torch.float32
-	assert_array_almost_equal(y[:4], [
-		[25., 24., 19., 32.],
-		[26., 18., 29., 27.],
-		[28., 25., 21., 26.],
-		[21., 33., 19., 27.]], 2)
-
-
-def test_predict_flattendense_fp16(X, cuda_device):
-	torch.manual_seed(0)
-	model = FlattenDense().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
-
-	assert y.shape == (64, 3)
-	assert y.dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
+@pytest.mark.parametrize("dtype, expected, decimal", [
+	(torch.float16, [
 		[ 0.1927,  0.2788, -0.1000],
 		[-0.0505,  0.0174, -0.1750],
 		[-0.1409,  0.0106,  0.0673],
-		[-0.2374, -0.0069,  0.0834]], 3)
-
-
-def test_predict_flattendense_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = FlattenDense().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 3)
-	assert y.dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
+		[-0.2374, -0.0069,  0.0834]], 3),
+	(torch.bfloat16, [
 		[ 0.1934,  0.2793, -0.1001],
 		[-0.0508,  0.0179, -0.1748],
 		[-0.1416,  0.0112,  0.0669],
 		[-0.2373, -0.0070,  0.0835]], 2)
-
-
-def test_predict_conv_fp16(X, cuda_device):
+], ids=["fp16", "bf16"])
+def test_predict_flattendense_low_precision(X, dtype, expected, decimal,
+	cuda_device):
 	torch.manual_seed(0)
-	model = Conv().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
+	model = FlattenDense().to(cuda_device)
+	y = predict(model, X, batch_size=8, dtype=dtype, device=cuda_device)
 
-	assert y.shape == (64, 12, 98)
-	assert y.dtype == torch.float16
+	assert y.shape == (64, 3)
+	assert y.dtype == dtype
 	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:2, :2, :4].float(), [
+	assert_array_almost_equal(y[:4].float(), expected, decimal)
+
+
+@pytest.mark.parametrize("dtype, expected, decimal", [
+	(torch.float16, [
 		[[-0.2712, -0.5317, -0.3735, -0.4053],
 		 [-0.2988,  0.0980, -0.1013, -0.2561]],
 
 		[[-0.4805, -0.1667, -0.5859, -0.0536],
-		 [-0.3708, -0.3076, -0.5913,  0.0166]]], 3)
-
-
-def test_predict_conv_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = Conv().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 12, 98)
-	assert y.dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:2, :2, :4].float(), [
+		 [-0.3708, -0.3076, -0.5913,  0.0166]]], 3),
+	(torch.bfloat16, [
 		[[-0.2715, -0.5312, -0.3750, -0.4062],
 		 [-0.2988,  0.0977, -0.1016, -0.2559]],
 
 		[[-0.4805, -0.1670, -0.5859, -0.0537],
 		 [-0.3711, -0.3086, -0.5898,  0.0156]]], 2)
+], ids=["fp16", "bf16"])
+def test_predict_conv_low_precision(X, dtype, expected, decimal, cuda_device):
+	torch.manual_seed(0)
+	model = Conv().to(cuda_device)
+	y = predict(model, X, batch_size=8, dtype=dtype, device=cuda_device)
+
+	assert y.shape == (64, 12, 98)
+	assert y.dtype == dtype
+	assert next(model.parameters()).dtype == torch.float32
+	assert_array_almost_equal(y[:2, :2, :4].float(), expected, decimal)
 
 
-def test_predict_scatter_fp16(X, cuda_device):
+@pytest.mark.parametrize("dtype, decimal", [(torch.float16, 3),
+	(torch.bfloat16, 2)], ids=["fp16", "bf16"])
+def test_predict_scatter_low_precision(X, dtype, decimal, cuda_device):
 	torch.manual_seed(0)
 	model = Scatter().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
+	y = predict(model, X, batch_size=8, dtype=dtype, device=cuda_device)
 
 	assert y.shape == (64, 100, 4)
-	assert y.dtype == torch.float16
+	assert y.dtype == dtype
 	# Scatter just permutes, so values are unchanged at any precision.
 	assert_array_almost_equal(y[:2, :3, :4].float(), [
 		[[1., 0., 0., 0.],
@@ -581,451 +459,225 @@ def test_predict_scatter_fp16(X, cuda_device):
 
 		[[0., 1., 0., 0.],
 		 [0., 0., 1., 0.],
-		 [1., 0., 0., 0.]]], 3)
+		 [1., 0., 0., 0.]]], decimal)
 
 
-def test_predict_scatter_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = Scatter().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 100, 4)
-	assert y.dtype == torch.bfloat16
-	assert_array_almost_equal(y[:2, :3, :4].float(), [
-		[[1., 0., 0., 0.],
-		 [0., 0., 0., 1.],
-		 [0., 1., 0., 0.]],
-
-		[[0., 1., 0., 0.],
-		 [0., 0., 1., 0.],
-		 [1., 0., 0., 0.]]], 2)
-
-
-def test_predict_convdense_fp16(X, cuda_device):
-	torch.manual_seed(0)
-	model = ConvDense().to(cuda_device)
-	y = predict(model, X, batch_size=2, dtype=torch.float16, device=cuda_device)
-
-	assert len(y) == 2
-	assert y[0].shape == (64, 12, 98)
-	assert y[1].shape == (64, 3)
-	assert y[0].dtype == torch.float16
-	assert y[1].dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[0][:2, :2, :4].float(), [
+@pytest.mark.parametrize("dtype, expected0, expected1, decimal", [
+	(torch.float16, [
 		[[-0.7759,  0.0397, -0.8799, -1.0186],
 		 [ 0.0947,  0.2042, -0.2301, -0.3147]],
 
 		[[-0.6675, -0.8872, -0.8696, -0.4683],
-		 [-0.0768, -0.0090,  0.0243,  0.1355]]], 3)
-	assert_array_almost_equal(y[1][:4].float(), [
+		 [-0.0768, -0.0090,  0.0243,  0.1355]]], [
 		[ 0.1927,  0.2788, -0.1000],
 		[-0.0505,  0.0174, -0.1750],
 		[-0.1409,  0.0106,  0.0673],
-		[-0.2374, -0.0069,  0.0834]], 3)
-
-
-def test_predict_convdense_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = ConvDense().to(cuda_device)
-	y = predict(model, X, batch_size=2, dtype=torch.bfloat16, device=cuda_device)
-
-	assert len(y) == 2
-	assert y[0].shape == (64, 12, 98)
-	assert y[1].shape == (64, 3)
-	assert y[0].dtype == torch.bfloat16
-	assert y[1].dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[0][:2, :2, :4].float(), [
+		[-0.2374, -0.0069,  0.0834]], 3),
+	(torch.bfloat16, [
 		[[-0.7773,  0.0400, -0.8789, -1.0234],
 		 [ 0.0942,  0.2041, -0.2314, -0.3145]],
 
 		[[-0.6680, -0.8867, -0.8672, -0.4688],
-		 [-0.0771, -0.0089,  0.0238,  0.1357]]], 2)
-	assert_array_almost_equal(y[1][:4].float(), [
+		 [-0.0771, -0.0089,  0.0238,  0.1357]]], [
 		[ 0.1934,  0.2773, -0.1001],
 		[-0.0510,  0.0179, -0.1758],
 		[-0.1416,  0.0112,  0.0664],
 		[-0.2363, -0.0071,  0.0830]], 2)
-
-
-def test_predict_residual_conv_fp16(X, cuda_device):
+], ids=["fp16", "bf16"])
+def test_predict_convdense_low_precision(X, dtype, expected0, expected1,
+	decimal, cuda_device):
 	torch.manual_seed(0)
-	model = ResidualConv().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[-0.4900],
-		[ 0.0663],
-		[-0.6025],
-		[-0.1464]], 3)
-
-
-def test_predict_residual_conv_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = ResidualConv().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[-0.4883],
-		[ 0.0664],
-		[-0.6016],
-		[-0.1475]], 2)
-
-
-def test_predict_transformer_fp16(X, cuda_device):
-	torch.manual_seed(0)
-	model = Transformer().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[-0.5059],
-		[ 0.7588],
-		[-0.1565],
-		[ 0.4629]], 3)
-
-
-def test_predict_transformer_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = Transformer().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[-0.5039],
-		[ 0.7578],
-		[-0.1572],
-		[ 0.4629]], 2)
-
-
-def test_predict_conv2d_expand_fp16(X, cuda_device):
-	torch.manual_seed(0)
-	model = Conv2DExpand().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[ 0.0658],
-		[ 0.0003],
-		[-0.0614],
-		[-0.0342]], 3)
-
-
-def test_predict_conv2d_expand_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = Conv2DExpand().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[ 0.0659],
-		[ 0.0002],
-		[-0.0623],
-		[-0.0337]], 2)
-
-
-def test_predict_custom_linear_fp16(X, cuda_device):
-	torch.manual_seed(0)
-	model = CustomLinear().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[-0.0962],
-		[ 0.2407],
-		[ 0.1909],
-		[ 0.2659]], 3)
-
-
-def test_predict_custom_linear_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = CustomLinear().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[-0.0967],
-		[ 0.2412],
-		[ 0.1904],
-		[ 0.2656]], 2)
-
-
-def test_predict_custom_sqrt_fp16(X, cuda_device):
-	torch.manual_seed(0)
-	model = CustomSqrt().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[-0.2020],
-		[-0.1216],
-		[-0.1644],
-		[-0.1508]], 3)
-
-
-def test_predict_custom_sqrt_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = CustomSqrt().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[-0.2002],
-		[-0.1240],
-		[-0.1611],
-		[-0.1514]], 2)
-
-
-def test_predict_dilated_conv_fp16(X, cuda_device):
-	torch.manual_seed(0)
-	model = DilatedConv().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[0.0682],
-		[0.0574],
-		[0.0643],
-		[0.0378]], 3)
-
-
-def test_predict_dilated_conv_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = DilatedConv().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[0.0679],
-		[0.0574],
-		[0.0645],
-		[0.0376]], 2)
-
-
-def test_predict_conv_batch_norm_fp16(X, cuda_device):
-	torch.manual_seed(0)
-	model = ConvBatchNorm().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[ 0.0439],
-		[-0.0023],
-		[ 0.0093],
-		[ 0.0305]], 3)
-
-
-def test_predict_conv_batch_norm_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = ConvBatchNorm().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[ 0.0439],
-		[-0.0020],
-		[ 0.0095],
-		[ 0.0306]], 2)
-
-
-def test_predict_conv_layer_norm_fp16(X, cuda_device):
-	torch.manual_seed(0)
-	model = ConvLayerNorm().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[ 0.2172],
-		[ 0.3096],
-		[-0.6040],
-		[-0.1360]], 3)
-
-
-def test_predict_conv_layer_norm_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = ConvLayerNorm().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[ 0.2168],
-		[ 0.3105],
-		[-0.6055],
-		[-0.1367]], 2)
-
-
-def test_predict_multi_activation_fp16(X, cuda_device):
-	torch.manual_seed(0)
-	model = MultiActivation().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[0.0712],
-		[0.0853],
-		[0.0731],
-		[0.0558]], 3)
-
-
-def test_predict_multi_activation_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = MultiActivation().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[0.0703],
-		[0.0854],
-		[0.0723],
-		[0.0562]], 2)
-
-
-def test_predict_dropout_conv_fp16(X, cuda_device):
-	torch.manual_seed(0)
-	model = DropoutConv().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.float16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.float16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[ 0.0921],
-		[ 0.1210],
-		[-0.1930],
-		[-0.0334]], 3)
-
-
-def test_predict_dropout_conv_bf16(X, cuda_device):
-	torch.manual_seed(0)
-	model = DropoutConv().to(cuda_device)
-	y = predict(model, X, batch_size=8, dtype=torch.bfloat16, device=cuda_device)
-
-	assert y.shape == (64, 1)
-	assert y.dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[:4].float(), [
-		[ 0.0923],
-		[ 0.1211],
-		[-0.1934],
-		[-0.0334]], 2)
-
-
-def test_predict_multi_input_multi_output_fp16(X, alpha, beta, cuda_device):
-	torch.manual_seed(0)
-	model = MultiInputMultiOutput().to(cuda_device)
-	y = predict(model, X, args=(alpha, beta), batch_size=8,
-		dtype=torch.float16, device=cuda_device)
+	model = ConvDense().to(cuda_device)
+	y = predict(model, X, batch_size=2, dtype=dtype, device=cuda_device)
 
 	assert len(y) == 2
 	assert y[0].shape == (64, 12, 98)
 	assert y[1].shape == (64, 3)
-	assert y[0].dtype == torch.float16
-	assert y[1].dtype == torch.float16
+	assert y[0].dtype == dtype
+	assert y[1].dtype == dtype
 	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[0][:2, :3, :4].float(), [
+	assert_array_almost_equal(y[0][:2, :2, :4].float(), expected0, decimal)
+	assert_array_almost_equal(y[1][:4].float(), expected1, decimal)
+
+
+@pytest.mark.parametrize("model_class, dtype, expected, decimal", [
+	(ResidualConv, torch.float16, [
+		[-0.4900],
+		[ 0.0663],
+		[-0.6025],
+		[-0.1464]], 3),
+	(ResidualConv, torch.bfloat16, [
+		[-0.4883],
+		[ 0.0664],
+		[-0.6016],
+		[-0.1475]], 2),
+	(Transformer, torch.float16, [
+		[-0.5059],
+		[ 0.7588],
+		[-0.1565],
+		[ 0.4629]], 3),
+	(Transformer, torch.bfloat16, [
+		[-0.5039],
+		[ 0.7578],
+		[-0.1572],
+		[ 0.4629]], 2),
+	(Conv2DExpand, torch.float16, [
+		[ 0.0658],
+		[ 0.0003],
+		[-0.0614],
+		[-0.0342]], 3),
+	(Conv2DExpand, torch.bfloat16, [
+		[ 0.0659],
+		[ 0.0002],
+		[-0.0623],
+		[-0.0337]], 2),
+	(CustomLinear, torch.float16, [
+		[-0.0962],
+		[ 0.2407],
+		[ 0.1909],
+		[ 0.2659]], 3),
+	(CustomLinear, torch.bfloat16, [
+		[-0.0967],
+		[ 0.2412],
+		[ 0.1904],
+		[ 0.2656]], 2),
+	(CustomSqrt, torch.float16, [
+		[-0.2020],
+		[-0.1216],
+		[-0.1644],
+		[-0.1508]], 3),
+	(CustomSqrt, torch.bfloat16, [
+		[-0.2002],
+		[-0.1240],
+		[-0.1611],
+		[-0.1514]], 2),
+	(DilatedConv, torch.float16, [
+		[0.0682],
+		[0.0574],
+		[0.0643],
+		[0.0378]], 3),
+	(DilatedConv, torch.bfloat16, [
+		[0.0679],
+		[0.0574],
+		[0.0645],
+		[0.0376]], 2),
+	(ConvBatchNorm, torch.float16, [
+		[ 0.0439],
+		[-0.0023],
+		[ 0.0093],
+		[ 0.0305]], 3),
+	(ConvBatchNorm, torch.bfloat16, [
+		[ 0.0439],
+		[-0.0020],
+		[ 0.0095],
+		[ 0.0306]], 2),
+	(ConvLayerNorm, torch.float16, [
+		[ 0.2172],
+		[ 0.3096],
+		[-0.6040],
+		[-0.1360]], 3),
+	(ConvLayerNorm, torch.bfloat16, [
+		[ 0.2168],
+		[ 0.3105],
+		[-0.6055],
+		[-0.1367]], 2),
+	(MultiActivation, torch.float16, [
+		[0.0712],
+		[0.0853],
+		[0.0731],
+		[0.0558]], 3),
+	(MultiActivation, torch.bfloat16, [
+		[0.0703],
+		[0.0854],
+		[0.0723],
+		[0.0562]], 2),
+	(DropoutConv, torch.float16, [
+		[ 0.0921],
+		[ 0.1210],
+		[-0.1930],
+		[-0.0334]], 3),
+	(DropoutConv, torch.bfloat16, [
+		[ 0.0923],
+		[ 0.1211],
+		[-0.1934],
+		[-0.0334]], 2)
+], ids=[
+	"ResidualConv-fp16", "ResidualConv-bf16", "Transformer-fp16",
+	"Transformer-bf16", "Conv2DExpand-fp16", "Conv2DExpand-bf16",
+	"CustomLinear-fp16", "CustomLinear-bf16", "CustomSqrt-fp16",
+	"CustomSqrt-bf16", "DilatedConv-fp16", "DilatedConv-bf16",
+	"ConvBatchNorm-fp16", "ConvBatchNorm-bf16", "ConvLayerNorm-fp16",
+	"ConvLayerNorm-bf16", "MultiActivation-fp16", "MultiActivation-bf16",
+	"DropoutConv-fp16", "DropoutConv-bf16"])
+def test_predict_architectures_low_precision(X, model_class, dtype, expected,
+	decimal, cuda_device):
+	torch.manual_seed(0)
+	model = model_class().to(cuda_device)
+	y = predict(model, X, batch_size=8, dtype=dtype, device=cuda_device)
+
+	assert y.shape == (64, 1)
+	assert y.dtype == dtype
+	assert next(model.parameters()).dtype == torch.float32
+	assert_array_almost_equal(y[:4].float(), expected, decimal)
+
+
+@pytest.mark.parametrize("dtype, expected0, expected1, decimal", [
+	(torch.float16, [
 		[[ 1.4922,  1.2324,  1.3906,  1.3584],
 		 [ 1.4648,  1.8613,  1.6621,  1.5078],
 		 [ 1.6387,  1.9072,  1.4531,  1.4414]],
 
 		[[-0.0803,  0.2334, -0.1858,  0.3467],
 		 [ 0.0293,  0.0925, -0.1912,  0.4167],
-		 [ 0.8398,  0.2444,  0.6099,  0.3071]]], 3)
-	assert_array_almost_equal(y[1][:4].float(), [
+		 [ 0.8398,  0.2444,  0.6099,  0.3071]]], [
 		[-0.4006,  0.1458,  0.0229],
 		[-0.0359, -0.2302, -0.0822],
 		[-0.0012, -0.0975,  0.1534],
-		[-0.1794, -0.3792, -0.0308]], 3)
-
-
-def test_predict_multi_input_multi_output_bf16(X, alpha, beta, cuda_device):
-	torch.manual_seed(0)
-	model = MultiInputMultiOutput().to(cuda_device)
-	y = predict(model, X, args=(alpha, beta), batch_size=8,
-		dtype=torch.bfloat16, device=cuda_device)
-
-	assert len(y) == 2
-	assert y[0].shape == (64, 12, 98)
-	assert y[1].shape == (64, 3)
-	assert y[0].dtype == torch.bfloat16
-	assert y[1].dtype == torch.bfloat16
-	assert next(model.parameters()).dtype == torch.float32
-	assert_array_almost_equal(y[0][:2, :3, :4].float(), [
+		[-0.1794, -0.3792, -0.0308]], 3),
+	(torch.bfloat16, [
 		[[ 1.4922,  1.2344,  1.3906,  1.3594],
 		 [ 1.4688,  1.8594,  1.6641,  1.5078],
 		 [ 1.6406,  1.9062,  1.4531,  1.4375]],
 
 		[[-0.0801,  0.2334, -0.1855,  0.3477],
 		 [ 0.0293,  0.0918, -0.1895,  0.4160],
-		 [ 0.8398,  0.2451,  0.6094,  0.3086]]], 2)
-	assert_array_almost_equal(y[1][:4].float(), [
+		 [ 0.8398,  0.2451,  0.6094,  0.3086]]], [
 		[-0.4023,  0.1455,  0.0236],
 		[-0.0359, -0.2305, -0.0820],
 		[-0.0011, -0.0972,  0.1533],
 		[-0.1797, -0.3789, -0.0310]], 2)
+], ids=["fp16", "bf16"])
+def test_predict_multi_input_multi_output_low_precision(X, alpha, beta, dtype,
+	expected0, expected1, decimal, cuda_device):
+	torch.manual_seed(0)
+	model = MultiInputMultiOutput().to(cuda_device)
+	y = predict(model, X, args=(alpha, beta), batch_size=8,
+		dtype=dtype, device=cuda_device)
+
+	assert len(y) == 2
+	assert y[0].shape == (64, 12, 98)
+	assert y[1].shape == (64, 3)
+	assert y[0].dtype == dtype
+	assert y[1].dtype == dtype
+	assert next(model.parameters()).dtype == torch.float32
+	assert_array_almost_equal(y[0][:2, :3, :4].float(), expected0, decimal)
+	assert_array_almost_equal(y[1][:4].float(), expected1, decimal)
 
 
 ###
 
 
-def test_predict_func_identity(X, device):
+@pytest.mark.parametrize("func, shape", [(lambda y: y, (64, 3)),
+	(lambda y: y[:, 0], (64,))], ids=["identity", "projection"])
+def test_predict_func(X, func, shape, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 
 	y_default = predict(model, X, batch_size=8, device=device)
-	y_func = predict(model, X, batch_size=8, device=device, func=lambda y: y)
+	y_func = predict(model, X, batch_size=8, device=device, func=func)
 
-	assert_array_almost_equal(y_default, y_func)
-
-
-def test_predict_func_projection(X, device):
-	torch.manual_seed(0)
-	model = FlattenDense()
-
-	y_default = predict(model, X, batch_size=8, device=device)
-	y_proj = predict(model, X, batch_size=8, device=device,
-		func=lambda y: y[:, 0])
-
-	assert y_proj.shape == (64,)
-	assert_array_almost_equal(y_proj, y_default[:, 0])
+	assert y_func.shape == shape
+	assert_array_almost_equal(y_func, func(y_default))
 
 
 def test_predict_verbose(X, device):
@@ -1049,15 +701,6 @@ def test_predict_batch_size_zero(X, device):
 	model = FlattenDense()
 
 	assert_raises(ValueError, predict, model, X, batch_size=0, device=device)
-
-
-def test_predict_convdense_returns_list(X, device):
-	torch.manual_seed(0)
-	model = ConvDense()
-	y = predict(model, X, batch_size=8, device=device)
-
-	assert isinstance(y, list)
-	assert len(y) == 2
 
 
 ###

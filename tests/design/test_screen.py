@@ -2,6 +2,7 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import torch
+import pytest
 
 from tangermeme.utils import random_one_hot
 from tangermeme.predict import predict
@@ -136,40 +137,18 @@ def test_screen_no_y(device):
 	assert_array_almost_equal(y_hat, [[-0.085115]])
 
 
-def test_screen_custom_func(device):
-	torch.manual_seed(0)
-	def onlyAs(shape, random_state):
-		return random_one_hot(shape, probs=[1.0, 0.0, 0.0, 0.0])
-	
-	model = SmallDeepSEA()
-	y = [10]
-	
-	X_hat = screen(model, (4, 100), y, device=device, max_iter=10, 
-		random_state=0, func=onlyAs)
-
-	assert X_hat.shape == (1, 4, 100)
-	assert X_hat.dtype == torch.int8
-	assert all(torch.unique(X_hat) == torch.tensor([0, 1], dtype=torch.int8))
-
-	assert_array_almost_equal(X_hat[:, :, :20], [
-		[[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]
-	])
-
-	y_hat = predict(model, X_hat, device=device)
-
-	assert_array_almost_equal(y_hat, [[-0.0841]], 4)
-
-
-def test_screen_custom_kwargs(device):
+@pytest.mark.parametrize("kwargs", [
+	dict(max_iter=10, random_state=0, func=lambda shape, random_state:
+		random_one_hot(shape, probs=[1.0, 0.0, 0.0, 0.0])),
+	dict(max_iter=1, additional_func_kwargs={'probs': [1, 0, 0, 0]})
+], ids=["func", "additional_func_kwargs"])
+def test_screen_custom_func(kwargs, device):
+	# Both draw only all-A sequences.
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [10]
 	
-	X_hat = screen(model, (4, 100), y, device=device, max_iter=1, 
-		additional_func_kwargs={'probs': [1, 0, 0, 0]})
+	X_hat = screen(model, (4, 100), y, device=device, **kwargs)
 
 	assert X_hat.shape == (1, 4, 100)
 	assert X_hat.dtype == torch.int8
@@ -194,19 +173,6 @@ def test_screen_raises(device):
 	
 	assert_raises(ValueError, screen, model, (1, 4, 100), y, device=device)
 	assert_raises(ValueError, screen, model, (100,), y, device=device)
-
-
-def test_screen_random_state_reproducibility(device):
-	torch.manual_seed(0)
-	model = SmallDeepSEA()
-	y = [10]
-
-	X_hat0 = screen(model, (4, 100), y, device=device, max_iter=1,
-		random_state=0)
-	X_hat1 = screen(model, (4, 100), y, device=device, max_iter=1,
-		random_state=0)
-
-	assert_array_almost_equal(X_hat0, X_hat1)
 
 
 def test_screen_packed(device):
