@@ -750,6 +750,24 @@ def test_randomize_full_sequence(X):
 	assert X_rand.sum() == X.sum()
 
 
+def test_randomize_genome_probs(X):
+	# Four decimals that sum to 1 in float64 but not after a float32 cast.
+	probs = [[0.295, 0.205, 0.205, 0.295]]
+	X_rand = randomize(X, start=10, end=30, probs=probs, random_state=0)
+	assert X_rand.shape == (X.shape[0], 1, 4, X.shape[-1])
+	assert_array_almost_equal(X_rand[:, 0, :, :10], X[:, :, :10])
+	assert_array_almost_equal(X_rand[:, 0, :, 30:], X[:, :, 30:])
+	assert torch.all(X_rand[:, 0, :, 10:30].sum(dim=1) == 1)
+
+	X_rand2 = randomize(X, start=10, end=30, probs=torch.tensor(probs,
+		dtype=torch.float32), random_state=0)
+	assert_array_almost_equal(X_rand, X_rand2)
+
+	X_rand3 = randomize(X, start=10, end=30, probs=numpy.array(probs),
+		random_state=0)
+	assert_array_almost_equal(X_rand, X_rand3)
+
+
 def test_randomize_raises_probs(X):
 	assert_raises(ValueError, randomize, X, start=5, end=10,
 		probs=[[0.1, 0.8, 0.1]])

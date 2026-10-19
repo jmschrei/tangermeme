@@ -1841,10 +1841,11 @@ def recursive_seqlets(
 		fields = _recursive_seqlet_decode_fields(X, rcdfs, xmin, bin_width,
 			threshold, min_seqlet_len, max_seqlet_len, additional_flanks, n_bins)
 
-	# A frame of no seqlets is built from no rows, which gives it object
-	# columns.
 	if fields is None or fields[0].shape[0] == 0:
-		seqlets = pandas.DataFrame([], columns=columns)
+		dtypes = [numpy.int64, numpy.int64, numpy.int64, numpy.float64,
+			numpy.float64]
+		seqlets = pandas.DataFrame({name: numpy.array([], dtype=dtype)
+			for name, dtype in zip(columns, dtypes)})
 	else:
 		seqlets = pandas.DataFrame(dict(zip(columns, fields)))
 

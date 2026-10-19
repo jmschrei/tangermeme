@@ -489,7 +489,9 @@ def randomize(
 		torch tensor. The shape of this matrix is either (1, len(alphabet)) or
 		(len(X), len(alphabet)), and is interpreted as either having the same
 		probabilities across all examples or an example-specific set of
-		probabilities. Default is [[0.25, 0.25, 0.25, 0.25]].
+		probabilities. Each row must sum to 1 within 1e-6 and is renormalized
+		to sum to exactly 1, so float32 rounding does not reject it.
+		Default is [[0.25, 0.25, 0.25, 0.25]].
 
 	n: int, optional
 		The number of times to shuffle that region. Default is 1.
@@ -513,14 +515,20 @@ def randomize(
 		substitution.
 	"""
 
-	if not isinstance(probs, torch.Tensor):
-		probs = torch.tensor(probs)
+	probs = torch.as_tensor(probs, dtype=torch.float64)
 
 	if not isinstance(random_state, numpy.random.RandomState):
 		random_state = numpy.random.RandomState(random_state)
 
 	_validate_input(X, "X", ohe=True, allow_N=True)
 	_validate_input(probs, "Probs", shape=(-1, -1), min_value=0, max_value=1)
+
+	# numpy's draw rejects a row whose sum is off by float32 rounding, so a
+	# row within tolerance is renormalized to sum to exactly 1.
+	if (probs.sum(dim=1) - 1).abs().max() > 1e-6:
+		raise ValueError("Each row of probs must sum to 1.")
+
+	probs = probs / probs.sum(dim=1, keepdim=True)
 
 	if end <= start:
 		raise ValueError("End must come after start.")

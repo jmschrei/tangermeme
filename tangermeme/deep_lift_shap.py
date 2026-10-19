@@ -625,11 +625,13 @@ def deep_lift_shap(
 		character has a non-zero attribution at each position. Default is False.
 
 	warning_threshold: float, optional
-		A threshold on the convergence delta that will always raise a warning
-		if the delta is larger than it. Normal deltas are in the range of
-		1e-6 to 1e-8. Note that convergence deltas are calculated on the
-		gradients prior to the aggr_func being applied to them. Default 
-		is 0.001. 
+		An absolute threshold on the convergence delta of each example-reference
+		pair that raises a warning when a delta exceeds it. Normal deltas are in
+		the range of 1e-6 to 1e-8. Because it is absolute, a model whose
+		outputs are small can exceed it by a large fraction without a warning,
+		so a second warning, not controlled by this value, is raised when the
+		mean delta of a batch exceeds 1% of the mean absolute output
+		difference. Default is 0.001.
 
 	additional_nonlinear_ops: dict or None, optional
 		If additional nonlinear ops need to be added to the dictionary of
@@ -667,10 +669,13 @@ def deep_lift_shap(
 		is None.
 
 	random_state: int or None, optional
-		The random seed to use to ensure determinism. Must be an int (or None);
-		the value is added to per-shuffle offsets when calling `references`, so
-		`numpy.random.RandomState` instances are not supported here. If None,
-		the process is not deterministic. Default is None.
+		The random seed for the references: reference `k` of every example is
+		drawn with seed `random_state + k`, so the references are the same on
+		every call. Must be an int (or None); `numpy.random.RandomState`
+		instances are not supported here. The seed does not fix the kernels: on
+		a GPU two calls can differ at the 1e-8 to 1e-5 level unless
+		`torch.backends.cudnn.deterministic` is set. If None, the references
+		differ on every call. Default is None.
 
 	verbose: bool, optional
 		Whether to display a progress bar. Default is False.
@@ -799,6 +804,18 @@ def deep_lift_shap(
 				if torch.any(convergence_deltas > warning_threshold):
 					warnings.warn("Convergence deltas too high: " +   
 						str(convergence_deltas), RuntimeWarning)
+
+				# An absolute threshold says nothing about a model whose outputs
+				# are small, so the deltas are also compared with the output
+				# differences they should match.
+				relative = convergence_deltas.mean() / output_diff.abs().mean(
+					).clamp_min(1e-12)
+				if relative > 0.01:
+					warnings.warn("Convergence deltas are {:.1%} of the output "
+						"differences: an operation in the model has no DeepLIFT "
+						"rule and is being treated as linear. See "
+						"additional_nonlinear_ops.".format(relative.item()),
+						RuntimeWarning)
 					
 				if print_convergence_deltas:
 					print(convergence_deltas)

@@ -4721,3 +4721,44 @@ def test_deep_lift_shap_packed_mixed_references(X, func, device):
 	assert isinstance(refs_packed, torch.Tensor)
 	assert refs_packed.dtype == refs.dtype
 	assert torch.equal(refs_packed, refs)
+
+
+##
+
+
+class _Scaled(torch.nn.Module):
+	def __init__(self, model, scale):
+		super().__init__()
+		self.model = model
+		self.scale = scale
+
+	def forward(self, X):
+		return self.model(X) * self.scale
+
+
+def test_deep_lift_shap_relative_convergence_warning():
+	# Outputs scaled to 1e-4 keep every delta under the absolute threshold,
+	# so only the relative check can report the unhooked functional softmax
+	# and product in the shipped form of ConvAttentionPool.
+	X = random_one_hot((8, 4, 100), random_state=0).type(torch.float32)
+	torch.manual_seed(0)
+	model = _Scaled(ConvAttentionPool(hookable=False), 1e-4)
+
+	with warnings.catch_warnings(record=True) as caught:
+		warnings.simplefilter("always")
+		deep_lift_shap(model, X, device='cpu', random_state=0, n_shuffles=3,
+			warning_threshold=1e-3)
+
+	messages = [str(c.message) for c in caught
+		if issubclass(c.category, RuntimeWarning)]
+	assert len(messages) > 0
+	assert all(m.startswith("Convergence deltas are") for m in messages)
+
+	torch.manual_seed(0)
+	model = _Scaled(ConvAttentionPool(hookable=True), 1e-4)
+	with warnings.catch_warnings(record=True) as caught:
+		warnings.simplefilter("always")
+		deep_lift_shap(model, X, device='cpu', random_state=0, n_shuffles=3,
+			warning_threshold=1e-3)
+
+	assert not any(issubclass(c.category, RuntimeWarning) for c in caught)

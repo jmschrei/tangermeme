@@ -1,106 +1,45 @@
-# Wrapping models for tangermeme
+# Wrapping models
 
-tangermeme is deliberately assumption-free, which pushes one requirement onto
-you: most analysis functions assume a model whose forward returns a **single
-tensor**. Wrapping is the productivity hack that makes everything else work.
-
-## The contracts
-
-- **Input layout:** `X` is `(batch, len(alphabet), length)` — default
-  `(batch, 4, length)` for DNA. Channels are the one-hot alphabet axis.
-- **Forward:** `y = model(X)` must work; broadcasting is supported where possible.
-- **Single tensor vs list:** `predict` tolerates a model that returns a *list* of
-  tensors (multi-output) and returns a list back. But `deep_lift_shap`,
-  `saturation_mutagenesis`, and `design` need a **single tensor** — wrap to pick
-  one head before calling them.
-- **target= vs wrapping:** if multiple outputs live in *one tensor*
-  `(batch, n_tasks)`, select with `target=`. If they are *separate tensors* in a
-  list, you must wrap to return just one.
-- **deep_lift_shap / pisa output shape:** both read outputs from axis 1
-  (`target=` indexes it; `pisa` explains every entry of it). Trailing axes of
-  length 1, such as a global pool leaves, are dropped; any other axis after
-  axis 1, such as a profile's length, raises `ValueError`. Wrap to sum, slice
-  or weight it (recipe below); for per-position `pisa`, return
-  `(batch, length)` for one task.
-
-## Recipe: select one output head
-
-```python
-import torch
-
-class TaskWrapper(torch.nn.Module):
-    def __init__(self, model, task):
-        super().__init__()
-        self.model = model
-        self.task = task
-
-    def forward(self, X, *args):
-        y = self.model(X, *args)          # may be a list or a multi-task tensor
-        return y[self.task]               # -> single tensor
-
-attr = deep_lift_shap(TaskWrapper(model, 0), X, target=0)
-```
-
-## Recipe: profile head -> scalar (e.g. BPNet counts)
-
-A common pattern is summing a profile to a total-count scalar, or cropping to a
-center window, so attribution/design has a single target to optimize:
+- `X` is `(batch, len(alphabet), length)`; `y = model(X)` must work.
+- `predict` accepts a model returning a list of tensors and returns a list;
+  `deep_lift_shap`, `pisa`, `saliency`, `saturation_mutagenesis` and
+  `design.*` need a single tensor. `deep_lift_shap` and `pisa` read it as
+  `(batch, n_outputs)`: `target=` indexes axis 1, `pisa` explains every
+  entry of it, trailing axes of length 1 are dropped, any other trailing
+  axis (a profile's length) raises `ValueError` naming the shape.
+- Several outputs in one tensor `(batch, n_tasks)`: select with `target=`.
+  Separate tensors in a list: wrap to return one.
+- Put preprocessing and head selection in the wrapper, not in a custom
+  `func`. `predict`, `deep_lift_shap`, `pisa`, `saturation_mutagenesis`,
+  `design.*` and `product.*` move the model to `device`, switch to eval,
+  run without gradients where appropriate, and restore device and mode
+  afterward. A sweep over N models keeps them on the CPU in a dict and
+  passes `device=` to each call; only one occupies the GPU at a time.
 
 ```python
 class CountWrapper(torch.nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
+	def __init__(self, model):
+		super().__init__()
+		self.model = model
 
-    def forward(self, X, *args):
-        profile, counts = self.model(X, *args)   # BPNet-style two heads
-        return profile.sum(dim=-1, keepdim=True) # or return counts
+	def forward(self, X, *args):
+		profile, counts = self.model(X, *args)   # BPNet-style heads
+		return counts                            # (batch, 1); or profile.sum(-1)
 ```
 
-## More recipes (from the "Wrappers are Productivity Hacks" vignette)
+Recipes that need a wrapper and the one trap in each:
 
-- **Reverse-complement averaging** — average predictions on `X` and its RC
-  (`torch.flip(X, dims=(-1, -2))`, flipping both length and the ACGT axis).
-  **Footgun:** this silently mishandles **stranded** outputs — those must also be
-  flipped along the output axis. It's only correct as-is for strand-agnostic outputs
-  (e.g. counts).
-- **Bake in a control track** — wrap a model that needs a control input so it
-  supplies an all-zeros control automatically, removing the need to thread `args=`.
-- **Concatenate inputs the function won't split** — when a function accepts only one
-  tensor (no `args=`), wrap the model to take a single concatenated tensor (e.g.
-  4-channel sequence + 2-channel control = 6 channels) and split it inside `forward`.
-- **Fix a non-standard layout** — some models (e.g. `enformer_pytorch`) expect
-  length-first input; wrap with `X.permute(0, 2, 1)`. Same place to do dict-indexed
-  outputs (`y['human']`) or bin-summing (`y.sum(dim=-2)`).
-- **Harmonize length across models** — pad or trim wrappers let you compare models
-  with different input windows on the same loci (also see
-  `references/comparing-models.md`). Padding with N pushes sequences
-  out-of-distribution if the model wasn't trained on N; trimming discards flanks.
-- **Squish N models into one** — a wrapper that runs several models and concatenates
-  their outputs feeds straight into `marginalize` / `saturation_mutagenesis` as a
-  single model. Wrappers stack: `CountWrapper(ControlWrapper(model))`.
+| wrapper | trap |
+|---|---|
+| reverse-complement averaging, `torch.flip(X, dims=(-1, -2))` | stranded outputs must be flipped along their output axis too; as written it is right only for strand-agnostic outputs |
+| bake in a zero control track so `args=` is not needed | cherimoya ships `ControlWrapper`, `LogCountWrapper`, `ProfileWrapper`; bpnet-lite ships `CountWrapper`, `ProfileWrapper` |
+| concatenate inputs into one tensor and split inside `forward` | for functions with no `args=` |
+| `X.permute(0, 2, 1)` for length-first models (`enformer_pytorch`); `y['human']`; `y.sum(dim=-2)` | |
+| pad or trim to compare input lengths on one locus set | padding with N is out of distribution; re-`extract_loci` at each model's `in_window` instead |
+| run several models and concatenate outputs | feeds `marginalize` or ISM as one model |
 
-## Multi-input models: use `args=`, don't bake inputs into the wrapper
-
-Extra model inputs (cell-state vectors, control tracks, etc.) flow through every
-tangermeme function via `args=(tensor, ...)`. The i-th example is paired with the
-i-th row of each arg, so each arg's batch dimension must match `X`. The wrapper's
-forward should accept `*args` and forward them:
-
-```python
-y = predict(model, X, args=(controls,), batch_size=64)
-```
-
-## What you do NOT need to handle
-
-`predict`, `deep_lift_shap`, `pisa`, `saturation_mutagenesis`, `design.*`, and
-`product.*` already move the model to `device`, switch to eval mode, run without
-gradients where appropriate, and restore the model's original device + training
-mode afterward. Your wrapper only needs a correct `forward`.
-
-## Related references
-
-`references/func-pattern.md` (how wrapped models flow through
-perturbations), `references/deep_lift_shap.md` and
-`references/saturation_mutagenesis.md` (why a single-tensor
-forward is required there).
+Wrappers stack: `CountWrapper(ControlWrapper(model))`. A wrapper does not
+hide a model's own fused layers from DeepLIFT: cherimoya needs
+`additional_nonlinear_ops=cherimoya.deep_lift_shap.attribution_ops()`,
+bpnet-lite's profile head needs `_ProfileLogitScaling` registered with
+`_nonlinear` (`references/deep_lift_shap.md`).

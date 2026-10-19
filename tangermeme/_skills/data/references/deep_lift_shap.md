@@ -1,601 +1,104 @@
-# DeepLIFT/SHAP attributions in tangermeme
-
-`tangermeme.deep_lift_shap.deep_lift_shap` runs a model "backwards" to score the
-contribution of each input base to an output. It corrects several issues found in
-other DeepLIFT/SHAP implementations and supports custom non-linearities.
-
-## Signature (defaults that matter)
+# DeepLIFT/SHAP attributions (tangermeme.deep_lift_shap)
 
 ```python
 deep_lift_shap(
-    model, X,
-    args=None,
-    target=0,                       # WHICH output — see below
-    batch_size=32,                  # example-REFERENCE pairs, not examples — see below
-    references=dinucleotide_shuffle,# callable OR a precomputed tensor
-    n_shuffles=20,                  # references per example when references is a fn
-    return_references=False,
-    hypothetical=False,
-    warning_threshold=0.001,        # additivity (convergence-delta) check
-    additional_nonlinear_ops=None,
-    print_convergence_deltas=False,
-    raw_outputs=False,
-    only_warn=False,
-    dtype=None, device=None,        # device None -> CUDA if available else CPU
-    random_state=None,
-    verbose=False,
-)
+	model, X,                       # X one-hot (batch, len(alphabet), length), int8 is fine
+	args=None,                      # extra model inputs, one row per example; reused for its references
+	target=0,                       # indexes axis 1 of the output; the default is silent on multi-task models
+	batch_size=32,                  # example-reference PAIRS per step, not examples
+	references=dinucleotide_shuffle,# callable f(X, n, random_state) -> (batch, n, len(alphabet), length), or that tensor
+	n_shuffles=20,
+	return_references=False,        # True -> AttributionReferencesResult(attributions, references)
+	hypothetical=False,             # True -> scores for every base, for CWMs; not seqlet-caller input
+	warning_threshold=0.001,        # ABSOLUTE bound on each pair's convergence delta
+	additional_nonlinear_ops=None,  # {ModuleType: rule}, see references/deep_lift_shap-unhooked-ops.md
+	print_convergence_deltas=False,
+	raw_outputs=False,              # True -> multipliers before projection, not per-reference attributions
+	only_warn=False,
+	dtype=None, device=None,        # device None -> CUDA if available; model device and mode restored after
+	random_state=None,
+)                                   # -> (batch, len(alphabet), length) on the CPU, model dtype
 ```
 
-## Footgun #1 — `target=` is mandatory for multi-task models
-
-`target` defaults to `0`. If your model emits multiple outputs in one tensor and
-you forget `target=`, you will silently get attributions for output 0, not an
-error. Always set it explicitly for multi-task models:
-
-```python
-X_attr = deep_lift_shap(model, X, target=267, random_state=0)
-```
-
-If the model returns *multiple tensors* (a list), `target` cannot select among
-them — wrap the model so its forward returns a single tensor first (see
-`references/model-wrapping.md`).
-
-## Footgun #2 — reproducibility needs `random_state=`
-
-The default `references=dinucleotide_shuffle` draws `n_shuffles` random
-backgrounds per example, so attributions vary run to run. Pass `random_state=` to
-make them deterministic (required when capturing regression values). For comparing
-attributions **across tasks or models**, holding `random_state` *and* `n_shuffles`
-fixed is mandatory — otherwise each call attributes against different backgrounds
-and the differences you see are noise, not signal (see
-`references/comparing-models.md`). `random_state=r` seeds reference `k` of every
-example with `r + k`, so the references of a seeded call can be precomputed with
-`dinucleotide_shuffle`, whose `random_state` also takes one seed per sequence:
-`torch.stack([dinucleotide_shuffle(X, n=1, random_state=[r + k] * len(X))[:, 0]
-for k in range(n_shuffles)], dim=1)`. A custom `references=` callable has the
-signature `f(X, n, random_state) -> (n_examples, n, len(alphabet), length)`; if you
-only shuffle a sub-span, attributions are exactly `0` outside it — don't interpret
-those positions.
-
-`ersatz.local_dinucleotide_shuffle` satisfies that contract and can be passed
-straight in. It shuffles within consecutive bins rather than across the whole
-sequence, so the background keeps the GC and repeat structure varying along the
-window instead of averaging it flat — closer to the original in every respect
-except the motif content you are trying to isolate. Its `bin_size` defaults to
-1024 and must be shorter than the sequence, so a window under ~1kb (a 1000bp
-BPNet or DeepSEA input, say) needs the argument bound first:
-
-```python
-from functools import partial
-refs_fn = partial(local_dinucleotide_shuffle, bin_size=128, min_bin_size=64)
-X_attr = deep_lift_shap(model, X, references=refs_fn, random_state=0)
-```
-
-## Footgun #3 — `only_warn=True` still raises inside shuffling
-
-`only_warn=True` downgrades validation errors on `X`, but the internal
-`dinucleotide_shuffle` re-validates and will still raise on a malformed `X`.
-Workaround: precompute references from a valid one-hot input and pass them in. Note
-the standalone `dinucleotide_shuffle` parameter is `n=` (the `n_shuffles` name is
-`deep_lift_shap`'s own), and a precomputed `references=` tensor must have shape
-`(batch, n_shuffles, len(alphabet), length)`:
-
-```python
-refs = dinucleotide_shuffle(X_valid, n=20, random_state=0)  # (batch, 20, 4, length)
-X_attr = deep_lift_shap(model, X, references=refs, only_warn=True)
-```
-
-`references=` can also be a `PackedSequence` of batch shape `(batch, n_shuffles)`,
-such as `dinucleotide_shuffle(X, n=20, return_packed=True)`, which holds them at 2
-bits a position and is decoded a batch at a time. With `return_references=True`,
-the references come back packed when `X` or `references` is packed.
-
-Unknown characters (all-zero columns) have a direct route: with `only_warn=True`,
-`references=partial(dinucleotide_shuffle, allow_N=True)` shuffles each as a fifth
-character, and those positions get zero attribution. `pisa` has no `only_warn`
-and rejects them.
-
-## `batch_size` counts example-reference pairs
-
-`batch_size` is the number of example×reference pairs run at once, not the number
-of examples. With the default `n_shuffles=20`, a single example already expands to
-20 forward/backward passes, so `batch_size=32` does **not** mean 32 examples in
-flight. If you hit OOM, lower `batch_size` (or `n_shuffles`); the attributions are
-unchanged, only the per-step memory differs.
-
-## Convergence deltas — the correctness signal (read this)
-
-DeepLIFT/SHAP has an additive property: per-example attributions should sum to the
-prediction difference between the sequence and its references. The convergence
-delta measures the violation, and its **magnitude tells you the cause**:
-
-- **delta > ~0.01**: a non-linearity the hooks don't handle is unregistered — a
-  real **correctness bug**. Fix it (below), don't ship the attributions.
-- **delta ~1e-3 to 1e-5 (often 1e-7 on CPU)**: benign floating-point error.
-  Architecture-dependent; safe to ignore.
-
-tangermeme auto-warns above `warning_threshold`; use `print_convergence_deltas=True`
-to see per example-reference-pair values.
-
-**High deltas do NOT produce garbage logos — this is the dangerous part.** A model
-with an unregistered op can still highlight motif-shaped patterns that look real but
-*vanish* once the op is registered. Motif-shaped ≠ correct; only low deltas are.
-Cross-check a suspicious logo against the actual prediction.
-
-### Registering a custom non-linearity
-
-A rule is registered per module *type*. These are the types `deep_lift_shap` and
-`pisa` both cover:
-
-- **Elementwise activations** (rescale rule) — `ReLU`, `ReLU6`, `LeakyReLU`,
-  `RReLU`, `PReLU`, `ELU`, `CELU`, `SELU`, `GELU`, `SiLU`, `Mish`,
-  `Sigmoid`, `LogSigmoid`, `Tanh`, `Softplus`, `Softshrink`.
-- **Pooling** — `MaxPool1d`, `MaxPool2d`. Two separate bugs here were fixed in
-  tangermeme 1.5.0, and neither one goes away on the CPU or at fp64, so a model
-  that pools and has stubborn deltas on an older version is very likely hitting
-  one of them. **Overlapping windows** (`kernel_size > stride`, e.g.
-  `MaxPool1d(4, 2)`) dropped the contribution of every output position but one
-  wherever two windows shared a winning input position, giving large deltas on
-  *every* example. **Two or more pools stacked** hit the second one, whatever
-  the window sizes: where an input did not change at all between example and
-  reference the rule substituted a value that differed between the two halves
-  it carries, and the next pool up reads both. That one is intermittent at
-  fp32/fp64, where it needs a particular example-reference pair, but systematic
-  in bf16/fp16, where coarse rounding makes unchanged inputs common — it cost
-  `SharedPool` a factor of 60 in fp16.
-- **Coupling ops with closed forms** — `Softmax`, `LayerNorm`, `RMSNorm`,
-  `GLU`, and `tangermeme.deep_lift_shap.BilinearOp`. `GLU` is here rather
-  than above because it gates rather than acting elementwise: it halves the
-  axis it gates over and each output depends on two input positions, so the
-  rescale rule does not fit it. Before tangermeme 1.5.0 it was mapped to the
-  rescale rule anyway, and any model containing one raised a size mismatch
-  from inside the rule.
-
-Anything not in that list and not linear is a hole. `Conv*`, `Linear`,
-`BatchNorm*`, `Embedding`, `AvgPool*`, adds, concatenations and
-reshapes need no custom rule.
-
-```python
-from tangermeme.deep_lift_shap import _nonlinear
-X_attr = deep_lift_shap(model, X, additional_nonlinear_ops={MyActivation: _nonlinear})
-```
-
-`_nonlinear` only fits a layer whose input and output have the same shape; see
-"Route 1b" below for what to do when yours does not.
-
-### Precision: CPU vs CUDA, and the fp64 escape hatch
-
-The same model gives **higher deltas on CUDA than CPU** (parallel reductions reorder
-float sums) — thresholds tuned on CPU may need raising on GPU. To disambiguate
-"unregistered op" from "precision noise," re-run a few examples on CPU. (A
-delta that survives fp64 is *usually* an unregistered op, but before 1.5.0 a
-stacked max-pool would also do it — see the pooling entry above.) For
-genuinely precision-driven deltas, `deep_lift_shap(model.double(), X.double(),
-references=refs.double(), ...)` drops them to ~1e-16 (slower; fp64).
-
-`dtype=torch.bfloat16` or `dtype=torch.float16` runs the pass under autocast and
-returns attributions in that dtype. Expect deltas an order of magnitude above the
-fp32 ones; raise `warning_threshold` accordingly rather than reading them as an
-unhooked op. Before tangermeme 1.5.0 this raised `RuntimeError: hook 'hook' has
-changed the type of value` for any model containing a max-pool, a norm, a softmax
-or a bilinear op.
-
-When the delta is real rather than precision noise, the next two sections find
-the op responsible and fix it. When a closed-form rule is impractical to derive,
-reach for `integrated_gradients_op` instead. When nothing can be hooked at all,
-switch to ISM — see `references/saturation_mutagenesis.md`.
-
-## Auditing a model for unhooked operations
-
-Two things can go wrong, and they need different checks. A **custom module** with no
-rule is visible in `model.modules()`. A **functional** call — `torch.matmul`,
-`F.softmax` — is not a module at all, so there is nothing for a rule to attach to
-and nothing in the module list to notice. Both are silently treated as linear.
-
-Drop this in and run it before trusting any attribution from an unfamiliar model.
-It walks the forward pass, attributes every torch call to the innermost module
-executing at the time, and reports the ones whose owner has no rule:
-
-```python
-import torch
-from torch.nn.modules.module import register_module_forward_hook
-from torch.nn.modules.module import register_module_forward_pre_hook
-
-from tangermeme.deep_lift_shap import BilinearOp
-
-RULED = {
-    torch.nn.ReLU, torch.nn.ReLU6, torch.nn.RReLU, torch.nn.SELU,
-    torch.nn.CELU, torch.nn.GELU, torch.nn.SiLU, torch.nn.Mish, torch.nn.GLU,
-    torch.nn.ELU, torch.nn.LeakyReLU, torch.nn.Sigmoid, torch.nn.Tanh,
-    torch.nn.Softplus, torch.nn.Softshrink, torch.nn.LogSigmoid,
-    torch.nn.PReLU, torch.nn.MaxPool1d, torch.nn.MaxPool2d, torch.nn.Softmax,
-    torch.nn.LayerNorm, torch.nn.RMSNorm, BilinearOp,
-}
-
-LINEAR = {
-    "linear", "conv1d", "conv2d", "conv3d", "conv_transpose1d", "add", "sub",
-    "cat", "stack", "reshape", "view", "permute", "transpose", "flatten",
-    "unsqueeze", "squeeze", "chunk", "split", "sum", "mean", "pad", "to",
-    "type", "clone", "detach", "contiguous", "dim", "size", "dropout",
-    "avg_pool1d", "avg_pool2d", "embedding", "batch_norm", "expand",
-    "repeat", "narrow", "index_select", "roll", "__get__", "__getitem__",
-    "_set_grad_enabled", "empty", "zeros", "ones", "arange", "t",
-}
-
-
-def audit(model, X, extra_rules=()):
-    """List every op in `model`'s forward that no DeepLIFT rule covers."""
-
-    ruled, stack, found = RULED | set(extra_rules), [], set()
-
-    def _push(module, inputs):
-        stack.append(module)
-
-    def _pop(module, inputs, outputs):
-        stack.pop()
-
-    class _Trace(torch.overrides.TorchFunctionMode):
-        def __torch_function__(self, func, types, args=(), kwargs=None):
-            name = getattr(func, "__name__", "?")
-            if name not in LINEAR and stack and type(stack[-1]) not in ruled:
-                found.add((type(stack[-1]).__name__, name))
-            return func(*args, **(kwargs or {}))
-
-    pre = register_module_forward_pre_hook(_push)
-    post = register_module_forward_hook(_pop)
-    try:
-        with _Trace(), torch.no_grad():
-            model(X)
-    finally:
-        pre.remove()
-        post.remove()
-
-    return sorted(found)
-```
-
-Each finding is `(owning module type, operation)`. Measured on five models:
-
-| model | `audit` reports | meaning |
-|---|---|---|
-| conv + `MultiheadAttention` | `('MultiheadAttention', 'multi_head_attention_forward')` | `MultiheadAttention` module internally invokes a fused kernel |
-| `TransformerEncoderLayer` | the above, plus `('TransformerEncoderLayer', 'relu')` | functional activation, rewritable |
-| the `Gated` model below, `torch.softmax(a(X), -1) * b(X)` | `('Gated', 'mul')`, `('Gated', 'softmax')` | functional ops, rewritable |
-| attention built from `BilinearOp` + `nn.Softmax` | only the constant `'div'` and `'mul'` | false positives — see below |
-| conv + `enformer_pytorch`-style `AttentionPool` | `('AttentionPool', 'mul')`, `('AttentionPool', 'softmax')`, plus the model's own constant `'mul'` | two functional ops in one pooling layer, both rewritable; the third is a false positive |
-
-**`mul`, `div`, `matmul`, `bmm` and `einsum` are reported deliberately.** A product
-is linear when one operand is a constant (`scores / head_dim ** 0.5`, a `* beta`
-scaling) and bilinear when both vary. The audit cannot tell those apart, so it
-reports both and you dismiss the constant ones by reading the line. A product of
-two activations that it reports is real and needs `BilinearOp`.
-
-### The convergence delta is the empirical test
-
-The audit is a static read of one forward pass; it can miss an op reached only on
-another input, and it flags things that turn out to be fine. The delta is the
-measurement that settles it, because an unhooked non-linearity breaks
-summation-to-delta by construction:
-
-```python
-import warnings
-
-with warnings.catch_warnings(record=True) as caught:
-    warnings.simplefilter("always")
-    X_attr = deep_lift_shap(model, X, references=refs, random_state=0)
-
-unhooked = [c for c in caught if issubclass(c.category, RuntimeWarning)]
-```
-
-An empty list means every non-linearity on the path your input took is hooked.
-A non-empty one means something is not, and the audit above tells you what.
-Use `warnings.simplefilter("error", RuntimeWarning)` to turn it into a hard
-failure in a script. A fully hooked model sits near floating-point noise; an
-unhooked non-linearity raises the delta by orders of magnitude, and the more of
-the model's output it accounts for the larger the jump. The absolute values are
-model-specific, so compare a model against itself before and after a fix rather
-than against a number quoted here.
-
-## Fixing what the audit finds
-
-### Route 1 — rewrite the op as a hookable module (preferred)
-
-These ops are parameterless, so the rewrite changes the *structure* of the
-forward and nothing else, and the original weights load straight in. Swap a
-functional `softmax` for `torch.nn.Softmax`, a functional product or `matmul` or
-`einsum` for `BilinearOp`, a functional `F.gelu` for `torch.nn.GELU`.
-
-`BilinearOp(equation)` is `torch.matmul` when `equation is None`, the elementwise
-product `left * right` for the string `"...,...->..."`, and `torch.einsum(equation,
-left, right)` otherwise. It uses its operands exactly as passed, so any transpose,
-reshape or scaling stays outside it.
-
-```python
-import torch
-from tangermeme.deep_lift_shap import BilinearOp
-
-
-class Gated(torch.nn.Module):
-    """The original: a functional softmax and a functional product."""
-
-    def __init__(self, seq_len=100):
-        super().__init__()
-        self.a = torch.nn.Conv1d(4, 8, 3, padding='same')
-        self.b = torch.nn.Conv1d(4, 8, 3, padding='same')
-        self.d = torch.nn.Linear(8 * seq_len, 1)
-
-    def forward(self, X):
-        h = torch.softmax(self.a(X), dim=-1) * self.b(X)
-        return self.d(h.reshape(h.shape[0], -1))
-
-
-class GatedHookable(Gated):
-    """The rewrite: same parameters, every non-linearity behind a module."""
-
-    def __init__(self, seq_len=100):
-        super().__init__(seq_len)
-        self.softmax = torch.nn.Softmax(dim=-1)
-        self.gate = BilinearOp("...,...->...")
-
-    def forward(self, X):
-        h = self.gate(self.softmax(self.a(X)), self.b(X))
-        return self.d(h.reshape(h.shape[0], -1))
-
-
-model = Gated()                                 # the trained original
-hookable = GatedHookable()
-hookable.load_state_dict(model.state_dict())    # parameter set is unchanged
-```
-
-Subclassing the original is the cheapest form of the rewrite when the parameters
-live in the parent, as above. When they do not, write the new class standalone and
-`load_state_dict(model.state_dict())` still works as long as every parameter keeps
-its name — `Softmax` and `BilinearOp` add none.
-
-**Always verify the transfer before attributing**, since `load_state_dict` is happy
-with a model that computes something else entirely:
-
-```python
-with torch.no_grad():
-    assert torch.allclose(model(X), hookable(X), atol=1e-6)
-```
-
-Then re-run the delta check. On the pair above the original emits one convergence
-warning and the rewrite emits none.
-
-`torch.nn.MultiheadAttention` has no functional form to swap — see the limitations
-below. Write the block out of `BilinearOp` and `torch.nn.Softmax` instead; the
-worked example is `MultiHeadAttention` in `tests/toy_models.py`, and
-`TransformerBlock` in the same file is the stacked pre-norm/post-norm version.
-
-### Route 1b — a custom elementwise module reuses the built-in rescale rule
-
-A module of your own that is elementwise and shape-preserving does not need a new
-rule, only registration of the existing one:
-
-```python
-from tangermeme.deep_lift_shap import _nonlinear
-
-X_attr = deep_lift_shap(model, X, references=refs, random_state=0,
-    additional_nonlinear_ops={MyActivation: _nonlinear})
-```
-
-`_nonlinear` divides `delta_out / delta_in`, so it **must go on a layer with equal
-input and output shape**. If your op also reduces (a profile head that does
-`logits * softmax(logits)` then `.sum()`, say), split it: put the elementwise,
-shape-preserving part in its own `nn.Module`, register *that*, and do the
-reduction in the parent wrapper. Registering the reducing layer raises a
-size-mismatch error. The same dictionary overrides a built-in rule when the key
-collides, which is how you replace one you disagree with.
-
-### Route 2 — `integrated_gradients_op` for a module with no closed form
-
-If deriving a closed-form rule (and/or its corresponding Jacobian-vector-product) is too
-involved, you may register a numeric rule for it instead. `integrated_gradients_op(K=8)`
-returns a hook that integrates the module's Jacobian along the straight-line path from
-the reference activation to the observed one:
-
-```python
-from tangermeme.deep_lift_shap import integrated_gradients_op
-
-X_attr = deep_lift_shap(model, X, references=refs, random_state=0,
-    additional_nonlinear_ops={MyOpaqueModule: integrated_gradients_op(K=8)})
-```
-
-Caveats:
-
-- **Single-input modules only.** The rule re-runs `module(z)` with one tensor.
-  Registering it for a two-operand module such as `BilinearOp` raises
-  `TypeError: forward() missing 1 required positional argument`.
-- **It is slower.** The rule evaluates the module `K` times, so the cost grows
-  with `K`, and the overhead on the whole call depends on how much of the model's
-  cost sits outside the wrapped module and on the device. The factor varies enough
-  between models and between CPU and CUDA that quoting one here would mislead;
-  time your own model with and without it.
-- **Choice of K** Minimally, select a `K` that satisfies summation-to-delta. Increasing
-  `K`, if runtime/compute allow, can improve attribution quality in some cases. There is
-  currently no well-defined guidance for selecting `K`. Choice of `K` is partly dependent
-  on the nature of the function whose partial derivatives we are integrating, and partly on
-  the data regime where it is being evaluated. 
-
-Prefer route 1 when it applies. Route 2 is the fallback for what route 1 cannot
-reach.
-
-### `integrated_gradients_op` is a fallback, not a validator
-
-It is tempting to register it over a layer that already has a closed-form rule to
-"check" that rule. That does not work, because the two are not the same quantity.
-A path integral and the rescale secant coincide only for an elementwise function:
-
-- elementwise (an unregistered activation, rescale vs. `integrated_gradients_op`)
-  — they agree to floating-point noise.
-- coupling across positions (`RMSNorm`, closed form vs. `integrated_gradients_op`)
-  — they differ by orders of magnitude more, and **raising `K` does not close the
-  gap**. That is how you tell the two apart: quadrature error shrinks with
-  `K`, a difference in method does not.
-
-Both satisfy summation-to-delta. Neither is a more accurate version of the other,
-so a disagreement tells you nothing about which is right. Summation-to-delta is
-the only property to check.
-
-### Worked example — attention pooling (Enformer)
-
-Attention pooling takes a weighted average within each pool window instead of the
-max or the mean: a 1x1 convolution scores the entries of the window, a softmax
-turns those scores into weights, and the pooled value is the window multiplied by
-its weights and summed. `enformer_pytorch`'s `AttentionPool` writes both the
-softmax and the product as function calls, so the layer has **two** unhooked
-non-linearities and `audit` reports both. Swapping only the softmax for
-`torch.nn.Softmax` leaves the delta where it was; the product is the second one.
-
-Route 1, the rewrite. Two attributes and two lines of `forward` change, and the
-parameter set is untouched, so the weights of a trained Enformer load straight in:
-
-```python
-import torch
-from tangermeme.deep_lift_shap import BilinearOp
-
-
-class AttentionPool(torch.nn.Module):
-    """`enformer_pytorch`'s layer with the two function calls made modules."""
-
-    def __init__(self, dim, pool_size=2):
-        super().__init__()
-        self.pool_size = pool_size
-        self.to_attn_logits = torch.nn.Conv2d(dim, dim, 1, bias=False)
-        torch.nn.init.dirac_(self.to_attn_logits.weight)
-        with torch.no_grad():
-            self.to_attn_logits.weight.mul_(2)
-
-        self.softmax = torch.nn.Softmax(dim=-1)      # was logits.softmax(-1)
-        self.prod = BilinearOp("...,...->...")       # was (x * attn)
-
-    def _window(self, x):
-        b, d, n = x.shape
-        return x.reshape(b, d, n // self.pool_size, self.pool_size)
-
-    def forward(self, x):
-        b, _, n = x.shape
-        remainder = n % self.pool_size
-
-        if remainder > 0:
-            pad = self.pool_size - remainder
-            x = torch.nn.functional.pad(x, (0, pad), value=0)
-            mask = torch.zeros((b, 1, n), dtype=torch.bool, device=x.device)
-            mask = self._window(torch.nn.functional.pad(mask, (0, pad),
-                value=True))
-
-        x = self._window(x)
-        logits = self.to_attn_logits(x)
-
-        # A mask applied here, outside the softmax module, is fine: the rule
-        # reads the module's own input, which is the masked logits.
-        if remainder > 0:
-            logits = logits.masked_fill(mask, -torch.finfo(logits.dtype).max)
-
-        return self.prod(x, self.softmax(logits)).sum(dim=-1)
-```
-
-Route 2, no rewrite at all. The whole layer takes one tensor and returns one
-tensor, which is all `integrated_gradients_op` needs, so a checkpoint tied to a
-published layer definition can be attributed as it stands:
-
-```python
-from enformer_pytorch.modeling_enformer import AttentionPool
-from tangermeme.deep_lift_shap import deep_lift_shap, integrated_gradients_op
-
-X_attr = deep_lift_shap(model, X, references=refs, random_state=0,
-    additional_nonlinear_ops={AttentionPool: integrated_gradients_op(K=8)})
-```
-
-Both converge to floating-point noise, with and without a padded window, and they
-agree to 4e-4 on attributions whose scale is 2.7e-2 — the usual closed-form
-versus path-integral difference described above, and it does not shrink with `K`.
-
-Two things to get right:
-
-- **Register the pooling layer, not the block around it.** A block that also
-  contains a ReLU puts a kink in the integration path, where Gauss-Legendre
-  quadrature converges slowly: on the model in `tests/toy_models.py`, registering
-  the pooling layer converges at `K=4` while registering the enclosing model still
-  crossed the warning threshold at `K=8`.
-- **`masked_fill` in the audit output is a false positive.** Filling with a
-  constant is linear, as is the `mul` of an output scaling. The findings that
-  matter are `softmax` and the `mul` of two activations.
-
-`AttentionPool` and `ConvAttentionPool` in `tests/toy_models.py` are the worked
-pair, with `hookable=False` selecting the shipped form. `enformer_pytorch`'s
-`Attention` has the same problem for the same reason (`einsum` and `.softmax()` as
-function calls) and both routes apply to it as well.
-
-## Known limitations
-
-- **`torch.nn.MultiheadAttention` is not attributable as-is.** It dispatches into a
-  fused `multi_head_attention_forward` that computes its softmax and both matmuls
-  below the module layer, so there is no module for a rule to attach to and no
-  functional call to swap. Rewrite the block.
-- **`torch.nn.TransformerEncoderLayer` is not attributable as-is** for the same
-  reason — it contains a `MultiheadAttention` — and additionally calls its
-  activation functionally.
-- **Subclassing a registered op raises `KeyError`.** Hooks are registered by
-  `isinstance` but dispatched by exact `type`, so `class MyReLU(torch.nn.ReLU)`
-  gets hooks installed and then fails in the backward hook with
-  `KeyError: <class 'MyReLU'>`. Pass the subclass through
-  `additional_nonlinear_ops={MyReLU: _nonlinear}` instead of relying on
-  inheritance. This predates the transformer rules and applies to every op.
-- **A row masked entirely with `-inf` gives `NaN`.** Causal and padding masks are
-  handled, but a query attending to nothing makes torch's own softmax return `NaN`
-  in the forward pass, so the model is ill-posed before attribution is involved.
-  Use a large finite mask instead, which softmaxes that row to uniform. Check
-  `torch.isfinite(model(X)).all()` first when your model masks attention.
-
-## Reused modules are handled
-
-A module assigned once and called several times, the common `self.relu` reused
-across layers, is a single instance in the module tree, and so is a genuinely
-weight-shared parameterized layer. The activations are cached per call, so the
-rules read the pair belonging to whichever call the backward pass is unwinding
-and a model does not have to be rewritten with one instance per call site.
-
-Before tangermeme 1.5.0 the cache held one pair per module rather than one per
-call, so every call but the last was attributed against the wrong activations.
-Attributions taken with an earlier version on a model that reuses a module are
-wrong and should be recomputed.
-
-## hypothetical vs projected attributions
-
-- Default (`hypothetical=False`): attributions are projected onto the observed
-  bases — what you plot as a logo of the actual sequence.
-- `hypothetical=True`: per-base hypothetical contributions across all four bases.
-  Use these to build motif patterns / contribution-weight matrices (CWMs)
-  downstream — **not** as the seqlet-caller input.
-
-The seqlet callers take the projected output collapsed over the channel axis
-(`X_attr.sum(dim=1)`) — see `references/seqlets.md`.
-
-## Return type
-
-Returns a tensor shaped like `X` (e.g. `(batch, 4, length)`). With
-`return_references=True` it returns an `AttributionReferencesResult(attributions,
-references)` NamedTuple — unpack positionally or by attribute.
-
-## Plotting
-
-```python
-from tangermeme.plot import plot_logo
-plot_logo(X_attr[0], ax=ax)   # tangermeme has its own logo plotting (no logomaker)
-```
-
-## Composing with perturbations
-
-`deep_lift_shap` satisfies the `func=` contract, so it drops into `marginalize`,
-`ablate`, `variant_effect.*`, etc. to get attributions before/after an edit —
-route attribution kwargs via `additional_func_kwargs` (see
-`references/func-pattern.md`).
-
-## Related references
-
-`references/saturation_mutagenesis.md` (the forward-pass
-alternative), `references/seqlets.md` (consuming projected attributions),
-`references/model-wrapping.md` (single-tensor requirement),
-`references/comparing-models.md` (shared references across models).
+The model must return `(batch, n_outputs)`; trailing axes of length 1 are
+dropped, any other trailing axis (a profile) raises `ValueError`. Wrap first:
+`references/model-wrapping.md`.
+
+## Defaults that silently give the wrong answer
+
+- `target=0` on a multi-task model attributes output 0 with no warning.
+- No `random_state` means different references, and different attributions,
+  on every call. Reference `k` of every example is seeded `random_state + k`,
+  so the same references come from
+  `torch.stack([dinucleotide_shuffle(X, n=1, random_state=[r + k] * len(X))[:, 0] for k in range(n_shuffles)], dim=1)`;
+  `dinucleotide_shuffle(X, n=n_shuffles, random_state=r)` gives different ones.
+  Comparing attributions across models or tasks needs the same references:
+  precompute once and pass `references=` the tensor.
+- `warning_threshold` is absolute; a model whose outputs are of order 1e-3
+  can be 30% wrong under it. After 1.5.0 a second warning fires when the
+  mean delta exceeds 1% of the mean output difference; on older versions
+  check the relative error yourself with
+  `python scripts/audit_deeplift.py --model module:expr` (skill root
+  relative; next section).
+- The seed fixes the references, not the kernels: on a GPU two calls with
+  the same seed differ at 1e-8 to 1e-5. For bit-identity set
+  `torch.backends.cudnn.deterministic = True` and `benchmark = False`
+  first, or compare with a tolerance.
+
+## Convergence deltas
+
+Attributions of each example-reference pair sum to the difference in output.
+The delta is the violation. Relative to the output difference: 1e-5 or
+below is floating-point noise (higher on CUDA than on the CPU, an order of
+magnitude higher under `dtype=torch.bfloat16` or `float16`, 1e-16 at fp64);
+anything larger means an operation the hooks do not cover and the logo may
+still look motif-like. The warning is a `RuntimeWarning`, one per batch.
+Agreement with ISM does not detect a missing rule: on a model with an
+unhooked softmax the wrong and the corrected attributions correlated equally
+with ISM. Finding and fixing the operation: `references/deep_lift_shap-unhooked-ops.md`.
+A model whose package ships its own rules (cherimoya:
+`cherimoya.deep_lift_shap.attribution_ops()`; bpnet-lite: `_ProfileLogitScaling`,
+`_Log`, `_Exp` with `_nonlinear`) needs them passed as `additional_nonlinear_ops`,
+or every pair warns.
+
+## References
+
+- A callable gets `(X, n, random_state)`. `local_dinucleotide_shuffle`
+  qualifies and keeps composition per bin instead of per window; its
+  `bin_size` defaults to 1024 and must be shorter than the sequence, so bind
+  it for inputs under about 1 kb:
+  `references=partial(local_dinucleotide_shuffle, bin_size=128, min_bin_size=64)`.
+  Shuffling a sub-span (`partial(dinucleotide_shuffle, start=, end=)`) gives
+  exactly 0 outside it.
+- Unknown characters (all-zero columns) are rejected. Route:
+  `only_warn=True, references=partial(dinucleotide_shuffle, allow_N=True)`;
+  those positions get 0. `only_warn=True` alone still raises inside the
+  default shuffle.
+- A tensor `references=` may be a `PackedSequence` of batch shape
+  `(batch, n_shuffles)`; references come back packed when `X` or
+  `references` is packed, otherwise in the model's dtype (float32 for int8 `X`).
+
+## Memory and speed
+
+Every hooked module caches activations for `2 x batch_size` rows, so memory
+follows `batch_size x length x width x depth`, not parameter count: a 197 KB
+cherimoya of width 32 on 2,114 bp took 3.7 GB at `batch_size=64`. Lower
+`batch_size` or `n_shuffles` on OOM; attributions are unchanged. The first
+call in a process pays 15 to 35 s of CUDA warm-up; time the second. Models
+need not live on the GPU: keep them on the CPU and pass `device=`, each call
+moves one over and back.
+
+## Output
+
+Projected (default): the observed base's score, zero elsewhere; sum over
+axis 1 for the per-position track that `recursive_seqlets` takes
+(`references/seqlets.md`). `hypothetical=True`: a score for every base at
+every position, the input for CWMs. `raw_outputs=True`: the multipliers
+before projection, `(batch, n_shuffles, ...)`, which `hypothetical_attributions`
+turns into attributions. `plot_logo(X_attr[0], ax=ax)` draws one example
+(`references/plot.md`). As `func=` inside `marginalize`, `ablate` or
+`variant_effect.*`, route its kwargs through `additional_func_kwargs`
+(`references/func-pattern.md`).
+
+tangermeme below 1.5.0 attributed stacked or overlapping max-pools, reused
+modules, GLU and half precision wrongly; recompute on 1.5.0 or later.

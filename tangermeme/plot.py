@@ -245,9 +245,11 @@ def plot_logo(
 			be larger. If None, visualize the full sequence. Default is None.
 
 	ylim: tuple or None, optional
-			The lower and upper bounds of the plot. Pass the bounds in here rather
-			than setting them after calling this function if you want the annotation
-			spacing to adjust to it. If None, use the default bounds. Default is
+			The lower and upper bounds of the plot, as `(lower, upper)`; a single
+			number `y` means `(-y, y)`. Pass the bounds in here rather than
+			setting them after calling this function if you want the annotation
+			spacing to adjust to it. If None, use the range of the data, or a
+			symmetric range around zero when annotations are drawn. Default is
 			None.
 
 	n_tracks: int, optional
@@ -382,6 +384,10 @@ def plot_logo(
 	ax.add_collection(col)
 	ax.set_xlim(-0.1, X_attr.shape[-1])
 	ax.set_ylim(neg_total, pos_total)
+	if ylim is not None:
+		ylim = (-ylim, ylim) if numpy.isscalar(ylim) else tuple(ylim)
+		ax.set_ylim(*ylim)
+
 	ax.spines[['top', 'right', 'bottom']].set_visible(False)
 	
 	
@@ -406,9 +412,11 @@ def plot_logo(
 		annotations_ = annotations_.sort_values(["start"], ascending=True)
 
 		if len(annotations_) > 0:
-			ylim = ylim or max(abs(X_attr.min()), abs(X_attr.max()))
-			ax.set_ylim(-ylim, ylim)
-			r = ylim*2
+			if ylim is None:
+				ylim = max(abs(X_attr.min()), abs(X_attr.max()))
+				ylim = (-ylim, ylim)
+
+			ax.set_ylim(*ylim)
 			y_offset_bars=ax.get_ylim()[0]/8
 			y_offset_labels = 0
 

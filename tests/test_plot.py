@@ -532,6 +532,22 @@ def test_interactive_logo_box_alpha(X_attr, annotations):
 	assert numpy.allclose(facecolors[:, 3], 0.5)
 
 
+def test_plot_logo_respects_ylim(X_attr, annotations):
+	fig, ax = plt.subplots()
+	plot_logo(X_attr, ax=ax, ylim=(-2, 3))
+	assert ax.get_ylim() == (-2, 3)
+
+	fig, ax = plt.subplots()
+	plot_logo(X_attr, ax=ax, annotations=annotations, score_key='attribution',
+		ylim=(-2, 3))
+	assert ax.get_ylim() == (-2, 3)
+
+	fig, ax = plt.subplots()
+	plot_logo(X_attr, ax=ax, annotations=annotations, score_key='attribution',
+		ylim=2)
+	assert ax.get_ylim() == (-2, 2)
+
+
 def test_interactive_logo_respects_ylim(X_attr, annotations):
 	pytest.importorskip("mpld3")
 	fig, ax = plt.subplots()

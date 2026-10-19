@@ -197,6 +197,23 @@ def test_substitution_effect_rejects_empty_X():
 		substitution_effect(model, X, subs)
 
 
+def test_insertion_effect_multibase_rows_reversed():
+	# Rows at one position are inserted in reverse of the order given, so
+	# the string S goes in as the rows (k, p, S[-1]), ..., (k, p, S[0]).
+	X = one_hot_encode("AAAAAAAAAA")[None].type(torch.float32)
+	def identity(model, X, args=None, **kwargs):
+		return X
+
+	rows = torch.tensor([[0, 5, 2], [0, 5, 1], [0, 5, 0]])   # "ACG" reversed
+	X_before, X_after = insertion_effect(SumModel(), X, rows, func=identity,
+		left=False)
+	assert characters(X_after[0]) == "AAAAAACGAA"
+
+	X_before, X_after = insertion_effect(SumModel(), X, rows, func=identity,
+		left=True)
+	assert characters(X_after[0]) == "AAACGAAAAA"
+
+
 def test_insertion_effect_rejects_empty_X():
 	# Empty X is rejected before any sequence is built; any ValueError is
 	# acceptable here.

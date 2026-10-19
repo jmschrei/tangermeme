@@ -1211,13 +1211,11 @@ def reverse_complement(
 
 	Notes
 	-----
-	The tensor path is 2-D only (shape `(alphabet_size, length)`). Passing a
-	batched tensor with shape `(N, A, L)` is NOT rejected but produces silently
-	wrong output: `torch.flip(..., dims=(-1,))` flips the last axis as
-	intended, but the subsequent `[idxs]` indexing permutes the *first* axis,
-	which on a batched input is the batch dimension instead of the alphabet
-	axis. Iterate over the batch (or unsqueeze and call once per row) until a
-	proper batched path is added.
+	The tensor path takes one sequence, shape `(alphabet_size, length)`. A
+	batched tensor `(N, A, L)` raises a ValueError, because the complement
+	permutes the first axis; reverse complement a batch with
+	`torch.stack([reverse_complement(x) for x in X])` or pass a
+	PackedSequence, which keeps its batch axes.
 	"""
 
 	if isinstance(seq, PackedSequence):
@@ -1246,6 +1244,10 @@ def reverse_complement(
 		seq_rc = ''.join(reversed(seq_rc))
 
 	elif isinstance(seq, torch.Tensor):
+		if seq.ndim != 2:
+			raise ValueError("reverse_complement takes one one-hot encoded "
+				"sequence with shape (alphabet_size, length); got shape {}. Loop "
+				"over a batch, or pass a PackedSequence.".format(tuple(seq.shape)))
 
 		chars = list(complement_map.keys())
 		idxs = [chars.index(char) for char in complement_map.values()]

@@ -1,125 +1,63 @@
-# Seqlet calling (recursive_seqlets / tfmodisco_seqlets)
+# Seqlet calling (tangermeme.seqlet)
 
-Seqlets are contiguous spans of high attribution — the "where are the motifs"
-step. `tangermeme.seqlet` has two callers with genuinely different behavior.
+Both callers take per-position projected attribution sums, `(n, length)`:
+`X_attr.sum(dim=1)` of the default `deep_lift_shap` output. A `(n, 4, length)`
+or hypothetical tensor fails inside numba with a `TypingError`.
 
-## The #1 footgun: input is a 2D projected track
-
-Both callers take **per-position projected attribution sums**, shape `(n, length)`
-— i.e. the default (`hypothetical=False`) `deep_lift_shap` output collapsed over the
-channel axis:
+## recursive_seqlets
 
 ```python
-attr_sums = X_attr.sum(dim=1)        # (n, 4, length) -> (n, length)
+recursive_seqlets(X, threshold=0.01, min_seqlet_len=4, max_seqlet_len=25,
+	additional_flanks=0, n_bins=1000, X_control=None, target_fdr=0.1, return_fdr=False)
+# DataFrame: example_idx, start, end, attribution, p-value; sorted by p-value; positive seqlets only
 ```
 
-Do **not** pass the `(n, 4, length)` attributions or hypothetical attributions.
-(See `references/deep_lift_shap.md`: hypothetical is for building CWMs, not
-for seqlet calling.)
-
-## recursive_seqlets — sharp, p-value based
-
-```python
-from tangermeme.seqlet import recursive_seqlets
-
-seqlets = recursive_seqlets(attr_sums, threshold=0.01, additional_flanks=0)
-# DataFrame columns: example_idx, start, end, attribution, p-value (sorted by p-value)
-```
-
-- Returns **positive seqlets only**. For negative ones, run on `-attr_sums` (and
-  `X_control=-attr_control` if you use a control), negate the returned
-  `attribution`, and drop any that overlap a positive seqlet. Do not run on
-  `attr_sums.abs()`: the null then pools both tails, so negatives weaker than the
-  positives are never significant.
-- The `p-value` column is a **ranking score, not an error rate**. It is computed as
-  if positions were independent draws from a histogram, but attributions are
-  correlated along the sequence and the default histogram contains the signal being
-  tested, so p-values come out smaller than the real chance of a span in
-  signal-free sequence. `threshold=0.01` does not mean 1% of calls are false, and the
-  same threshold means different false-call rates in different models and datasets.
-  Rank seqlets by it; choose the threshold with a control (below), not by habit.
-- `min_seqlet_len` (default 4) is also the smallest span the recursive property must
-  hold over. At 1, every single position inside a seqlet must pass the threshold on
-  its own, so one weak base splits a motif. `max_seqlet_len` (default 25) raises cost.
-- `additional_flanks` pads the reported `start`/`end` **and** the reported
-  `attribution` is re-summed over the padded span, so it grows with the flanks. The
-  `p-value` is unchanged — it is computed on the un-padded core. Flanks may overlap
-  neighbors even though the cores cannot, so flanked spans are not disjoint, their
-  attributions can double-count the same positions, and
-  `pairwise_annotations_spacing` rejects them (see `references/annotate.md`).
-- **Over-calls on a single example** (it can't fit a null from one sequence), and a
-  sequence's p-values depend on the other sequences passed with it. Pass many
-  examples together.
+- The `p-value` column is a ranking score: positions are treated as
+  independent draws from a histogram that contains the signal being
+  tested, so `threshold=0.01` is not a 1% false-call rate and means
+  different rates in different models. A sequence's p-values depend on the
+  other sequences in the call; pass many together, never one.
+- Negative seqlets: run on `-attr_sums` (and `X_control=-attr_control`),
+  negate the returned `attribution`, drop overlaps with positive calls.
+  Not `attr_sums.abs()`: the pooled null hides weaker negatives.
+- `min_seqlet_len=1` makes every position pass on its own, so one weak base
+  splits a motif. `additional_flanks` pads `start`/`end` and re-sums
+  `attribution` over the padded span (the p-value stays on the core);
+  flanked spans can overlap, which `pairwise_annotations_spacing` rejects.
 
 ### Choosing the threshold with a control
 
-Pass control attributions as `X_control` and the threshold is chosen for you: the
-largest one whose estimated false discovery rate is at or below `target_fdr`
-(default 0.1). `threshold` is then ignored. A good control is several dinucleotide
-shuffles of each sequence, attributed with the same model, target and settings as
-`X`, and concatenated:
+`X_control` picks the largest threshold whose estimated false discovery
+rate is at or below `target_fdr` and ignores `threshold`. Control: a few
+dinucleotide shuffles of each sequence attributed with the same settings.
 
 ```python
-import torch
-
-from tangermeme.ersatz import dinucleotide_shuffle
-from tangermeme.seqlet import recursive_seqlets
-
-shuffles = dinucleotide_shuffle(X, n=3, random_state=0)       # (n, 3, 4, length)
-attr_control = torch.cat([deep_lift_shap(model, shuffles[:, k], random_state=0).sum(dim=1)
+shuffles = dinucleotide_shuffle(X, n=3, random_state=0)                 # (n, 3, 4, length)
+attr_control = torch.cat([deep_lift_shap(model, shuffles[:, k], target=t, random_state=0).sum(dim=1)
 	for k in range(3)])
-
-seqlets, fdr = recursive_seqlets(attr_sums, X_control=attr_control, target_fdr=0.1,
-	return_fdr=True)
+seqlets, fdr = recursive_seqlets(attr_sums, X_control=attr_control, target_fdr=0.1, return_fdr=True)
 ```
 
-- The estimate at each threshold is the number of seqlets called on the control
-  plus one, scaled to the size of `X`, over the number called on `X`. The plus one
-  stops a few chance calls at an extreme threshold, with no control calls, from
-  passing as zero. It is a property of the whole set of calls, not of any single
-  seqlet.
-- `return_fdr=True` returns `(seqlets, fdr)`: one row per threshold (0.1 to 1e-30,
-  four per decade) with both counts and the estimate. Without it, only `seqlets`.
-- **No threshold reaches the target** → a `TangermemeWarning` with the lowest
-  estimate reached, and no seqlets. Raise `target_fdr`.
-- **More shuffles, steadier estimate.** The estimate is only as precise as the number
-  of control seqlets at a threshold; with one shuffle, a strict threshold may rest on
-  a few dozen. Each shuffle costs one more attribution pass.
-- **Look at the whole curve.** "False" here means no more frequent than in sequences
-  with the same dinucleotide composition. Shuffles keep chance motif matches that the
-  model responds to, so the curve can level off above zero: a target below that
-  level is reached by no threshold, and a target near it picks a threshold from a
-  flat stretch that moves a lot between controls.
+The estimate is (control calls + 1, scaled to the size of `X`) over calls
+on `X`, per threshold; `fdr` has one row per threshold from 0.1 to 1e-30.
+When no threshold reaches the target the call warns and returns an empty
+frame (typed columns; object columns on 1.5.0 and earlier). A model that
+responds to composition (an accessibility count head) calls as many seqlets
+on shuffles as on peaks: on a K562 ChromBPNet the estimate bottomed out at
+0.16. Look at `fdr` first; fall back to `threshold`. More shuffles steady
+the estimate; each costs an attribution pass.
 
-## tfmodisco_seqlets — longer, discovery-oriented
+## tfmodisco_seqlets
 
 ```python
-from tangermeme.seqlet import tfmodisco_seqlets
-
-seqlets = tfmodisco_seqlets(attr_sums, window_size=21, flank=10)
-# DataFrame columns: example_idx, start, end, attribution (positive + negative sets)
+tfmodisco_seqlets(attr_sums, window_size=21, flank=10)   # example_idx, start, end, attribution; both signs
 ```
 
-- Replicates TF-MoDISco's caller: seqlets are **longer and less sensitive** by
-  design (local context helps motif discovery; flanks get trimmed downstream).
-- **Adaptively lowers its threshold to hit a minimum count → it over-calls**; expect
-  to filter the results by attribution afterward.
-- Boundaries are **left-offset/asymmetric** because each position is replaced by the
-  sum of the window to its right (the chosen position is the left edge).
+TF-MoDISco's caller: longer, less sensitive spans for motif discovery; it
+lowers its threshold to reach a minimum count, so filter by attribution
+afterward; boundaries are left-offset (each position holds the sum of the
+window to its right).
 
-## Which to use
-
-`recursive_seqlets` for sharp, minimal spans ranked by p-value;
-`tfmodisco_seqlets` when feeding a motif-discovery pipeline that wants generous
-spans. Both flow straight into annotation and plotting.
-
-## Related references
-
-- **Label / count seqlets** → `references/annotate.md` (`annotate_seqlets`,
-  `count_annotations`, `pairwise_annotations`).
-- **Plot seqlets** → `references/plot.md`. Three things to get right: filter to
-  one example, pass `score_key='attribution'`, and move a name column to the
-  front — `plot_logo` reads the label from column 0, which in a seqlet frame is
-  `example_idx`.
-- **Where the attributions come from** → `references/deep_lift_shap.md`
-  (projected vs hypothetical).
+Label and count the spans: `references/annotate.md`. Draw them:
+`references/plot.md` (filter to one example, `score_key='attribution'`, a
+name column first).
