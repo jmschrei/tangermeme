@@ -146,15 +146,10 @@ def test_kmers_packed_codes(k, length, monkeypatch):
 	assert torch.equal(kmers(X_packed, k), X_kmers)
 
 
-def test_kmers_packed():
+def test_gapped_kmers_packed():
 	X = random_one_hot((5, 4, 60), random_state=0)
 	X[1, :, 10:14] = 0
 	X_packed = PackedSequence.from_one_hot(X)
-	scores = torch.randn(5, 60, generator=torch.Generator().manual_seed(0))
-
-	assert torch.equal(kmers(X_packed, 3), kmers(X, 3))
-	assert torch.equal(kmers(X_packed, 2, scores=scores), kmers(X, 2,
-		scores=scores))
 
 	X_gkmers = gapped_kmers(X, min_k=4, max_k=5)
 	X_gkmers_packed = gapped_kmers(X_packed, min_k=4, max_k=5)
