@@ -13,6 +13,10 @@ import numba
 import torch
 import pandas
 
+from llvmlite import ir
+from numba import types
+from numba.extending import intrinsic
+
 from .utils import _validate_input
 from .utils import characters
 from .utils import TangermemeWarning
@@ -360,6 +364,68 @@ def tfmodisco_seqlets(
 ###
 
 
+# The number of consecutive outputs of the null's convolution computed at
+# once. At 32 or fewer LLVM unrolls the block's loop fully and leaves it
+# scalar; from 48 to 96 the block is 6 to 12 vector registers.
+_NULL_BLOCK = 64
+
+# The null's histogram bins its values _NULL_CHUNK at a time into a buffer, in
+# a loop of its own that compiles to vector divides, then counts them into
+# _NULL_SPLIT integer histograms (a power of two), value j of a chunk into
+# histogram j mod _NULL_SPLIT, so that consecutive values in one bin do not
+# wait on each other's store. Buffer and histograms are 32 KB at 1000 bins.
+_NULL_CHUNK = 2048
+_NULL_SPLIT = 2
+
+
+@intrinsic
+def _stack_float64(typingctx, n):
+	"""A pointer to `n` float64 values on the stack of the calling function,
+	for a literal integer `n`. LLVM keeps such an array in registers across
+	a loop when every access is at a constant offset; it cannot do that for
+	a numpy array, which may alias the arrays the loop reads.
+	"""
+
+	if not isinstance(n, types.IntegerLiteral):
+		return None
+
+	def codegen(context, builder, signature, args):
+		with builder.goto_entry_block():
+			arr = builder.alloca(ir.ArrayType(ir.DoubleType(), n.literal_value))
+		return builder.bitcast(arr, ir.DoubleType().as_pointer())
+
+	return types.CPointer(types.float64)(n), codegen
+
+
+@intrinsic
+def _float64_ptr(typingctx, arr, o):
+	"""A pointer to `arr[o]`, for a C-contiguous 1D float64 array `arr`.
+	Unlike a slice, it computes no bounds: the caller keeps `o` in range.
+	"""
+
+	if not (isinstance(arr, types.Array) and arr.ndim == 1 and arr.layout == 'C'
+		and arr.dtype == types.float64 and isinstance(o, types.Integer)):
+		return None
+
+	def codegen(context, builder, signature, args):
+		ary = context.make_array(signature.args[0])(context, builder, args[0])
+		return builder.gep(ary.data, [args[1]])
+
+	return types.CPointer(types.float64)(arr, o), codegen
+
+
+@numba.njit
+def _recursive_seqlet_null_bins(x, xmin, bin_width, n_bins, x_bin):
+	"""Write to `x_bin` the place of each value of `x` in the null's split
+	histogram: its bin, clamped to the end bins as in _recursive_seqlet_bins,
+	plus n_bins times (j mod _NULL_SPLIT).
+	"""
+
+	for j in range(x.shape[0]):
+		b = math.floor((x[j] - xmin) / bin_width)
+		x_bin[j] = min(max(b, 0), n_bins - 1) + (j & (_NULL_SPLIT - 1)) * n_bins
+
+
 @numba.njit
 def _recursive_seqlet_null(values, xmin, bin_width, max_seqlet_len=25,
 	n_bins=1000):
@@ -378,11 +444,27 @@ def _recursive_seqlet_null(values, xmin, bin_width, max_seqlet_len=25,
 	# Step 1: Calculate a histogram of binned scores
 	###
 
-	f = numpy.zeros(n_bins, dtype=numpy.float64)
+	# The counts are integers below 2**53, so the float64 sum of the split
+	# histograms equals the float64 count of each bin, in any order.
+	n_values = values.shape[0]
+	x_bin = numpy.empty(_NULL_CHUNK, dtype=numpy.int64)
+	counts = numpy.zeros(_NULL_SPLIT * n_bins, dtype=numpy.int64)
 
-	for i in range(values.shape[0]):
-		x_bin = math.floor((values[i] - xmin) / bin_width)
-		f[min(max(x_bin, 0), n_bins - 1)] += 1
+	for c0 in range(0, n_values, _NULL_CHUNK):
+		m = min(_NULL_CHUNK, n_values - c0)
+		_recursive_seqlet_null_bins(values[c0:c0 + m], xmin, bin_width, n_bins,
+			x_bin)
+
+		# The unsigned index (every place is >= 0) drops a wraparound check.
+		for j in range(m):
+			counts[numpy.uint64(x_bin[j])] += 1
+
+	f = numpy.zeros(n_bins, dtype=numpy.float64)
+	for k in range(n_bins):
+		count = 0
+		for s in range(_NULL_SPLIT):
+			count += counts[s * n_bins + k]
+		f[k] = count
 
 	f = f / values.shape[0]
 
@@ -400,10 +482,139 @@ def _recursive_seqlet_null(values, xmin, bin_width, max_seqlet_len=25,
 	rcdfs = numpy.zeros((max_seqlet_len+1, n_bins*max_seqlet_len+1),
 		dtype=numpy.float64)
 
+	# Each row is the previous one convolved with f, computed one output at a
+	# time as cur[m] = sum over ascending i of prev[i] * f[m - i], for blocks
+	# of _NULL_BLOCK consecutive outputs whose sums stay in registers: per i
+	# the block reads one contiguous slice of f, padded with zeros at both
+	# ends so that every i reaching some output of the block reads one. Each
+	# output adds its products over ascending i, from +0.0 and without fused
+	# multiply-adds. The padding adds products of +0.0 before and after them,
+	# which leave the sum unchanged (every value is at least +0.0), so each
+	# output is the sum of prev[i] * f[m - i] over the i with
+	# 0 <= m - i < n_bins alone, in ascending i. Only the outputs m < n_out,
+	# the ones such a product reaches, are written.
+	#
+	# The slice of padded f starts one value earlier for each i, so in seven
+	# of every eight i its loads would cross cache lines. Instead it is read
+	# from one of eight copies of padded f, copy s shifted s values to the
+	# left and starting on a 64-byte boundary, chosen so that the slice
+	# starts on one too. The values read are the same.
+	#
+	# When f is finite, the same sums run over the nonzero bins j of f in
+	# descending order instead, which is ascending i = m - j for every
+	# output m, and each block reads, per j, one slice of the previous row
+	# padded with B zeros at both ends. Every term this drops is a finite
+	# value times +0.0, a +0.0 that leaves the sum unchanged, so the rows are
+	# the same bit for bit. Empty values give f = 0/0, whose NaN must reach
+	# every output, so they keep the loop over i.
+	#
+	# The padded rows are read from eight shifted copies laid out as those of
+	# f. Two sets of them alternate: the row being built reads one and writes
+	# its outputs into the other for the next row. The first set starts as
+	# the copies of padded f, row 1. A set is next written two rows later,
+	# with a longer row that covers everything written to it before, so the
+	# padding past each row's end stays zero.
+	B = _NULL_BLOCK
+	nz_j = numpy.empty(n_bins, dtype=numpy.int64)
+	nz_f = numpy.empty(n_bins, dtype=numpy.float64)
+	n_nz = 0
+	finite = True
+	for j in range(n_bins - 1, -1, -1):
+		v = f[j]
+		if not numpy.isfinite(v):
+			finite = False
+		if v != 0.0:
+			nz_j[n_nz] = j
+			nz_f[n_nz] = v
+			n_nz += 1
+
+	if finite:
+		W = (n_bins * max(max_seqlet_len - 1, 1) + 2 * B + 7) // 8 * 8
+		n_sets = 2
+	else:
+		W = (n_bins + 2 * B + 7) // 8 * 8
+		n_sets = 1
+
+	buf = numpy.zeros(n_sets * 8 * W + 8, dtype=numpy.float64)
+	s0 = (64 - buf.ctypes.data % 64) % 64 // 8
+	fp = buf[s0:s0 + 8 * W]
+	for s in range(8):
+		for j in range(n_bins):
+			fp[s * W + B + j - s] = f[j]
+
+	# The slice for the bin nz_j[t] in the block at m0 starts at nz_o[t] + m0
+	# in a set: in copy (B + m0 - j) & 7, and m0 is a multiple of 8.
+	nz_o = numpy.empty(n_nz, dtype=numpy.int64)
+	for t in range(n_nz):
+		j = nz_j[t]
+		s = (B - j) & 7
+		nz_o[t] = s * W + B - j - s
+
+	acc = numba.carray(_stack_float64(_NULL_BLOCK), _NULL_BLOCK)
+
 	for seqlet_len in range(1, max_seqlet_len+1):
-		for i in range(n_bins * (seqlet_len-1)):
-			for j in range(n_bins):
-				scores[seqlet_len, i+j] += scores[seqlet_len-1, i] * f[j]
+		prev = scores[seqlet_len-1]
+		cur = scores[seqlet_len]
+		n_prev = n_bins * (seqlet_len-1)
+		n_out = n_prev + n_bins - 1 if seqlet_len > 1 else 0
+
+		if finite and n_out > 0:
+			r0 = s0 + (seqlet_len % 2) * 8 * W
+			rd = buf[r0:r0 + 8 * W]
+			w0 = s0 + (1 - seqlet_len % 2) * 8 * W
+			wr = buf[w0:w0 + 8 * W]
+			more = seqlet_len < max_seqlet_len
+
+			# nz_j[t_hi:t_lo] are the nonzero bins in [m0 - n_prev + 1,
+			# m0 + B - 1], the bins that reach some output of the block.
+			t_hi = n_nz
+			t_lo = n_nz
+			for m0 in range(0, n_out, B):
+				for b in range(B):
+					acc[b] = 0.0
+
+				while t_hi > 0 and nz_j[t_hi - 1] <= m0 + B - 1:
+					t_hi -= 1
+				while t_lo > 0 and nz_j[t_lo - 1] < m0 - n_prev + 1:
+					t_lo -= 1
+
+				# The unsigned index (t >= 0) drops a wraparound check per t,
+				# and the pointer the bounds a slice would compute per t.
+				for t in range(t_hi, t_lo):
+					a = nz_f[numpy.uint64(t)]
+					o = nz_o[numpy.uint64(t)] + m0
+					pv = numba.carray(_float64_ptr(rd, o), _NULL_BLOCK)
+					for b in range(B):
+						acc[b] += pv[b] * a
+
+				n_b = min(B, n_out - m0)
+				for b in range(n_b):
+					cur[m0 + b] = acc[b]
+
+				if more:
+					for s in range(8):
+						o = s * W + B + m0 - s
+						wv = wr[o:o + n_b]
+						for b in range(n_b):
+							wv[b] = acc[b]
+
+		else:
+			for m0 in range(0, n_out, B):
+				for b in range(B):
+					acc[b] = 0.0
+
+				# The unsigned index (i >= 0) drops a wraparound check per i.
+				for i in range(max(m0 - n_bins + 1, 0), min(m0 + B, n_prev)):
+					a = prev[numpy.uint64(i)]
+					st = B + m0 - i
+					s = st & 7
+					o = s * W + st - s
+					fv = fp[o:o + B]
+					for b in range(B):
+						acc[b] += a * fv[b]
+
+				for b in range(min(B, n_out - m0)):
+					cur[m0 + b] = acc[b]
 
 		for i in range(n_bins * seqlet_len - 1, -1, -1):
 			rcdfs[seqlet_len, i] = rcdfs[seqlet_len, i+1] + scores[seqlet_len, i]
@@ -412,7 +623,303 @@ def _recursive_seqlet_null(values, xmin, bin_width, max_seqlet_len=25,
 
 
 @numba.njit
-def _recursive_seqlet_decode(X, rcdfs, xmin, bin_width, threshold=0.01,
+def _sort_candidates(cand_p, cand_k, m, tmp_p, tmp_k):
+	"""Sort cand_p[:m] in increasing order, moving cand_k[:m] with it.
+
+	The sort is stable, so entries gathered in order of start come out in
+	order of (p-value, start), the order in which the decoder visits them.
+	Runs of 16 are sorted by insertion, then merged in passes between the
+	candidates and the scratch arrays tmp_p and tmp_k, of size at least m.
+	"""
+
+	for lo in range(0, m, 16):
+		hi = min(lo + 16, m)
+		for a in range(lo + 1, hi):
+			p, k = cand_p[a], cand_k[a]
+			b = a
+			while b > lo and p < cand_p[b-1]:
+				cand_p[b] = cand_p[b-1]
+				cand_k[b] = cand_k[b-1]
+				b -= 1
+
+			cand_p[b] = p
+			cand_k[b] = k
+
+	src_p, src_k, dst_p, dst_k = cand_p, cand_k, tmp_p, tmp_k
+	in_tmp = False
+	width = 16
+	while width < m:
+		for lo in range(0, m, 2 * width):
+			mid = min(lo + width, m)
+			hi = min(lo + 2 * width, m)
+			a, b, c = lo, mid, lo
+			while a < mid and b < hi:
+				pa, pb = src_p[a], src_p[b]
+				ka, kb = src_k[a], src_k[b]
+				right = pb < pa
+				dst_p[c] = pb if right else pa
+				dst_k[c] = kb if right else ka
+				step = 1 if right else 0
+				b += step
+				a += 1 - step
+				c += 1
+
+			while a < mid:
+				dst_p[c] = src_p[a]
+				dst_k[c] = src_k[a]
+				a += 1
+				c += 1
+
+			while b < hi:
+				dst_p[c] = src_p[b]
+				dst_k[c] = src_k[b]
+				b += 1
+				c += 1
+
+		src_p, src_k, dst_p, dst_k = dst_p, dst_k, src_p, src_k
+		in_tmp = not in_tmp
+		width *= 2
+
+	if in_tmp:
+		for c in range(m):
+			cand_p[c] = src_p[c]
+			cand_k[c] = src_k[c]
+
+
+@numba.njit
+def _sort_finite_candidates(cand_p, cand_k, m, tmp_p, tmp_k):
+	"""Sort cand_p[:m] as _sort_candidates does, for values with no NaN.
+
+	Each pair of runs is merged from both ends at once: the front takes the
+	smaller head, the left run's on ties, and the back the larger tail, the
+	right run's on ties. Each end follows the stable merge's rule, so between
+	them they write the stable merge's output, with two independent chains of
+	loads and compares per step instead of one. A NaN breaks that, since the
+	two ends could then disagree on the order. The runs of 16 are sorted into
+	the scratch arrays when the number of passes is odd, so that the last
+	pass writes the candidates.
+	"""
+
+	n_passes = 0
+	width = 16
+	while width < m:
+		n_passes += 1
+		width *= 2
+
+	if n_passes % 2 == 1:
+		src_p, src_k, dst_p, dst_k = tmp_p, tmp_k, cand_p, cand_k
+	else:
+		src_p, src_k, dst_p, dst_k = cand_p, cand_k, tmp_p, tmp_k
+
+	for lo in range(0, m, 16):
+		hi = min(lo + 16, m)
+		for a in range(lo, hi):
+			p, k = cand_p[a], cand_k[a]
+			b = a
+			while b > lo and p < src_p[b-1]:
+				src_p[b] = src_p[b-1]
+				src_k[b] = src_k[b-1]
+				b -= 1
+
+			src_p[b] = p
+			src_k[b] = k
+
+	width = 16
+	while width < m:
+		for lo in range(0, m, 2 * width):
+			mid = min(lo + width, m)
+			hi = min(lo + 2 * width, m)
+			if mid == hi:
+				for c in range(lo, hi):
+					dst_p[c] = src_p[c]
+					dst_k[c] = src_k[c]
+				continue
+
+			# The front fills [lo, c) from a and b, the back (tc, hi) from ta
+			# and tb.
+			a, b, c = lo, mid, lo
+			ta, tb, tc = mid - 1, hi - 1, hi - 1
+
+			# Runs of equal length: each end writes as many outputs as a run
+			# holds, so neither end can run out of a run.
+			if hi - mid == mid - lo:
+				for _ in range(mid - lo):
+					pa, pb = src_p[a], src_p[b]
+					ka, kb = src_k[a], src_k[b]
+					right = pb < pa
+					dst_p[c] = pb if right else pa
+					dst_k[c] = kb if right else ka
+					step = 1 if right else 0
+					b += step
+					a += 1 - step
+					c += 1
+
+					qa, qb = src_p[ta], src_p[tb]
+					ja, jb = src_k[ta], src_k[tb]
+					left = qb < qa
+					dst_p[tc] = qa if left else qb
+					dst_k[tc] = ja if left else jb
+					step = 1 if left else 0
+					ta -= step
+					tb -= 1 - step
+					tc -= 1
+
+				continue
+
+			# A shorter right run, at the end of a pass: the front writes
+			# ceil(n/2) outputs and the back floor(n/2), at most the left
+			# run's length, so neither end runs out of the left run, and
+			# either may run out of the right one. The front's load from it
+			# is then clamped into the pair and not taken; the back's is the
+			# left run's last entry, and not taken.
+			n_back = (hi - lo) // 2
+			n_front = hi - lo - n_back
+			for _ in range(n_back):
+				pa, pb = src_p[a], src_p[min(b, hi - 1)]
+				ka, kb = src_k[a], src_k[min(b, hi - 1)]
+				right = (pb < pa) & (b < hi)
+				dst_p[c] = pb if right else pa
+				dst_k[c] = kb if right else ka
+				step = 1 if right else 0
+				b += step
+				a += 1 - step
+				c += 1
+
+				qa, qb = src_p[ta], src_p[tb]
+				ja, jb = src_k[ta], src_k[tb]
+				left = (qb < qa) | (tb < mid)
+				dst_p[tc] = qa if left else qb
+				dst_k[tc] = ja if left else jb
+				step = 1 if left else 0
+				ta -= step
+				tb -= 1 - step
+				tc -= 1
+
+			if n_front > n_back:
+				pa, pb = src_p[a], src_p[min(b, hi - 1)]
+				ka, kb = src_k[a], src_k[min(b, hi - 1)]
+				right = (pb < pa) & (b < hi)
+				dst_p[c] = pb if right else pa
+				dst_k[c] = kb if right else ka
+
+		src_p, src_k, dst_p, dst_k = dst_p, dst_k, src_p, src_k
+		width *= 2
+
+
+@numba.njit
+def _recursive_seqlet_sparse(rcdfs, min_seqlet_len, max_seqlet_len, n_bins):
+	"""Whether the decoders may build, for each length, only the entries whose
+	triangle can still be below the threshold (_recursive_seqlet_shortest and
+	_recursive_seqlet_longer) instead of the full matrices.
+
+	The largest entry of a span's triangle is the largest own p-value over
+	its sub-spans, so it is at least that of either span one shorter inside
+	it, and an entry at or above the threshold rules out every span holding
+	it. That needs every length decoded to be at least 1, and every entry of
+	`rcdfs` the bins can reach to be a number: max(a, b) returns a when b is
+	NaN, so a NaN would be dropped by a later max. With no NaN there, the
+	entries have none either, which _sort_finite_candidates needs. The
+	matrices are built in full otherwise, and when `rcdfs` has fewer rows or
+	columns than the lengths and bins reach.
+	"""
+
+	if min_seqlet_len < 1 or min_seqlet_len > max_seqlet_len or n_bins < 1:
+		return False
+	if max_seqlet_len >= rcdfs.shape[0]:
+		return False
+	if max_seqlet_len * (n_bins - 1) >= rcdfs.shape[1]:
+		return False
+
+	nan = False
+	for seqlet_len in range(min_seqlet_len, max_seqlet_len+1):
+		for s in range(seqlet_len * (n_bins - 1) + 1):
+			v = rcdfs[seqlet_len, s]
+			nan |= v != v
+
+	return not nan
+
+
+@numba.njit
+def _recursive_seqlet_bins(x, xmin, bin_width, n_bins, x_bin):
+	"""Write the bin of each value of `x` to `x_bin`, placing values outside
+	the range of the bins in the end bins. A loop of its own, over one row,
+	it compiles to vector divides; inside a loop carrying a running sum the
+	divides stay scalar.
+	"""
+
+	for j in range(x.shape[0]):
+		b = math.floor((x[j] - xmin) / bin_width)
+		x_bin[j] = min(max(b, 0), n_bins - 1)
+
+
+@numba.njit
+def _recursive_seqlet_shortest(X_bin_csum, rcdfs, seqlet_len, threshold,
+	k_, p_, q_):
+	"""Write the entries of the shortest length decoded, `seqlet_len` (at
+	least 1), whose triangle is below `threshold` to `k_`, `p_` and `q_` in
+	order of start: the start, the entry of the matrix of p-values and the
+	largest entry of its triangle. The rows of the matrix below this length
+	are zeros. Returns the number of entries written.
+	"""
+
+	l = X_bin_csum.shape[0] - 1
+	m = 0
+	for k in range(l-seqlet_len+1):
+		x_ = X_bin_csum[k+seqlet_len] - X_bin_csum[k]
+		p = max(rcdfs[seqlet_len, x_], 0.0)
+		q = max(p, 0.0)
+		k_[m] = k
+		p_[m] = p
+		q_[m] = q
+		if q < threshold:
+			m += 1
+
+	return m
+
+
+@numba.njit
+def _recursive_seqlet_longer(X_bin_csum, rcdfs, seqlet_len, threshold,
+	prev_k, prev_p, prev_q, m_prev, k_, p_, q_):
+	"""Write the entries of length `seqlet_len` whose triangle is below
+	`threshold` to `k_`, `p_` and `q_` in order of start, from the `m_prev`
+	such entries of length seqlet_len - 1 in `prev_k`, `prev_p` and `prev_q`.
+
+	An entry of this length below the threshold needs the entries of the
+	length below at its start and at the next to be below it too, and its
+	p-value and triangle maximum are computed from those two as the full
+	matrices compute them. Returns the number of entries written.
+	"""
+
+	m = 0
+	for a in range(m_prev-1):
+		k = prev_k[a]
+		if prev_k[a+1] != k + 1:
+			continue
+
+		x_ = X_bin_csum[k+seqlet_len] - X_bin_csum[k]
+		p = max(rcdfs[seqlet_len, x_], prev_p[a])
+		q = max(p, prev_q[a+1])
+		k_[m] = k
+		p_[m] = p
+		q_[m] = q
+		if q < threshold:
+			m += 1
+
+	return m
+
+
+@numba.njit
+def _grown(a, size):
+	"""A new array of `size` entries whose first len(a) entries are a's."""
+
+	b = numpy.empty(size, dtype=a.dtype)
+	for i in range(a.shape[0]):
+		b[i] = a[i]
+	return b
+
+
+@numba.njit
+def _recursive_seqlet_decode_fields(X, rcdfs, xmin, bin_width, threshold=0.01,
 	min_seqlet_len=4, max_seqlet_len=25, additional_flanks=0, n_bins=1000):
 	"""An internal function calling seqlets given the null distributions.
 
@@ -422,7 +929,173 @@ def _recursive_seqlet_decode(X, rcdfs, xmin, bin_width, threshold=0.01,
 	(4) Decode this matrix of p-values to find the longest seqlets
 
 	Values of `X` outside the range the bins were built over are placed in the
+	end bins. The spans are decoded as by _recursive_seqlet_decode_dense,
+	which this calls when _recursive_seqlet_sparse says so. Otherwise, only
+	the entries of each length whose triangle is below the threshold are
+	built, from those of the length below (_recursive_seqlet_longer), in
+	order of start, which are the entries the full matrices give to the
+	decoder.
+
+	Returns the seqlets in the order they are called as five arrays: the
+	example index, start and end (int64), and the attribution sum and
+	p-value (float64).
+	"""
+
+	if not _recursive_seqlet_sparse(rcdfs, min_seqlet_len, max_seqlet_len,
+		n_bins):
+		return _recursive_seqlet_decode_dense(X, rcdfs, xmin, bin_width,
+			threshold, min_seqlet_len, max_seqlet_len, additional_flanks,
+			n_bins)
+
+	n, l = X.shape
+	n_lens = max_seqlet_len - min_seqlet_len + 1
+
+	# One example's bins, and the cumulative sums of its bins and values,
+	# rebuilt at the start of each example. Entry 0 of the sums is never
+	# written and stays zero. The bins are a pass of their own so that it
+	# vectorizes, which the running sums would stop.
+	X_bin = numpy.empty(l, dtype=numpy.int64)
+	X_bin_csum = numpy.zeros(l+1, dtype=numpy.int64)
+	X_csum = numpy.zeros(l+1)
+
+	# The entries below the threshold of the last length built and of the one
+	# before it, in order of start.
+	k_a = numpy.empty(l, dtype=numpy.int64)
+	p_a = numpy.empty(l, dtype=numpy.float64)
+	q_a = numpy.empty(l, dtype=numpy.float64)
+	k_b = numpy.empty(l, dtype=numpy.int64)
+	p_b = numpy.empty(l, dtype=numpy.float64)
+	q_b = numpy.empty(l, dtype=numpy.float64)
+
+	# Row j of sorted_p and sorted_k holds the n_cands[j] entries of length
+	# max_seqlet_len - j below the threshold, sorted stably by p-value from
+	# an order of start, the order in which the decoder visits them.
+	sorted_p = numpy.empty((n_lens, l), dtype=numpy.float64)
+	sorted_k = numpy.empty((n_lens, l), dtype=numpy.int64)
+	n_cands = numpy.zeros(n_lens, dtype=numpy.int64)
+	tmp_p = numpy.empty(l, dtype=numpy.float64)
+	tmp_k = numpy.empty(l, dtype=numpy.int64)
+
+	# A position is in a seqlet called in example i when called holds i + 1.
+	called = numpy.zeros(l, dtype=numpy.int64)
+
+	# The fields of the called seqlets, in arrays that double in size when
+	# they fill.
+	capacity = max(n, 16)
+	seqlet_idx = numpy.empty(capacity, dtype=numpy.int64)
+	seqlet_start = numpy.empty(capacity, dtype=numpy.int64)
+	seqlet_end = numpy.empty(capacity, dtype=numpy.int64)
+	seqlet_attr = numpy.empty(capacity, dtype=numpy.float64)
+	seqlet_p = numpy.empty(capacity, dtype=numpy.float64)
+	n_seqlets = 0
+
+	for i in range(n):
+		_recursive_seqlet_bins(X[i], xmin, bin_width, n_bins, X_bin)
+
+		for j in range(l):
+			X_bin_csum[j+1] = X_bin_csum[j] + X_bin[j]
+			X_csum[j+1] = X_csum[j] + X[i, j]
+
+		m = 0
+		for seqlet_len in range(min_seqlet_len, max_seqlet_len+1):
+			if seqlet_len == min_seqlet_len:
+				m = _recursive_seqlet_shortest(X_bin_csum, rcdfs, seqlet_len,
+					threshold, k_a, p_a, q_a)
+			else:
+				m = _recursive_seqlet_longer(X_bin_csum, rcdfs, seqlet_len,
+					threshold, k_a, p_a, q_a, m, k_b, p_b, q_b)
+				k_a, k_b = k_b, k_a
+				p_a, p_b = p_b, p_a
+				q_a, q_b = q_b, q_a
+
+			j = max_seqlet_len - seqlet_len
+			for c in range(m):
+				sorted_p[j, c] = p_a[c]
+				sorted_k[j, c] = k_a[c]
+
+			n_cands[j] = m
+			_sort_finite_candidates(sorted_p[j], sorted_k[j], m, tmp_p, tmp_k)
+
+		# Identify spans, from longest to shortest, that satisfy the recursive
+		# p-value threshold.
+		for j in range(n_lens):
+			seqlet_len = max_seqlet_len - j
+
+			for q in range(n_cands[j]):
+				start = sorted_k[j, q]
+
+				for end in range(start, start+seqlet_len):
+					if called[end] == i + 1:
+						break
+
+				else:
+					for end in range(start, start+seqlet_len):
+						called[end] = i + 1
+
+					# Report the span's own p-value, not the maximum over
+					# its prefixes that its entry holds.
+					x_ = X_bin_csum[start+seqlet_len] - X_bin_csum[start]
+					p = rcdfs[seqlet_len, x_]
+
+					end = min(start + seqlet_len + additional_flanks, l)
+					start = max(start - additional_flanks, 0)
+					attr = X_csum[end] - X_csum[start]
+
+					if n_seqlets == capacity:
+						capacity *= 2
+						seqlet_idx = _grown(seqlet_idx, capacity)
+						seqlet_start = _grown(seqlet_start, capacity)
+						seqlet_end = _grown(seqlet_end, capacity)
+						seqlet_attr = _grown(seqlet_attr, capacity)
+						seqlet_p = _grown(seqlet_p, capacity)
+
+					seqlet_idx[n_seqlets] = i
+					seqlet_start[n_seqlets] = start
+					seqlet_end[n_seqlets] = end
+					seqlet_attr[n_seqlets] = attr
+					seqlet_p[n_seqlets] = p
+					n_seqlets += 1
+
+	return (seqlet_idx[:n_seqlets], seqlet_start[:n_seqlets],
+		seqlet_end[:n_seqlets], seqlet_attr[:n_seqlets], seqlet_p[:n_seqlets])
+
+
+def _recursive_seqlet_decode(X, rcdfs, xmin, bin_width, threshold=0.01,
+	min_seqlet_len=4, max_seqlet_len=25, additional_flanks=0, n_bins=1000):
+	"""Call seqlets as `_recursive_seqlet_decode_fields` does, returned as a
+	list of (example index, start, end, attribution, p-value) tuples in the
+	order they are called."""
+
+	fields = _recursive_seqlet_decode_fields(X, rcdfs, xmin, bin_width,
+		threshold, min_seqlet_len, max_seqlet_len, additional_flanks, n_bins)
+	return list(zip(*[field.tolist() for field in fields]))
+
+
+@numba.njit
+def _recursive_seqlet_decode_dense(X, rcdfs, xmin, bin_width, threshold=0.01,
+	min_seqlet_len=4, max_seqlet_len=25, additional_flanks=0, n_bins=1000):
+	"""_recursive_seqlet_decode_fields, building the full matrices of
+	p-values and of triangle maxima for every example, and returning the
+	same five arrays.
+
+	This covers the last two steps of the recursive seqlet algorithm:
+
+	(3) Use the null distributions to calculate p-values for each possible length
+	(4) Decode this matrix of p-values to find the longest seqlets
+
+	Values of `X` outside the range the bins were built over are placed in the
 	end bins.
+
+	Within one length, the spans are visited in the order of their entry in
+	the matrix of p-values, the largest p-value over the span's prefixes,
+	with ties broken by start, and the visit ends at the first entry at or
+	above the threshold. A span is called when none of its positions is in a
+	seqlet called already and every entry of its triangle is below the
+	threshold. Each span's triangle is reduced to its largest entry while the
+	matrix is built, so a span whose triangle reaches the threshold is never
+	visited. Calling a span never changes the matrix, so one matrix serves
+	every example and is rebuilt from ones only when `min_seqlet_len` is
+	below 1, where the first row built reads the last one.
 	"""
 
 	n, l = X.shape
@@ -431,64 +1104,415 @@ def _recursive_seqlet_decode(X, rcdfs, xmin, bin_width, threshold=0.01,
 	# Step 3: Calculate p-values given these 1-CDFs
 	###
 
-	X_bin_csum = numpy.zeros((n, l+1), dtype=numpy.int64)
-	X_csum = numpy.zeros((n, l+1))
-
-	for i in range(n):
-		for j in range(l):
-			x_bin = math.floor((X[i, j] - xmin) / bin_width)
-			X_bin_csum[i, j+1] = X_bin_csum[i, j] + min(max(x_bin, 0), n_bins - 1)
-			X_csum[i, j+1] = X_csum[i, j] + X[i, j]
+	# The cumulative sums of one example's bins and values, rebuilt at the
+	# start of each example. Entry 0 is never written and stays zero.
+	X_bin_csum = numpy.zeros(l+1, dtype=numpy.int64)
+	X_csum = numpy.zeros(l+1)
 
 
 	###
 	# Step 4: Decode p-values into seqlets
 	###
-	
-	seqlets = []
-	
+
+	# The fields of the called seqlets, in arrays that double in size when
+	# they fill.
+	capacity = max(n, 16)
+	seqlet_idx = numpy.empty(capacity, dtype=numpy.int64)
+	seqlet_start = numpy.empty(capacity, dtype=numpy.int64)
+	seqlet_end = numpy.empty(capacity, dtype=numpy.int64)
+	seqlet_attr = numpy.empty(capacity, dtype=numpy.float64)
+	seqlet_p = numpy.empty(capacity, dtype=numpy.float64)
+	n_seqlets = 0
+
+	n_rows = max_seqlet_len + 1
+	p_flat = numpy.ones(n_rows * l, dtype=numpy.float64)
+	p_value = p_flat.reshape((n_rows, l))
+	p_value[:min_seqlet_len] = 0
+
+	# q_value[L, k] is the largest entry of the triangle of the span [k, k+L),
+	# p_value[L-m, k+m] for m from 0 to L-1, where the rows of p_value below
+	# min_seqlet_len are zeros. Its rows below min_seqlet_len, row 0 and the
+	# last column, which row 1 reads at k = l - 1, are never written: they are
+	# the zeros the recursion starts from.
+	q_value = numpy.zeros((n_rows, l+1), dtype=numpy.float64)
+
+	# A position is in a seqlet called in example i when called holds i + 1.
+	# The entries of one length whose triangle is below the threshold are
+	# gathered in order of start and sorted stably by p-value.
+	called = numpy.zeros(l, dtype=numpy.int64)
+	cand_p = numpy.empty(l, dtype=numpy.float64)
+	cand_k = numpy.empty(l, dtype=numpy.int64)
+	tmp_p = numpy.empty(l, dtype=numpy.float64)
+	tmp_k = numpy.empty(l, dtype=numpy.int64)
+
 	for i in range(n):
-		p_value = numpy.ones((max_seqlet_len+1, l), dtype=numpy.float64)
-		p_value[:min_seqlet_len] = 0
+		for j in range(l):
+			x_bin = math.floor((X[i, j] - xmin) / bin_width)
+			X_bin_csum[j+1] = X_bin_csum[j] + min(max(x_bin, 0), n_bins - 1)
+			X_csum[j+1] = X_csum[j] + X[i, j]
+
+		if min_seqlet_len < 1 and i > 0:
+			for j in range(p_flat.shape[0]):
+				p_flat[j] = 1
+			p_value[:min_seqlet_len] = 0
 
 		for seqlet_len in range(min_seqlet_len, max_seqlet_len+1):
-			for k in range(l-seqlet_len+1):
-				x_ = X_bin_csum[i, k+seqlet_len] - X_bin_csum[i, k]
-				p_value[seqlet_len, k] = max(rcdfs[seqlet_len, x_],
-					p_value[seqlet_len-1, k])
+			if seqlet_len < 1:
+				for k in range(l-seqlet_len+1):
+					x_ = X_bin_csum[k+seqlet_len] - X_bin_csum[k]
+					p_value[seqlet_len, k] = max(rcdfs[seqlet_len, x_],
+						p_value[seqlet_len-1, k])
+				continue
 
-		# Iteratively identify spans, from longest to shortest, that satisfy the
-		# recursive p-value threshold.
+			for k in range(l-seqlet_len+1):
+				x_ = X_bin_csum[k+seqlet_len] - X_bin_csum[k]
+				p = max(rcdfs[seqlet_len, x_], p_value[seqlet_len-1, k])
+				p_value[seqlet_len, k] = p
+				q_value[seqlet_len, k] = max(p, q_value[seqlet_len-1, k+1])
+
+		# Identify spans, from longest to shortest, that satisfy the recursive
+		# p-value threshold. A span of length below 1 has no triangle beyond
+		# its own entry.
 		for j in range(max_seqlet_len - min_seqlet_len + 1):
 			seqlet_len = max_seqlet_len - j
 
-			while True:
-				start = p_value[seqlet_len].argmin()
-				p = p_value[seqlet_len, start]
-				p_value[seqlet_len, start] = 1
+			m = 0
+			if seqlet_len >= 1:
+				for k in range(l-seqlet_len+1):
+					if q_value[seqlet_len, k] < threshold:
+						cand_p[m] = p_value[seqlet_len, k]
+						cand_k[m] = k
+						m += 1
 
-				if p >= threshold:
-					break
+			else:
+				for k in range(min(l-seqlet_len+1, l)):
+					p = p_value[seqlet_len, k]
+					if p < threshold:
+						cand_p[m] = p
+						cand_k[m] = k
+						m += 1
 
-				for k in range(1, seqlet_len):
-					if p_value[seqlet_len-k, start+k] >= threshold:
+			_sort_candidates(cand_p, cand_k, m, tmp_p, tmp_k)
+
+			for q in range(m):
+				start = cand_k[q]
+
+				for end in range(start, start+seqlet_len):
+					if called[end] == i + 1:
 						break
 
 				else:
 					for end in range(start, start+seqlet_len):
-						p_value[:, end] = 1
+						called[end] = i + 1
 
-					# Report the span's own p-value, not the maximum over its
-					# prefixes that p_value holds.
-					x_ = X_bin_csum[i, start+seqlet_len] - X_bin_csum[i, start]
+					# Report the span's own p-value, not the maximum over
+					# its prefixes that p_value holds.
+					x_ = X_bin_csum[start+seqlet_len] - X_bin_csum[start]
 					p = rcdfs[seqlet_len, x_]
 
 					end = min(start + seqlet_len + additional_flanks, l)
 					start = max(start - additional_flanks, 0)
-					attr = X_csum[i, end] - X_csum[i, start]
-					seqlets.append((i, start, end, attr, p))
+					attr = X_csum[end] - X_csum[start]
 
-	return seqlets
+					if n_seqlets == capacity:
+						capacity *= 2
+						seqlet_idx = _grown(seqlet_idx, capacity)
+						seqlet_start = _grown(seqlet_start, capacity)
+						seqlet_end = _grown(seqlet_end, capacity)
+						seqlet_attr = _grown(seqlet_attr, capacity)
+						seqlet_p = _grown(seqlet_p, capacity)
+
+					seqlet_idx[n_seqlets] = i
+					seqlet_start[n_seqlets] = start
+					seqlet_end[n_seqlets] = end
+					seqlet_attr[n_seqlets] = attr
+					seqlet_p[n_seqlets] = p
+					n_seqlets += 1
+
+	return (seqlet_idx[:n_seqlets], seqlet_start[:n_seqlets],
+		seqlet_end[:n_seqlets], seqlet_attr[:n_seqlets], seqlet_p[:n_seqlets])
+
+
+@numba.njit
+def _recursive_seqlet_counts(X, rcdfs, xmin, bin_width, thresholds,
+	min_seqlet_len=4, max_seqlet_len=25, n_bins=1000):
+	"""Count the seqlets `_recursive_seqlet_decode` calls on each row of `X`
+	at each of `thresholds`, which run from largest to smallest.
+
+	The counts are those of _recursive_seqlet_counts_dense, which this calls
+	when _recursive_seqlet_sparse says so. Otherwise, only the entries of
+	each length whose triangle is below the largest threshold are built, in
+	order of start as in _recursive_seqlet_decode, and the sorted entries of
+	each length are visited at each threshold as there. Every decoded length
+	is then at least 1, so a row stops at its first threshold with no
+	seqlet.
+	"""
+
+	if not _recursive_seqlet_sparse(rcdfs, min_seqlet_len, max_seqlet_len,
+		n_bins):
+		return _recursive_seqlet_counts_dense(X, rcdfs, xmin, bin_width,
+			thresholds, min_seqlet_len, max_seqlet_len, n_bins)
+
+	n, l = X.shape
+	n_lens = max_seqlet_len - min_seqlet_len + 1
+	n_thresholds = thresholds.shape[0]
+	counts = numpy.zeros(n_thresholds, dtype=numpy.int64)
+
+	largest = -numpy.inf
+	for t in range(n_thresholds):
+		largest = max(largest, thresholds[t])
+
+	# One row's bins, a pass of their own as in _recursive_seqlet_decode, and
+	# their cumulative sums, whose entry 0 stays zero.
+	X_bin = numpy.empty(l, dtype=numpy.int64)
+	X_bin_csum = numpy.zeros(l+1, dtype=numpy.int64)
+
+	# The entries below the largest threshold of the last length built and of
+	# the one before it, in order of start.
+	k_a = numpy.empty(l, dtype=numpy.int64)
+	p_a = numpy.empty(l, dtype=numpy.float64)
+	q_a = numpy.empty(l, dtype=numpy.float64)
+	k_b = numpy.empty(l, dtype=numpy.int64)
+	p_b = numpy.empty(l, dtype=numpy.float64)
+	q_b = numpy.empty(l, dtype=numpy.float64)
+
+	# The p-values of one length's entries and their places in the order of
+	# start, sorted stably by p-value.
+	cand_p = numpy.empty(l, dtype=numpy.float64)
+	cand_k = numpy.empty(l, dtype=numpy.int64)
+	tmp_p = numpy.empty(l, dtype=numpy.float64)
+	tmp_k = numpy.empty(l, dtype=numpy.int64)
+
+	# Row j of sorted_p, sorted_k and sorted_q holds the n_cands[j] entries of
+	# length max_seqlet_len - j below the largest threshold, in the decoder's
+	# order, with their p-values and triangle maxima.
+	sorted_p = numpy.empty((n_lens, l), dtype=numpy.float64)
+	sorted_k = numpy.empty((n_lens, l), dtype=numpy.int64)
+	sorted_q = numpy.empty((n_lens, l), dtype=numpy.float64)
+	n_cands = numpy.zeros(n_lens, dtype=numpy.int64)
+
+	# A position is in a seqlet called at the current row and threshold when
+	# called holds that pair's stamp.
+	called = numpy.zeros(l, dtype=numpy.int64)
+	stamp = 0
+
+	for i in range(n):
+		_recursive_seqlet_bins(X[i], xmin, bin_width, n_bins, X_bin)
+
+		for j in range(l):
+			X_bin_csum[j+1] = X_bin_csum[j] + X_bin[j]
+
+		m = 0
+		for seqlet_len in range(min_seqlet_len, max_seqlet_len+1):
+			if seqlet_len == min_seqlet_len:
+				m = _recursive_seqlet_shortest(X_bin_csum, rcdfs, seqlet_len,
+					largest, k_a, p_a, q_a)
+			else:
+				m = _recursive_seqlet_longer(X_bin_csum, rcdfs, seqlet_len,
+					largest, k_a, p_a, q_a, m, k_b, p_b, q_b)
+				k_a, k_b = k_b, k_a
+				p_a, p_b = p_b, p_a
+				q_a, q_b = q_b, q_a
+
+			for c in range(m):
+				cand_p[c] = p_a[c]
+				cand_k[c] = c
+
+			_sort_finite_candidates(cand_p, cand_k, m, tmp_p, tmp_k)
+
+			j = max_seqlet_len - seqlet_len
+			for c in range(m):
+				a = cand_k[c]
+				sorted_p[j, c] = cand_p[c]
+				sorted_k[j, c] = k_a[a]
+				sorted_q[j, c] = q_a[a]
+
+			n_cands[j] = m
+
+		for t in range(n_thresholds):
+			threshold = thresholds[t]
+			stamp += 1
+
+			n_seqlets = 0
+			for j in range(n_lens):
+				seqlet_len = max_seqlet_len - j
+
+				for q in range(n_cands[j]):
+					if sorted_p[j, q] >= threshold:
+						break
+
+					if sorted_q[j, q] >= threshold:
+						continue
+
+					start = sorted_k[j, q]
+					for end in range(start, start+seqlet_len):
+						if called[end] == stamp:
+							break
+
+					else:
+						for end in range(start, start+seqlet_len):
+							called[end] = stamp
+
+						n_seqlets += 1
+
+			counts[t] += n_seqlets
+			if n_seqlets == 0:
+				break
+
+	return counts
+
+
+@numba.njit
+def _recursive_seqlet_counts_dense(X, rcdfs, xmin, bin_width, thresholds,
+	min_seqlet_len=4, max_seqlet_len=25, n_bins=1000):
+	"""_recursive_seqlet_counts, building the full matrices of p-values and
+	of triangle maxima for every row.
+
+	The bins, their cumulative sums, the matrix of p-values and the largest
+	entry of each span's triangle do not depend on the threshold, and the
+	decoder never changes the matrix, so each row builds them once. For each
+	length, the entries whose triangle is below the largest threshold are
+	sorted once, stably by p-value from an order of start, and every
+	threshold visits, in that order, the entries whose triangle is below it,
+	calling each that overlaps no seqlet called at that threshold. Once a
+	threshold calls no seqlet in a row, nothing in it was called, so a span
+	passed there exactly when its triangle of p-values was below that
+	threshold, and no stricter threshold calls a seqlet in the row: the row
+	stops at its first zero. That holds only when every decoded length is
+	at least 1, so with a smaller `min_seqlet_len` every threshold is
+	decoded. Returns the number of seqlets at each threshold, summed over
+	the rows.
+	"""
+
+	n, l = X.shape
+	n_rows = max_seqlet_len + 1
+	n_lens = max(max_seqlet_len - min_seqlet_len + 1, 0)
+	n_thresholds = thresholds.shape[0]
+	counts = numpy.zeros(n_thresholds, dtype=numpy.int64)
+
+	largest = -numpy.inf
+	for t in range(n_thresholds):
+		largest = max(largest, thresholds[t])
+
+	X_bin_csum = numpy.zeros(l+1, dtype=numpy.int64)
+	p_flat = numpy.ones(n_rows * l, dtype=numpy.float64)
+	p_value = p_flat.reshape((n_rows, l))
+	p_value[:min_seqlet_len] = 0
+
+	# q_value[L, k] is the largest entry of the triangle of [k, k+L), built as
+	# in the decoder; its rows below min_seqlet_len, row 0 and the last
+	# column stay zero.
+	q_value = numpy.zeros((n_rows, l+1), dtype=numpy.float64)
+
+	cand_p = numpy.empty(l, dtype=numpy.float64)
+	cand_k = numpy.empty(l, dtype=numpy.int64)
+	tmp_p = numpy.empty(l, dtype=numpy.float64)
+	tmp_k = numpy.empty(l, dtype=numpy.int64)
+
+	# Row j of sorted_p, sorted_k and sorted_q holds the n_cands[j] entries of
+	# length max_seqlet_len - j whose key is below the largest threshold, in
+	# the decoder's order, with their p-values and keys.
+	sorted_p = numpy.empty((n_lens, l), dtype=numpy.float64)
+	sorted_k = numpy.empty((n_lens, l), dtype=numpy.int64)
+	sorted_q = numpy.empty((n_lens, l), dtype=numpy.float64)
+	n_cands = numpy.zeros(n_lens, dtype=numpy.int64)
+
+	# A position is in a seqlet called at the current row and threshold when
+	# called holds that pair's stamp.
+	called = numpy.zeros(l, dtype=numpy.int64)
+	stamp = 0
+
+	stop_rows = min_seqlet_len >= 1
+
+	for i in range(n):
+		for j in range(l):
+			x_bin = math.floor((X[i, j] - xmin) / bin_width)
+			X_bin_csum[j+1] = X_bin_csum[j] + min(max(x_bin, 0), n_bins - 1)
+
+		# With min_seqlet_len >= 1 every entry a row reads is written for that
+		# row first, or is one of the ones and zeros set above; otherwise the
+		# matrix starts over as the decoder's does.
+		if not stop_rows and i > 0:
+			for j in range(p_flat.shape[0]):
+				p_flat[j] = 1
+			p_value[:min_seqlet_len] = 0
+
+		for seqlet_len in range(min_seqlet_len, max_seqlet_len+1):
+			if seqlet_len < 1:
+				for k in range(l-seqlet_len+1):
+					x_ = X_bin_csum[k+seqlet_len] - X_bin_csum[k]
+					p_value[seqlet_len, k] = max(rcdfs[seqlet_len, x_],
+						p_value[seqlet_len-1, k])
+				continue
+
+			for k in range(l-seqlet_len+1):
+				x_ = X_bin_csum[k+seqlet_len] - X_bin_csum[k]
+				p = max(rcdfs[seqlet_len, x_], p_value[seqlet_len-1, k])
+				p_value[seqlet_len, k] = p
+				q_value[seqlet_len, k] = max(p, q_value[seqlet_len-1, k+1])
+
+		# The key of an entry is the largest entry of its triangle, which for
+		# a length below 1 is the entry itself.
+		for j in range(n_lens):
+			seqlet_len = max_seqlet_len - j
+
+			m = 0
+			if seqlet_len >= 1:
+				for k in range(l-seqlet_len+1):
+					if q_value[seqlet_len, k] < largest:
+						cand_p[m] = p_value[seqlet_len, k]
+						cand_k[m] = k
+						m += 1
+
+			else:
+				for k in range(min(l-seqlet_len+1, l)):
+					p = p_value[seqlet_len, k]
+					if p < largest:
+						cand_p[m] = p
+						cand_k[m] = k
+						m += 1
+
+			_sort_candidates(cand_p, cand_k, m, tmp_p, tmp_k)
+			for q in range(m):
+				sorted_p[j, q] = cand_p[q]
+				sorted_k[j, q] = cand_k[q]
+				if seqlet_len >= 1:
+					sorted_q[j, q] = q_value[seqlet_len, cand_k[q]]
+				else:
+					sorted_q[j, q] = cand_p[q]
+			n_cands[j] = m
+
+		for t in range(n_thresholds):
+			threshold = thresholds[t]
+			stamp += 1
+
+			n_seqlets = 0
+			for j in range(n_lens):
+				seqlet_len = max_seqlet_len - j
+
+				for q in range(n_cands[j]):
+					if sorted_p[j, q] >= threshold:
+						break
+
+					if sorted_q[j, q] >= threshold:
+						continue
+
+					start = sorted_k[j, q]
+					for end in range(start, start+seqlet_len):
+						if called[end] == stamp:
+							break
+
+					else:
+						for end in range(start, start+seqlet_len):
+							called[end] = stamp
+
+						n_seqlets += 1
+
+			counts[t] += n_seqlets
+			if n_seqlets == 0 and stop_rows:
+				break
+
+	return counts
 
 
 def _as_attributions(X, name, dtype=None):
@@ -552,16 +1576,20 @@ def _recursive_seqlets_fdr(X, X_control, tables, min_seqlet_len,
 	# input has a seqlet, no stricter threshold gives one.
 	exhausted = tables is None
 
+	if not exhausted:
+		xmin, bin_width, rcdfs = tables
+		ordered = numpy.ascontiguousarray(thresholds)
+		counts = _recursive_seqlet_counts(X, rcdfs, xmin, bin_width, ordered,
+			min_seqlet_len, max_seqlet_len, n_bins)
+		counts_control = _recursive_seqlet_counts(X_control, rcdfs, xmin,
+			bin_width, ordered, min_seqlet_len, max_seqlet_len, n_bins)
+
 	rows = []
-	for threshold in thresholds:
+	for t, threshold in enumerate(thresholds):
 		if exhausted:
 			n_seqlets, n_control = 0, 0
 		else:
-			xmin, bin_width, rcdfs = tables
-			n_seqlets = len(_recursive_seqlet_decode(X, rcdfs, xmin, bin_width,
-				threshold, min_seqlet_len, max_seqlet_len, 0, n_bins))
-			n_control = len(_recursive_seqlet_decode(X_control, rcdfs, xmin,
-				bin_width, threshold, min_seqlet_len, max_seqlet_len, 0, n_bins))
+			n_seqlets, n_control = int(counts[t]), int(counts_control[t])
 			exhausted = n_seqlets == 0 and n_control == 0
 
 		fdr = ((n_control + 1) * scale / n_seqlets if n_seqlets > 0
@@ -807,14 +1835,19 @@ def recursive_seqlets(
 				"estimate at every threshold.".format(target_fdr, reason),
 				TangermemeWarning, stacklevel=2)
 
-	if tables is None or threshold is None:
-		seqlets = []
-	else:
+	fields = None
+	if tables is not None and threshold is not None:
 		xmin, bin_width, rcdfs = tables
-		seqlets = _recursive_seqlet_decode(X, rcdfs, xmin, bin_width, threshold,
-			min_seqlet_len, max_seqlet_len, additional_flanks, n_bins)
+		fields = _recursive_seqlet_decode_fields(X, rcdfs, xmin, bin_width,
+			threshold, min_seqlet_len, max_seqlet_len, additional_flanks, n_bins)
 
-	seqlets = pandas.DataFrame(seqlets, columns=columns)
+	# A frame of no seqlets is built from no rows, which gives it object
+	# columns.
+	if fields is None or fields[0].shape[0] == 0:
+		seqlets = pandas.DataFrame([], columns=columns)
+	else:
+		seqlets = pandas.DataFrame(dict(zip(columns, fields)))
+
 	seqlets = seqlets.sort_values("p-value").reset_index(drop=True)
 
 	if return_fdr:
