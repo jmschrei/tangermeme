@@ -150,17 +150,12 @@ def _clear_hooks(module):
 
 		del module.handles
 
-	# Drop the per-call activations and the operands a bilinear op stages for
-	# them. They are as large as the activations themselves and would
-	# otherwise stay attached to the module for as long as the model is alive.
 	for name in ("_caches", "_fwd_counter", "_bw_idx", "_staged"):
 		if name in module.__dict__:
 			del module.__dict__[name]
 
-	# `_b_hook` puts one call's values under these four names for the duration
-	# of a rule and removes them again, so they are only still here if the
-	# rule raised. Only tensors are removed, so a model carrying its own
-	# attribute of one of these names keeps it.
+	# Still set only if a rule raised inside `_b_hook`. Only tensors are
+	# removed, so a model's own attribute of one of these names survives.
 	for name in ("input", "output", "left", "right"):
 		if isinstance(module.__dict__.get(name), torch.Tensor):
 			delattr(module, name)
@@ -170,26 +165,19 @@ def _f_hook(module, inputs, outputs):
 	if _hooks_disabled():
 		return
 
-	# A module may cache values of its own during its forward, as `BilinearOp`
-	# does with its two operands. That forward runs before this hook, so take
-	# what it staged whether or not this call is kept, and keep it in the same
-	# entry as the activations.
+	# Operands `BilinearOp.forward` staged before this hook ran; taken whether
+	# or not this call is kept.
 	cache = module.__dict__.pop("_staged", {})
 
 	if not outputs.requires_grad:
 		return
 
-	# A module that is called more than once in a forward pass sees a different
-	# input and output each time, and the rules need the pair belonging to the
-	# call the backward pass is currently unwinding. Index the pairs by the
-	# order the calls were made, and have each output tag itself on the way
-	# back so that `_b_hook` knows which one it is in.
+	# A module called more than once per forward pass keeps one cache per
+	# call, in call order. The output's tensor hook tells `_b_hook` which call
+	# the backward pass is in.
 	idx = module._fwd_counter
 	module._fwd_counter += 1
 
-	# Clone only the activations the rule declares in `_reads`; a rule that
-	# declares nothing gets both. Detaching first keeps the clone off the
-	# autograd graph.
 	ops = getattr(module, "_NON_LINEAR_OPS", None) or {}
 	reads = getattr(ops.get(type(module)), "_reads", _READS_BOTH)
 
@@ -210,11 +198,8 @@ def _b_hook(module, grad_input, grad_output):
 	if _hooks_disabled():
 		return
 
-	# The tag is set by a hook on the output tensor of one call, which torch
-	# fires immediately before that call's own backward node and so before
-	# this hook, whatever order the surrounding graph is traversed in. It is
-	# missing when the forward hook declined the call, which leaves the
-	# gradient alone.
+	# Set by the output's tensor hook, which torch fires just before this
+	# call's backward node. Missing when `_f_hook` declined the call.
 	idx = module.__dict__.pop("_bw_idx", None)
 	if idx is None:
 		return grad_input
@@ -229,13 +214,9 @@ def _b_hook(module, grad_input, grad_output):
 	for name in cache:
 		delattr(module, name)
 
-	# torch rejects a backward hook that hands back a gradient in a different
-	# dtype than the one it was given. Under autocast a rule can return
-	# float32 where the gradient it replaces is half precision, because the
-	# activations it reads and the arithmetic it does on them need not stay in
-	# the autocast dtype. Putting the multipliers back in the dtype of the
-	# gradients they replace covers every rule at once, including the ones
-	# passed in through `additional_nonlinear_ops`.
+	# torch rejects a gradient whose dtype differs from the one it handed the
+	# hook, and under autocast a rule may return float32 for a half-precision
+	# gradient.
 	return tuple(m if m is None or g is None or m.dtype == g.dtype
 		else m.to(g.dtype) for m, g in zip(multipliers, grad_input))
 
@@ -375,13 +356,9 @@ class BilinearOp(torch.nn.Module):
 			The contraction of the two operands.
 		"""
 
-		# `_NON_LINEAR_OPS` is attached to every module only while the
-		# DeepLIFT hooks are active, so these large tensors are cached during
-		# an attribution call and never outside one. The second check keeps a
-		# re-entrant pass, such as the one the local-IG rule makes, from
-		# overwriting the operands an enclosing rule is still reading. The
-		# forward hook takes them from here and files them under this call,
-		# so that a module used more than once keeps one pair per call.
+		# Staged only during an attribution call, and not in a re-entrant pass
+		# such as the local-IG rule's, which would overwrite the operands an
+		# enclosing rule is reading. `_f_hook` files them under this call.
 		if hasattr(self, "_NON_LINEAR_OPS") and not _hooks_disabled():
 			self._staged = {
 				"left": left.detach(),
@@ -469,9 +446,8 @@ def integrated_gradients_op(
 		z, z0 = module.input.chunk(2)
 		q, q0 = grad_output[0].chunk(2)
 
-		# The module may change the shape of what it is handed, so the nodes
-		# and the weights are shaped against the input and the output
-		# separately.
+		# The module may change the shape, so the nodes are shaped against the
+		# input and the weights against the output.
 		z_tail, q_tail = z.shape[1:], q.shape[1:]
 		nodes, _ = _grid(z.dtype, z.device, z.ndim)
 		_, weights = _grid(q.dtype, q.device, q.ndim)
@@ -805,9 +781,6 @@ def deep_lift_shap(
 					warnings.warn("Convergence deltas too high: " +   
 						str(convergence_deltas), RuntimeWarning)
 
-				# An absolute threshold says nothing about a model whose outputs
-				# are small, so the deltas are also compared with the output
-				# differences they should match.
 				relative = convergence_deltas.mean() / output_diff.abs().mean(
 					).clamp_min(1e-12)
 				if relative > 0.01:
@@ -887,9 +860,7 @@ def _captum_deep_lift_shap(
 	sequences by delegating to captum's `DeepLiftShap` and using a user-
 	supplied (or default `dinucleotide_shuffle`) reference function or
 	pre-computed reference tensor, the same `references` contract used by
-	`deep_lift_shap`. It does NOT make any assumption about the structure of
-	the model output (no BPNet logits/counts split) and it does NOT generate
-	GC-matched negatives.
+	`deep_lift_shap`.
 
 	This is an internal/debugging function that is mostly meant to be used to
 	check for differences with the `deep_lift_shap` method.

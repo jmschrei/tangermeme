@@ -253,6 +253,8 @@ Documentation
 
 	- The README is rewritten. It links the paper in Nature Methods and gives its citation, opens with an image of a workflow map of every public function that links to an interactive version, and adds a Speed section comparing one-hot encoding, saturation mutagenesis and DeepLIFT/SHAP with other packages, giving the machine, versions and settings of each measurement. The Usage examples form one walkthrough that defines a small model, run as written, and show their printed output, and they gain sections on ``extract_loci``, PISA, ``local_dinucleotide_shuffle``, the other design methods and plotting. The roadmap is removed, the note that FIMO and Tomtom moved to memesuite-lite is now part of a Related Packages section, and the ``interactive`` extra is listed. The ``space`` example passed ``spacing=10``, which raises ``ValueError: spacing has shape torch.Size([]) but must have shape (-1, 1)``; it now passes a tensor with one row per spacing.
 
+	- Comments and docstrings are trimmed to what the code does not already say. Comments that restated the code or its docstring, described earlier behavior or gave timings are removed, and the long comments in ``recursive_seqlets``, the DeepLIFT rules and ``extract_loci`` are condensed. Among the public docstrings, ``validate_input`` no longer calls ``_validate_input`` an alias kept for compatibility, ``plot_pwm`` no longer describes what it used to do, ``unchunk`` says that ``lengths`` is required and that it returns a list, ``tfmodisco_seqlets`` says that it returns a dataframe, and ``extract_loci``, ``saliency`` and ``dinucleotide_shuffle`` drop sentences on their internals that do not change what they return.
+
 
 saliency
 --------

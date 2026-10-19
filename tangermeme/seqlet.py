@@ -283,7 +283,7 @@ def tfmodisco_seqlets(
 	Returns
 	-------
 	seqlets: pandas.DataFrame, shape=(-1, 4)
-		A tensor containing the example index, start position, end position,
+		A dataframe containing the example index, start position, end position,
 		and attribution sum for each seqlet that passes the thresholds.
 	"""
 
@@ -364,16 +364,14 @@ def tfmodisco_seqlets(
 ###
 
 
-# The number of consecutive outputs of the null's convolution computed at
-# once. At 32 or fewer LLVM unrolls the block's loop fully and leaves it
-# scalar; from 48 to 96 the block is 6 to 12 vector registers.
+# Outputs of the null's convolution per block. At 32 or fewer, LLVM unrolls
+# the block's loop fully and leaves it scalar.
 _NULL_BLOCK = 64
 
-# The null's histogram bins its values _NULL_CHUNK at a time into a buffer, in
-# a loop of its own that compiles to vector divides, then counts them into
-# _NULL_SPLIT integer histograms (a power of two), value j of a chunk into
-# histogram j mod _NULL_SPLIT, so that consecutive values in one bin do not
-# wait on each other's store. Buffer and histograms are 32 KB at 1000 bins.
+# The null's histogram bins _NULL_CHUNK values at a time in a loop of their
+# own, which vectorizes, and counts value j into histogram j mod _NULL_SPLIT
+# (a power of two), so that consecutive values in one bin do not wait on each
+# other's store.
 _NULL_CHUNK = 2048
 _NULL_SPLIT = 2
 
@@ -476,44 +474,26 @@ def _recursive_seqlet_null(values, xmin, bin_width, max_seqlet_len=25,
 		dtype=numpy.float64)
 	scores[1, :n_bins] = f
 	
-	# rcdfs[k, i] is P(S >= i) for S a sum of k binned values. It is summed
-	# down from the top because 1 - CDF loses the small tail probabilities to
-	# rounding. The extra column is the zero that the sum starts from.
+	# Summed down from the top because 1 - CDF loses the small tail
+	# probabilities to rounding. The extra column is the zero the sum starts
+	# from.
 	rcdfs = numpy.zeros((max_seqlet_len+1, n_bins*max_seqlet_len+1),
 		dtype=numpy.float64)
 
-	# Each row is the previous one convolved with f, computed one output at a
-	# time as cur[m] = sum over ascending i of prev[i] * f[m - i], for blocks
-	# of _NULL_BLOCK consecutive outputs whose sums stay in registers: per i
-	# the block reads one contiguous slice of f, padded with zeros at both
-	# ends so that every i reaching some output of the block reads one. Each
-	# output adds its products over ascending i, from +0.0 and without fused
-	# multiply-adds. The padding adds products of +0.0 before and after them,
-	# which leave the sum unchanged (every value is at least +0.0), so each
-	# output is the sum of prev[i] * f[m - i] over the i with
-	# 0 <= m - i < n_bins alone, in ascending i. Only the outputs m < n_out,
-	# the ones such a product reaches, are written.
+	# Each row is the previous one convolved with f, in blocks of B outputs
+	# accumulated in registers. Each output sums prev[i] * f[m - i] over
+	# ascending i from +0.0, without fused multiply-adds; the zero padding
+	# that lets a block read whole slices adds only +0.0 terms, which leave
+	# the sums unchanged. Each slice is read from one of eight copies of its
+	# padded array, copy s shifted s values left, so that the slice starts
+	# on a 64-byte boundary.
 	#
-	# The slice of padded f starts one value earlier for each i, so in seven
-	# of every eight i its loads would cross cache lines. Instead it is read
-	# from one of eight copies of padded f, copy s shifted s values to the
-	# left and starting on a 64-byte boundary, chosen so that the slice
-	# starts on one too. The values read are the same.
-	#
-	# When f is finite, the same sums run over the nonzero bins j of f in
-	# descending order instead, which is ascending i = m - j for every
-	# output m, and each block reads, per j, one slice of the previous row
-	# padded with B zeros at both ends. Every term this drops is a finite
-	# value times +0.0, a +0.0 that leaves the sum unchanged, so the rows are
-	# the same bit for bit. Empty values give f = 0/0, whose NaN must reach
-	# every output, so they keep the loop over i.
-	#
-	# The padded rows are read from eight shifted copies laid out as those of
-	# f. Two sets of them alternate: the row being built reads one and writes
-	# its outputs into the other for the next row. The first set starts as
-	# the copies of padded f, row 1. A set is next written two rows later,
-	# with a longer row that covers everything written to it before, so the
-	# padding past each row's end stays zero.
+	# When f is finite, the sums run over the nonzero bins j of f in
+	# descending order (ascending i), skipping the +0.0 terms. The previous
+	# row is read from one of two sets of shifted copies and the row being
+	# built is written into the other; a set is next written by a longer
+	# row, so its padding stays zero. Empty input makes f NaN (0/0), which
+	# must reach every output, so it keeps the loop over i.
 	B = _NULL_BLOCK
 	nz_j = numpy.empty(n_bins, dtype=numpy.int64)
 	nz_f = numpy.empty(n_bins, dtype=numpy.float64)
@@ -578,8 +558,7 @@ def _recursive_seqlet_null(values, xmin, bin_width, max_seqlet_len=25,
 				while t_lo > 0 and nz_j[t_lo - 1] < m0 - n_prev + 1:
 					t_lo -= 1
 
-				# The unsigned index (t >= 0) drops a wraparound check per t,
-				# and the pointer the bounds a slice would compute per t.
+				# The unsigned index (t >= 0) drops a wraparound check per t.
 				for t in range(t_hi, t_lo):
 					a = nz_f[numpy.uint64(t)]
 					o = nz_o[numpy.uint64(t)] + m0
@@ -812,15 +791,12 @@ def _recursive_seqlet_sparse(rcdfs, min_seqlet_len, max_seqlet_len, n_bins):
 	triangle can still be below the threshold (_recursive_seqlet_shortest and
 	_recursive_seqlet_longer) instead of the full matrices.
 
-	The largest entry of a span's triangle is the largest own p-value over
-	its sub-spans, so it is at least that of either span one shorter inside
-	it, and an entry at or above the threshold rules out every span holding
-	it. That needs every length decoded to be at least 1, and every entry of
-	`rcdfs` the bins can reach to be a number: max(a, b) returns a when b is
-	NaN, so a NaN would be dropped by a later max. With no NaN there, the
-	entries have none either, which _sort_finite_candidates needs. The
-	matrices are built in full otherwise, and when `rcdfs` has fewer rows or
-	columns than the lengths and bins reach.
+	A span's triangle maximum is at least that of either span one shorter
+	inside it, so an entry at or above the threshold rules out every span
+	holding it. That needs every decoded length to be at least 1, `rcdfs` to
+	cover every length and bin sum reached, and no NaN in those entries:
+	max(a, b) returns a when b is NaN, so a later max would drop it, and
+	_sort_finite_candidates needs no NaN.
 	"""
 
 	if min_seqlet_len < 1 or min_seqlet_len > max_seqlet_len or n_bins < 1:
@@ -950,10 +926,6 @@ def _recursive_seqlet_decode_fields(X, rcdfs, xmin, bin_width, threshold=0.01,
 	n, l = X.shape
 	n_lens = max_seqlet_len - min_seqlet_len + 1
 
-	# One example's bins, and the cumulative sums of its bins and values,
-	# rebuilt at the start of each example. Entry 0 of the sums is never
-	# written and stays zero. The bins are a pass of their own so that it
-	# vectorizes, which the running sums would stop.
 	X_bin = numpy.empty(l, dtype=numpy.int64)
 	X_bin_csum = numpy.zeros(l+1, dtype=numpy.int64)
 	X_csum = numpy.zeros(l+1)
@@ -979,8 +951,6 @@ def _recursive_seqlet_decode_fields(X, rcdfs, xmin, bin_width, threshold=0.01,
 	# A position is in a seqlet called in example i when called holds i + 1.
 	called = numpy.zeros(l, dtype=numpy.int64)
 
-	# The fields of the called seqlets, in arrays that double in size when
-	# they fill.
 	capacity = max(n, 16)
 	seqlet_idx = numpy.empty(capacity, dtype=numpy.int64)
 	seqlet_start = numpy.empty(capacity, dtype=numpy.int64)
@@ -1078,14 +1048,6 @@ def _recursive_seqlet_decode_dense(X, rcdfs, xmin, bin_width, threshold=0.01,
 	p-values and of triangle maxima for every example, and returning the
 	same five arrays.
 
-	This covers the last two steps of the recursive seqlet algorithm:
-
-	(3) Use the null distributions to calculate p-values for each possible length
-	(4) Decode this matrix of p-values to find the longest seqlets
-
-	Values of `X` outside the range the bins were built over are placed in the
-	end bins.
-
 	Within one length, the spans are visited in the order of their entry in
 	the matrix of p-values, the largest p-value over the span's prefixes,
 	with ties broken by start, and the visit ends at the first entry at or
@@ -1100,22 +1062,9 @@ def _recursive_seqlet_decode_dense(X, rcdfs, xmin, bin_width, threshold=0.01,
 
 	n, l = X.shape
 
-	###
-	# Step 3: Calculate p-values given these 1-CDFs
-	###
-
-	# The cumulative sums of one example's bins and values, rebuilt at the
-	# start of each example. Entry 0 is never written and stays zero.
 	X_bin_csum = numpy.zeros(l+1, dtype=numpy.int64)
 	X_csum = numpy.zeros(l+1)
 
-
-	###
-	# Step 4: Decode p-values into seqlets
-	###
-
-	# The fields of the called seqlets, in arrays that double in size when
-	# they fill.
 	capacity = max(n, 16)
 	seqlet_idx = numpy.empty(capacity, dtype=numpy.int64)
 	seqlet_start = numpy.empty(capacity, dtype=numpy.int64)
@@ -1262,8 +1211,6 @@ def _recursive_seqlet_counts(X, rcdfs, xmin, bin_width, thresholds,
 	for t in range(n_thresholds):
 		largest = max(largest, thresholds[t])
 
-	# One row's bins, a pass of their own as in _recursive_seqlet_decode, and
-	# their cumulative sums, whose entry 0 stays zero.
 	X_bin = numpy.empty(l, dtype=numpy.int64)
 	X_bin_csum = numpy.zeros(l+1, dtype=numpy.int64)
 
@@ -1368,19 +1315,13 @@ def _recursive_seqlet_counts_dense(X, rcdfs, xmin, bin_width, thresholds,
 	"""_recursive_seqlet_counts, building the full matrices of p-values and
 	of triangle maxima for every row.
 
-	The bins, their cumulative sums, the matrix of p-values and the largest
-	entry of each span's triangle do not depend on the threshold, and the
-	decoder never changes the matrix, so each row builds them once. For each
-	length, the entries whose triangle is below the largest threshold are
-	sorted once, stably by p-value from an order of start, and every
-	threshold visits, in that order, the entries whose triangle is below it,
-	calling each that overlaps no seqlet called at that threshold. Once a
-	threshold calls no seqlet in a row, nothing in it was called, so a span
-	passed there exactly when its triangle of p-values was below that
-	threshold, and no stricter threshold calls a seqlet in the row: the row
-	stops at its first zero. That holds only when every decoded length is
-	at least 1, so with a smaller `min_seqlet_len` every threshold is
-	decoded. Returns the number of seqlets at each threshold, summed over
+	Only the visit depends on the threshold, so each row builds its matrices
+	and sorts each length's entries once, and every threshold visits them in
+	that order. A row stops at its first threshold with no seqlet: with
+	nothing called, a span passes exactly when its triangle is below the
+	threshold, so no stricter threshold calls one. That needs every decoded
+	length to be at least 1, so a smaller `min_seqlet_len` decodes every
+	threshold. Returns the number of seqlets at each threshold, summed over
 	the rows.
 	"""
 
@@ -1570,10 +1511,8 @@ def _recursive_seqlets_fdr(X, X_control, tables, min_seqlet_len,
 
 	scale = X.size / X_control.size
 
-	# With nothing called, nothing is masked, so a span passes exactly when
-	# its own triangle of p-values is below the threshold. Any span passing a
-	# stricter threshold would then have passed this one, so once neither
-	# input has a seqlet, no stricter threshold gives one.
+	# Once neither input has a seqlet, no stricter threshold gives one, as in
+	# _recursive_seqlet_counts_dense.
 	exhausted = tables is None
 
 	if not exhausted:
@@ -1701,9 +1640,10 @@ def recursive_seqlets(
 	seqlets called on `X`. The added one keeps a strict threshold at which a
 	few seqlets are called on `X` and, by chance, none on the control from
 	passing as a false discovery rate of zero. Seqlets are then called on
-	`X` at the largest threshold whose estimate is at or below `target_fdr`. Once a threshold calls no seqlet
-	on `X` and none on `X_control`, no stricter threshold can call any, so
-	the remaining thresholds are filled in without calling seqlets.
+	`X` at the largest threshold whose estimate is at or below `target_fdr`.
+	Once a threshold calls no seqlet on `X` and none on `X_control`, no
+	stricter threshold can call any, so the remaining thresholds are filled
+	in without calling seqlets.
 
 	A good control is the attributions of several dinucleotide shuffles of
 	each sequence in `X`, computed with the same model, target and settings
@@ -1788,8 +1728,8 @@ def recursive_seqlets(
 		smallest, with columns `threshold`, `n_seqlets` (called on `X`),
 		`n_control_seqlets` (called on `X_control`) and `fdr`, the estimated
 		false discovery rate described above, which is NaN where no seqlets
-		are called on `X`. Seqlets are called at the largest threshold whose `fdr` is at or
-		below `target_fdr`.
+		are called on `X`. Seqlets are called at the largest threshold whose
+		`fdr` is at or below `target_fdr`.
 	"""
 
 	X = _as_attributions(X, "X")

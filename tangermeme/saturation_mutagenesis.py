@@ -26,8 +26,8 @@ from .utils import TangermemeWarning
 
 
 # fast=True is not attempted for a job that fast=False would finish in less
-# time than this, in seconds, because capturing and checking the model could
-# take longer than it saves, and does when the check then fails.
+# time than this, in seconds, since capturing and checking the model could
+# take longer than it saves.
 _FAST_MIN_SECONDS = 30.0
 
 # fast=True is used only when it takes at most this fraction of the time
@@ -36,9 +36,8 @@ _FAST_MAX_RELATIVE_TIME = 1.0
 
 # The largest difference between fast=True and fast=False, relative to the
 # largest output, that verification accepts, by the dtype the model runs in.
-# Each is set above the rounding differences of that dtype. On CUDA, float32
-# convolutions run in TF32 by default, so float32 gets a looser tolerance
-# there than on the CPU.
+# On CUDA, float32 convolutions run in TF32 by default, so float32 gets a
+# looser tolerance there than on the CPU.
 _FAST_TOLERANCE = {
 	torch.float64: 1e-10,
 	torch.float32: 1e-4,

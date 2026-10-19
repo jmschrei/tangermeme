@@ -1,11 +1,8 @@
 # _compat.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
-"""Small cross-module helpers for device handling and model-state
-preservation. Kept private to discourage external dependence; everything
-here is implementation detail that the public functions in `predict`,
-`deep_lift_shap`, `pisa`, `design`, `product`, and `saturation_mutagenesis`
-share."""
+"""Private helpers for device handling and model-state preservation that
+the public functions share."""
 
 from __future__ import annotations
 
@@ -20,8 +17,7 @@ def _resolve_device(device: str | torch.device | None) -> torch.device:
 
 	If `device` is None, return `'cuda'` when CUDA is available and `'cpu'`
 	otherwise. If `device` is a string or `torch.device`, it is returned as
-	a `torch.device`. This lets callers avoid the historical default of
-	`device='cuda'`, which crashes on CPU-only machines.
+	a `torch.device`.
 	"""
 
 	if device is None:
@@ -66,11 +62,6 @@ def _preserve_model_state(
 ) -> Iterator[None]:
 	"""Move a model to `device` for the duration of a `with` block, then
 	restore its original device and training mode on exit.
-
-	Many public entry points (`predict`, `deep_lift_shap`, ...) historically
-	called `model.to(device).eval()` and never restored the original state,
-	silently mutating a user-owned object. Wrapping those calls with this
-	context manager keeps the model where the user left it.
 	"""
 
 	try:

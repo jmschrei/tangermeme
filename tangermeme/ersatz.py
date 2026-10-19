@@ -837,8 +837,7 @@ def _random_states(random_state, n):
 		raise ValueError("random_state must hold one seed per sequence, {}, "
 			"but has shape {}.".format(n, random_states.shape))
 
-	# The kernel seeds with 32-bit integers, and a larger seed wraps around,
-	# as it did when the kernel took a single int32 seed.
+	# The kernel seeds with 32-bit integers, so a larger seed wraps around.
 	return random_states.astype(numpy.int64).astype(numpy.int32)
 
 
@@ -1015,17 +1014,12 @@ def dinucleotide_shuffle(
 		Whether to use a specific random seed when generating the shuffle,
 		to ensure reproducibility. If None, do not use a reproducible seed.
 		Unlike other methods, cannot be a numpy.random.RandomState object.
-		Note: the seed used for the i-th sequence in the batch is
-		`random_state + i`, so the per-sequence stream depends on batch
-		position. Two calls with the same `random_state` but different batch
-		sizes will agree on the leading prefix of sequences (positions where
-		both batches contain that index) but diverge otherwise; this also
-		means sequence 0 of one batch is reproduced as sequence 0 of any
-		other batch that uses the same `random_state`. A sequence of
-		`len(X)` integers instead gives each sequence its own seed, so
-		sequence i is shuffled as `dinucleotide_shuffle(X[i:i+1], ...,
-		random_state=random_state[i])` would shuffle it, whatever else is in
-		the batch. Default is None.
+		The i-th sequence in the batch is shuffled with seed
+		`random_state + i`, so its shuffles depend on its position in the
+		batch. A sequence of `len(X)` integers instead gives each sequence its
+		own seed, so sequence i is shuffled as `dinucleotide_shuffle(X[i:i+1],
+		..., random_state=random_state[i])` would shuffle it, whatever else is
+		in the batch. Default is None.
 
 	allow_N: bool, optional
 		Whether to accept unknown characters, encoded as all-zero columns, in
@@ -1079,11 +1073,10 @@ def dinucleotide_shuffle(
 	if packed:
 		X = X.to_one_hot()
 
-	# The character index of every position. An unknown character, an
-	# all-zero column, is shuffled as a character of its own, with index
-	# len(alphabet), since its maximum would read it as the first character.
-	# `max` rather than `argmax`, which was 150 times slower along this axis
-	# on the CPU, for 64 sequences of 2,114bp.
+	# An unknown character, an all-zero column, is shuffled as a character of
+	# its own, index len(alphabet), since its maximum would read it as the
+	# first character. `max` rather than `argmax`, which is much slower along
+	# this axis on the CPU.
 	values, idxs = X[:, :, start:end].max(dim=1)
 	idxs[values == 0] = X.shape[1]
 	idxs = idxs.cpu().numpy().astype(numpy.int32)
@@ -1344,10 +1337,8 @@ def local_dinucleotide_shuffle(
 				)
 				X_shuf[i, j, :, bin_start:bin_end] = shuffled[0, 0]
 
-				# `dinucleotide_shuffle` raises when every shuffle of a region
-				# comes back identical, but only when asked for more than one.
-				# It is called once per bin here, so that check cannot fire and
-				# an unshuffleable bin would otherwise pass through silently.
+				# `dinucleotide_shuffle` checks for an unshuffleable region only
+				# when asked for more than one shuffle, so count them here.
 				n_bins += 1
 				n_unshuffled += torch.equal(shuffled[0, 0].to(X.device),
 					X[i, :, bin_start:bin_end])
