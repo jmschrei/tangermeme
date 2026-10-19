@@ -4,7 +4,6 @@
 import torch
 import pytest
 
-from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
 from tangermeme.utils import PackedSequence
 from tangermeme.ersatz import shuffle
@@ -45,19 +44,8 @@ def X():
 ##
 
 
-def test_saliency(X, device):
-	# These values are the uncorrected input times gradient; the corrected
-	# default is checked against its closed form further down.
-	torch.manual_seed(0)
-	model = FlattenDense()
-	X_attr = saliency(model, X, gradient_correction=False, device=device)
-
-	assert isinstance(X_attr, torch.Tensor)
-	assert X_attr.shape == X.shape
-	assert X_attr.dtype == torch.float32
-	assert X_attr.device == torch.device('cpu')
-
-	assert_array_almost_equal(X_attr[:2, :, :6], [
+@pytest.mark.parametrize("hypothetical,expected", [
+	(False, [
 		[[-0.0004,  0.0000, -0.0000, -0.0368, -0.0000,  0.0000],
 		 [ 0.0000,  0.0000, -0.0218, -0.0000, -0.0000, -0.0000],
 		 [ 0.0000,  0.0000, -0.0000, -0.0000, -0.0000,  0.0000],
@@ -65,20 +53,11 @@ def test_saliency(X, device):
 		[[-0.0000,  0.0000, -0.0412, -0.0000, -0.0193,  0.0000],
 		 [ 0.0470,  0.0000, -0.0000, -0.0000, -0.0000, -0.0000],
 		 [ 0.0000,  0.0322, -0.0000, -0.0000, -0.0000,  0.0350],
-		 [-0.0000,  0.0000, -0.0000,  0.0115,  0.0000, -0.0000]]], 4)
-
-
-def test_saliency_hypothetical(X, device):
-	torch.manual_seed(0)
-	model = FlattenDense()
-	X_attr = saliency(model, X, hypothetical=True, gradient_correction=False,
-		device=device)
-
-	assert X_attr.shape == X.shape
+		 [-0.0000,  0.0000, -0.0000,  0.0115,  0.0000, -0.0000]]]),
 
 	# A single Linear layer has a constant Jacobian, so every example gets
 	# the same hypothetical attributions.
-	assert_array_almost_equal(X_attr[:2, :, :6], [
+	(True, [
 		[[-0.0004,  0.0268, -0.0412, -0.0368, -0.0193,  0.0134],
 		 [ 0.0470,  0.0337, -0.0218, -0.0126, -0.0476, -0.0009],
 		 [ 0.0021,  0.0322, -0.0378, -0.0343, -0.0290,  0.0350],
@@ -86,7 +65,22 @@ def test_saliency_hypothetical(X, device):
 		[[-0.0004,  0.0268, -0.0412, -0.0368, -0.0193,  0.0134],
 		 [ 0.0470,  0.0337, -0.0218, -0.0126, -0.0476, -0.0009],
 		 [ 0.0021,  0.0322, -0.0378, -0.0343, -0.0290,  0.0350],
-		 [-0.0241,  0.0090, -0.0260,  0.0115,  0.0098, -0.0371]]], 4)
+		 [-0.0241,  0.0090, -0.0260,  0.0115,  0.0098, -0.0371]]]),
+], ids=["projected", "hypothetical"])
+def test_saliency(X, hypothetical, expected, device):
+	# These values are the uncorrected input times gradient; the corrected
+	# default is checked against its closed form further down.
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X_attr = saliency(model, X, hypothetical=hypothetical,
+		gradient_correction=False, device=device)
+
+	assert isinstance(X_attr, torch.Tensor)
+	assert X_attr.shape == X.shape
+	assert X_attr.dtype == torch.float32
+	assert X_attr.device == torch.device('cpu')
+
+	assert_array_almost_equal(X_attr[:2, :, :6], expected, 4)
 
 
 def test_saliency_hypothetical_projects_to_observed(X, device):
@@ -102,31 +96,32 @@ def test_saliency_hypothetical_projects_to_observed(X, device):
 	assert_array_almost_equal(X_attr, X_attr_hypothetical * X, 5)
 
 
-def test_saliency_is_signed(X, device):
-	# The gradient is not passed through an absolute value, so attributions
-	# carry sign: a character can push the target output down.
-	torch.manual_seed(0)
-	model = ConvAvgDense(n_outputs=1)
-	X_attr = saliency(model, X, device=device)
-
-	assert X_attr.min() < 0
-	assert X_attr.max() > 0
-
-
-def test_saliency_matches_closed_form_linear(device):
+@pytest.mark.parametrize("hypothetical", [False, True])
+@pytest.mark.parametrize("gradient_correction", [False, True])
+def test_saliency_matches_closed_form_linear(gradient_correction,
+		hypothetical, device):
 	# For a single Linear layer the gradient of the output with respect to
-	# the input is exactly the weight matrix, independent of X.
+	# the input is exactly the weight matrix, independent of X, so the
+	# corrected gradient is the weight matrix minus its mean over the
+	# alphabet at each position.
 	torch.manual_seed(1)
 	model = FlattenDense(seq_len=6, n_outputs=1)
 	X = random_one_hot((5, 4, 6), random_state=2).type(torch.float32)
 
-	X_attr = saliency(model, X, gradient_correction=False, device=device)
+	X_attr = saliency(model, X, hypothetical=hypothetical,
+		gradient_correction=gradient_correction, device=device)
 
 	W = model.dense.weight.detach().reshape(4, 6)
-	assert_array_almost_equal(X_attr, W.unsqueeze(0) * X, 5)
+	if gradient_correction:
+		W = W - W.mean(dim=0, keepdim=True)
+
+	W = W.unsqueeze(0)
+	expected = W.expand(5, -1, -1) if hypothetical else W * X
+	assert_array_almost_equal(X_attr, expected, 5)
 
 
-def test_saliency_matches_autograd(device):
+@pytest.mark.parametrize("gradient_correction", [False, True])
+def test_saliency_matches_autograd(gradient_correction, device):
 	# Ground truth from a plain torch.autograd.grad call, using a model with
 	# a nonlinearity so the gradient genuinely depends on X.
 	torch.manual_seed(3)
@@ -134,11 +129,14 @@ def test_saliency_matches_autograd(device):
 	model.eval()
 
 	X = random_one_hot((6, 4, 15), random_state=4).type(torch.float32)
-	X_attr = saliency(model, X, gradient_correction=False, device=device)
+	X_attr = saliency(model, X, gradient_correction=gradient_correction,
+		device=device)
 
 	X_ = X.clone().to(device).requires_grad_()
 	y = model(X_)
 	grad, = torch.autograd.grad(y[:, 0].sum(), X_)
+	if gradient_correction:
+		grad = grad - grad.mean(dim=1, keepdim=True)
 
 	assert_array_almost_equal(X_attr, (grad * X_).detach().cpu(), 5)
 
@@ -218,21 +216,6 @@ def test_saliency_func_reduces_multi_output_model(X, device):
 
 	X_attr = saliency(model, X, func=lambda y: y[1], device=device)
 	assert X_attr.shape == X.shape
-
-
-def test_saliency_int8_input(device):
-	# X is only upcast per batch, so an int8 encoding -- which cannot itself
-	# require grad -- has to work.
-	torch.manual_seed(0)
-	model = FlattenDense(seq_len=6, n_outputs=1)
-	X = one_hot_encode('ACGTAC').unsqueeze(0)
-	assert X.dtype == torch.int8
-
-	X_attr = saliency(model, X, device=device)
-
-	assert X_attr.shape == (1, 4, 6)
-	assert_array_almost_equal(X_attr,
-		saliency(model, X.type(torch.float32), device=device), 5)
 
 
 def test_saliency_dtype(X, cuda_device):
@@ -351,16 +334,21 @@ def test_saliency_raises_profile_output(X, device):
 		saliency(model, X, device=device)
 
 
-def test_saliency_raises_empty(device):
+@pytest.mark.parametrize("packed", [False, True])
+def test_saliency_raises_empty(X, packed, device):
 	model = FlattenDense()
-	X = random_one_hot((0, 4, 100), random_state=0).type(torch.float32)
+	if packed:
+		X = PackedSequence.from_one_hot(X)
 
 	with pytest.raises(ValueError, match="at least one example"):
-		saliency(model, X, device=device)
+		saliency(model, X[:0], device=device)
 
 
-def test_saliency_raises_mismatched_args(X, device):
+@pytest.mark.parametrize("packed", [False, True])
+def test_saliency_raises_mismatched_args(X, packed, device):
 	model = FlattenDense()
+	if packed:
+		X = PackedSequence.from_one_hot(X)
 
 	with pytest.raises(ValueError, match="same first"):
 		saliency(model, X, args=(torch.zeros(2, 1),), device=device)
@@ -482,40 +470,6 @@ def test_saliency_apply_product(X, device):
 			assert_array_almost_equal(X_attr[:, j, k], X_attr0 * b, 5)
 
 
-@pytest.mark.parametrize("hypothetical", [False, True])
-def test_saliency_gradient_correction_closed_form_linear(hypothetical, device):
-	# For a single Linear layer the gradient is the weight matrix, so the
-	# corrected gradient is the weight matrix minus its mean over the
-	# alphabet at each position.
-	torch.manual_seed(1)
-	model = FlattenDense(seq_len=6, n_outputs=1)
-	X = random_one_hot((5, 4, 6), random_state=2).type(torch.float32)
-
-	X_attr = saliency(model, X, hypothetical=hypothetical, device=device)
-
-	W = model.dense.weight.detach().reshape(4, 6)
-	W = (W - W.mean(dim=0, keepdim=True)).unsqueeze(0)
-	expected = W.expand(5, -1, -1) if hypothetical else W * X
-
-	assert_array_almost_equal(X_attr, expected, 5)
-
-
-def test_saliency_gradient_correction_matches_autograd(device):
-	torch.manual_seed(3)
-	model = ConvAvgDense(n_outputs=1).to(device)
-	model.eval()
-
-	X = random_one_hot((6, 4, 15), random_state=4).type(torch.float32)
-	X_attr = saliency(model, X, device=device)
-
-	X_ = X.clone().to(device).requires_grad_()
-	y = model(X_)
-	grad, = torch.autograd.grad(y[:, 0].sum(), X_)
-	grad = grad - grad.mean(dim=1, keepdim=True)
-
-	assert_array_almost_equal(X_attr, (grad * X_).detach().cpu(), 5)
-
-
 def test_saliency_gradient_correction_ignores_off_simplex(device):
 	# Adding the same weight to every character at a position changes the
 	# model only off the one-hot simplex, where every position sums to one.
@@ -608,19 +562,22 @@ def test_saliency_packed_16bit(X, dtype, cuda_device):
 	assert_same(X_attr, X_attr_packed)
 
 
+@pytest.mark.parametrize("args", [None, (torch.zeros(64, 1),
+	torch.full((64, 1), 2.0))], ids=["no_args", "args"])
 @pytest.mark.parametrize("dtype", [torch.int8, torch.uint8, torch.bool,
 	torch.float16, torch.float64])
-def test_saliency_stored_dtype(X, dtype, device):
+def test_saliency_stored_dtype(X, dtype, args, device):
 	# Attributions of sequences and arguments stored in another dtype equal
-	# those of the same values given as float32.
+	# those of the same values given as float32. X is only upcast per batch,
+	# so an int8 encoding, which cannot itself require grad, has to work.
 	torch.manual_seed(0)
 	model = FlattenDense()
-	alpha = torch.zeros(X.shape[0], 1)
-	beta = torch.full((X.shape[0], 1), 2.0)
 
-	X_attr = saliency(model, X.type(dtype), args=(alpha.half(),
-		beta.double()), device=device)
-	X_attr0 = saliency(model, X, args=(alpha, beta), device=device)
+	X_attr = saliency(model, X.type(dtype), args=None if args is None else
+		(args[0].half(), args[1].double()), device=device)
+	X_attr0 = saliency(model, X, args=args, device=device)
+
+	assert X_attr.shape == X.shape
 	assert_same(X_attr0, X_attr)
 
 
@@ -652,11 +609,3 @@ def test_saliency_func_packed(X, name, device):
 	torch.manual_seed(0)
 	y_packed = calls[name](PackedSequence.from_one_hot(X))
 	assert_same(y, y_packed)
-
-
-def test_saliency_packed_raises(X, device):
-	model = FlattenDense()
-	X_packed = PackedSequence.from_one_hot(X)
-	assert_raises(ValueError, saliency, model, X_packed[:0], device=device)
-	assert_raises(ValueError, saliency, model, X_packed, args=(X[:5],),
-		device=device)
