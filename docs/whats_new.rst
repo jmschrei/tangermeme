@@ -336,6 +336,16 @@ dependency_map
 	  Tutorial B8 hold the references fixed with a wrapper.
 
 
+Testing
+-------
+
+	- Tests that could not fail are fixed or removed. In each case the fixed test was shown to fail with the property it guards broken. Several passed whatever the code did: the signal-threshold test of the background search asserted inside a loop over an empty result; ``test_saturation_mutagenesis_ordering`` compared at a tolerance above every attribution it compared; ``test_deep_lift_shap_random_state`` passed on a shape mismatch; ``test_pisa_n_shuffles`` and three pisa warning checks called ``deep_lift_shap``; the deep_lift_shap cleanup-on-error tests raised before any hook ran; several ersatz error tests raised from a different check than the one they named; two beam search tests passed when no search step ran; and the greedy ``reverse_complement`` test never set ``reverse_complement=True``.
+
+	- Tests that checked pandas, figwig, torch or the toy models rather than tangermeme are removed or rewritten, as are cases that compared a call with itself, such as a batch size above the number of sequences or ``n_jobs=1`` against ``n_jobs=1``, and ``device`` parameters on tests that raise before anything is moved.
+
+	- Tests that never ran now do: the check of the error raised for a block-gzip FASTA without BioPython, which was skipped whenever BioPython was installed and now hides it through ``sys.modules``; the install-skills console script, through in-process calls of ``main()``; and the four skipped cases of the ``PackedSequence.from_one_hot`` value check. ``test_deep_lift_shap_subclassed_op`` is a strict xfail instead of a skip.
+
+
 Version 1.5.0
 =============
 
