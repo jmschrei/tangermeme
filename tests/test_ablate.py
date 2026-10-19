@@ -506,29 +506,26 @@ def test_ablate_convdense_batch_size(X, alpha, device):
 	assert_array_almost_equal(y_after0[1], y_after2[1])
 
 
-def test_ablate_raises_shape(X, alpha):
-	torch.manual_seed(0)
-	model = ConvDense()
-
-	assert_raises(ValueError, ablate, model, X[0], 46, 54)
-	assert_raises(ValueError, ablate, model, X[:, 0], 46, 54)
-	assert_raises(ValueError, ablate, model, X.unsqueeze(0), 46, 54)
-
-	assert_raises(ValueError, ablate, model, X, 46, 54, args=(alpha[:2],))
-	assert_raises(ValueError, ablate, model, X, 46, 54, args=alpha)
-	assert_raises(ValueError, ablate, model, X, 46, 54, args=(alpha[:2, None],))
-
-
-def test_ablate_raises_args(X, alpha, beta):
+@pytest.mark.parametrize("kwargs", [
+	lambda X, alpha, beta: dict(X=X[0], start=46, end=54),
+	lambda X, alpha, beta: dict(X=X[:, 0], start=46, end=54),
+	lambda X, alpha, beta: dict(X=X.unsqueeze(0), start=46, end=54),
+	lambda X, alpha, beta: dict(X=X, start=-6, end=5),
+	lambda X, alpha, beta: dict(X=X, start=7, end=5),
+	lambda X, alpha, beta: dict(X=X, start=7, end=5000),
+	lambda X, alpha, beta: dict(X=X, start=46, end=54, args=alpha),
+	lambda X, alpha, beta: dict(X=X, start=46, end=54, args=(alpha[:2],)),
+	lambda X, alpha, beta: dict(X=X, start=46, end=54,
+		args=(alpha[:2, None],)),
+	lambda X, alpha, beta: dict(X=X, start=5, end=10, args=(alpha[:5],)),
+	lambda X, alpha, beta: dict(X=X, start=5, end=10, args=(alpha, beta[:5]))
+], ids=["X_no_batch", "X_no_channel", "X_4d", "start_negative",
+	"start_after_end", "end_past_length", "args_not_tuple", "args_2_rows",
+	"args_3d", "args_5_rows", "second_args_5_rows"])
+def test_ablate_raises_args(X, alpha, beta, kwargs):
 	torch.manual_seed(0)
 	model = FlattenDense()
-
-	assert_raises(ValueError, ablate, model, X, -6, 5)
-	assert_raises(ValueError, ablate, model, X, 7, 5)
-	assert_raises(ValueError, ablate, model, X, 7, 5000)
-	assert_raises(ValueError, ablate, model, X, 5, 10, args=alpha)
-	assert_raises(ValueError, ablate, model, X, 5, 10, args=(alpha[:5],))
-	assert_raises(ValueError, ablate, model, X, 5, 10, args=(alpha, beta[:5]))
+	assert_raises(ValueError, ablate, model, **kwargs(X, alpha, beta))
 
 
 def test_ablate_accepts_N(X, device):
@@ -673,42 +670,34 @@ def test_ablate_deep_lift_shap_vs_attribute(X, device):
 	assert_array_almost_equal(y_after, y_after0, 4)
 
 
-def test_ablate_deep_lift_shap_alpha(X, alpha, device):
+@pytest.mark.parametrize("use_beta", [False, True], ids=["alpha",
+	"alpha_beta"])
+def test_ablate_deep_lift_shap_alpha(X, alpha, beta, use_beta, device):
+	# FlattenDense multiplies its output by beta, so the attributions scale
+	# by it and do not depend on alpha.
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
+	args = (alpha[:8], beta[:8]) if use_beta else (alpha[:8],)
+	scale = beta[:8] if use_beta else torch.ones(8, 1)
 
 	y_before0, y_after0 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
 		n=3, n_shuffles=5, device=device, random_state=0)
 	y_before1, y_after1 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		n=3, n_shuffles=5, args=(alpha,), device=device, random_state=0)
+		n=3, n_shuffles=5, args=args, device=device, random_state=0)
 
 	assert y_before0.shape == (8, 4, 100)
 	assert y_before0.dtype == torch.float32
-	assert_array_almost_equal(y_before0, y_before1, 4)
+	assert_array_almost_equal(y_before1, y_before0 * scale[:, :, None], 4)
 
 	assert y_after0.shape == (8, 3, 4, 100)
 	assert y_after0.dtype == torch.float32
-	assert_array_almost_equal(y_after0, y_after1, 4)
+	assert_array_almost_equal(y_after1, y_after0 * scale[:, :, None, None], 4)
 
-
-def test_ablate_deep_lift_shap_alpha_beta(X, alpha, beta, device):
-	torch.manual_seed(0)
-	model = FlattenDense(n_outputs=1)
-
-	y_before0, y_after0 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		n=3, n_shuffles=5, device=device, random_state=0)
-	y_before1, y_after1 = ablate(model, X[:8], 45, 55, func=deep_lift_shap, 
-		n=3, n_shuffles=5, args=(alpha, beta), device=device, random_state=0)
-
-	assert y_before0.shape == (8, 4, 100)
-	assert y_before0.dtype == torch.float32
-	assert_raises(AssertionError, assert_array_almost_equal, y_before0, 
-		y_before1, 4)
-
-	assert y_after0.shape == (8, 3, 4, 100)
-	assert y_after0.dtype == torch.float32
-	assert_raises(AssertionError, assert_array_almost_equal, y_after0, 
-		y_after1, 4)
+	if use_beta:
+		assert_raises(AssertionError, assert_array_almost_equal, y_before0,
+			y_before1, 4)
+		assert_raises(AssertionError, assert_array_almost_equal, y_after0,
+			y_after1, 4)
 
 
 def test_ablate_deep_lift_shap_n_shuffles(X, device):
@@ -1157,24 +1146,16 @@ def test_ablate_accepts_fp64(X, device):
 	assert y_after.dtype == torch.float32
 
 
-def test_ablate_accepts_fp16(X, cuda_device):
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16],
+	ids=["fp16", "bf16"])
+def test_ablate_accepts_16bit(X, dtype, cuda_device):
 	model = FlattenDense().to(cuda_device)
-	X16 = X.type(torch.float16).to(cuda_device)
+	X16 = X.type(dtype).to(cuda_device)
 
 	y_before, y_after = ablate(model, X16, start=10, end=20, n=2,
-		device=cuda_device, dtype=torch.float16, random_state=0)
-	assert y_before.dtype == torch.float16
-	assert y_after.dtype == torch.float16
-
-
-def test_ablate_accepts_bf16(X, cuda_device):
-	model = FlattenDense().to(cuda_device)
-	Xbf = X.type(torch.bfloat16).to(cuda_device)
-
-	y_before, y_after = ablate(model, Xbf, start=10, end=20, n=2,
-		device=cuda_device, dtype=torch.bfloat16, random_state=0)
-	assert y_before.dtype == torch.bfloat16
-	assert y_after.dtype == torch.bfloat16
+		device=cuda_device, dtype=dtype, random_state=0)
+	assert y_before.dtype == dtype
+	assert y_after.dtype == dtype
 
 
 def test_ablate_returns_named_tuple(X, device):
