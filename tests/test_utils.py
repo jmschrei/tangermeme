@@ -1961,17 +1961,20 @@ def test_packed_sequence_from_codes_raises():
 	assert_raises(ValueError, PackedSequence.from_codes, torch.tensor(3))
 
 
-@pytest.mark.parametrize("dtype", [torch.int8, torch.int64, torch.float32,
-	torch.float64])
-@pytest.mark.parametrize("value", [0.5, 2, -1, float('nan'), 'two ones'])
+# An integer dtype cannot hold 0.5 or nan, so it is not paired with them.
+@pytest.mark.parametrize("dtype, value", [
+	(torch.int8, 2), (torch.int8, -1), (torch.int8, 'two ones'),
+	(torch.int64, 2), (torch.int64, -1), (torch.int64, 'two ones'),
+	(torch.float32, 0.5), (torch.float32, 2), (torch.float32, -1),
+	(torch.float32, float('nan')), (torch.float32, 'two ones'),
+	(torch.float64, 0.5), (torch.float64, 2), (torch.float64, -1),
+	(torch.float64, float('nan')), (torch.float64, 'two ones')])
 def test_packed_sequence_from_one_hot_raises_values(dtype, value):
 	X = _packed_one_hot((3, 4, 21)).to(dtype)
 	if value == 'two ones':
 		X[1, :2, 5] = 1
-	elif dtype.is_floating_point or value in (2, -1):
-		X[1, 2, 5] = value
 	else:
-		pytest.skip("an integer dtype cannot hold {}".format(value))
+		X[1, 2, 5] = value
 
 	assert_raises(ValueError, PackedSequence.from_one_hot, X)
 
