@@ -306,30 +306,12 @@ def test_marginalize_convdense(X, device):
         [-0.1714,  0.1811,  0.2204],
         [-0.2601,  0.1425,  0.2126]], 4)
 
-
-def test_marginalize_convdense_batch_size(X, device):
-	torch.manual_seed(0)
-	model = ConvDense()
-	y_before, y_after = marginalize(model, X, "ACGTC", batch_size=68, 
+	y_before2, y_after2 = marginalize(model, X, "ACGTC", start=0, batch_size=68,
 		device=device)
-
-	assert len(y_before) == 2
-	assert y_before[0].shape == (64, 12, 98)
-	assert y_before[1].shape == (64, 3)
-
-	assert len(y_after) == 2
-	assert y_after[0].shape == (64, 12, 98)
-	assert y_after[1].shape == (64, 3)
-
-
-def test_marginalize_scatter_batch_size(X, device):
-	torch.manual_seed(0)
-	model = Scatter()
-	y_before, y_after = marginalize(model, X, "ACGTC", batch_size=68, 
-		device=device)
-
-	assert y_before.shape == (64, 100, 4)
-	assert y_after.shape == (64, 100, 4)
+	assert_array_almost_equal(y_before[0], y_before2[0])
+	assert_array_almost_equal(y_before[1], y_before2[1])
+	assert_array_almost_equal(y_after[0], y_after2[0])
+	assert_array_almost_equal(y_after[1], y_after2[1])
 
 
 def test_marginalize_raises_shape(X, device):
@@ -402,24 +384,16 @@ def test_marginalize_accepts_fp64(X, device):
 	assert y_after.dtype == torch.float32
 
 
-def test_marginalize_accepts_fp16(X, cuda_device):
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16],
+	ids=["fp16", "bf16"])
+def test_marginalize_accepts_16bit(X, dtype, cuda_device):
 	model = FlattenDense().to(cuda_device)
-	X16 = X.type(torch.float16).to(cuda_device)
+	X16 = X.type(dtype).to(cuda_device)
 
 	y_before, y_after = marginalize(model, X16, "ACGTC",
-		device=cuda_device, dtype=torch.float16)
-	assert y_before.dtype == torch.float16
-	assert y_after.dtype == torch.float16
-
-
-def test_marginalize_accepts_bf16(X, cuda_device):
-	model = FlattenDense().to(cuda_device)
-	Xbf = X.type(torch.bfloat16).to(cuda_device)
-
-	y_before, y_after = marginalize(model, Xbf, "ACGTC",
-		device=cuda_device, dtype=torch.bfloat16)
-	assert y_before.dtype == torch.bfloat16
-	assert y_after.dtype == torch.bfloat16
+		device=cuda_device, dtype=dtype)
+	assert y_before.dtype == dtype
+	assert y_after.dtype == dtype
 
 
 ###
@@ -694,24 +668,17 @@ def test_marginalize_deep_lift_shap_raises(X, device):
 ###
 
 
-def test_marginalize_returns_tuple_not_list(X, device):
-	model = FlattenDense()
-	result = marginalize(model, X, "ACGTC", batch_size=8, device=device)
-
-	assert isinstance(result, tuple)
-	assert len(result) == 2
-
-
-def test_marginalize_annotations_basic(X, device):
+@pytest.mark.parametrize("container", [torch.tensor, numpy.array])
+def test_marginalize_annotations_basic(X, container, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	X0 = X[:5].clone()
 
-	annotations = torch.tensor([
+	annotations = container([
 		[0, 10, 18],
 		[3, 20, 30],
 		[3, 40, 46],
-	], dtype=torch.int64)
+	])
 
 	y_befores, y_afters = marginalize_annotations(model, X, X0, annotations,
 		batch_size=8, device=device)
@@ -773,23 +740,6 @@ def test_marginalize_annotations_deep_lift_shap(X, device):
 	assert y_afters.shape == (2, 3, 4, 100)
 	assert y_befores.dtype == torch.float32
 	assert y_afters.dtype == torch.float32
-
-
-def test_marginalize_annotations_numpy_array(X, device):
-	torch.manual_seed(0)
-	model = FlattenDense()
-	X0 = X[:3].clone()
-
-	annotations_np = numpy.array([
-		[0, 10, 18],
-		[3, 40, 46],
-	])
-
-	y_befores, y_afters = marginalize_annotations(model, X, X0, annotations_np,
-		batch_size=8, device=device)
-
-	assert y_befores.shape == (2, 3, 3)
-	assert y_afters.shape == (2, 3, 3)
 
 
 def test_marginalize_func_saturation_mutagenesis(X, device):
