@@ -6,8 +6,8 @@ Release History
 ===============
 
 
-Version 1.5.1 (unreleased)
-==========================
+Unreleased
+==========
 
 Claude Code skill
 -----------------
@@ -138,6 +138,8 @@ seqlet
 	- The ``recursive_seqlets`` docstring says that its p-values rank spans rather than give error rates, and why, so that ``threshold=0.01`` does not mean that 1% of the calls are false, and it describes choosing the threshold with ``X_control``. For negative seqlets, it says to run on the negated attributions and drop those that overlap a positive seqlet. Running on the absolute values, as it used to suggest, pools both tails into one null, so negative seqlets weaker than the positive ones are never significant.
 
 	- ``recursive_seqlets`` raises a ``ValueError`` for a ``threshold`` that is NaN or above 1. It used to never return: its decoder stops at the first p-value at or above the threshold, and no p-value is NaN or above 1, so ``threshold=numpy.nan``, ``1.5`` or ``numpy.inf`` looped until the process was killed. A threshold of 1 is still accepted, and one of 0 or below still calls no seqlets.
+
+	- ``recursive_seqlets`` is faster on both of its paths, and its outputs are bitwise identical, row order included. With ``X_control``, it used to run its decoder on ``X`` and on ``X_control`` at every threshold it evaluated, up to 117, and each run binned every row again, rebuilt its p-value matrix, and took a new argmin over every start of a length for each span it visited, writing ones over the columns of each seqlet it called. Each row is now binned and its p-value matrix built once, every threshold is decoded in one pass over the row from the loosest to the strictest, keeping only the counts, and a row stops at the first threshold at which it has no seqlet. Both decoders gather the spans below the threshold and sort them once by p-value and start, and skip a span that overlaps a seqlet already called. When ``min_seqlet_len`` is at least 1 and the null distributions hold no NaN, they build only the p-values of spans that can still pass the threshold. The null distributions are built a block of outputs at a time, over the nonzero bins of the histogram. On DeepLIFT/SHAP attributions of 1,000 GM12878 ATAC-seq peaks of 2,114bp from a Cherimoya model, on one CPU thread, a call without a control took 0.0147 s against 0.427 s, and one with the attributions of two dinucleotide shuffles of each peak as the control took 0.102 s against 18.2 s. Compiling the numba kernels, once per environment, takes longer: a first call on each path took 7.0 s against 2.8 s.
 
 utils
 -----
