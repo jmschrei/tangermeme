@@ -220,8 +220,8 @@ def marginalize_annotations(
 		y_afters = torch.stack(y_afters)
 	else:
 		y_befores = [torch.stack([x[i] for x in y_befores]) for i in range(len(
-			y_befores))]
+			y_befores[0]))]
 		y_afters = [torch.stack([x[i] for x in y_afters]) for i in range(len(
-			y_afters))]
+			y_afters[0]))]
 
 	return PerturbationAnnotationsResult(y_befores=y_befores, y_afters=y_afters)
