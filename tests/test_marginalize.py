@@ -7,6 +7,9 @@ import pytest
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
+from tangermeme.predict import predict
+from tangermeme.ersatz import shuffle
 from tangermeme.ersatz import substitute
 
 from tangermeme.deep_lift_shap import deep_lift_shap
@@ -20,6 +23,9 @@ from .toy_models import Conv
 from .toy_models import Scatter
 from .toy_models import ConvDense
 from .toy_models import SmallDeepSEA
+from ._packed import assert_same
+from ._packed import check_packed
+from ._packed import Spy
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -893,3 +899,44 @@ def test_marginalize_annotations_returns_named_tuple(X, device):
 	assert torch.equal(result.y_befores, y_befores)
 	assert torch.equal(result.y_afters, y_afters)
 	assert isinstance(result, PerturbationAnnotationsResult)
+
+
+###
+# A PackedSequence is passed on packed to functions that take one and
+# decoded for others, with the predictions of its one-hot encoding.
+
+
+_PREDICT_SPY = Spy(predict, 1)
+
+
+@pytest.mark.parametrize("func", ["predict", "deep_lift_shap", "custom"])
+def test_marginalize_packed(X, func, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X = X.clone()
+	X[2, :, 10:15] = 0
+
+	kwargs = {"predict": dict(func=predict), "custom": dict(
+		func=_PREDICT_SPY), "deep_lift_shap": dict(func=deep_lift_shap,
+		additional_func_kwargs={"n_shuffles": 3, "random_state": 0,
+		"references": shuffle})}[func]
+
+	if func == "deep_lift_shap":
+		X = X[:8].clone()
+		X[2] = random_one_hot((1, 4, 100), random_state=1)[0]
+
+	check_packed(lambda X_: marginalize(model, X_, "ACGTACGT", device=device,
+		**kwargs), X, [_PREDICT_SPY] if func == "custom" else [])
+
+
+def test_marginalize_annotations_packed(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X0 = random_one_hot((8, 4, 100), random_state=2).float()
+	annotations = torch.tensor([[0, 5, 12], [3, 40, 44], [7, 90, 100]])
+
+	y = marginalize_annotations(model, X, X0, annotations, device=device)
+	y_packed = marginalize_annotations(model, PackedSequence.from_one_hot(X),
+		PackedSequence.from_one_hot(X0), annotations, device=device)
+	assert_same(y.y_befores, y_packed.y_befores)
+	assert_same(y.y_afters, y_packed.y_afters)

@@ -10,6 +10,7 @@ import sys
 import mmap
 import ctypes
 import warnings
+import itertools
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -26,7 +27,12 @@ from .utils import one_hot_encode  # noqa: F401, importable from here
 from .utils import _one_hot_encode_rows
 from .utils import _one_hot_rows_mapping
 from .utils import _one_hot_encode_fasta
+from .utils import _cat_packed
+from .utils import _chunk_rows
+from .utils import _check_one_batch_axis
+from .utils import _check_packable
 from .utils import characters
+from .utils import PackedSequence
 from .utils import TangermemeWarning
 
 from memelite.io import read_meme as memelite_read_meme
@@ -852,8 +858,9 @@ def extract_loci(
 	exclusion_lists: str | os.PathLike | pandas.DataFrame | list | None = None,
 	return_mask: bool = False,
 	verbose: bool = False,
-	n_jobs: int = 8,
-) -> torch.Tensor | list[torch.Tensor]:
+	n_jobs: int = 4,
+	return_packed: bool = False,
+) -> torch.Tensor | PackedSequence | list[torch.Tensor | PackedSequence]:
 	"""Extract sequence and signal information for each provided locus.
 
 	This function will take in a set of loci, sequences, and optionally signals,
@@ -1049,8 +1056,15 @@ def extract_loci(
 		paths with, and that the sequences of a fasta file are read and
 		one-hot encoded with, or -1 for one per CPU. The encoding threads are
 		also capped by numba's NUMBA_NUM_THREADS. The returned values do not
-		depend on it. Default is 8.
+		depend on it. Default is 4.
 
+	return_packed: bool, optional
+		Whether to return the sequences as a PackedSequence rather than a
+		one-hot encoding. The windows are read and packed a chunk at a time,
+		so the one-hot encoding of all of them is never held. Needs an
+		alphabet of four characters, and the characters in `ignore` become
+		unknown characters. The signals are returned as they are otherwise.
+		Default is False.
 
 	Returns
 	-------
@@ -1058,7 +1072,7 @@ def extract_loci(
 		The extracted sequences in the same order as the loci in the locus
 		file after optional filtering by chromosome, as a contiguous tensor of
 		dtype int8, or of the dtype of the values of `sequences` when it is a
-		dictionary.
+		dictionary, or as a PackedSequence under `return_packed`.
 
 	signals: torch.tensor, shape=(n, len(signals), out_window+2*max_jitter)
 		The extracted signals where the first dimension is in the same order
@@ -1093,6 +1107,8 @@ def extract_loci(
 
 	if n_loci is not None and n_loci < 1:
 		raise ValueError("n_loci must be at least 1 or None.")
+
+	_check_packable(return_packed, len(alphabet), "the alphabet")
 
 	if isinstance(n_jobs, bool) or not isinstance(n_jobs, (int, numpy.integer)):
 		raise TypeError("n_jobs must be an integer.")
@@ -1245,34 +1261,57 @@ def extract_loci(
 	# file where they can be, and the windows of a pyfaidx.Fasta one at a
 	# time; both are one-hot encoded straight into one C-contiguous array.
 	threads = _cpu_count() if n_jobs == -1 else int(n_jobs)
+	width = in_window + 2 * max_jitter
+
+	step = len(mids)
+	if return_packed:
+		step = _chunk_rows(width)
+
+	def pack(seqs):
+		return PackedSequence.from_one_hot(torch.from_numpy(seqs), tuple(
+			alphabet))
+
 	try:
 		if opened_fasta and mids.dtype == numpy.int64:
 			codes, names = pandas.factorize(loci_chroms)
+			names = [str(name) for name in names]
+			starts = mids - in_width - max_jitter
+
+			chunks = []
 			with tqdm(total=len(mids), disable=d, desc=desc) as progress:
-				seqs = _read_fasta_windows(sequences, (codes, mids - in_width -
-					max_jitter), in_window + 2 * max_jitter, alphabet, ignore,
-					names=[str(name) for name in names], n_jobs=threads)
-				progress.update(len(mids))
+				for c in range(0, len(mids), step):
+					seqs = _read_fasta_windows(sequences, (codes[c:c+step],
+						starts[c:c+step]), width, alphabet, ignore, names=names,
+						n_jobs=threads)
+					chunks.append(pack(seqs) if return_packed else seqs)
+					progress.update(len(seqs))
 		else:
 			windows = ((str(chrom), mid - in_width - max_jitter, mid + in_width
 				+ max_jitter + (in_window % 2)) for chrom, mid in tqdm(zip(
 				loci_chroms, mids.tolist()), total=len(mids), disable=d,
 				desc=desc))
 
-			# numpy.stack keeps the memory layout of its inputs, so a stack of
-			# slices of Fortran-ordered arrays is not contiguous by default.
-			if isinstance(sequences, dict):
-				seqs = numpy.ascontiguousarray(numpy.stack([sequences[chrom][:,
-					start:end] for chrom, start, end in windows]))
-			else:
-				seqs = _read_pyfaidx_windows(sequences, windows, alphabet,
-					ignore, n_jobs=threads)
+			chunks = []
+			for c in range(0, len(mids), step):
+				windows_ = itertools.islice(windows, step)
+
+				# numpy.stack keeps the memory layout of its inputs, so a stack
+				# of slices of Fortran-ordered arrays is not contiguous by
+				# default.
+				if isinstance(sequences, dict):
+					seqs = numpy.ascontiguousarray(numpy.stack([sequences[
+						chrom][:, start:end] for chrom, start, end in windows_]))
+				else:
+					seqs = _read_pyfaidx_windows(sequences, windows_, alphabet,
+						ignore, n_jobs=threads)
+
+				chunks.append(pack(seqs) if return_packed else seqs)
 	finally:
 		if opened_fasta:
 			sequences.close()
 
 	# Figure out how to format the outputs depending on the provided parameters.
-	seqs = torch.from_numpy(seqs)
+	seqs = _cat_packed(chunks) if return_packed else torch.from_numpy(chunks[0])
 	y_return = [seqs]
 
 	if signals is not None:
@@ -1291,8 +1330,36 @@ def extract_loci(
 	return y_return[0] if len(y_return) == 1 else y_return
 
 
+def _fasta_characters(X_seq, alphabet):
+	"""The characters of one sequence, with N for an all-zero column.
+
+	A sequence without one goes through `characters` alone. An
+	all-zero column is a tie, on which `characters` raises; the sequence is
+	then written with N at each all-zero column when no other column is
+	tied, and the error is raised again otherwise.
+	"""
+
+	try:
+		return characters(X_seq, alphabet=alphabet)
+	except ValueError:
+		if (not isinstance(X_seq, torch.Tensor) or X_seq.ndim != 2 or
+				X_seq.shape[0] != len(alphabet) or
+				X_seq.dtype == torch.bfloat16):
+			raise
+
+		X_seq = X_seq.numpy(force=True)
+		is_N = (X_seq == 0).all(axis=0)
+		n_max = (X_seq == X_seq.max(axis=0, keepdims=True)).sum(axis=0)
+		if not is_N.any() or (n_max[~is_N] > 1).any():
+			raise
+
+		X_chars = numpy.array(alphabet)[X_seq.argmax(axis=0)]
+		X_chars[is_N] = 'N'
+		return ''.join(X_chars)
+
+
 def one_hot_to_fasta(
-	X: torch.Tensor | numpy.ndarray,
+	X: torch.Tensor | numpy.ndarray | PackedSequence,
 	filename: str,
 	mode: str = 'w',
 	headers: list[str] | None = None,
@@ -1307,8 +1374,14 @@ def one_hot_to_fasta(
 
 	Parameters
 	----------
-	X: torch.Tensor, shape=(-1, len(alphabet), length)
-		A set of one-hot encoded sequences to write out.
+	X: torch.Tensor, shape=(-1, len(alphabet), length), or PackedSequence
+		A set of one-hot encoded sequences to write out. A position whose
+		column is all zeros, such as an unknown character, is written as N.
+		A position whose largest value is tied between characters raises a
+		ValueError.
+		A PackedSequence with one batch axis is written from its character
+		indices with its own alphabet, a chunk of sequences at a time, and its
+		unknown characters as N.
 
 	filename: str
 		The path to the FASTA file to write to.
@@ -1326,9 +1399,18 @@ def one_hot_to_fasta(
 		the index into the one-hot encoding. Default is ['A', 'C', 'G', 'T'].
 	"""
 	
+	if isinstance(X, PackedSequence):
+		_check_one_batch_axis(X)
+		chars = numpy.frombuffer((''.join(X.alphabet) + 'N').encode('ascii'),
+			dtype=numpy.uint8)
+		step = _chunk_rows(X.length)
+		sequences = (chars[codes].tobytes().decode('ascii') for start in range(
+			0, len(X), step) for codes in X[start:start+step].to_codes().numpy())
+	else:
+		sequences = (_fasta_characters(X_seq, alphabet) for X_seq in X)
+
 	with open(filename, mode=mode) as outfile:
-		for i, X_seq in enumerate(X):
-			X_chars = characters(X_seq, alphabet=alphabet)
+		for i, X_chars in enumerate(sequences):
 			
 			if headers is None:
 				outfile.write("> {}\n".format(i))

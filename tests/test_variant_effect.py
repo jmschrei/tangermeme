@@ -16,6 +16,8 @@ from .toy_models import SumModel
 from .toy_models import SmallDeepSEA
 
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
+from tangermeme.predict import predict
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import characters
 
@@ -24,6 +26,8 @@ from tangermeme.variant_effect import deletion_effect
 from tangermeme.variant_effect import insertion_effect
 
 from tangermeme.deep_lift_shap import deep_lift_shap
+from ._packed import check_packed
+from ._packed import Spy
 
 
 @pytest.fixture
@@ -483,3 +487,71 @@ def test_substitution_effect_allows_repeated_position_across_examples():
 	assert int(y_before.sum(dim=-1)[0]) == 20
 	assert int(y_after.sum(dim=-1)[0]) == 20
 	assert int(y_after.sum(dim=-1)[1]) == 20
+
+
+###
+# A PackedSequence gives the predictions of its one-hot encoding, whether
+# `func` takes it packed or is given its int8 one-hot encoding.
+
+
+_PREDICT_SPY = Spy(predict, 1)
+
+
+@pytest.mark.parametrize("func", [predict, _PREDICT_SPY])
+@pytest.mark.parametrize("chunk", [None, 100])
+def test_substitution_effect_packed(X, substitutions, func, chunk, device,
+	monkeypatch):
+	if chunk is not None:
+		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
+
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	check_packed(lambda X_: substitution_effect(model, X_, substitutions,
+		func=func, device=device), X, [func] if func is _PREDICT_SPY else [])
+
+
+@pytest.mark.parametrize("func", [predict, _PREDICT_SPY])
+@pytest.mark.parametrize("left", [False, True])
+@pytest.mark.parametrize("chunk", [None, 100])
+def test_deletion_effect_packed(X_del, deletions, func, left, chunk, device,
+	monkeypatch):
+	if chunk is not None:
+		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
+
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	check_packed(lambda X_: deletion_effect(model, X_, deletions, left=left,
+		func=func, device=device), X_del, [func] if func is _PREDICT_SPY else [])
+
+
+@pytest.mark.parametrize("func", [predict, _PREDICT_SPY])
+@pytest.mark.parametrize("left", [False, True])
+@pytest.mark.parametrize("chunk", [None, 100])
+def test_insertion_effect_packed(X, substitutions, func, left, chunk, device,
+	monkeypatch):
+	if chunk is not None:
+		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
+
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	check_packed(lambda X_: insertion_effect(model, X_, substitutions,
+		left=left, func=func, device=device), X.float(), [func] if func is
+		_PREDICT_SPY else [])
+
+
+@pytest.mark.parametrize("name", ["substitution", "deletion", "insertion"])
+def test_variant_effect_packed_raises_batch_axes(name):
+	X = PackedSequence.from_one_hot(random_one_hot((6, 4, 40),
+		random_state=1)).reshape(2, 3)
+	model = FlattenDense(seq_len=40)
+	calls = {
+		"substitution": lambda: substitution_effect(model, X,
+			torch.tensor([[0, 3, 1]]), device='cpu'),
+		"deletion": lambda: deletion_effect(model, X, torch.tensor([[0, 3]]),
+			device='cpu'),
+		"insertion": lambda: insertion_effect(model, X,
+			torch.tensor([[0, 3, 1]]), device='cpu'),
+	}
+
+	with pytest.raises(ValueError, match="must have shape"):
+		calls[name]()

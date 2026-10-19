@@ -12,11 +12,31 @@ import torch
 from tqdm import trange
 
 from ._compat import _autocast_supported, _preserve_model_state, _resolve_device
+from .utils import _accepts_packed
+from .utils import PackedSequence
 
 
+def _to_device(X, dtype, device):
+	"""Move a batch to `device` in `dtype`, decoding a PackedSequence there.
+
+	A cast of integers to a wider floating point dtype is exact, so it is made
+	on `device` after the copy, which is then the smaller. Any other cast is
+	made before it, because a GPU can give a float NaN different bits.
+	"""
+
+	if isinstance(X, PackedSequence):
+		return X.to_one_hot(dtype=dtype, device=device)
+
+	if (dtype.is_floating_point and not X.dtype.is_floating_point and
+			X.element_size() < torch.finfo(dtype).bits // 8):
+		return X.to(device).to(dtype)
+	return X.type(dtype).to(device)
+
+
+@_accepts_packed
 def predict(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	args: Sequence[torch.Tensor] | None = None,
 	func: Callable[..., Any] | None = None,
 	batch_size: int = 32,
@@ -39,8 +59,10 @@ def predict(
 	examples in the original dtype. These features allow the function to work on 
 	massive data sets that do not fit in GPU memory. For example, the original
 	sequences can be kept as 8-bit integers for compression and each batch will
-	be upcast to the desired precision. If a single batch does not fit in memory,
-	try lowering the batch size.
+	be upcast to the desired precision. A batch of integers in a narrower dtype
+	than the one it is converted to, such as int8, is converted after it is
+	moved, so that less is copied to the device. If a single batch does not fit in
+	memory, try lowering the batch size.
 
 
 	Parameters
@@ -48,8 +70,10 @@ def predict(
 	model: torch.nn.Module
 		The PyTorch model to use to make predictions.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to make predictions for.
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
+		A one-hot encoded set of sequences to make predictions for, or a
+		PackedSequence with one batch axis, of which each batch is decoded on
+		`device` in `dtype`.
 
 	args: tuple or list or None, optional
 		An optional set of additional arguments to pass into the model. If
@@ -124,7 +148,7 @@ def predict(
 
 		for start in trange(0, X.shape[0], batch_size, disable=not verbose):
 			end = start + batch_size
-			X_ = X[start:end].type(dtype).to(device)
+			X_ = _to_device(X[start:end], dtype, device)
 
 			if X_.shape[0] == 0:
 				continue
@@ -136,7 +160,7 @@ def predict(
 
 			with autocast_ctx:
 				if args is not None:
-					args_ = [a[start:end].type(dtype).to(device) for a in args]
+					args_ = [_to_device(a[start:end], dtype, device) for a in args]
 					y_ = model(X_, *args_)
 				else:
 					y_ = model(X_)

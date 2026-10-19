@@ -9,7 +9,10 @@ from typing import Any
 import numpy
 import torch
 
+from .utils import _for_func
+from .utils import _position_one_hot
 from .utils import _validate_input
+from .utils import PackedSequence
 from .utils import one_hot_encode
 
 from .ersatz import substitute
@@ -19,7 +22,7 @@ from .results import PerturbationResult, PerturbationAnnotationsResult
 
 def marginalize(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	motif: torch.Tensor | str,
 	start: int | None = None,
 	alphabet: list[str] = ['A', 'C', 'G', 'T'],
@@ -62,8 +65,10 @@ def marginalize(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to have a motif inserted into.
+		A PackedSequence with one batch axis is passed to `func` packed when
+		`func` takes one, and as an int8 one-hot encoding otherwise.
 
 	motif: torch.tensor or str
 		Either a one-hot encoded short motif with shape
@@ -126,16 +131,18 @@ def marginalize(
 			f"{motif.device} and X on {X.device}.")
 
 	X_perturb = substitute(X, motif, start=start, alphabet=alphabet)
-	y_before = func(model, X, **kwargs, **additional_func_kwargs)
-	y_after = func(model, X_perturb, **kwargs, **additional_func_kwargs)
+	y_before = func(model, _for_func(X, func), **kwargs,
+		**additional_func_kwargs)
+	y_after = func(model, _for_func(X_perturb, func), **kwargs,
+		**additional_func_kwargs)
 
 	return PerturbationResult(y_before=y_before, y_after=y_after)
 
 
 def marginalize_annotations(
 	model: torch.nn.Module,
-	X: torch.Tensor,
-	X0: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
+	X0: torch.Tensor | PackedSequence,
 	annotations: torch.Tensor,
 	**kwargs: Any,
 ) -> PerturbationAnnotationsResult:
@@ -159,11 +166,14 @@ def marginalize_annotations(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences corresponding to the annotations.
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
+		A one-hot encoded set of sequences corresponding to the annotations,
+		or a PackedSequence with one batch axis, of which only the annotated
+		positions are decoded.
 
-	X0: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences that motifs will be substituted into.
+	X0: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
+		A one-hot encoded set of sequences that motifs will be substituted into,
+		or a PackedSequence with one batch axis.
 
 	annotations: torch.Tensor, shape=(n_annotations, 3)
 		A tensor of annotations where the first column is the example_idx, the
@@ -196,7 +206,10 @@ def marginalize_annotations(
 	y_befores, y_afters = [], []
 
 	for idx, start, end in annotations:
-		seq = X[idx, :, start:end].unsqueeze(0)
+		if isinstance(X, PackedSequence):
+			seq = _position_one_hot(X, int(idx), start, end).unsqueeze(0)
+		else:
+			seq = X[idx, :, start:end].unsqueeze(0)
 
 		y_before, y_after = marginalize(model, X0, seq, **kwargs)
 		y_befores.append(y_before)

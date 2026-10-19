@@ -16,6 +16,7 @@ import pybigtools
 
 import tangermeme.io
 import tangermeme.utils
+from tangermeme.utils import PackedSequence
 
 from tangermeme.io import _interleave_loci
 from tangermeme.io import _load_signals
@@ -2939,6 +2940,68 @@ def test_one_hot_to_fasta_headers_length_mismatch(tmp_path):
 	assert_raises(IndexError, one_hot_to_fasta, X, str(path), headers=["only_one"])
 
 
+def _fasta_text(sequences, headers):
+	return "".join("> {}\n".format(header) + "".join(sequence[i:i+80] + "\n"
+		for i in range(0, len(sequence), 80)) + "\n" for header, sequence in
+		zip(headers, sequences))
+
+
+@pytest.mark.parametrize("dtype", [torch.int8, torch.float32])
+def test_one_hot_to_fasta_N(dtype, tmp_path):
+	# A column of zeros is written as N, at the start, middle and end of a
+	# sequence and throughout one, as a PackedSequence is.
+	sequences = ['NNACGTNNNA' * 20, 'ACGT' * 49 + 'ACNN', 'NNNNNNNN']
+	X = torch.stack([one_hot_encode(s) for s in sequences[:2]]).type(dtype)
+	one_hot_to_fasta(X, str(tmp_path / "one_hot.fa"), headers=["a", "b"])
+	assert (tmp_path / "one_hot.fa").read_text() == _fasta_text(sequences[:2],
+		["a", "b"])
+
+	one_hot_to_fasta(PackedSequence.from_one_hot(X), str(tmp_path /
+		"packed.fa"), headers=["a", "b"])
+	assert (tmp_path / "packed.fa").read_text() == (tmp_path /
+		"one_hot.fa").read_text()
+
+	one_hot_to_fasta(one_hot_encode(sequences[2]).unsqueeze(0).type(dtype),
+		str(tmp_path / "all_N.fa"))
+	assert (tmp_path / "all_N.fa").read_text() == _fasta_text(sequences[2:],
+		[0])
+
+
+def test_one_hot_to_fasta_N_only_all_zero(tmp_path):
+	# Only an all-zero column is written as N. A column that sums to zero
+	# without being zero has a largest value, whose character is written.
+	path = str(tmp_path / "out.fa")
+	X = torch.tensor([[[1.0, 1.0, 0.3, 0.0], [-1.0, 0.0, -0.2, 0.0],
+		[0.0, 0.0, -0.1, 0.0], [0.0, 0.0, 0.0, 0.0]]])
+	one_hot_to_fasta(X, path)
+	assert (tmp_path / "out.fa").read_text() == _fasta_text(["AAAN"], [0])
+
+
+def test_one_hot_to_fasta_bfloat16_raises(tmp_path):
+	# characters cannot read bfloat16, so a bfloat16 sequence with an N or a
+	# tie raises the ValueError that characters raised on it, as before.
+	X = one_hot_encode('ACGTNACGT').unsqueeze(0).type(torch.bfloat16)
+	assert_raises(ValueError, one_hot_to_fasta, X, str(tmp_path / "out.fa"))
+
+
+def test_one_hot_to_fasta_ties_raise(tmp_path):
+	# A column whose largest value is tied between characters is ambiguous,
+	# and raises whether or not the sequence also holds an N.
+	path = str(tmp_path / "out.fa")
+
+	X = one_hot_encode('ACGTNACGT').unsqueeze(0)
+	X[0, 1, 2] = 1
+	assert_raises(ValueError, one_hot_to_fasta, X, path)
+
+	X = torch.full((1, 4, 5), 0.25)
+	assert_raises(ValueError, one_hot_to_fasta, X, path)
+
+	X = torch.tensor([[[0.7, 0.0, 0.0], [0.3, 0.0, 0.1], [0.0, 0.0, 0.9],
+		[0.0, 0.0, 0.0]]])
+	one_hot_to_fasta(X, path)
+	assert (tmp_path / "out.fa").read_text() == _fasta_text(["ANG"], [0])
+
+
 ###
 
 
@@ -4226,3 +4289,158 @@ def test_extract_loci_nan_and_inf_threads(tmp_path, monkeypatch, n_jobs):
 		2], [2, 2, 2, 2, 2, 2, 2, 0, 0, 0]])
 	assert numpy.isfinite(y.numpy()).all()
 	assert numpy.isfinite(y_in.numpy()).all()
+
+
+def test_one_hot_to_fasta_packed(tmp_path):
+	# A PackedSequence is written as its one-hot encoding is, and its
+	# unknown characters as N.
+	X = torch.stack([one_hot_encode('ACGT' * 25), one_hot_encode('GCGA' * 25)])
+	one_hot_to_fasta(X, str(tmp_path / "one_hot.fa"))
+	one_hot_to_fasta(PackedSequence.from_one_hot(X), str(tmp_path / "packed.fa"))
+	assert (tmp_path / "packed.fa").read_text() == (tmp_path /
+		"one_hot.fa").read_text()
+
+	X_N = torch.stack([one_hot_encode('ACGTNNNA' * 20), one_hot_encode('C' * 160)])
+	one_hot_to_fasta(PackedSequence.from_one_hot(X_N), str(tmp_path / "N.fa"),
+		headers=["a", "b"])
+	assert (tmp_path / "N.fa").read_text() == ("> a\n" + ('ACGTNNNA' * 10) +
+		"\n" + ('ACGTNNNA' * 10) + "\n\n> b\n" + "C" * 80 + "\n" + "C" * 80 +
+		"\n\n")
+
+
+###
+# Under return_packed=True, extract_loci reads and packs the windows a chunk
+# at a time and returns the packed sequences of its one-hot path.
+
+
+@pytest.mark.parametrize("chunk", [None, 10, 25])
+def test_extract_loci_packed(chunk, monkeypatch):
+	if chunk is not None:
+		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
+
+	loci, fasta = "tests/data/test.bed", "tests/data/test.fa"
+	bw = ["tests/data/test.bw", "tests/data/test2.bw"]
+
+	X, y = extract_loci(loci, fasta, bw, in_window=10, out_window=10)
+	X_packed, y_packed = extract_loci(loci, fasta, bw, in_window=10,
+		out_window=10, return_packed=True)
+
+	assert isinstance(X_packed, PackedSequence)
+	assert X_packed.shape == X.shape
+	assert torch.equal(X_packed.to_one_hot(), X)
+	assert torch.equal(y_packed, y)
+
+
+@pytest.fixture
+def fasta_with_N(tmp_path):
+	rng = numpy.random.RandomState(0)
+	chroms = {}
+	for name, length in (("chr1", 900), ("chr2", 700)):
+		seq = list(rng.choice(list("ACGTacgt"), size=length))
+		seq[100:130] = "N" * 30
+		seq[401] = "n"
+		seq[650:655] = "NNNNN"
+		chroms[name] = "".join(seq)
+
+	path = tmp_path / "with_N.fa"
+	with open(path, "w") as outfile:
+		for name, seq in chroms.items():
+			outfile.write(">{}\n".format(name))
+			for start in range(0, len(seq), 60):
+				outfile.write(seq[start:start+60] + "\n")
+
+	return str(path)
+
+
+@pytest.mark.parametrize("chunk", [None, 120])
+@pytest.mark.parametrize("reader", ["path", "pyfaidx"])
+def test_extract_loci_packed_N(fasta_with_N, chunk, reader, monkeypatch):
+	if chunk is not None:
+		monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
+
+	loci = pandas.DataFrame({"chrom": ["chr1", "chr1", "chr2", "chr2", "chr1"],
+		"start": [100, 380, 600, 300, 640], "end": [140, 420, 660, 310, 700]})
+	sequences = fasta_with_N if reader == "path" else pyfaidx.Fasta(fasta_with_N)
+	kwargs = dict(in_window=60, max_jitter=4, ignore=['N', 'n'],
+		alphabet=list("ACGT"), return_mask=True)
+
+	X, mask = extract_loci(loci, sequences, **kwargs)
+	X_packed, mask_packed = extract_loci(loci, sequences, return_packed=True,
+		**kwargs)
+
+	assert len(X_packed.n_runs) > 0
+	assert torch.equal(X_packed.to_one_hot(), X)
+	assert torch.equal(mask_packed, mask)
+
+
+def test_extract_loci_packed_dict(dict_sequences):
+	X = extract_loci("tests/data/test.bed", dict_sequences, in_window=10)
+	X_packed = extract_loci("tests/data/test.bed", dict_sequences, in_window=10,
+		return_packed=True)
+	assert torch.equal(X_packed.to_one_hot(), X)
+
+
+def test_extract_loci_packed_raises():
+	with pytest.raises(ValueError, match="four characters"):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
+			alphabet=list("ACGTN"), ignore=[], return_packed=True)
+
+
+@pytest.mark.parametrize("chunk", [1, 250, 10 ** 6])
+def test_one_hot_to_fasta_packed_chunks_alphabet(chunk, tmp_path, monkeypatch):
+	# A PackedSequence is written a chunk of sequences at a time, with its
+	# own alphabet: every chunk is written, and in order.
+	monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
+	X = tangermeme.utils.random_one_hot((7, 4, 100), random_state=2)
+	X[3, :, 10:20] = 0
+
+	one_hot_to_fasta(X, str(tmp_path / "one_hot.fa"), alphabet=['A', 'C',
+		'G', 'U'])
+	one_hot_to_fasta(PackedSequence.from_one_hot(X, alphabet=('A', 'C', 'G',
+		'U')), str(tmp_path / "packed.fa"))
+	assert (tmp_path / "packed.fa").read_text() == (tmp_path /
+		"one_hot.fa").read_text()
+	assert (tmp_path / "packed.fa").read_text().count(">") == 7
+
+
+def test_one_hot_to_fasta_packed_raises_batch_axes(tmp_path):
+	X = PackedSequence.from_one_hot(tangermeme.utils.random_one_hot((6, 4, 40),
+		random_state=1)).reshape(2, 3)
+	with pytest.raises(ValueError, match="must have shape"):
+		one_hot_to_fasta(X, str(tmp_path / "out.fa"))
+
+
+@pytest.mark.parametrize("reader", ["dict", "pyfaidx"])
+def test_extract_loci_packed_chunks_bounded(reader, dict_sequences,
+	monkeypatch):
+	# The windows of a dict or a pyfaidx.Fasta are read and packed a chunk at
+	# a time, two windows of 10 here, with the result of the one-hot path.
+	sequences = dict_sequences if reader == "dict" else pyfaidx.Fasta(
+		"tests/data/test.fa")
+	X = extract_loci("tests/data/test.bed", sequences, in_window=10)
+
+	monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", 25)
+	sizes, from_one_hot = [], PackedSequence.from_one_hot
+
+	def counted(X_, *args, **kwargs):
+		sizes.append(len(X_))
+		return from_one_hot(X_, *args, **kwargs)
+
+	monkeypatch.setattr(PackedSequence, "from_one_hot", counted)
+	X_packed = extract_loci("tests/data/test.bed", sequences, in_window=10,
+		return_packed=True)
+
+	assert torch.equal(X_packed.to_one_hot(), X)
+	assert max(sizes) == 2 and sum(sizes) == len(X)
+
+
+def test_extract_loci_packed_alphabet():
+	# The packed windows are labelled with the alphabet they were encoded in.
+	alphabet = list("TGCA")
+	X = extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
+		alphabet=alphabet)
+	X_packed = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		in_window=10, alphabet=alphabet, return_packed=True)
+
+	assert X_packed.alphabet == tuple(alphabet)
+	assert torch.equal(X_packed.to_one_hot(), X)

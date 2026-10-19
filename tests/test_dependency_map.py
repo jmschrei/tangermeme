@@ -7,6 +7,7 @@ import pytest
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
 
 from tangermeme.saliency import saliency
 from tangermeme.deep_lift_shap import deep_lift_shap
@@ -456,3 +457,68 @@ def test_dependency_map_verbose(X, device):
 	assert_array_almost_equal(
 		dependency_map(model, X[:1], verbose=True, device=device),
 		dependency_map(model, X[:1], device=device), 6)
+
+
+###
+# A PackedSequence, decoded at the start, gives the dependency maps of its
+# one-hot encoding.
+
+
+@pytest.mark.parametrize("func", [saliency, deep_lift_shap])
+def test_dependency_map_packed(X, func, device):
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	kwargs = {}
+	if func is saliency:
+		X = X.clone()
+		X[1, :, 4:6] = 0
+	else:
+		kwargs = {"random_state": 0, "n_shuffles": 3}
+
+	dmap = dependency_map(model, X, func=func, device=device, **kwargs)
+	dmap_packed = dependency_map(model, PackedSequence.from_one_hot(X),
+		func=func, device=device, **kwargs)
+	assert dmap_packed.dtype == dmap.dtype
+	assert torch.equal(dmap_packed, dmap)
+
+
+def test_dependency_map_packed_start_end_args(device):
+	torch.manual_seed(0)
+	model = FlattenDense(seq_len=12, n_outputs=1)
+	X = random_one_hot((2, 4, 12), random_state=0)
+	alpha = torch.zeros(2, 1)
+	beta = torch.full((2, 1), 2.0)
+
+	dmap = dependency_map(model, X, args=(alpha, beta), start=3, end=8,
+		device=device)
+	dmap_packed = dependency_map(model, PackedSequence.from_one_hot(X),
+		args=(alpha, beta), start=3, end=8, device=device)
+	assert torch.equal(dmap_packed, dmap)
+
+
+def test_dependency_map_packed_raises(X, device):
+	model = ConvAvgDense(n_outputs=1)
+	X_packed = PackedSequence.from_one_hot(X)
+	assert_raises(ValueError, dependency_map, model, X_packed[:0],
+		device=device)
+	assert_raises(ValueError, dependency_map, model, X_packed,
+		args=(torch.zeros(3, 1),), device=device)
+
+
+def test_dependency_map_packed_func_int8(X, device):
+	# A function of the user's is given int8 one-hot sequences.
+	seen = []
+
+	def func(model, X, **kwargs):
+		seen.append(X.dtype)
+		return saliency(model, X, **kwargs)
+
+	torch.manual_seed(0)
+	model = ConvAvgDense(n_outputs=1)
+	dmap = dependency_map(model, X, func=func, device=device)
+	seen.clear()
+	dmap_packed = dependency_map(model, PackedSequence.from_one_hot(X),
+		func=func, device=device)
+
+	assert len(seen) > 0 and all(dtype == torch.int8 for dtype in seen)
+	assert torch.equal(dmap_packed, dmap)

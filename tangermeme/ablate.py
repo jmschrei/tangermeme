@@ -10,7 +10,9 @@ from typing import Any
 import numpy
 import torch
 
+from .utils import _for_func
 from .utils import _validate_input
+from .utils import PackedSequence
 from .ersatz import shuffle
 from .predict import predict
 from .results import PerturbationResult, PerturbationAnnotationsResult
@@ -18,7 +20,7 @@ from .results import PerturbationResult, PerturbationAnnotationsResult
 
 def ablate(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	start: int,
 	end: int,
 	n: int = 20,
@@ -67,8 +69,11 @@ def ablate(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences to have a region shuffled out of.
+		A PackedSequence with one batch axis is passed to `func` and to
+		`shuffle_fn` packed when they take one, and as an int8 one-hot
+		encoding otherwise.
 
 	start: int
 		The starting position of where to randomize the sequence, inclusive.
@@ -149,15 +154,21 @@ def ablate(
 			additional_func_kwargs['random_state'] = random_state
 
 
-	X_perturb = shuffle_fn(X, start=start, end=end, n=n, 
+	X_perturb = shuffle_fn(_for_func(X, shuffle_fn), start=start, end=end, n=n, 
 		random_state=random_state)
 
 	args_n = None if args is None else tuple(a.repeat_interleave(n, dim=0) 
 		for a in args)
 
-	y_before = func(model, X, args=args, **kwargs, **additional_func_kwargs)
-	y_after = func(model, X_perturb.reshape(-1, *X_perturb.shape[2:]),
-		args=args_n, **kwargs, **additional_func_kwargs)
+	if isinstance(X_perturb, PackedSequence):
+		X_flat = X_perturb.reshape(-1)
+	else:
+		X_flat = X_perturb.reshape(-1, *X_perturb.shape[2:])
+
+	y_before = func(model, _for_func(X, func), args=args, **kwargs,
+		**additional_func_kwargs)
+	y_after = func(model, _for_func(X_flat, func), args=args_n, **kwargs,
+		**additional_func_kwargs)
 
 	if isinstance(y_after, torch.Tensor):
 		y_after = y_after.reshape(*X_perturb.shape[:2], *y_after.shape[1:])
@@ -170,7 +181,7 @@ def ablate(
 
 def ablate_annotations(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	annotations: torch.Tensor,
 	**kwargs: Any,
 ) -> PerturbationAnnotationsResult:
@@ -190,8 +201,9 @@ def ablate_annotations(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to ablate annotations from.
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
+		A one-hot encoded set of sequences to ablate annotations from, or a
+		PackedSequence with one batch axis.
 
 	annotations: torch.Tensor, shape=(n_annotations, 3)
 		A tensor of annotations where the first column is the example_idx, the

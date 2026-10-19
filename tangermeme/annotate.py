@@ -5,22 +5,26 @@ from __future__ import annotations
 
 from typing import Any
 
+import numba
 import numpy
 import torch
 import pandas
 
 from .io import read_meme
+from .utils import _check_one_batch_axis
+from .utils import _position_one_hot
 from .utils import _validate_input
+from .utils import PackedSequence
 
 from memelite.tomtom import tomtom
 
 
 def annotate_seqlets(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	seqlets: pandas.DataFrame,
 	motifs: str | dict,
 	n_nearest: int = 1,
-	n_jobs: int = -1,
+	n_jobs: int = 4,
 	**kwargs: Any,
 ) -> tuple[pandas.DataFrame, list[str]]:
 	"""Annotate a set of seqlets according to a motif database using TOMTOM.
@@ -38,9 +42,11 @@ def annotate_seqlets(
 
 	Parameters
 	----------
-	X: torch.Tensor, shape=(n_examples, len(alphabet), length)
+	X: torch.Tensor, shape=(n_examples, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences. These are only relevant for
 		extracting the sequences spanned by each seqlet.
+		Only the positions of each seqlet are decoded from a PackedSequence,
+		as float32.
 
 	seqlets: pandas.DataFrame, shape=(n_seqlets, 3+)
 		A BED-formatted set of seqlets to annotate. The first three columns
@@ -58,8 +64,8 @@ def annotate_seqlets(
 		the most significant hit. Default is 1.
 
 	n_jobs: int, optional
-		The number of threads to run TOMTOM on in parallel. -1 means use all
-		available threads. Default is -1.
+		The number of threads to run TOMTOM on in parallel, capped by numba's
+		NUMBA_NUM_THREADS. -1 means use all available threads. Default is 4.
 
 	``**kwargs``: arguments, optional
 		Any other arguments to pass into the TOMTOM algorithm.
@@ -79,9 +85,20 @@ def annotate_seqlets(
 
 	motif_pwms = list(motifs.values())
 
+	_check_one_batch_axis(X)
+
 	X_seqlets = []
 	for example_idx, start, end in seqlets.iloc[:, :3].values:
-		X_seqlets.append(X[example_idx, :, start:end])
+		if isinstance(X, PackedSequence):
+			X_seqlets.append(_position_one_hot(X, int(example_idx), start, end,
+				dtype=torch.float32))
+		else:
+			X_seqlets.append(X[example_idx, :, start:end])
+
+	# memelite sets numba's thread count to n_jobs unchecked, which raises
+	# above the threads numba allows.
+	if n_jobs != -1:
+		n_jobs = min(int(n_jobs), numba.config.NUMBA_NUM_THREADS)
 
 	p_values, _, _, _, _, idxs = tomtom(X_seqlets, motif_pwms, 
 		n_nearest=n_nearest, n_jobs=n_jobs, **kwargs)

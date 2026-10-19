@@ -11,12 +11,15 @@ import numpy as np
 from numba import njit, prange
 import numba
 
+from .utils import _chunk_rows
+from .utils import PackedSequence
+
 key_type = numba.types.int64
 value_type = numba.types.float64
 
 
 def kmers(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	k: int,
 	scores: torch.Tensor | None = None,
 ) -> scipy.sparse.csr_matrix:
@@ -31,8 +34,11 @@ def kmers(
 
 	Parameters
 	----------
-	X: torch.Tensor, shape=(-1, len(alphabet), sequence_length)
+	X: torch.Tensor, shape=(-1, len(alphabet), sequence_length), or PackedSequence
 		A one-hot encoded set of sequences.
+		A PackedSequence is read from its character indices, without
+		building its one-hot encoding, with an unknown character counted as
+		the first character, as an all-zero column is.
 
 	k: int
 		The size of the k-mers to consider.
@@ -51,6 +57,34 @@ def kmers(
 		sequences and each column is a k-mer that could be in the sequence.
 	"""
 
+	if scores is not None:
+		scores = scores.unsqueeze(1).type(torch.float32)
+		ws = torch.ones(1, 1, k, dtype=torch.float32)
+		scores = torch.nn.functional.conv1d(scores, ws)[:, 0]
+
+	if isinstance(X, PackedSequence) and X.length >= k:
+		# The index of each k-mer is the sum of its characters' indices times
+		# n to the power of their offsets, as the convolution below gives,
+		# counted a chunk of sequences at a time. `& 3` counts an unknown
+		# character, 4, as the first, as an all-zero column is.
+		n, n_kmers = 4, X.length - k + 1
+		X_kmers = torch.zeros((len(X), n**k))
+
+		step = _chunk_rows(X.length)
+		for i in range(0, len(X), step):
+			codes = X[i:i+step].to_codes().bitwise_and_(3)
+			idxs = torch.zeros((codes.shape[0], n_kmers), dtype=torch.int64)
+			for j in range(k):
+				idxs.add_(codes[:, j:j+n_kmers], alpha=n ** j)
+
+			X_kmers[i:i+step].scatter_add_(1, idxs, torch.ones(1,
+				dtype=torch.float32).expand_as(idxs) if scores is None else scores[i:i+step])
+
+		return X_kmers
+
+	if isinstance(X, PackedSequence):
+		X = X.to_one_hot()
+
 	n = X.shape[1]
 
 	X = X.type(torch.int32)
@@ -58,15 +92,11 @@ def kmers(
 	w = w[None, :, :].type(torch.int32).to(X.device)
 	idxs = torch.nn.functional.conv1d(X, w).type(torch.int64)[:, 0]
 
-	if scores is not None:
-		scores = scores.unsqueeze(1).type(torch.float32)
-		ws = torch.ones(1, 1, k, dtype=torch.float32)
-		score_ = torch.nn.functional.conv1d(scores, ws)[:, 0]
-	else:
-		score_ = torch.ones(1, dtype=torch.float32).expand_as(idxs)
+	if scores is None:
+		scores = torch.ones(1, dtype=torch.float32).expand_as(idxs)
 
-	X_kmers = torch.zeros((X.shape[0], n**k))
-	X_kmers.scatter_add_(1, idxs, score_)
+	X_kmers = torch.zeros((idxs.shape[0], n**k))
+	X_kmers.scatter_add_(1, idxs, scores)
 	return X_kmers
 
 
@@ -164,7 +194,7 @@ def _fast_extract_gkmers(X, min_k, max_k, max_gap, max_len, max_entries):
 
 
 def gapped_kmers(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	scores: torch.Tensor | None = None,
 	min_k: int = 4,
 	max_k: int = 8,
@@ -185,8 +215,10 @@ def gapped_kmers(
 
 	Parameters
 	----------
-	X: torch.Tensor, shape=(-1, len(alphabet), sequence_length)
+	X: torch.Tensor, shape=(-1, len(alphabet), sequence_length), or PackedSequence
 		A one-hot encoded set of sequences.
+		A PackedSequence is decoded to its one-hot encoding at the start,
+		since the counts take more memory than the sequences.
 
 	scores: torch.Tensor with shape=(-1, sequence_length) or None, optional
 		A corresponding set of attribution values to use. If None, return counts
@@ -224,6 +256,9 @@ def gapped_kmers(
 		found.
 	"""
 
+
+	if isinstance(X, PackedSequence):
+		X = X.to_one_hot()
 
 	X_idxs = X.argmax(axis=1)
 	if scores is None:

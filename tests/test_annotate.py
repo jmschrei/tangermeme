@@ -15,6 +15,7 @@ from numpy.testing import assert_array_almost_equal
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
 
 from tangermeme.annotate import annotate_seqlets
 from tangermeme.annotate import count_annotations
@@ -415,3 +416,73 @@ def test_pairwise_annotations_spacing_overlap_across_examples_ok():
 	y = pairwise_annotations_spacing(X, max_distance=100)
 
 	assert int(y.sum()) == 0
+
+
+def test_annotate_seqlets_packed_decodes_seqlets(X, gata_seqlets,
+	monkeypatch):
+	# With a PackedSequence, each seqlet given to TOMTOM holds only its own
+	# positions, not a view into a decode of the whole sequence, so the
+	# decodes are not all kept alive at once.
+	import tangermeme.annotate
+
+	seen = []
+	tomtom = tangermeme.annotate.tomtom
+
+	def spy(X_seqlets, *args, **kwargs):
+		seen.extend(X_seqlets)
+		return tomtom(X_seqlets, *args, **kwargs)
+
+	monkeypatch.setattr(tangermeme.annotate, "tomtom", spy)
+	annotate_seqlets(PackedSequence.from_one_hot(X), gata_seqlets,
+		"tests/data/test.meme")
+
+	assert len(seen) == len(gata_seqlets)
+	for X_seqlet, (_, start, end) in zip(seen,
+			gata_seqlets.iloc[:, :3].values):
+		assert X_seqlet.shape == (4, end - start)
+		assert X_seqlet.untyped_storage().nbytes() == X_seqlet.numel() * \
+			X_seqlet.element_size()
+
+
+def test_annotate_seqlets_few_threads():
+	# The default n_jobs is capped by the threads numba allows, so a call with
+	# the defaults works where numba allows fewer than four.
+	import os
+	import subprocess
+	import sys
+
+	import tangermeme
+
+	code = ("import pandas, torch\n"
+		"from tangermeme.annotate import annotate_seqlets\n"
+		"X = torch.load('tests/data/X_gata.torch')\n"
+		"seqlets = pandas.DataFrame({'example_idx': [0, 1], 'start': [1040, "
+		"1030], 'end': [1060, 1050]})\n"
+		"idxs, pvals = annotate_seqlets(X, seqlets, 'tests/data/test.meme')\n"
+		"print(tuple(idxs.shape))\n")
+
+	root = os.path.dirname(os.path.dirname(tangermeme.__file__))
+	env = dict(os.environ, NUMBA_NUM_THREADS="2",
+		PYTHONPATH=root + os.pathsep + os.environ.get("PYTHONPATH", ""))
+	result = subprocess.run([sys.executable, "-c", code], env=env,
+		capture_output=True, text=True)
+
+	assert result.returncode == 0, result.stderr[-2000:]
+	assert result.stdout.strip() == "(2, 1)"
+
+
+def test_annotate_seqlets_packed(X, gata_seqlets):
+	# A PackedSequence gives the annotations of its one-hot encoding.
+	idxs, pvals = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme")
+	idxs_packed, pvals_packed = annotate_seqlets(PackedSequence.from_one_hot(X),
+		gata_seqlets, "tests/data/test.meme")
+
+	assert torch.equal(idxs_packed, idxs)
+	assert torch.equal(pvals_packed, pvals)
+
+
+def test_annotate_seqlets_packed_raises_batch_axes(gata_seqlets):
+	X = PackedSequence.from_one_hot(random_one_hot((6, 4, 40),
+		random_state=1)).reshape(2, 3)
+	with pytest.raises(ValueError, match="must have shape"):
+		annotate_seqlets(X, gata_seqlets, "tests/data/test.meme")

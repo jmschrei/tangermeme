@@ -15,7 +15,11 @@ from tqdm import trange
 from ._compat import _autocast_supported, _resolve_device
 from .ersatz import dinucleotide_shuffle
 from .results import AttributionReferencesResult
+from .utils import _accepts_packed
+from .utils import _cat_packed
+from .utils import _keep_references
 from .utils import _validate_input
+from .utils import PackedSequence
 from ._deep_lift_utils import _build_nonlinear_ops
 from ._deep_lift_utils import _READS_BOTH
 from ._deep_lift_utils import _hooks_disabled
@@ -499,9 +503,10 @@ def integrated_gradients_op(
 	return _hook
 
 
+@_accepts_packed
 def deep_lift_shap(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	args: tuple | None = None,
 	target: int = 0,
 	batch_size: int = 32,
@@ -558,9 +563,11 @@ def deep_lift_shap(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A set of one-hot encoded sequences to calculate attribution values
-		for. 
+		for, or a PackedSequence with one batch axis, of which each batch is
+		decoded in `dtype`. The attributions are those of its one-hot
+		encoding.
 
 	args: tuple or None, optional
 		An optional set of additional arguments to pass into the model. If
@@ -596,7 +603,9 @@ def deep_lift_shap(
 		that for each sequence a number of shuffles are provided. It must be
 		one-hot encoded, except that all-zero columns are allowed. A baseline
 		that is not one-hot, such as 0.25 everywhere, must come from a
-		callable, whose output is not validated. Default is the function
+		callable, whose output is not validated. A PackedSequence of batch
+		shape `(len(X), n_shuffles)` can be passed instead of the tensor, and
+		each batch of it is decoded on `device`. Default is the function
 		`dinucleotide_shuffle`.
 
 	n_shuffles: int, optional
@@ -675,9 +684,11 @@ def deep_lift_shap(
 		reference pair with shape equal to `(X.shape[0], n_shuffles, X.shape[1],
 		X.shape[2])`.
 
-	references: torch.tensor, optional
+	references: torch.tensor or PackedSequence, optional
 		The references used for each input sequence, with the shape
-		(n_input_sequences, n_shuffles, 4, length). Only returned if
+		(n_input_sequences, n_shuffles, 4, length). A PackedSequence when
+		`references` is one, or when `X` is one and the references are
+		one-hot, packed a batch at a time. Only returned if
 		`return_references = True`.
 	"""
 
@@ -706,10 +717,14 @@ def deep_lift_shap(
 	
 		attributions, references_, Xi, rj, attr_ = [], [], [], [], []
 
-		if isinstance(references, torch.Tensor):
+		given = isinstance(references, (torch.Tensor, PackedSequence))
+		if given:
 			_validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
 				X.shape[2]), ohe=True, allow_N=True, ohe_dim=-2, only_warn=only_warn)
 			n_shuffles = references.shape[1]
+
+		return_packed = (isinstance(X, PackedSequence) or
+			isinstance(references, PackedSequence))
 
 		n, z = X.shape[0] * n_shuffles, 0
 
@@ -718,14 +733,20 @@ def deep_lift_shap(
 			rj.append(i % n_shuffles)
 
 			if len(Xi) == batch_size or i == (n-1):
-				_X = X[Xi].cpu().type(dtype)
+				if isinstance(X, PackedSequence):
+					_X = X[Xi].to_one_hot(dtype=dtype)
+				else:
+					_X = X[Xi].cpu().type(dtype)
 				_args = None if args is None else tuple([a[Xi].to(device).type(dtype)
 					for a in args])
 
 				# Handle reference sequences while ensuring that the same seed is
 				# used for each shuffle even if not all shuffles are done in the
 				# same batch.
-				if isinstance(references, torch.Tensor):
+				if isinstance(references, PackedSequence):
+					_references = references[Xi, rj].to_one_hot(dtype=dtype,
+						device=device)
+				elif given:
 					_references = references[Xi, rj]
 				else:
 					if random_state is None:
@@ -803,22 +824,27 @@ def deep_lift_shap(
 					if raw_outputs == False:
 						attr_chunk = attr_chunk.mean(dim=0)
 						if not hypothetical:
-							attr_chunk *= X[z].cpu()
+							if isinstance(X, PackedSequence):
+								attr_chunk *= X[z].to_one_hot()
+							else:
+								attr_chunk *= X[z].cpu()
 
 					attributions.append(attr_chunk)
 					attr_ = attr_[n_shuffles:]
 					z += 1
 
 				if return_references:
-					references_.extend(list(_references.cpu().detach()))
+					return_packed = _keep_references(references_,
+						_references.detach().cpu(), return_packed)
 
 				Xi, rj = [], []
 
 		attributions = torch.stack(attributions)
 
 		if return_references:
-			references_ = torch.cat(references_).reshape(X.shape[0], n_shuffles,
-				*X.shape[1:])
+			references_ = (_cat_packed(references_).reshape(X.shape[0],
+				n_shuffles) if return_packed else torch.cat(references_).reshape(
+				X.shape[0], n_shuffles, *X.shape[1:]))
 			return AttributionReferencesResult(
 				attributions=attributions, references=references_)
 		return attributions
@@ -859,9 +885,10 @@ def _captum_deep_lift_shap(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A set of one-hot encoded sequences to calculate attribution values
-		for. 
+		for, or a PackedSequence with one batch axis, of which each sequence
+		is decoded in the dtype of the model's parameters.
 
 	args: tuple or None, optional
 		An optional set of additional arguments to pass into the model. If
@@ -942,16 +969,27 @@ def _captum_deep_lift_shap(
 	device = _resolve_device(device)
 	model = model.to(device).eval()
 
+	dtype = next(model.parameters(), torch.zeros(1)).dtype
+	return_packed = (isinstance(X, PackedSequence) or
+		isinstance(references, PackedSequence))
+
 	attributions = []
 	references_ = []
 	with torch.no_grad():
 		for i in trange(len(X), disable=not verbose):
-			_X = X[i:i+1].to(device)
+			if isinstance(X, PackedSequence):
+				_X = X[i:i+1].to_one_hot(dtype=dtype, device=device)
+			else:
+				_X = X[i:i+1].to(device)
+
 			_args = None if args is None else tuple([a[i:i+1].to(device) 
 				for a in args])
 
 			# Calculate references
-			if isinstance(references, torch.Tensor):
+			if isinstance(references, PackedSequence):
+				_references = references[i].to_one_hot(dtype=dtype,
+					device=device)
+			elif isinstance(references, torch.Tensor):
 				_references = references[i].to(device)
 			else:
 				_references = references(_X, n=n_shuffles, 
@@ -965,13 +1003,16 @@ def _captum_deep_lift_shap(
 				attr = (attr * _X)
 			
 			if return_references:
-				references_.append(_references.unsqueeze(0).cpu())
+				return_packed = _keep_references(references_,
+					_references.unsqueeze(0).cpu(), return_packed)
 
 			attributions.append(attr.cpu())
 
 	attributions = torch.cat(attributions)
 
 	if return_references:
+		references_ = (_cat_packed(references_) if return_packed else
+			torch.cat(references_))
 		return AttributionReferencesResult(
-			attributions=attributions, references=torch.cat(references_))
+			attributions=attributions, references=references_)
 	return attributions

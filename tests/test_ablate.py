@@ -11,6 +11,8 @@ import pytest
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
+from tangermeme.predict import predict
 
 from tangermeme.ablate import ablate
 from tangermeme.ablate import ablate_annotations
@@ -26,6 +28,9 @@ from .toy_models import Conv
 from .toy_models import Scatter
 from .toy_models import ConvDense
 from .toy_models import SmallDeepSEA
+from ._packed import assert_same
+from ._packed import check_packed
+from ._packed import Spy
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -1214,3 +1219,56 @@ def test_ablate_annotations_returns_named_tuple(X, device):
 	assert torch.equal(result.y_befores, y_befores)
 	assert torch.equal(result.y_afters, y_afters)
 	assert isinstance(result, PerturbationAnnotationsResult)
+
+
+###
+# A PackedSequence is passed on packed to functions that take one and
+# decoded for others, with the predictions of its one-hot encoding.
+
+
+_SHUFFLE_SPY, _PREDICT_SPY = Spy(shuffle, 0), Spy(predict, 1)
+
+
+@pytest.mark.parametrize("shuffle_fn", [shuffle, dinucleotide_shuffle,
+	_SHUFFLE_SPY])
+@pytest.mark.parametrize("func", [predict, _PREDICT_SPY])
+def test_ablate_packed(X, shuffle_fn, func, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	check_packed(lambda X_: ablate(model, X_, 20, 60, n=4,
+		shuffle_fn=shuffle_fn, func=func, random_state=0, device=device), X,
+		[f for f in (shuffle_fn, func) if isinstance(f, Spy)])
+
+
+def test_ablate_annotations_packed(X, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	annotations = torch.tensor([[0, 5, 30], [3, 40, 70]])
+
+	y = ablate_annotations(model, X, annotations, n=3, random_state=0,
+		device=device)
+	y_packed = ablate_annotations(model, PackedSequence.from_one_hot(X),
+		annotations, n=3, random_state=0, device=device)
+	assert_same(y.y_befores, y_packed.y_befores)
+	assert_same(y.y_afters, y_packed.y_afters)
+
+
+@pytest.mark.parametrize("shuffle_fn", ["shuffle", "dinucleotide_shuffle"])
+def test_ablate_packed_N(X, shuffle_fn, device):
+	# Unknown characters inside and outside the shuffled region.
+	import functools
+
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X = X.clone()
+	X[0, :, 30:35] = 0
+	X[3, :, 70:75] = 0
+	shuffle_fn = shuffle if shuffle_fn == "shuffle" else functools.partial(
+		dinucleotide_shuffle, allow_N=True)
+
+	y = ablate(model, X, 20, 60, n=4, shuffle_fn=shuffle_fn, random_state=0,
+		device=device)
+	y_packed = ablate(model, PackedSequence.from_one_hot(X), 20, 60, n=4,
+		shuffle_fn=shuffle_fn, random_state=0, device=device)
+	assert_same(y.y_before, y_packed.y_before)
+	assert_same(y.y_after, y_packed.y_after)

@@ -12,18 +12,51 @@ import torch
 
 from tqdm import tqdm
 
+from .utils import _accepts_packed
+from .utils import _check_packable
+from .utils import _codes_of
+from .utils import _map_rows
+from .utils import _one_hot_codes
+from .utils import _numba_threads
+from .utils import _random_codes
+from .utils import _stack_packed
+from .utils import _pack_row
+from .utils import _row_runs
 from .utils import _validate_input
 from .utils import one_hot_encode
+from .utils import PackedSequence
 from .utils import random_one_hot
 from .utils import TangermemeWarning
 
 
+def _motif_codes(motif, rows, n):
+	"""The character indices of the motifs of sequences `rows`, whether
+	`motif` holds one motif or one per sequence, with 4 for all-zero
+	columns."""
+
+	codes = _one_hot_codes(motif).cpu()
+	return codes.expand(n, -1)[rows] if codes.shape[0] == 1 else codes[rows]
+
+
+def _packed_output(X, return_packed, alphabet):
+	"""Resolve `return_packed` for X and the alphabet a packed output has,
+	raising when a one-hot X does not have four characters to pack."""
+
+	packed = isinstance(X, PackedSequence)
+	if return_packed is None:
+		return_packed = packed
+
+	_check_packable(return_packed and not packed, X.shape[1], "X")
+	return return_packed, X.alphabet if packed else tuple(alphabet)
+
+
 def insert(
-	X: torch.Tensor | str,
+	X: torch.Tensor | PackedSequence | str,
 	motif: torch.Tensor | str,
 	start: int | None = None,
 	alphabet: list[str] = list("ACGT"),
-) -> torch.Tensor:
+	return_packed: bool | None = None,
+) -> torch.Tensor | PackedSequence:
 	"""Insert a motif into a set of sequences at a defined position.
 
 	This function will take in a tensor of one-hot encoded sequences or a string
@@ -72,19 +105,22 @@ def insert(
 		necessary or used if a one-hot encoded tensor is provided for the
 		motif. Default is ['A', 'C', 'G', 'T'].
 
+	return_packed: bool or None, optional
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
+
 
 	Returns
 	-------
-	Y: torch.tensor, shape=(-1, len(alphabet), length + motif_length)
+	Y: torch.tensor, shape=(-1, len(alphabet), length + motif_length), or PackedSequence
 		A one-hot encoded set of sequences that each have the motif inserted
 		at the same position.
 	"""
 
 	if isinstance(motif, str):
 		motif = one_hot_encode(motif, alphabet=alphabet).unsqueeze(0)
-
-	if motif.shape[0] == 1:
-		motif = motif.repeat(X.shape[0], 1, 1)
 
 	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
 	_validate_input(motif, "motif", shape=(-1, X.shape[1], -1), ohe=True)
@@ -95,16 +131,27 @@ def insert(
 	else:
 		start = X.shape[-1] // 2
 
+	return_packed, packed_alphabet = _packed_output(X, return_packed, alphabet)
+	if return_packed or isinstance(X, PackedSequence):
+		Y = _map_rows(X, lambda codes, rows: torch.cat([codes[:, :start],
+			_motif_codes(motif, rows, X.shape[0]), codes[:, start:]], dim=1),
+			X.shape[-1] + motif.shape[-1], packed_alphabet)
+		return Y if return_packed else Y.to_one_hot()
+
+	if motif.shape[0] == 1:
+		motif = motif.repeat(X.shape[0], 1, 1)
+
 	return torch.cat([X[:, :, :start], motif, X[:, :, start:]], dim=-1)
 
 
 def substitute(
-	X: torch.Tensor | str,
+	X: torch.Tensor | PackedSequence | str,
 	motif: torch.Tensor | str,
 	start: int | None = None,
 	alphabet: list[str] = list("ACGT"),
 	ignore: list[str] = ["N"],
-) -> torch.Tensor:
+	return_packed: bool | None = None,
+) -> torch.Tensor | PackedSequence:
 	"""Substitute a motif into a set of sequences at a defined position.
 
 	This function will take in a tensor of one-hot encoded sequences or a string
@@ -166,10 +213,16 @@ def substitute(
 		string is provided for the motif and causes an all-zeros column to be
 		added to the one-hot encoding of the motif. Default is ["N"].
 
+	return_packed: bool or None, optional
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
+
 
 	Returns
 	-------
-	Y: torch.tensor, shape=(-1, len(alphabet), length)
+	Y: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences that each have the motif substituted
 		at the same position.
 	"""
@@ -191,6 +244,19 @@ def substitute(
 	else:
 		start = X.shape[-1] // 2 - motif.shape[-1] // 2
 
+	return_packed, packed_alphabet = _packed_output(X, return_packed, alphabet)
+	if return_packed or isinstance(X, PackedSequence):
+		end = start + motif.shape[-1]
+
+		def substitute_codes(codes, rows):
+			motif_codes = _motif_codes(motif, rows, X.shape[0])
+			codes[:, start:end] = torch.where(motif_codes == 4,
+				codes[:, start:end], motif_codes)
+			return codes
+
+		Y = _map_rows(X, substitute_codes, X.shape[-1], packed_alphabet)
+		return Y if return_packed else Y.to_one_hot()
+
 	X = torch.clone(X)
 	for i in range(motif.shape[-1]):
 		idxs = motif[:, :, i].sum(dim=1) == 1
@@ -204,13 +270,14 @@ def substitute(
 
 
 def multisubstitute(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	motifs: list[torch.Tensor | str],
 	spacing: list[int],
 	start: int | None = None,
 	alphabet: list[str] = list("ACGT"),
 	ignore: list[str] = ["N"],
-) -> torch.Tensor:
+	return_packed: bool | None = None,
+) -> torch.Tensor | PackedSequence:
 	"""Substitute a set of motifs into sequences with provided spacings.
 
 	This function will take in a list of tensors of one-hot encoded sequences
@@ -264,10 +331,16 @@ def multisubstitute(
 		string is provided for the motif and causes an all-zeros column to be
 		added to the one-hot encoding of the motif. Default is ["N"].
 
+	return_packed: bool or None, optional
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
+
 
 	Returns
 	-------
-	Y: torch.tensor, shape=(-1, len(alphabet), length)
+	Y: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences that each have the motifs substituted
 		at the correct positions.
 	"""
@@ -297,16 +370,24 @@ def multisubstitute(
 			raise ValueError("Sum of motif lengths and spacing cannot be " + 
 				"larger than the sequence being inserted into.")
 
+	# Packed once, the sequences stay packed through every substitution.
+	packed = isinstance(X, PackedSequence) or bool(return_packed)
 	for i in range(len(spacing)):
 		X = substitute(X, motifs[i], start=start, alphabet=alphabet, 
-			ignore=ignore)
+			ignore=ignore, return_packed=packed or None)
 		start += motif_lengths[i] + spacing[i]
 
-	X = substitute(X, motifs[-1], start=start, alphabet=alphabet, ignore=ignore)
-	return X
+	X = substitute(X, motifs[-1], start=start, alphabet=alphabet, ignore=ignore,
+		return_packed=packed or None)
+	return X.to_one_hot() if packed and return_packed is False else X
 
 
-def delete(X: torch.Tensor, start: int, end: int) -> torch.Tensor:
+def delete(
+	X: torch.Tensor | PackedSequence,
+	start: int,
+	end: int,
+	return_packed: bool | None = None,
+) -> torch.Tensor | PackedSequence:
 	"""Delete a portion of a sequence.
 
 	This function will take in a tensor of one-hot encoded sequences and a pair
@@ -332,10 +413,16 @@ def delete(X: torch.Tensor, start: int, end: int) -> torch.Tensor:
 	end: int
 		The final position to remove, not inclusive.
 
+	return_packed: bool or None, optional
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
+
 
 	Returns
 	-------
-	Y: torch.tensor, shape=(-1, len(alphabet), length-(end-start))
+	Y: torch.tensor, shape=(-1, len(alphabet), length-(end-start)), or PackedSequence
 		A one-hot encoded set of sequences that each have a portion deleted.
 	"""
 
@@ -348,17 +435,26 @@ def delete(X: torch.Tensor, start: int, end: int) -> torch.Tensor:
 			"than zero, and cannot be greater than the length of the sequence.")
 
 	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
+
+	return_packed, packed_alphabet = _packed_output(X, return_packed, "ACGT")
+	if return_packed or isinstance(X, PackedSequence):
+		Y = _map_rows(X, lambda codes, rows: torch.cat([codes[:, :start],
+			codes[:, end:]], dim=1), X.shape[-1] - (end - start),
+			packed_alphabet)
+		return Y if return_packed else Y.to_one_hot()
+
 	return torch.cat([X[:, :, :start], X[:, :, end:]], dim=-1)
 
 
 def randomize(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	start: int,
 	end: int,
 	probs: list | tuple | numpy.ndarray | torch.Tensor = [[0.25, 0.25, 0.25, 0.25]],
 	n: int = 1,
 	random_state: int | numpy.random.RandomState | None = None,
-) -> torch.Tensor:
+	return_packed: bool | None = None,
+) -> torch.Tensor | PackedSequence:
 	"""Replace a region of the provided loci with randomly drawn sequence.
 
 	This function will take in a batch of sequences and replace region specified
@@ -403,10 +499,16 @@ def randomize(
 		substitution to ensure reproducibility. If None, do not use a 
 		reproducible seed. Default is None.
 
+	return_packed: bool or None, optional
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
+
 
 	Returns
 	-------
-	X_rands: torch.tensor, shape=(-1, n, len(alphabet), length)
+	X_rands: torch.tensor, shape=(-1, n, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences that each have a randomized
 		substitution.
 	"""
@@ -426,6 +528,28 @@ def randomize(
 	if end > X.shape[-1] or start < 0:
 		raise ValueError("Start or end are falling off the edge of X.")
 
+	return_packed, packed_alphabet = _packed_output(X, return_packed, "ACGT")
+	if return_packed or isinstance(X, PackedSequence):
+		if probs.shape[1] != X.shape[1]:
+			raise ValueError("probs has {} columns but X has {} characters."
+				.format(probs.shape[1], X.shape[1]))
+
+		X_rands = []
+		for i in range(n):
+			# The same draws, in the same order, as random_one_hot below.
+			codes_i = torch.from_numpy(_random_codes((X.shape[0], probs.shape[1],
+				end-start), probs, random_state))
+
+			def randomize_codes(codes, rows, codes_i=codes_i):
+				codes[:, start:end] = codes_i[rows]
+				return codes
+
+			X_rands.append(_map_rows(X, randomize_codes, X.shape[-1],
+				packed_alphabet))
+
+		Y = _stack_packed(X_rands)
+		return Y if return_packed else Y.to_one_hot()
+
 	X_rands = []
 	for i in range(n):
 		substitute_ohe = random_one_hot((X.shape[0], probs.shape[1], end-start), 
@@ -437,13 +561,15 @@ def randomize(
 	return torch.stack(X_rands).permute(1, 0, 2, 3)
 
 
+@_accepts_packed
 def shuffle(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	start: int = 0,
 	end: int = -1,
 	n: int = 1,
 	random_state: int | numpy.random.RandomState | None = None,
-) -> torch.Tensor:
+	return_packed: bool | None = None,
+) -> torch.Tensor | PackedSequence:
 	"""Replace a region of the provided loci with a shuffled version.
 
 	This function will take in a batch of sequences and shuffle the specified
@@ -484,10 +610,16 @@ def shuffle(
 		ensure reproducibility. If None, do not use a reproducible seed. Default 
 		is None.
 
+	return_packed: bool or None, optional
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
+
 
 	Returns
 	-------
-	Y: torch.tensor, shape=(-1, n, len(alphabet), length)
+	Y: torch.tensor, shape=(-1, n, len(alphabet), length), or PackedSequence
 		A one-hot encoded set of sequences that each have a shuffled portion.
 	"""
 
@@ -505,6 +637,24 @@ def shuffle(
 	if not isinstance(random_state, numpy.random.RandomState):
 		random_state = numpy.random.RandomState(random_state)
 
+	return_packed, packed_alphabet = _packed_output(X, return_packed, "ACGT")
+	if return_packed or isinstance(X, PackedSequence):
+		X_shufs = []
+		for i in range(n):
+			idxs = numpy.arange(end-start)
+			random_state.shuffle(idxs)
+			idxs = torch.from_numpy(idxs)
+
+			def shuffle_codes(codes, rows, idxs=idxs):
+				codes[:, start:end] = codes[:, start:end][:, idxs]
+				return codes
+
+			X_shufs.append(_map_rows(X, shuffle_codes, X.shape[-1],
+				packed_alphabet))
+
+		Y = _stack_packed(X_shufs)
+		return Y if return_packed else Y.to_one_hot()
+
 	X_shufs = []
 	for i in range(n):
 		idxs = numpy.arange(end-start)
@@ -517,6 +667,45 @@ def shuffle(
 	return torch.stack(X_shufs).permute(1, 0, 2, 3)
 
 
+@numba.njit(nogil=True, cache=True, inline='always')
+def _shuffle_sequence(idxs, n_chars, n_shuffles, random_state, shuffled):
+	"""Shuffle the character indices `idxs` of one sequence `n_shuffles`
+	times into the rows of `shuffled`, after seeding the generator with
+	`random_state`. It is inlined into each caller rather than compiled as
+	a kernel of its own, which a first shuffle would otherwise load."""
+
+	seq_len = idxs.shape[0]
+	if seq_len == 0:
+		return
+
+	numpy.random.seed(random_state)
+
+	next_idxs = numpy.zeros((n_chars, seq_len), dtype=numpy.int32)
+	next_idxs_counts = numpy.zeros(n_chars, dtype=numpy.int32)
+	for j in range(seq_len - 1):
+		char = idxs[j]
+		next_idxs[char, next_idxs_counts[char]] = j + 1
+		next_idxs_counts[char] += 1
+
+	for i in range(n_shuffles):
+		for char in range(n_chars):
+			n = next_idxs_counts[char]
+
+			next_idxs_ = numpy.arange(n)
+			next_idxs_[:-1] = numpy.random.permutation(n-1)  # Keep last index
+			next_idxs[char, :n] = next_idxs[char, :n][next_idxs_]
+
+		counters = numpy.zeros(n_chars, dtype=numpy.int32)
+		idx = 0
+		shuffled[i, 0] = idxs[idx]
+		for j in range(1, seq_len):
+			char = idxs[idx]
+			idx = next_idxs[char, counters[char]]
+
+			counters[char] += 1
+			shuffled[i, j] = idxs[idx]
+
+
 @numba.njit(nogil=True, cache=True)
 def _fast_shuffle(idxs, n_chars, n_shuffles, random_states, shuffled):
 	"""An internal function for fast dinucleotide shuffling using numba.
@@ -527,37 +716,98 @@ def _fast_shuffle(idxs, n_chars, n_shuffles, random_states, shuffled):
 	do not depend on the other rows in the call. The GIL is released.
 	"""
 
-	n_seqs, seq_len = idxs.shape
-	if seq_len == 0:
-		return
+	for k in range(idxs.shape[0]):
+		_shuffle_sequence(idxs[k], n_chars, n_shuffles, random_states[k],
+			shuffled[k])
 
-	for k in range(n_seqs):
-		numpy.random.seed(random_states[k])
 
-		next_idxs = numpy.zeros((n_chars, seq_len), dtype=numpy.int32)
-		next_idxs_counts = numpy.zeros(n_chars, dtype=numpy.int32)
-		for j in range(seq_len - 1):
-			char = idxs[k, j]
-			next_idxs[char, next_idxs_counts[char]] = j + 1
-			next_idxs_counts[char] += 1
+@numba.njit(nogil=True, parallel=True, cache=True)
+def _fast_shuffle_parallel(idxs, n_chars, n_shuffles, random_states,
+	shuffled):
+	"""`_fast_shuffle` with the rows split across numba's threads. Each row
+	seeds the generator of the thread it runs on, so the shuffles are those
+	of `_fast_shuffle` for any number of threads."""
 
-		for i in range(n_shuffles):
-			for char in range(n_chars):
-				n = next_idxs_counts[char]
+	for k in numba.prange(idxs.shape[0]):
+		_shuffle_sequence(idxs[k], n_chars, n_shuffles, random_states[k],
+			shuffled[k])
 
-				next_idxs_ = numpy.arange(n)
-				next_idxs_[:-1] = numpy.random.permutation(n-1)  # Keep last index
-				next_idxs[char, :n] = next_idxs[char, :n][next_idxs_]
 
-			counters = numpy.zeros(n_chars, dtype=numpy.int32)
-			idx = 0
-			shuffled[k, i, 0] = idxs[k, idx]
-			for j in range(1, seq_len):
-				char = idxs[k, idx]
-				idx = next_idxs[char, counters[char]]
+@numba.njit(nogil=True, cache=True)
+def _shuffle_sequence_packed(codes, start, end, n_shuffles, random_state,
+	data, run_starts, run_ends, flags):
+	"""Shuffle positions `start` to `end` of one sequence of character
+	indices, `codes`, with 4 for an unknown character, `n_shuffles` times,
+	and pack each shuffled sequence into a row of `data`.
 
-				counters[char] += 1
-				shuffled[k, i, j] = idxs[k, idx]
+	`run_starts` and `run_ends` hold the same number of runs of unknown
+	characters, m, for each shuffle, which is the number in `codes` since
+	every shuffle keeps it: those of shuffle i are written to positions i * m
+	to (i + 1) * m. `flags` receives whether any position between the ends
+	of the region is the same in every shuffle, whether all of them are, and
+	whether a shuffle had a number of runs other than m, in which case its
+	runs are not written.
+	"""
+
+	seq_len = codes.shape[0]
+	region_len = end - start
+
+	shuffled = numpy.empty((n_shuffles, region_len), dtype=numpy.uint8)
+	_shuffle_sequence(codes[start:end], 5, n_shuffles, random_state, shuffled)
+
+	any_conserved, all_conserved = False, True
+	for j in range(1, region_len - 1):
+		conserved = True
+		for i in range(1, n_shuffles):
+			if shuffled[i, j] != shuffled[0, j]:
+				conserved = False
+				break
+
+		any_conserved = any_conserved or conserved
+		all_conserved = all_conserved and conserved
+
+	n_runs = run_starts.shape[0] // n_shuffles if n_shuffles > 0 else 0
+
+	row = codes.copy()
+	wrong_runs = False
+	for i in range(n_shuffles):
+		for j in range(region_len):
+			row[start + j] = shuffled[i, j]
+
+		if _pack_row(row, data, i, seq_len) != n_runs:
+			wrong_runs = True
+		elif n_runs > 0:
+			_row_runs(row, seq_len, run_starts, run_ends, i * n_runs)
+
+	flags[0] = any_conserved
+	flags[1] = all_conserved
+	flags[2] = wrong_runs
+
+
+@numba.njit(nogil=True, cache=True)
+def _fast_shuffle_packed(codes, start, end, n_shuffles, random_states,
+	run_ptr, data, run_starts, run_ends, flags):
+	"""Run `_shuffle_sequence_packed` on each row of `codes`, writing the
+	runs of row k from `n_shuffles * run_ptr[k]`."""
+
+	for k in range(codes.shape[0]):
+		r0, r1 = n_shuffles * run_ptr[k], n_shuffles * run_ptr[k+1]
+		_shuffle_sequence_packed(codes[k], start, end, n_shuffles,
+			random_states[k], data[k], run_starts[r0:r1], run_ends[r0:r1],
+			flags[k])
+
+
+@numba.njit(nogil=True, parallel=True, cache=True)
+def _fast_shuffle_packed_parallel(codes, start, end, n_shuffles,
+	random_states, run_ptr, data, run_starts, run_ends, flags):
+	"""`_fast_shuffle_packed` with the rows split across numba's threads,
+	with the same shuffles for any number of threads."""
+
+	for k in numba.prange(codes.shape[0]):
+		r0, r1 = n_shuffles * run_ptr[k], n_shuffles * run_ptr[k+1]
+		_shuffle_sequence_packed(codes[k], start, end, n_shuffles,
+			random_states[k], data[k], run_starts[r0:r1], run_ends[r0:r1],
+			flags[k])
 
 
 def _random_states(random_state, n):
@@ -582,6 +832,84 @@ def _random_states(random_state, n):
 	# The kernel seeds with 32-bit integers, and a larger seed wraps around,
 	# as it did when the kernel took a single int32 seed.
 	return random_states.astype(numpy.int64).astype(numpy.int32)
+
+
+def _check_conserved(any_conserved, all_conserved, n_shuffles, verbose,
+	stacklevel):
+	"""Given, for each sequence, whether any position between the ends of its
+	region is the same in all of its shuffles and whether all of them are,
+	warn when `verbose` if any is, and raise if there is more than one
+	shuffle and all of them are for some sequence, whose shuffles are then
+	identical. `stacklevel` points the warning at the line that called
+	dinucleotide_shuffle."""
+
+	if verbose and any_conserved.any():
+		warnings.warn("At least one position in dinucleotide shuffle is "
+			"identical across all positions.", TangermemeWarning,
+			stacklevel=stacklevel)
+
+	if n_shuffles > 1 and all_conserved.any():
+		raise ValueError("All dinucleotide shuffles yield identical " +
+			"sequences, potentially due to a lack of diversity in sequence.")
+
+
+# A call that shuffles fewer positions than this in all, the sequences times
+# the shuffles times the length of the region, runs on one thread, where
+# starting the threads costs more than it saves.
+_SHUFFLE_PARALLEL_MIN = 4096
+
+
+def _shuffle_packed(codes, start, end, n_shuffles, random_states, verbose,
+	n_jobs, alphabet):
+	"""Dinucleotide shuffle positions `start` to `end` of each sequence of
+	character indices `codes`, shape (n, length) with 4 for an unknown
+	character, `n_shuffles` times, seeding sequence i with random_states[i].
+
+	The shuffles are those the one-hot path of `dinucleotide_shuffle` draws
+	for the same seeds. Each is packed as it is drawn, so neither the
+	shuffled character indices nor a one-hot encoding of them is held for
+	more than one sequence at a time. Returns a PackedSequence of shape
+	(n, n_shuffles, 4, length).
+	"""
+
+	codes = numpy.ascontiguousarray(codes.cpu().numpy(), dtype=numpy.uint8)
+	n_seqs, length = codes.shape
+
+	is_n = codes == 4
+	n_runs = is_n[:, :1].sum(axis=1) + (is_n[:, 1:] & ~is_n[:, :-1]).sum(
+		axis=1)
+	run_ptr = numpy.zeros(n_seqs + 1, dtype=numpy.int64)
+	run_ptr[1:] = numpy.cumsum(n_runs)
+
+	data = numpy.empty((n_seqs, n_shuffles, (length + 3) // 4),
+		dtype=numpy.uint8)
+	run_starts = numpy.empty(n_shuffles * run_ptr[-1], dtype=numpy.int64)
+	run_ends = numpy.empty(n_shuffles * run_ptr[-1], dtype=numpy.int64)
+	flags = numpy.empty((n_seqs, 3), dtype=numpy.bool_)
+
+	args = (codes, start, end, n_shuffles, random_states, run_ptr, data,
+		run_starts, run_ends, flags)
+	if (n_jobs == 1 or n_seqs < 2 or
+			n_seqs * n_shuffles * (end - start) < _SHUFFLE_PARALLEL_MIN):
+		_fast_shuffle_packed(*args)
+	else:
+		with _numba_threads(n_jobs):
+			_fast_shuffle_packed_parallel(*args)
+
+	# A shuffle keeps the count of every dinucleotide and both ends of the
+	# region, and so the number of runs of unknown characters.
+	if flags[:, 2].any():
+		raise RuntimeError("A dinucleotide shuffle changed the number of runs "
+			"of unknown characters.")
+
+	_check_conserved(flags[:, 0], flags[:, 1], n_shuffles, verbose,
+		stacklevel=4)
+
+	rows = numpy.repeat(numpy.arange(n_seqs * n_shuffles),
+		numpy.repeat(n_runs, n_shuffles))
+	n_runs = numpy.stack([rows, run_starts, run_ends], axis=1)
+	return PackedSequence(torch.from_numpy(data), length,
+		torch.from_numpy(n_runs), alphabet)
 
 
 def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
@@ -621,15 +949,18 @@ def _dinucleotide_shuffle(X, n_shuffles=1, random_state=None, verbose=False):
 		random_state=random_state, verbose=verbose, allow_N=True)[0]
 
 
+@_accepts_packed
 def dinucleotide_shuffle(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	start: int = 0,
 	end: int = -1,
 	n: int = 20,
 	random_state: int | Sequence[int] | None = None,
 	verbose: bool = False,
 	allow_N: bool = False,
-) -> torch.Tensor:
+	return_packed: bool | None = None,
+	n_jobs: int = 1,
+) -> torch.Tensor | PackedSequence:
 	"""Given a one-hot encoded sequence, dinucleotide shuffle it.
 
 	This function takes in a one-hot encoded sequence (not a string) and
@@ -646,12 +977,19 @@ def dinucleotide_shuffle(
 	numpy arrays. Code has been adapted from
 	https://github.com/kundajelab/deeplift/blob/master/deeplift/dinuc_shuffle.py
 
+	The shuffles can be returned as a `PackedSequence`, which holds four
+	positions in a byte. With `return_packed=True` each shuffle is packed as
+	it is drawn, so the shuffles take sixteen times less memory than an int8
+	one-hot encoding of them would and the one-hot encoding is never built.
+	The shuffles are the same as those of the one-hot encoding.
+
 	Parameters
 	----------
-	X: torch.tensor, shape=(-1, len(alphabet), length)
-		A one-hot encoded set of sequences to be shuffled. Unlike the other
-		functions in this module, unknown characters, encoded as all-zero
-		columns, are rejected unless `allow_N=True`.
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
+		A one-hot encoded set of sequences to be shuffled, or a PackedSequence
+		with one batch axis. Unlike the other functions in this module,
+		unknown characters, encoded as all-zero columns, are rejected unless
+		`allow_N=True`.
 
 	start: int, optional
 		The starting position of where to randomize the sequence, inclusive.
@@ -689,20 +1027,49 @@ def dinucleotide_shuffle(
 		unknown characters therefore stays one run but can move. If False,
 		an unknown character raises a ValueError. Default is False.
 
+	return_packed: bool or None, optional
+		Whether to return the shuffles as a PackedSequence rather than a
+		one-hot encoding. Packing needs an alphabet of four characters. If
+		None, return a PackedSequence when `X` is one. Default is None.
+
+	n_jobs: int, optional
+		The number of threads to shuffle the sequences on, or -1 for one per
+		thread numba allows, capped by numba's NUMBA_NUM_THREADS. A call that
+		shuffles fewer than 4,096 positions in all, the sequences times the
+		shuffles times the length of the region, runs on one thread, since
+		starting the threads costs more than it saves. The shuffles are
+		the same for every value. Under numba's OpenMP threading layer, used
+		when TBB is not installed, a process that has run the threads cannot
+		fork worker processes afterwards. Default is 1.
+
 
 	Returns
 	-------
-	shuffled_sequences: torch.tensor, shape=(-1, n, len(alphabet), length)
-		The shuffled sequences. Dtype and device match the input `X`.
+	shuffled_sequences: torch.tensor, shape=(-1, n, len(alphabet), length), or PackedSequence
+		The shuffled sequences. A one-hot encoding has the dtype and device
+		of `X`, or int8 on the CPU when `X` is a PackedSequence. A
+		PackedSequence has batch axes (-1, n), the alphabet of `X` or ACGT,
+		and its tensors on the CPU.
 	"""
 
 	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1,
 		allow_N=allow_N)
+	packed, length = isinstance(X, PackedSequence), X.shape[-1]
+	return_packed, alphabet = _packed_output(X, return_packed, "ACGT")
 
 	if end < 0:
-		end = X.shape[-1] + 1 + end
+		end = length + 1 + end
 
 	random_states = _random_states(random_state, X.shape[0])
+
+	if return_packed:
+		start, end, _ = slice(start, end).indices(length)
+		codes = X.to_codes() if packed else _one_hot_codes(X)
+		return _shuffle_packed(codes, start, max(start, end), n, random_states,
+			verbose, n_jobs, alphabet)
+
+	if packed:
+		X = X.to_one_hot()
 
 	# The character index of every position. An unknown character, an
 	# all-zero column, is shuffled as a character of its own, with index
@@ -714,20 +1081,23 @@ def dinucleotide_shuffle(
 	idxs = idxs.cpu().numpy().astype(numpy.int32)
 
 	shuffled = numpy.empty((X.shape[0], n, idxs.shape[-1]), dtype=numpy.int32)
-	_fast_shuffle(idxs, X.shape[1] + 1, n, random_states, shuffled)
+	args = idxs, X.shape[1] + 1, n, random_states, shuffled
+	if n_jobs == 1 or X.shape[0] < 2 or shuffled.size < _SHUFFLE_PARALLEL_MIN:
+		_fast_shuffle(*args)
+	else:
+		with _numba_threads(n_jobs):
+			_fast_shuffle_parallel(*args)
+
 	shuffled = torch.from_numpy(shuffled)
 
 	# The first and last characters are always kept. `conserved` marks the
-	# positions between them where every shuffle of a sequence agrees.
-	interior = shuffled[:, :, 1:-1]
-	conserved = (interior == interior[:, :1]).all(dim=1)
-	if verbose and conserved.any():
-		warnings.warn("At least one position in dinucleotide shuffle is "
-			"identical across all positions.", TangermemeWarning, stacklevel=2)
-
-	if n > 1 and conserved.all(dim=1).any():
-		raise ValueError("All dinucleotide shuffles yield identical " +
-			"sequences, potentially due to a lack of diversity in sequence.")
+	# positions between them where every shuffle of a sequence agrees, which
+	# is checked only for a warning or for more than one shuffle.
+	if verbose or n > 1:
+		interior = shuffled[:, :, 1:-1]
+		conserved = (interior == interior[:, :1]).all(dim=1)
+		_check_conserved(conserved.any(dim=1), conserved.all(dim=1), n,
+			verbose, stacklevel=3)
 
 	X_shufs = X.unsqueeze(1).repeat(1, n, 1, 1)
 	alphabet = torch.arange(X.shape[1], device=X.device)
@@ -736,14 +1106,121 @@ def dinucleotide_shuffle(
 	return X_shufs
 
 
+def _local_bins(rng, length, bin_size, min_bin_size):
+	"""Draw the bins of one local shuffle of a sequence of `length`: a first
+	cut between `min_bin_size` and `bin_size`, bins of `bin_size` after it,
+	and a final bin merged into the one before when shorter than
+	`min_bin_size`."""
+
+	first_cut = rng.randint(min_bin_size, bin_size + 1)
+	boundaries = [0, first_cut]
+	boundaries.extend(range(first_cut + bin_size, length, bin_size))
+	boundaries.append(length)
+
+	bins = list(zip(boundaries[:-1], boundaries[1:]))
+	if bins[-1][1] - bins[-1][0] < min_bin_size:
+		# merge last two bins if the final bin is too small
+		bins[-2] = (bins[-2][0], bins[-1][1])
+		bins.pop()
+
+	return bins
+
+
+def _warn_unshuffled(n_unshuffled, n_bins):
+	"""Warn that `n_unshuffled` of `n_bins` bins came back unshuffled."""
+
+	if n_unshuffled > 0:
+		warnings.warn("{} of {} bins came back identical to the input and are "
+			"not randomized in the returned sequences. A bin whose characters "
+			"form a single Eulerian path, such as a homopolymer or a short "
+			"tandem repeat, has only one possible dinucleotide shuffle. "
+			"Raising `bin_size` merges such a region into a more diverse "
+			"neighborhood.".format(n_unshuffled, n_bins), TangermemeWarning,
+			stacklevel=3)
+
+
+@numba.njit(nogil=True, cache=True)
+def _shuffle_bins(codes, n_shuffles, bin_ptr, bin_starts, bin_ends,
+	random_states, data):
+	"""For each sequence k of `codes` and each shuffle i, dinucleotide shuffle
+	each of its bins once, seeding the generator for bin b with
+	random_states[b], and pack the sequence into data[k, i]. The bins of
+	(k, i) are bin_ptr[k * n_shuffles + i] to the next. Returns the number of
+	bins that came back identical to the input."""
+
+	n_seqs, length = codes.shape
+	row = numpy.empty(length, dtype=numpy.uint8)
+	unshuffled = 0
+	for k in range(n_seqs):
+		for i in range(n_shuffles):
+			for j in range(length):
+				row[j] = codes[k, j]
+
+			p = k * n_shuffles + i
+			for b in range(bin_ptr[p], bin_ptr[p + 1]):
+				start, end = bin_starts[b], bin_ends[b]
+				shuffled = numpy.empty((1, end - start), dtype=numpy.uint8)
+				_shuffle_sequence(codes[k, start:end], 5, 1, random_states[b],
+					shuffled)
+
+				same = True
+				for j in range(end - start):
+					row[start + j] = shuffled[0, j]
+					same = same and shuffled[0, j] == codes[k, start + j]
+				unshuffled += same
+
+			_pack_row(row, data[k], i, length)
+
+	return unshuffled
+
+
+def _local_shuffle_packed(X, n, bin_size, min_bin_size, rng, verbose,
+	alphabet):
+	"""The packed path of `local_dinucleotide_shuffle`: draw every bin and
+	seed from `rng` in the order the one-hot path draws them, then shuffle
+	and pack all of them in one call."""
+
+	bin_ptr, starts, ends, seeds = [0], [], [], []
+	for i in range(X.shape[0]):
+		for j in range(n):
+			for bin_start, bin_end in _local_bins(rng, X.shape[-1], bin_size,
+				min_bin_size):
+				starts.append(bin_start)
+				ends.append(bin_end)
+				seeds.append(rng.randint(0, 2**31 - 1))
+
+			bin_ptr.append(len(starts))
+
+	# Each bin is shuffled once, which dinucleotide_shuffle reports under
+	# `verbose` as every position kept.
+	if verbose:
+		for bin_start, bin_end in zip(starts, ends):
+			if bin_end - bin_start > 2:
+				warnings.warn("At least one position in dinucleotide shuffle "
+					"is identical across all positions.", TangermemeWarning,
+					stacklevel=3)
+
+	codes = _codes_of(X, slice(None)).numpy()
+	data = numpy.empty((X.shape[0], n, (X.shape[-1] + 3) // 4),
+		dtype=numpy.uint8)
+	n_unshuffled = _shuffle_bins(codes, n, numpy.array(bin_ptr,
+		dtype=numpy.int64), numpy.array(starts, dtype=numpy.int64),
+		numpy.array(ends, dtype=numpy.int64), numpy.array(seeds,
+		dtype=numpy.int64).astype(numpy.int32), data)
+
+	Y = PackedSequence(torch.from_numpy(data), X.shape[-1], alphabet=alphabet)
+	return Y, len(starts), n_unshuffled
+
+
 def local_dinucleotide_shuffle(
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	n: int = 20,
 	bin_size: int = 1024,
 	min_bin_size: int = 512,
 	random_state: int | None = None,
 	verbose: bool = False,
-) -> torch.Tensor:
+	return_packed: bool | None = None,
+) -> torch.Tensor | PackedSequence:
 	"""Dinucleotide-shuffle sequences independently within local bins.
 
 	A dinucleotide shuffle conserves the dinucleotide composition of the
@@ -810,11 +1287,19 @@ def local_dinucleotide_shuffle(
 		warning per bin; the `TangermemeWarning` described under `bin_size` is
 		the useful signal. Default is False.
 
+	return_packed: bool or None, optional
+		Whether to return a PackedSequence rather than a one-hot encoding,
+		which needs an alphabet of four characters. If None, return one when
+		`X` is a PackedSequence; False gives an int8 one-hot encoding.
+		Default is None.
+
 
 	Returns
 	-------
-	shuffled_sequences: torch.tensor, shape=(-1, n, len(alphabet), length)
-		The shuffled sequences. Dtype and device match the input `X`.
+	shuffled_sequences: torch.tensor, shape=(-1, n, len(alphabet), length), or PackedSequence
+		The shuffled sequences: a PackedSequence under `return_packed`, int8
+		for a packed `X` otherwise, and in the dtype and on the device of a
+		one-hot `X`.
 	"""
 
 	_validate_input(X, "X", shape=(-1, -1, -1), ohe=True, ohe_dim=1)
@@ -829,22 +1314,19 @@ def local_dinucleotide_shuffle(
 
 	rng = numpy.random.RandomState(random_state)
 
+	return_packed, packed_alphabet = _packed_output(X, return_packed, "ACGT")
+	if return_packed or isinstance(X, PackedSequence):
+		Y, n_bins, n_unshuffled = _local_shuffle_packed(X, n, bin_size,
+			min_bin_size, rng, verbose, packed_alphabet)
+		_warn_unshuffled(n_unshuffled, n_bins)
+		return Y if return_packed else Y.to_one_hot()
+
 	X_shuf = X.unsqueeze(1).repeat(1, n, 1, 1)
 	n_bins, n_unshuffled = 0, 0
 
 	for i in range(X.shape[0]):
 		for j in range(n):
-			first_cut = rng.randint(min_bin_size, bin_size + 1)
-			boundaries = [0, first_cut]
-			boundaries.extend(range(first_cut + bin_size, X.shape[-1], bin_size))
-			boundaries.append(X.shape[-1])
-
-			bins = list(zip(boundaries[:-1], boundaries[1:]))
-			if bins[-1][1] - bins[-1][0] < min_bin_size:
-				# merge last two bins if the final bin is too small
-				bins[-2] = (bins[-2][0], bins[-1][1])
-				bins.pop()
-
+			bins = _local_bins(rng, X.shape[-1], bin_size, min_bin_size)
 			for (bin_start, bin_end) in bins:
 				shuffled = dinucleotide_shuffle(
 					X[i:i+1, :, bin_start:bin_end],
@@ -862,13 +1344,5 @@ def local_dinucleotide_shuffle(
 				n_unshuffled += torch.equal(shuffled[0, 0].to(X.device),
 					X[i, :, bin_start:bin_end])
 
-	if n_unshuffled > 0:
-		warnings.warn("{} of {} bins came back identical to the input and are "
-			"not randomized in the returned sequences. A bin whose characters "
-			"form a single Eulerian path, such as a homopolymer or a short "
-			"tandem repeat, has only one possible dinucleotide shuffle. "
-			"Raising `bin_size` merges such a region into a more diverse "
-			"neighborhood.".format(n_unshuffled, n_bins), TangermemeWarning,
-			stacklevel=2)
-
+	_warn_unshuffled(n_unshuffled, n_bins)
 	return X_shuf

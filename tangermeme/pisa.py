@@ -18,7 +18,11 @@ from .ersatz import dinucleotide_shuffle
 from .results import AttributionReferencesResult
 
 from tangermeme.predict import predict
+from tangermeme.utils import _accepts_packed
+from tangermeme.utils import _cat_packed
+from tangermeme.utils import _keep_references
 from tangermeme.utils import _validate_input
+from tangermeme.utils import PackedSequence
 
 from tangermeme._deep_lift_utils import _build_nonlinear_ops
 
@@ -28,9 +32,10 @@ from tangermeme.deep_lift_shap import _squeeze_output
 from tangermeme.deep_lift_shap import hypothetical_attributions
 
 
+@_accepts_packed
 def pisa(
 	model: torch.nn.Module,
-	X: torch.Tensor,
+	X: torch.Tensor | PackedSequence,
 	args: tuple | None = None,
 	batch_size: int = 32,
 	references: Callable[..., Any] | torch.Tensor = dinucleotide_shuffle,
@@ -68,9 +73,10 @@ def pisa(
 		any number of inputs and make any number of outputs. The additional
 		inputs must be specified in the `args` parameter.
 
-	X: torch.tensor, shape=(-1, len(alphabet), length)
+	X: torch.tensor, shape=(-1, len(alphabet), length), or PackedSequence
 		A set of one-hot encoded sequences to calculate attribution values
-		for. 
+		for, or a PackedSequence with one batch axis, of which each sequence
+		is decoded in the dtype of the model's parameters.
 
 	args: tuple or None, optional
 		An optional set of additional arguments to pass into the model. If
@@ -98,8 +104,9 @@ def pisa(
 		that for each sequence a number of shuffles are provided. It must be
 		one-hot encoded, except that all-zero columns are allowed. A baseline
 		that is not one-hot, such as 0.25 everywhere, must come from a
-		callable, whose output is not validated. Default is the function
-		`dinucleotide_shuffle`. 
+		callable, whose output is not validated. A PackedSequence of batch
+		shape `(len(X), n_shuffles)` can be passed instead of the tensor.
+		Default is the function `dinucleotide_shuffle`. 
 
 	n_shuffles: int, optional
 		The number of shuffles to use if a function is given for `references`.
@@ -165,10 +172,11 @@ def pisa(
 		`raw_outputs=True`, the multipliers for each example-reference pair
 		with shape `(X.shape[0], n_shuffles, n_outputs, X.shape[1], X.shape[2])`.
 
-	references: torch.tensor, optional
+	references: torch.tensor or PackedSequence, optional
 		The references used for each input sequence, with the shape
-		(n_input_sequences, n_shuffles, 4, length). Only returned if
-		`return_references = True`.
+		(n_input_sequences, n_shuffles, 4, length). A PackedSequence when
+		`references` is one, or when `X` is one and the references are
+		one-hot. Only returned if `return_references = True`.
 
 	Notes
 	-----
@@ -199,10 +207,14 @@ def pisa(
 	with _attributing(model, device, _NON_LINEAR_OPS):
 		# Begin PISA procedure    
 		attributions, references_ = [], [] 
-		if isinstance(references, torch.Tensor):
+		if isinstance(references, (torch.Tensor, PackedSequence)):
 			_validate_input(references, "references", shape=(X.shape[0], -1, X.shape[1], 
 				X.shape[2]), ohe=True, allow_N=True, ohe_dim=-2)
 			n_shuffles = references.shape[1]
+
+		dtype = next(model.parameters(), torch.zeros(1)).dtype
+		return_packed = (isinstance(X, PackedSequence) or
+			isinstance(references, PackedSequence))
 
 		_probe_args = None if args is None else tuple(a[:1] for a in args)
 		n_outputs = _squeeze_output(predict(model, X[:1], args=_probe_args,
@@ -210,11 +222,18 @@ def pisa(
 
 		# Loop over each of the examples
 		for i in trange(len(X), disable=not verbose):
-			_X = X[i:i+1].to(device).requires_grad_()
+			if isinstance(X, PackedSequence):
+				_X = X[i:i+1].to_one_hot(dtype=dtype, device=device)
+			else:
+				_X = X[i:i+1].to(device)
+
+			_X = _X.requires_grad_()
 
 			# Either use reference sequences if provided or generate a set of them
 			# for this example being analyzed.
-			if isinstance(references, torch.Tensor):
+			if isinstance(references, PackedSequence):
+				_references = references[i].to_one_hot(dtype=dtype, device=device)
+			elif isinstance(references, torch.Tensor):
 				_references = references[i]
 			else:
 				_references = references(_X.cpu(), n=n_shuffles, 
@@ -222,7 +241,8 @@ def pisa(
 
 			_references = _references.to(device).requires_grad_()
 			if return_references:
-				references_.append(_references)
+				return_packed = _keep_references(references_,
+					_references.detach().unsqueeze(0), return_packed)
 
 			# Pull out the additional arguments for this example, if additional
 			# arguments are being provided, keeping the batch axis so that each
@@ -312,5 +332,6 @@ def pisa(
 
 		if return_references:
 			return AttributionReferencesResult(attributions=attributions,
-				references=torch.stack(references_).detach())
+				references=_cat_packed(references_) if return_packed else
+				torch.cat(references_))
 		return attributions

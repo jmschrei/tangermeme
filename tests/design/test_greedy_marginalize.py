@@ -5,6 +5,7 @@ import torch
 import pytest
 
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
 from tangermeme.design import greedy_marginalize
 from tangermeme.io import read_meme
 from tangermeme.utils import characters
@@ -40,3 +41,33 @@ def test_greedy_marginalize(X_marg, motifs, device):
 	assert X_hat.dtype == torch.int8
 	assert X_hat.sum(dim=0).min() == 1
 	assert all(torch.unique(X_hat) == torch.tensor([0, 1], dtype=torch.int8))
+
+
+def test_greedy_marginalize_packed(X_marg, motifs, device):
+	# Packed backgrounds give the design of their one-hot encoding, packed.
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	y = [[10.0]]
+	X_marg = X_marg.clone()
+	X_marg[0, :, 5:9] = 0
+	X_marg[-1, :, -3:] = 0
+
+	X_hat = greedy_marginalize(model, X_marg, y, motifs, device=device,
+		max_iter=2)
+	X_hat_packed = greedy_marginalize(model, PackedSequence.from_one_hot(X_marg),
+		y, motifs, device=device, max_iter=2)
+	assert isinstance(X_hat_packed, PackedSequence)
+	assert torch.equal(X_hat_packed.to_one_hot(), X_hat)
+
+
+def test_greedy_marginalize_packed_alphabet(X_marg, device):
+	# The design comes back labelled with `alphabet`, here an order other
+	# than ACGT.
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	alphabet = ['C', 'A', 'T', 'G']
+	X_packed = PackedSequence.from_one_hot(X_marg, alphabet=alphabet)
+
+	X_hat = greedy_marginalize(model, X_packed, [[10.0]], ["ACGT", "TTT"],
+		alphabet=alphabet, device=device, max_iter=1)
+	assert X_hat.alphabet == tuple(alphabet)

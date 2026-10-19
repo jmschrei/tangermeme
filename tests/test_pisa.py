@@ -11,6 +11,7 @@ import warnings
 
 from tangermeme.utils import one_hot_encode
 from tangermeme.utils import random_one_hot
+from tangermeme.utils import PackedSequence
 
 from tangermeme.ersatz import substitute
 from tangermeme.ersatz import shuffle
@@ -33,6 +34,8 @@ from .toy_models import Scatter
 from .toy_models import ConvDense
 from .toy_models import ConvPoolDense
 from .toy_models import SmallDeepSEA
+from ._packed import MixedReferences
+from ._packed import soft_references
 
 from numpy.testing import assert_raises
 from numpy.testing import assert_array_almost_equal
@@ -1447,3 +1450,81 @@ def test_pisa_shared_module_cleanup(X):
 		for name in ("handles", "_caches", "_fwd_counter", "_bw_idx",
 			"_staged", "input", "output", "left", "right"):
 			assert name not in module.__dict__
+
+
+###
+# A PackedSequence as X or as references gives the attributions of its
+# one-hot encoding, and packed sequences in give packed references out.
+
+
+def test_pisa_packed(X, references, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	X_packed = PackedSequence.from_one_hot(X)
+	refs_packed = PackedSequence.from_one_hot(references)
+
+	X_attr, refs = pisa(model, X, n_shuffles=3, random_state=0,
+		return_references=True, device=device)
+	X_attr_packed, refs_back = pisa(model, X_packed, n_shuffles=3,
+		random_state=0, return_references=True, device=device)
+	assert torch.equal(X_attr_packed.cpu(), X_attr.cpu())
+	assert isinstance(refs_back, PackedSequence)
+	assert torch.equal(refs_back.to_one_hot(), refs.cpu().to(torch.int8))
+
+	X_attr = pisa(model, X, references=references, device=device)
+	assert torch.equal(pisa(model, X_packed, references=refs_packed,
+		device=device).cpu(), X_attr.cpu())
+	assert torch.equal(pisa(model, X, references=refs_packed,
+		device=device).cpu(), X_attr.cpu())
+
+
+def test_pisa_packedsoft_references(X, device):
+	# References that are not one-hot cannot be packed, so with a packed X
+	# they come back as a tensor, the one a one-hot X gives.
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	kwargs = dict(references=soft_references, n_shuffles=3,
+		return_references=True, random_state=0, device=device)
+
+	X_attr, refs = pisa(model, X, **kwargs)
+	X_attr_packed, refs_packed = pisa(model, PackedSequence.from_one_hot(X),
+		**kwargs)
+
+	assert torch.equal(X_attr_packed, X_attr)
+	assert isinstance(refs_packed, torch.Tensor)
+	assert torch.equal(refs_packed, refs)
+
+
+def test_pisa_packed_references_N(X, references, device):
+	# Packed references with unknown characters in several examples come
+	# back with each run at its own sequence.
+	torch.manual_seed(0)
+	model = FlattenDense()
+	references = references.clone()
+	references[0, 4, :, 50:53] = 0
+	references[1, 2, :, 10:15] = 0
+	refs_packed = PackedSequence.from_one_hot(references)
+
+	X_attr = pisa(model, X, references=references, device=device)
+	X_attr_packed, refs_back = pisa(model, PackedSequence.from_one_hot(X),
+		references=refs_packed, return_references=True, device=device)
+	assert torch.equal(X_attr_packed.cpu(), X_attr.cpu())
+	assert torch.equal(refs_back.data, refs_packed.data)
+	assert torch.equal(refs_back.n_runs, refs_packed.n_runs)
+
+
+def test_pisa_packed_mixed_references(X, device):
+	# When a later batch of references cannot be packed, the earlier ones are
+	# decoded and all of them come back as the tensor a one-hot X gives.
+	torch.manual_seed(0)
+	model = SmallDeepSEA()
+	kwargs = dict(n_shuffles=3, return_references=True, random_state=0,
+		device=device)
+
+	X_attr, refs = pisa(model, X, references=MixedReferences(shuffle), **kwargs)
+	X_attr_packed, refs_packed = pisa(model, PackedSequence.from_one_hot(X),
+		references=MixedReferences(shuffle), **kwargs)
+
+	assert torch.equal(X_attr_packed, X_attr)
+	assert isinstance(refs_packed, torch.Tensor)
+	assert torch.equal(refs_packed, refs)

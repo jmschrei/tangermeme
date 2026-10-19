@@ -1,6 +1,11 @@
 # test_utils.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
+import os
+import json
+import math
+import functools
+
 import numpy
 import numba
 import torch
@@ -28,6 +33,10 @@ from tangermeme.utils import chunk
 from tangermeme.utils import unchunk
 from tangermeme.utils import extract_signal
 from tangermeme.utils import pwm_consensus
+from tangermeme.utils import PackedSequence
+from tangermeme.utils import _accepts_packed
+from tangermeme.utils import _for_func
+from tangermeme.predict import predict
 from tangermeme.utils import example_to_fasta_coords
 
 from numpy.testing import assert_raises
@@ -1626,3 +1635,674 @@ def test_one_hot_encode_fasta_n_jobs_read_through_pyfaidx(n_jobs, row,
 
 	status, _ = _encode_fasta(''.join(sequence), 60, starts, 25, n_jobs)
 	assert status == -2
+
+
+###
+
+
+def _packed_one_hot(shape, random_state=0):
+	"""A random one-hot encoding of the given shape, (*batch, 4, length),
+	with unknown characters at the start, the end, in a run and scattered."""
+
+	n, length = math.prod(shape[:-2]), shape[-1]
+	X = random_one_hot((n, 4, length), random_state=random_state)
+	if n > 0:
+		X[0, :, :2] = 0
+	if n > 1:
+		X[1, :, length // 3:2 * length // 3] = 0
+	if n > 2:
+		X[2, :, -1:] = 0
+	if n > 3:
+		X[3, :, ::3] = 0
+	if n > 4:
+		X[4] = 0
+
+	return X.reshape(shape)
+
+
+def test_packed_sequence_bytes():
+	# A=0, C=1, G=2 and T=3, the first position in the two highest bits:
+	# ACGT is 00 01 10 11 = 27, and the A after it is 00 then three positions
+	# of padding, 0. In ANNCT the Ns are stored as A: 00 00 00 01 = 1 and
+	# 11 000000 = 192, with one run of N over positions 1 and 2.
+	X = torch.stack([one_hot_encode('ACGTA'), one_hot_encode('ANNCT')])
+	X_packed = PackedSequence.from_one_hot(X)
+
+	assert X_packed.data.dtype == torch.uint8
+	assert X_packed.data.tolist() == [[27, 0], [1, 192]]
+	assert X_packed.n_runs.dtype == torch.int64
+	assert X_packed.n_runs.tolist() == [[1, 1, 3]]
+	assert X_packed.length == 5
+	assert X_packed.alphabet == ('A', 'C', 'G', 'T')
+	assert X_packed.shape == (2, 4, 5)
+	assert X_packed.ndim == 3
+	assert len(X_packed) == 2
+
+
+def test_packed_sequence_canonical():
+	# Padding and unknown characters are stored as zero bits, so sequences
+	# with the same characters have the same bytes. TNTNT is 11 00 11 00 =
+	# 204 and 11 000000 = 192.
+	X = torch.stack([one_hot_encode('TTTTT'), one_hot_encode('NNNNN'),
+		one_hot_encode('TNTNT')])
+	X_packed = PackedSequence.from_one_hot(X)
+
+	assert X_packed.data.tolist() == [[255, 192], [0, 0], [204, 192]]
+	assert X_packed.n_runs.tolist() == [[1, 0, 5], [2, 1, 2], [2, 3, 4]]
+
+
+@pytest.mark.parametrize("length", [0, 1, 2, 3, 4, 5, 7, 8, 100, 2114])
+def test_packed_sequence_round_trip(length):
+	X = _packed_one_hot((6, 4, length), random_state=length)
+	X_packed = PackedSequence.from_one_hot(X)
+	assert X_packed.data.shape == (6, (length + 3) // 4)
+	assert X_packed.to_one_hot().dtype == torch.int8
+	assert torch.equal(X_packed.to_one_hot(), X)
+
+	codes = X.argmax(dim=1).to(torch.uint8)
+	codes[X.sum(dim=1) == 0] = 4
+	assert X_packed.to_codes().dtype == torch.uint8
+	assert torch.equal(X_packed.to_codes(), codes)
+
+	X_codes = PackedSequence.from_codes(codes)
+	assert torch.equal(X_codes.data, X_packed.data)
+	assert torch.equal(X_codes.n_runs, X_packed.n_runs)
+	assert torch.equal(PackedSequence.from_codes(codes.numpy()).data,
+		X_packed.data)
+
+
+@pytest.mark.parametrize("shape", [(0,), (5,), (3, 2), (2, 3, 2)])
+def test_packed_sequence_batch_shapes(shape):
+	X = _packed_one_hot((*shape, 4, 37))
+	X_packed = PackedSequence.from_one_hot(X)
+
+	assert X_packed.shape == X.shape
+	assert X_packed.data.shape == (*shape, 10)
+	assert X_packed.to_codes().shape == (*shape, 37)
+	assert torch.equal(X_packed.to_one_hot(), X)
+
+
+def test_packed_sequence_single_sequence():
+	X = one_hot_encode('ACGNNT')
+	X_packed = PackedSequence.from_one_hot(X)
+
+	assert X_packed.shape == (4, 6)
+	assert X_packed.ndim == 2
+	assert X_packed.n_runs.tolist() == [[0, 3, 5]]
+	assert torch.equal(X_packed.to_one_hot(), X)
+	assert_raises(TypeError, len, X_packed)
+
+
+@pytest.mark.parametrize("dtype", [torch.int8, torch.uint8, torch.int64,
+	torch.float16, torch.float32, torch.float64])
+def test_packed_sequence_dtypes(dtype):
+	X = _packed_one_hot((5, 4, 50))
+	X_packed = PackedSequence.from_one_hot(X.to(dtype))
+	assert torch.equal(X_packed.data, PackedSequence.from_one_hot(X).data)
+
+	X_decoded = X_packed.to_one_hot(dtype=dtype)
+	assert X_decoded.dtype == dtype
+	assert torch.equal(X_decoded, X.to(dtype))
+
+
+def test_packed_sequence_device(device):
+	X = _packed_one_hot((5, 4, 50))
+	X_packed = PackedSequence.from_one_hot(X.to(device))
+	assert X_packed.data.device.type == 'cpu'
+	assert torch.equal(X_packed.data, PackedSequence.from_one_hot(X).data)
+
+	X_decoded = X_packed.to_one_hot(device=device)
+	assert X_decoded.device.type == device
+	assert torch.equal(X_decoded.cpu(), X)
+	assert X_packed.to_codes(device=device).device.type == device
+
+
+def test_packed_sequence_bytes_on_cpu(cuda_device):
+	# A PackedSequence keeps its bytes on the CPU and is decoded onto a
+	# device with to_one_hot or to_codes, so bytes on another device raise.
+	X_packed = PackedSequence.from_one_hot(_packed_one_hot((5, 4, 50)))
+	assert X_packed.device.type == 'cpu'
+
+	with pytest.raises(ValueError, match="CPU"):
+		PackedSequence(X_packed.data.to(cuda_device), X_packed.length,
+			X_packed.n_runs)
+
+
+def test_packed_sequence_alphabet():
+	X = _packed_one_hot((3, 4, 20))
+	X_packed = PackedSequence.from_one_hot(X, alphabet=['A', 'C', 'G', 'U'])
+	assert X_packed.alphabet == ('A', 'C', 'G', 'U')
+	assert X_packed[1:].alphabet == ('A', 'C', 'G', 'U')
+	assert X_packed.reshape(3).alphabet == ('A', 'C', 'G', 'U')
+	assert repr(X_packed) == "PackedSequence(shape=(3, 4, 20), n_runs=3, " \
+		"alphabet=ACGU)"
+
+
+@pytest.mark.parametrize("index", [0, -1, slice(1, 4), slice(None, None, 2),
+	slice(3, 3), [3, 3, 0], numpy.array([4, 1]), torch.tensor([2, 0, 2]),
+	torch.tensor([True, False, True, False, True, True])])
+def test_packed_sequence_getitem(index):
+	X = _packed_one_hot((6, 4, 23))
+	X_packed = PackedSequence.from_one_hot(X)
+	X_index = X_packed[index]
+
+	assert isinstance(X_index, PackedSequence)
+	assert X_index.shape == X[index].shape
+	assert torch.equal(X_index.to_one_hot(), X[index])
+	assert torch.equal(X_index.n_runs, PackedSequence.from_one_hot(
+		X[index]).n_runs)
+
+
+def test_packed_sequence_getitem_two_axes():
+	X = _packed_one_hot((4, 3, 4, 23))
+	X_packed = PackedSequence.from_one_hot(X)
+
+	Xi, rj = [0, 0, 1, 3, 3, 1], [2, 0, 1, 1, 2, 0]
+	assert torch.equal(X_packed[Xi, rj].to_one_hot(), X[Xi, rj])
+	assert torch.equal(X_packed[1].to_one_hot(), X[1])
+	assert torch.equal(X_packed[:, 1].to_one_hot(), X[:, 1])
+	assert torch.equal(X_packed[1:3, ::2].to_one_hot(), X[1:3, ::2])
+	assert torch.equal(X_packed[2, 1].to_one_hot(), X[2, 1])
+
+
+def test_packed_sequence_getitem_raises():
+	X_packed = PackedSequence.from_one_hot(_packed_one_hot((3, 4, 10)))
+	assert_raises(IndexError, X_packed.__getitem__, 3)
+	assert_raises(IndexError, X_packed.__getitem__, (0, 0))
+
+
+def test_packed_sequence_reshape():
+	X = _packed_one_hot((6, 4, 15))
+	X_packed = PackedSequence.from_one_hot(X)
+
+	assert torch.equal(X_packed.reshape(2, 3).to_one_hot(),
+		X.reshape(2, 3, 4, 15))
+	assert torch.equal(X_packed.reshape((3, 2)).to_one_hot(),
+		X.reshape(3, 2, 4, 15))
+	assert torch.equal(X_packed.reshape(2, 3).reshape(-1).to_one_hot(), X)
+	assert_raises(RuntimeError, X_packed.reshape, 4)
+
+
+def _is_mapped(tensor, path):
+	# Whether the memory of `tensor` lies in a mapping of the file `path`,
+	# from /proc/self/maps, which is Linux only.
+	if not os.path.exists("/proc/self/maps"):
+		pytest.skip("needs /proc/self/maps")
+
+	address, path = tensor.data_ptr(), os.path.realpath(path)
+	with open("/proc/self/maps") as infile:
+		for line in infile:
+			fields = line.split(maxsplit=5)
+			start, end = (int(x, 16) for x in fields[0].split("-"))
+			if (start <= address < end and len(fields) == 6 and
+				fields[5].strip() == path):
+				return True
+
+	return False
+
+
+@pytest.mark.parametrize("mmap", [False, True])
+def test_packed_sequence_save_load(tmp_path, mmap):
+	X = _packed_one_hot((3, 2, 4, 21))
+	X_packed = PackedSequence.from_one_hot(X, alphabet=('A', 'C', 'G', 'U'))
+	X_packed.save(tmp_path / "packed")
+	assert sorted(os.listdir(tmp_path / "packed")) == ['data.npy', 'meta.json',
+		'n_runs.npy']
+
+	X_load = PackedSequence.load(tmp_path / "packed", mmap=mmap)
+	assert _is_mapped(X_load.data, tmp_path / "packed" / "data.npy") == mmap
+	assert X_load.length == 21
+	assert X_load.alphabet == ('A', 'C', 'G', 'U')
+	assert torch.equal(X_load.data, X_packed.data)
+	assert torch.equal(X_load.n_runs, X_packed.n_runs)
+	assert torch.equal(X_load[1:, 0].to_one_hot(), X[1:, 0])
+
+	# Saving again replaces the files.
+	PackedSequence.from_one_hot(X[0]).save(tmp_path / "packed")
+	assert PackedSequence.load(tmp_path / "packed").shape == (2, 4, 21)
+
+
+def test_packed_sequence_save_mapped(tmp_path):
+	# A PackedSequence loaded with mmap=True can be edited and saved back to
+	# the directory it is mapped from.
+	X_packed = PackedSequence.from_one_hot(_packed_one_hot((50, 4, 21)))
+	X_packed.save(tmp_path)
+
+	X_load = PackedSequence.load(tmp_path, mmap=True)
+	X_load.data[3] = X_packed.data[4]
+	X_load.save(tmp_path)
+
+	X_back = PackedSequence.load(tmp_path)
+	assert torch.equal(X_back.data[3], X_packed.data[4])
+	assert torch.equal(X_back.data[5:], X_packed.data[5:])
+	assert sorted(os.listdir(tmp_path)) == ['data.npy', 'meta.json',
+		'n_runs.npy']
+
+
+def test_packed_sequence_load_raises_version(tmp_path):
+	PackedSequence.from_one_hot(_packed_one_hot((2, 4, 9))).save(tmp_path)
+	with open(tmp_path / "meta.json") as infile:
+		meta = json.load(infile)
+
+	meta["format_version"] = 2
+	with open(tmp_path / "meta.json", "w") as outfile:
+		json.dump(meta, outfile)
+
+	with pytest.raises(ValueError, match="format version 2"):
+		PackedSequence.load(tmp_path)
+
+
+def test_packed_sequence_raises():
+	data = torch.zeros(2, 3, dtype=torch.uint8)
+	PackedSequence(data, 10, n_runs=[[0, 0, 3], [0, 4, 5], [1, 9, 10]])
+
+	assert_raises(ValueError, PackedSequence, data.to(torch.int16), 10)
+	assert_raises(ValueError, PackedSequence, data.numpy(), 10)
+	assert_raises(ValueError, PackedSequence, torch.tensor(0,
+		dtype=torch.uint8), 0)
+	assert_raises(ValueError, PackedSequence, data, 13)
+	assert_raises(ValueError, PackedSequence, data, 8)
+	assert_raises(ValueError, PackedSequence, data, -1)
+	assert_raises(ValueError, PackedSequence, data, 10, alphabet='ACGTN')
+	assert_raises(ValueError, PackedSequence, data, 10, n_runs=[0, 0, 3])
+	assert_raises(ValueError, PackedSequence, data, 10, n_runs=[[0, 0.5, 3]])
+
+	for n_runs in ([[2, 0, 1]], [[-1, 0, 1]], [[0, -1, 1]], [[0, 3, 3]],
+		[[0, 5, 11]], [[1, 0, 1], [0, 0, 1]], [[0, 4, 5], [0, 0, 3]],
+		[[0, 0, 3], [0, 2, 5]], [[0, 0, 3], [0, 3, 5]]):
+		assert_raises(ValueError, PackedSequence, data, 10, n_runs=n_runs)
+
+
+def test_packed_sequence_from_one_hot_raises():
+	X = random_one_hot((2, 4, 10), random_state=0)
+	assert_raises(ValueError, PackedSequence.from_one_hot, X.float() * 0.5)
+	assert_raises(ValueError, PackedSequence.from_one_hot,
+		random_one_hot((2, 5, 10), random_state=0))
+	assert_raises(ValueError, PackedSequence.from_one_hot, X[0, 0])
+
+	X[0, :, 3] = 1
+	assert_raises(ValueError, PackedSequence.from_one_hot, X)
+
+
+def test_packed_sequence_from_codes_raises():
+	assert_raises(ValueError, PackedSequence.from_codes, torch.tensor([[0, 5]]))
+	assert_raises(ValueError, PackedSequence.from_codes, torch.tensor([[0, -1]]))
+	assert_raises(ValueError, PackedSequence.from_codes,
+		torch.tensor([[0.0, 1.0]]))
+	assert_raises(ValueError, PackedSequence.from_codes,
+		torch.tensor([[True, False]]))
+	assert_raises(ValueError, PackedSequence.from_codes, torch.tensor(3))
+
+
+@pytest.mark.parametrize("dtype", [torch.int8, torch.int64, torch.float32,
+	torch.float64])
+@pytest.mark.parametrize("value", [0.5, 2, -1, float('nan'), 'two ones'])
+def test_packed_sequence_from_one_hot_raises_values(dtype, value):
+	X = _packed_one_hot((3, 4, 21)).to(dtype)
+	if value == 'two ones':
+		X[1, :2, 5] = 1
+	elif dtype.is_floating_point or value in (2, -1):
+		X[1, 2, 5] = value
+	else:
+		pytest.skip("an integer dtype cannot hold {}".format(value))
+
+	assert_raises(ValueError, PackedSequence.from_one_hot, X)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.bool,
+	torch.int16, torch.int32])
+def test_packed_sequence_from_one_hot_other_dtypes(dtype):
+	X = _packed_one_hot((5, 4, 37))
+	X_packed = PackedSequence.from_one_hot(X.to(dtype))
+	X_ref = PackedSequence.from_one_hot(X)
+
+	assert torch.equal(X_packed.data, X_ref.data)
+	assert torch.equal(X_packed.n_runs, X_ref.n_runs)
+	assert torch.equal(X_packed.to_one_hot(dtype=dtype), X.to(dtype))
+
+
+def test_packed_sequence_from_one_hot_layouts():
+	X = _packed_one_hot((6, 4, 40))
+
+	# A strided view, a transposed copy read back as a view, and a tensor
+	# that requires a gradient all pack like the contiguous tensor.
+	X_strided = _packed_one_hot((6, 4, 80))[:, :, ::2]
+	X_transposed = X.permute(2, 0, 1).contiguous().permute(1, 2, 0)
+	X_grad = X.float().requires_grad_()
+
+	for X_ in X_strided, X_transposed, X_grad:
+		X_packed = PackedSequence.from_one_hot(X_)
+		assert torch.equal(X_packed.to_one_hot(), X_.detach().to(torch.int8))
+
+
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.int8, torch.int16,
+	torch.int32, torch.int64])
+def test_packed_sequence_from_codes_dtypes(dtype):
+	X = _packed_one_hot((5, 4, 30))
+	X_packed = PackedSequence.from_one_hot(X)
+	codes = X_packed.to_codes()
+
+	X_codes = PackedSequence.from_codes(codes.to(dtype))
+	assert torch.equal(X_codes.data, X_packed.data)
+	assert torch.equal(X_codes.n_runs, X_packed.n_runs)
+	assert torch.equal(PackedSequence.from_codes(codes[:, ::2].to(dtype)
+		).to_codes(), codes[:, ::2])
+
+
+@pytest.mark.parametrize("index", [None, Ellipsis, (Ellipsis, 1), (1,
+	Ellipsis), -1, (-1, -2), (None, 2), (slice(None), [0, 2, 2]),
+	(slice(1, None), 0), ([3, 0], slice(None)), ([[0, 1], [3, 3]], [[1, 2],
+	[0, 0]]), "mask", "row_mask", (slice(0, 0),), ([],)])
+def test_packed_sequence_getitem_forms(index):
+	X = _packed_one_hot((4, 3, 4, 23))
+	X[2, 1, :, 3:9] = 0
+	X_packed = PackedSequence.from_one_hot(X)
+
+	if index == "mask":
+		index = torch.tensor([[True, False, True], [False, False, False],
+			[True, True, False], [False, True, True]])
+	elif index == "row_mask":
+		index = numpy.array([True, False, True, True])
+
+	# Indexing the batch axes only: the channel and length axes are kept.
+	tuple_index = index if isinstance(index, tuple) else (index,)
+	X_ref = X[(*tuple_index, slice(None), slice(None))]
+
+	X_index = X_packed[index]
+	assert X_index.shape == X_ref.shape
+	assert torch.equal(X_index.to_one_hot(), X_ref)
+	X_ref_packed = PackedSequence.from_one_hot(X_ref)
+	assert torch.equal(X_index.data, X_ref_packed.data)
+	assert torch.equal(X_index.n_runs, X_ref_packed.n_runs)
+
+
+def test_packed_sequence_getitem_view():
+	# A slice of the bytes is a view, as it is for a tensor.
+	X_packed = PackedSequence.from_one_hot(_packed_one_hot((6, 4, 23)))
+	assert X_packed[1:4].data.data_ptr() == X_packed.data[1].data_ptr()
+
+
+def test_validate_input_packed():
+	X_packed = PackedSequence.from_one_hot(_packed_one_hot((3, 4, 20)))
+	assert validate_input(X_packed, "X", shape=(-1, 4, -1), ohe=True,
+		allow_N=True) is X_packed
+	assert validate_input(X_packed, "X", min_value=0, max_value=1) is X_packed
+
+	assert_raises(ValueError, validate_input, X_packed, "X", shape=(-1, 5, -1))
+	assert_raises(ValueError, validate_input, X_packed, "X", shape=(-1, -1))
+	assert_raises(ValueError, validate_input, X_packed, "X",
+		dtype=torch.float32)
+	assert_raises(ValueError, validate_input, X_packed, "X", min_value=0.5)
+	assert_raises(ValueError, validate_input, X_packed, "X", max_value=0.5)
+
+	with pytest.raises(ValueError, match="unknown characters"):
+		validate_input(X_packed, "X", ohe=True)
+
+	with pytest.warns(TangermemeWarning, match="unknown characters"):
+		validate_input(X_packed, "X", ohe=True, only_warn=True)
+
+	X_no_N = PackedSequence.from_one_hot(random_one_hot((3, 4, 20),
+		random_state=0))
+	assert validate_input(X_no_N, "X", ohe=True) is X_no_N
+
+
+def test_for_func():
+	X = _packed_one_hot((3, 4, 20))
+	X_packed = PackedSequence.from_one_hot(X)
+
+	marked = _accepts_packed(lambda model, X: X)
+	assert _for_func(X_packed, marked) is X_packed
+	assert _for_func(X_packed, functools.partial(functools.partial(marked, 1)
+		)) is X_packed
+	assert _for_func(X_packed, predict) is X_packed
+
+	X_decoded = _for_func(X_packed, lambda model, X: X)
+	assert X_decoded.dtype == torch.int8
+	assert torch.equal(X_decoded, X)
+	assert _for_func(X, marked) is X
+
+
+def test_for_func_wraps():
+	# functools.wraps copies a function's attributes onto its wrapper, but a
+	# wrapper the user writes still receives the int8 one-hot encoding, and
+	# so does a callable object, which may not be hashable.
+	X = _packed_one_hot((3, 4, 20))
+	X_packed = PackedSequence.from_one_hot(X)
+
+	@functools.wraps(predict)
+	def wrapped(model, X, **kwargs):
+		return X
+
+	X_decoded = _for_func(X_packed, wrapped)
+	assert X_decoded.dtype == torch.int8
+	assert torch.equal(X_decoded, X)
+
+	class Unhashable:
+		__hash__ = None
+
+		def __call__(self, model, X, **kwargs):
+			return X
+
+	assert torch.equal(_for_func(X_packed, Unhashable()), X)
+
+
+###
+# The sequence helpers take a PackedSequence and give the result of its
+# one-hot encoding.
+
+
+def test_gc_content_packed():
+	X = _packed_one_hot((6, 4, 50))
+	X_packed = PackedSequence.from_one_hot(X)
+
+	gc = gc_content(X)
+	gc_packed = gc_content(X_packed)
+	assert gc_packed.dtype == gc.dtype
+	assert torch.equal(gc_packed, gc)
+	assert gc_packed[4] == 0
+
+
+def test_gc_content_packed_alphabet():
+	# A PackedSequence is counted with its own alphabet, here one in which G
+	# and C are the last two characters.
+	X = _packed_one_hot((6, 4, 50))
+	X_packed = PackedSequence.from_one_hot(X, alphabet=('A', 'T', 'C', 'G'))
+
+	gc = gc_content(X, alphabet=['A', 'T', 'C', 'G'])
+	assert torch.equal(gc_content(X_packed), gc)
+	assert not torch.equal(gc, gc_content(X))
+
+
+def test_characters_packed():
+	X = one_hot_encode('ACGNNTGA')
+	X_packed = PackedSequence.from_one_hot(X)
+
+	assert characters(X_packed, allow_N=True) == 'ACGNNTGA'
+	assert characters(X_packed, force=True) == characters(X, force=True)
+	assert characters(X_packed.reshape(1), allow_N=True) == 'ACGNNTGA'
+	assert characters(PackedSequence.from_one_hot(X, alphabet='ACGU'),
+		allow_N=True) == 'ACGNNUGA'
+	assert_raises(ValueError, characters, X_packed)
+	assert_raises(ValueError, characters, X_packed.reshape(1)[[0, 0]])
+
+
+@pytest.mark.parametrize("shape", [(5,), (2, 3)])
+def test_reverse_complement_packed(shape):
+	X = _packed_one_hot((*shape, 4, 37))
+	X_packed = PackedSequence.from_one_hot(X)
+	X_rc = reverse_complement(X_packed)
+
+	X_flat = X.reshape(-1, 4, 37)
+	X_ref = torch.stack([reverse_complement(x) for x in X_flat])
+	assert isinstance(X_rc, PackedSequence)
+	assert X_rc.shape == X.shape
+	assert torch.equal(X_rc.to_one_hot().reshape(-1, 4, 37), X_ref)
+	assert torch.equal(reverse_complement(X_rc).to_one_hot(), X)
+
+	assert_raises(ValueError, reverse_complement, X_packed, allow_N=False)
+
+
+@pytest.mark.parametrize("chunk", [1, 100, 10 ** 6])
+def test_packed_helpers_chunks(chunk, monkeypatch):
+	# gc_content and reverse_complement work a chunk of sequences at a time,
+	# with the results of the one-hot encoding, for any batch axes.
+	monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
+	X = _packed_one_hot((3, 2, 4, 37))
+	X_packed = PackedSequence.from_one_hot(X)
+
+	X_flat = X.reshape(6, 4, 37)
+	assert torch.equal(gc_content(X_packed.reshape(6)), gc_content(X_flat))
+
+	X_rc = reverse_complement(X_packed)
+	assert X_rc.shape == X.shape
+	assert torch.equal(X_rc.to_one_hot().reshape(6, 4, 37), torch.stack(
+		[reverse_complement(x) for x in X_flat]))
+	assert torch.equal(reverse_complement(X_packed[1, 0]).to_one_hot(),
+		reverse_complement(X[1, 0]))
+
+
+def test_position_one_hot():
+	# Decoding positions start to end of one sequence gives the slice of its
+	# one-hot encoding, with Python's slice bounds, from only the bytes that
+	# hold those positions.
+	from tangermeme.utils import _position_one_hot
+
+	X = _packed_one_hot((4, 4, 103))
+	X[1, :, 40:47] = 0
+	X[2, :, :6] = 0
+	X[3, :, -9:] = 0
+	X_packed = PackedSequence.from_one_hot(X)
+
+	rng = numpy.random.RandomState(0)
+	bounds = [(0, 103), (5, 6), (40, 47), (38, 50), (98, 120), (-9, -1),
+		(-200, 3), (60, 20), (103, 110)]
+	bounds += [tuple(rng.randint(-110, 115, size=2)) for _ in range(200)]
+
+	for row in range(4):
+		for start, end in bounds:
+			for dtype in (torch.int8, torch.float32):
+				X_ = _position_one_hot(X_packed, row, start, end, dtype=dtype)
+				assert X_.dtype == dtype
+				assert torch.equal(X_, X[row, :, start:end].to(dtype))
+				assert X_.untyped_storage().nbytes() == X_.numel() * \
+					X_.element_size()
+
+
+def test_reverse_complement_packed_alphabet():
+	# A PackedSequence is complemented with `complement_map` over its own
+	# alphabet, here one whose complements are not its reverse.
+	alphabet = ('A', 'T', 'C', 'G')
+	complement_map = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
+	X = _packed_one_hot((5, 4, 37))
+	X_packed = PackedSequence.from_one_hot(X, alphabet=alphabet)
+
+	X_rc = reverse_complement(X_packed, complement_map=complement_map)
+	X_ref = torch.stack([reverse_complement(x, complement_map=complement_map)
+		for x in X])
+	assert X_rc.alphabet == alphabet
+	assert torch.equal(X_rc.to_one_hot(), X_ref)
+
+	rna_map = {'A': 'U', 'C': 'G', 'G': 'C', 'U': 'A'}
+	X_rna = PackedSequence.from_one_hot(X, alphabet=('A', 'C', 'G', 'U'))
+	assert torch.equal(reverse_complement(X_rna, complement_map=rna_map
+		).to_one_hot(), torch.stack([reverse_complement(x,
+		complement_map=rna_map) for x in X]))
+
+
+def test_chunk_packed():
+	X = [_packed_one_hot((1, 4, 100))[0], random_one_hot((1, 4, 77),
+		random_state=1)[0]]
+	X_chunks = chunk(X, size=20, overlap=5)
+	X_chunks_packed = chunk([PackedSequence.from_one_hot(x) for x in X],
+		size=20, overlap=5)
+
+	assert isinstance(X_chunks_packed, PackedSequence)
+	assert torch.equal(X_chunks_packed.to_one_hot(), X_chunks)
+
+
+@pytest.mark.parametrize("sequence", ["ACGTACGTAC", "ACGNNNTGAN", "N" * 7,
+	"ACGT" * 70000 + "NA", ""])
+def test_one_hot_encode_packed(sequence):
+	X = one_hot_encode(sequence)
+	X_packed = one_hot_encode(sequence, return_packed=True)
+	X_ref = PackedSequence.from_one_hot(X)
+
+	assert X_packed.shape == X.shape
+	assert torch.equal(X_packed.data, X_ref.data)
+	assert torch.equal(X_packed.n_runs, X_ref.n_runs)
+
+
+def test_one_hot_encode_packed_alphabet_ignore():
+	X = one_hot_encode("ACGUXXNA", alphabet=list("ACGU"), ignore=['N', 'X'])
+	X_packed = one_hot_encode("ACGUXXNA", alphabet=list("ACGU"), ignore=['N',
+		'X'], return_packed=True)
+	assert X_packed.alphabet == ('A', 'C', 'G', 'U')
+	assert torch.equal(X_packed.to_one_hot(), X)
+
+
+def test_one_hot_encode_packed_raises():
+	with pytest.raises(ValueError, match="not in"):
+		one_hot_encode("ACGTZ", return_packed=True)
+
+	with pytest.raises(ValueError, match="not in"):
+		one_hot_encode("ACGTé", return_packed=True)
+
+	with pytest.raises(ValueError, match="four characters"):
+		one_hot_encode("ACGT", alphabet=list("ACGTU"), return_packed=True)
+
+
+@pytest.mark.parametrize("chunk", [1, 99, 100, 10 ** 6])
+def test_random_one_hot_packed_chunks(chunk, monkeypatch):
+	# With return_packed=True the sequences are drawn and packed a chunk at
+	# a time, which gives the packed encoding of the one-hot draws whatever
+	# the chunk size, including chunks of one sequence and of all of them.
+	monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
+	probs = numpy.random.RandomState(0).dirichlet(numpy.ones(4), size=10)
+
+	for kwargs in ({}, {"probs": probs}):
+		X = random_one_hot((10, 4, 50), random_state=3, **kwargs)
+		X_packed = random_one_hot((10, 4, 50), random_state=3,
+			return_packed=True, **kwargs)
+		Y = PackedSequence.from_one_hot(X)
+		assert torch.equal(X_packed.data, Y.data)
+		assert torch.equal(X_packed.n_runs, Y.n_runs)
+
+	assert random_one_hot((0, 4, 50), return_packed=True).shape == (0, 4, 50)
+
+
+@pytest.mark.parametrize("probs", [None, [[0.5, 0.25, 0.125, 0.125]],
+	"per-sequence"])
+def test_random_one_hot_packed(probs):
+	if probs == "per-sequence":
+		probs = numpy.random.RandomState(0).dirichlet(numpy.ones(4), size=5)
+
+	X = random_one_hot((5, 4, 33), probs=probs, random_state=3)
+	X_packed = random_one_hot((5, 4, 33), probs=probs, random_state=3,
+		return_packed=True)
+	assert torch.equal(X_packed.to_one_hot(), X)
+
+	with pytest.raises(ValueError, match="four characters"):
+		random_one_hot((5, 3, 33), return_packed=True)
+
+
+def test_chunk_packed_raises_batch_axes():
+	# chunk takes PackedSequences of one sequence each.
+	X = PackedSequence.from_one_hot(random_one_hot((6, 4, 40),
+		random_state=1)).reshape(2, 3)
+	with pytest.raises(ValueError, match="one sequence"):
+		chunk([X])
+
+	with pytest.raises(ValueError, match="one sequence"):
+		chunk([X[0]])
+
+
+@pytest.mark.parametrize("return_packed", [False, True])
+def test_random_one_hot_random_state(return_packed):
+	# The same seed gives the same sequences and another seed others.
+	def draw(seed):
+		X = random_one_hot((5, 4, 40), random_state=seed,
+			return_packed=return_packed)
+		return X.to_one_hot() if return_packed else X
+
+	assert torch.equal(draw(3), draw(3))
+	assert not torch.equal(draw(3), draw(4))

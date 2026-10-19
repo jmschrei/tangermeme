@@ -6,6 +6,7 @@ import torch
 import pytest
 
 from tangermeme.utils import one_hot_encode
+from tangermeme.utils import PackedSequence
 from tangermeme.utils import random_one_hot
 
 from tangermeme.space import space
@@ -914,3 +915,62 @@ def test_apply_product_saturation_mutagenesis(X, alpha, device):
 		  [ 0.0409,  0.0000,  0.0000,  0.0000],
 		  [-0.0000,  0.0068, -0.0000, -0.0000],
 		  [-0.0000, -0.0000,  0.0000,  0.0296]]]], 4)
+
+
+###
+# A PackedSequence is passed on to `func` a batch at a time and gives the
+# outputs of its one-hot encoding.
+
+
+def test_apply_pairwise_packed(X, alpha, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	y = apply_pairwise(predict, model, X[:5], args=(alpha[:5],), batch_size=3,
+		device=device)
+	y_packed = apply_pairwise(predict, model, PackedSequence.from_one_hot(
+		X[:5]), args=(alpha[:5],), batch_size=3, device=device)
+	assert torch.equal(y_packed, y)
+
+
+def test_apply_product_packed(X, alpha, beta, device):
+	torch.manual_seed(0)
+	model = FlattenDense()
+	y = apply_product(predict, model, X[:4], args=(alpha[:3], beta[:2]),
+		batch_size=5, device=device)
+	y_packed = apply_product(predict, model, PackedSequence.from_one_hot(
+		X[:4]), args=(alpha[:3], beta[:2]), batch_size=5, device=device)
+	assert torch.equal(y_packed, y)
+
+
+def test_apply_packed_raises_batch_axes():
+	X = PackedSequence.from_one_hot(random_one_hot((6, 4, 40),
+		random_state=1)).reshape(2, 3)
+	model = FlattenDense(seq_len=40)
+	alpha, beta = torch.zeros(2, 1), torch.ones(2, 1)
+
+	with pytest.raises(ValueError, match="must have shape"):
+		apply_pairwise(predict, model, X, args=(alpha, beta), device='cpu')
+
+	with pytest.raises(ValueError, match="must have shape"):
+		apply_product(predict, model, X, args=(alpha, beta), device='cpu')
+
+
+def test_apply_pairwise_packed_func_int8(X, alpha, device):
+	# A function of the user's is given the int8 one-hot encoding of each
+	# packed batch.
+	seen = []
+
+	def func(model, X, **kwargs):
+		seen.append(X.dtype)
+		return predict(model, X, **kwargs)
+
+	torch.manual_seed(0)
+	model = FlattenDense()
+	y = apply_pairwise(func, model, X[:5], args=(alpha[:5],), batch_size=3,
+		device=device)
+	seen.clear()
+	y_packed = apply_pairwise(func, model, PackedSequence.from_one_hot(X[:5]),
+		args=(alpha[:5],), batch_size=3, device=device)
+
+	assert len(seen) > 0 and all(dtype == torch.int8 for dtype in seen)
+	assert torch.equal(y_packed, y)
