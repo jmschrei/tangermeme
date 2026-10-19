@@ -451,7 +451,7 @@ def test_substitution_effect_func_deep_lift_shap(X, substitutions, device):
 		   0.0000,  0.0000, -0.0000]]], 4)
 
 
-def test_variant_effect_returns_named_tuple(device):
+def test_variant_effect_returns_named_tuple():
 	from tangermeme.results import PerturbationResult
 
 	torch.manual_seed(0)

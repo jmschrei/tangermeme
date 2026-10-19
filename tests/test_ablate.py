@@ -506,35 +506,29 @@ def test_ablate_convdense_batch_size(X, alpha, device):
 	assert_array_almost_equal(y_after0[1], y_after2[1])
 
 
-def test_ablate_raises_shape(X, alpha, device):
+def test_ablate_raises_shape(X, alpha):
 	torch.manual_seed(0)
 	model = ConvDense()
 
-	assert_raises(ValueError, ablate, model, X[0], 46, 54, device=device)
-	assert_raises(ValueError, ablate, model, X[:, 0], 46, 54, device=device)
-	assert_raises(ValueError, ablate, model, X.unsqueeze(0), 46, 54, 
-		device=device)
+	assert_raises(ValueError, ablate, model, X[0], 46, 54)
+	assert_raises(ValueError, ablate, model, X[:, 0], 46, 54)
+	assert_raises(ValueError, ablate, model, X.unsqueeze(0), 46, 54)
 
-	assert_raises(ValueError, ablate, model, X, 46, 54, args=(alpha[:2],), 
-		device=device)
-	assert_raises(ValueError, ablate, model, X, 46, 54, args=alpha, 
-		device=device)
-	assert_raises(ValueError, ablate, model, X, 46, 54, args=(alpha[:2, None],),
-		device=device)
+	assert_raises(ValueError, ablate, model, X, 46, 54, args=(alpha[:2],))
+	assert_raises(ValueError, ablate, model, X, 46, 54, args=alpha)
+	assert_raises(ValueError, ablate, model, X, 46, 54, args=(alpha[:2, None],))
 
 
-def test_ablate_raises_args(X, alpha, beta, device):
+def test_ablate_raises_args(X, alpha, beta):
 	torch.manual_seed(0)
 	model = FlattenDense()
 
-	assert_raises(ValueError, ablate, model, X, -6, 5, device=device)
-	assert_raises(ValueError, ablate, model, X, 7, 5, device=device)
-	assert_raises(ValueError, ablate, model, X, 7, 5000, device=device)
-	assert_raises(ValueError, ablate, model, X, 5, 10, args=alpha, device=device)
-	assert_raises(ValueError, ablate, model, X, 5, 10, args=(alpha[:5],), 
-		device=device)
-	assert_raises(ValueError, ablate, model, X, 5, 10, args=(alpha, beta[:5]),
-		device=device)
+	assert_raises(ValueError, ablate, model, X, -6, 5)
+	assert_raises(ValueError, ablate, model, X, 7, 5)
+	assert_raises(ValueError, ablate, model, X, 7, 5000)
+	assert_raises(ValueError, ablate, model, X, 5, 10, args=alpha)
+	assert_raises(ValueError, ablate, model, X, 5, 10, args=(alpha[:5],))
+	assert_raises(ValueError, ablate, model, X, 5, 10, args=(alpha, beta[:5]))
 
 
 def test_ablate_accepts_N(X, device):
@@ -853,14 +847,14 @@ def test_ablate_deep_lift_shap_hypothetical(X, device):
 	assert_array_almost_equal(y_after, y_after1, 4)
 
 
-def test_ablate_deep_lift_shap_raises(X, device):
+def test_ablate_deep_lift_shap_raises(X):
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 
 	assert_raises(TypeError, ablate, model, X, 44, 55, n=3, func=deep_lift_shap,
-		device=device, additional_func_kwargs={'device': 'cpu'}, n_shuffles=5)
+		device='cpu', additional_func_kwargs={'device': 'cpu'}, n_shuffles=5)
 	assert_raises(TypeError, ablate, model, X, 44, 55, n=3, func=deep_lift_shap,
-		device=device, end=10)
+		end=10)
 
 
 ###
@@ -1138,13 +1132,12 @@ def test_ablate_rejects_args_device_mismatch():
 		ablate(model, X, start=10, end=20, n=2, args=(alpha_meta,))
 
 
-def test_ablate_annotations_empty(X, device):
+def test_ablate_annotations_empty(X):
 	torch.manual_seed(0)
 	model = FlattenDense()
 	annotations = torch.zeros(0, 3, dtype=torch.int64)
 
-	assert_raises(ValueError, ablate_annotations, model, X, annotations,
-		device=device)
+	assert_raises(ValueError, ablate_annotations, model, X, annotations)
 
 
 def test_ablate_rejects_empty_X():
