@@ -349,6 +349,24 @@ def test_characters_raise_ties():
 	assert characters(ohe, force=True) == seq
 
 
+def test_characters_numpy():
+	# A numpy array gives the characters its tensor gives, including a view
+	# with negative strides.
+	pwm = torch.tensor([
+		[0.25, 0.00, 0.10, 0.95, 0.00],
+		[0.20, 1.00, 1.00, 0.05, 1.00],
+		[0.30, 0.00, 0.30, 0.00, 0.00],
+		[0.25, 0.00, 3.00, 0.00, 0.00]
+	])
+
+	assert characters(pwm.numpy()) == 'GCTAC'
+	assert characters(pwm.numpy()[None]) == 'GCTAC'
+	assert characters(pwm.numpy()[:, ::-1]) == 'CATCG'
+	assert characters(one_hot_encode('GCTAC').numpy()) == 'GCTAC'
+	assert characters(numpy.zeros((4, 3)), allow_N=True) == 'NNN'
+	assert_raises(ValueError, characters, numpy.zeros((4, 3)))
+
+
 ##
 
 

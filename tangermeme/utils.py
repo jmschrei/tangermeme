@@ -444,7 +444,7 @@ def characters(
 
 	Parameters
 	----------
-	pwm: torch.tensor, shape=(len(alphabet), seq_len), or PackedSequence
+	pwm: torch.tensor or numpy.ndarray, shape=(len(alphabet), seq_len), or PackedSequence
 		A numeric representation of the sequence. This can be one-hot encoded
 		or contain numeric values. These numerics can be probabilities but can
 		also be frequencies.
@@ -489,6 +489,9 @@ def characters(
 		chars = numpy.array(list(pwm.alphabet) + ['N' if allow_N else
 			pwm.alphabet[0]])
 		return ''.join(chars[codes])
+
+	if isinstance(pwm, numpy.ndarray):
+		pwm = torch.from_numpy(numpy.ascontiguousarray(pwm))
 
 	#if (batch, alphabet_size, motif_size) and batch = 1, remove batch axis
 	if len(pwm.shape) == 3 and pwm.shape[0] == 1:

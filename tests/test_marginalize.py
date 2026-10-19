@@ -740,7 +740,10 @@ def test_marginalize_annotations_basic(X, device):
 		assert_array_almost_equal(y_afters[i], ya, 4)
 
 
-def test_marginalize_annotations_multi_output(X, device):
+@pytest.mark.parametrize("n_annotations", [1, 2, 3])
+def test_marginalize_annotations_multi_output(X, n_annotations, device):
+	# One list entry per model output, whatever the number of annotations;
+	# ConvDense has two outputs.
 	torch.manual_seed(0)
 	model = ConvDense()
 	X0 = X[:4].clone()
@@ -748,7 +751,8 @@ def test_marginalize_annotations_multi_output(X, device):
 	annotations = torch.tensor([
 		[0, 10, 18],
 		[3, 40, 46],
-	], dtype=torch.int64)
+		[5, 60, 70],
+	], dtype=torch.int64)[:n_annotations]
 
 	y_befores, y_afters = marginalize_annotations(model, X, X0, annotations,
 		batch_size=2, device=device)
@@ -758,10 +762,10 @@ def test_marginalize_annotations_multi_output(X, device):
 	assert len(y_befores) == 2
 	assert len(y_afters) == 2
 
-	assert y_befores[0].shape == (2, 4, 12, 98)
-	assert y_befores[1].shape == (2, 4, 3)
-	assert y_afters[0].shape == (2, 4, 12, 98)
-	assert y_afters[1].shape == (2, 4, 3)
+	assert y_befores[0].shape == (n_annotations, 4, 12, 98)
+	assert y_befores[1].shape == (n_annotations, 4, 3)
+	assert y_afters[0].shape == (n_annotations, 4, 12, 98)
+	assert y_afters[1].shape == (n_annotations, 4, 3)
 
 
 def test_marginalize_annotations_deep_lift_shap(X, device):

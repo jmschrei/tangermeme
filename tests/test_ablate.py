@@ -994,10 +994,14 @@ def test_ablate_annotations_basic(X, device):
 		assert_array_almost_equal(y_afters[i], ya, 4)
 
 
-def test_ablate_annotations_multihead(X, device):
+@pytest.mark.parametrize("n_annotations", [1, 2, 3])
+def test_ablate_annotations_multihead(X, n_annotations, device):
+	# One list entry per model output, whatever the number of annotations;
+	# ConvDense has two outputs.
 	torch.manual_seed(0)
 	model = ConvDense()
-	annotations = torch.tensor([[0, 10, 20], [3, 40, 50]])
+	annotations = torch.tensor([[0, 10, 20], [3, 40, 50], [5, 60, 70]])[
+		:n_annotations]
 
 	y_befores, y_afters = ablate_annotations(model, X, annotations,
 		random_state=0, n=3, batch_size=2, device=device)
@@ -1007,10 +1011,10 @@ def test_ablate_annotations_multihead(X, device):
 	assert len(y_befores) == 2
 	assert len(y_afters) == 2
 
-	assert y_befores[0].shape == (2, 1, 12, 98)
-	assert y_befores[1].shape == (2, 1, 3)
-	assert y_afters[0].shape == (2, 1, 3, 12, 98)
-	assert y_afters[1].shape == (2, 1, 3, 3)
+	assert y_befores[0].shape == (n_annotations, 1, 12, 98)
+	assert y_befores[1].shape == (n_annotations, 1, 3)
+	assert y_afters[0].shape == (n_annotations, 1, 3, 12, 98)
+	assert y_afters[1].shape == (n_annotations, 1, 3, 3)
 
 	assert y_befores[0].dtype == torch.float32
 	assert y_befores[1].dtype == torch.float32

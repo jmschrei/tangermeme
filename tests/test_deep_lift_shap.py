@@ -4559,6 +4559,24 @@ def test_deep_lift_shap_autocast_matches_full_precision(X, references, device):
 	assert_array_almost_equal(X_attr, X_attr_.float(), 2)
 
 
+@pytest.mark.parametrize("rule, atol", [("softmax", 1e-3),
+	("attention_pool", 5e-4), ("attention", 2e-3), ("transformer", 3e-3)])
+def test_deep_lift_shap_autocast_softmax_matches_full_precision(X, references,
+	device, rule, atol):
+	# The softmax rule computes in float32 under bf16 autocast. In bf16 it was
+	# off by up to 3e-2 on ConvSoftmax, whose attributions reach 6e-2.
+	torch.manual_seed(0)
+	model = AUTOCAST_MODELS[rule]()
+
+	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, random_state=0)
+	X_attr_ = deep_lift_shap(model, X[:4], references=references[:4],
+		device=device, dtype=torch.bfloat16, random_state=0,
+		warning_threshold=1e9)
+
+	assert (X_attr_.float() - X_attr).abs().max() < atol
+
+
 def test_deep_lift_shap_autocast_additional_nonlinear_ops(X, references,
 	device):
 	torch.manual_seed(0)
