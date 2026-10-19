@@ -1082,12 +1082,7 @@ def dinucleotide_shuffle(
 
 	if return_packed:
 		start, end, _ = slice(start, end).indices(length)
-		if packed:
-			codes = X.to_codes()
-		else:
-			values, codes = X.max(dim=1)
-			codes[values == 0] = 4
-
+		codes = X.to_codes() if packed else _one_hot_codes(X)
 		return _shuffle_packed(codes, start, max(start, end), n, random_states,
 			verbose, n_jobs, alphabet)
 
