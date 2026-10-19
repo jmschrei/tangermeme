@@ -255,53 +255,36 @@ def test_public_validate_input_wrapper(device):
 ##
 
 
-def test_characters_ohe():
-	seq = 'GCTAC'
-	ohe = torch.tensor([
+@pytest.mark.parametrize("ohe, alphabet", [
+	(torch.tensor([
 		[0, 0, 0, 1, 0],
 		[0, 1, 0, 0, 1],
 		[1, 0, 0, 0, 0],
 		[0, 0, 1, 0, 0]
-	])
-
-	seq_chars = characters(ohe)
-
-	assert isinstance(seq_chars, str)
-	assert len(seq_chars) == 5
-	assert seq_chars == seq
-
-
-def test_character_pwm():
-	seq = 'GCTAC'
-	ohe = torch.tensor([
+	]), None),
+	(torch.tensor([
 		[0.25, 0.00, 0.10, 0.95, 0.00],
 		[0.20, 1.00, 1.00, 0.05, 1.00],
 		[0.30, 0.00, 0.30, 0.00, 0.00],
 		[0.25, 0.00, 3.00, 0.00, 0.00]
-	])
-
-	seq_chars = characters(ohe)
-
-	assert isinstance(seq_chars, str)
-	assert len(seq_chars) == 5
-	assert seq_chars == seq
-
-
-def test_characters_alphabet():
-	seq = 'GCTAC'
-	ohe = torch.tensor([
+	]), None),
+	(torch.tensor([
 		[0.25, 0.00, 0.10, 0.95, 0.00],
 		[0.20, 1.00, 1.00, 0.05, 1.00],
 		[0.30, 0.00, 0.30, 0.00, 0.00],
 		[0.25, 0.00, 3.00, 0.00, 0.00],
 		[0.00, 0.00, 0.00, 0.00, 0.00]
-	])
-
-	seq_chars = characters(ohe, ['A', 'C', 'G', 'T', 'N'])
+	]), ['A', 'C', 'G', 'T', 'N'])
+], ids=['one_hot', 'pwm', 'alphabet'])
+def test_characters(ohe, alphabet):
+	if alphabet is None:
+		seq_chars = characters(ohe)
+	else:
+		seq_chars = characters(ohe, alphabet)
 
 	assert isinstance(seq_chars, str)
 	assert len(seq_chars) == 5
-	assert seq_chars == seq
+	assert seq_chars == 'GCTAC'
 
 
 def test_characters_raise_alphabet():
@@ -370,142 +353,44 @@ def test_characters_numpy():
 ##
 
 
-def test_one_hot_encode():
-	seq = 'ACGTA'
-	ohe = torch.tensor([
+@pytest.mark.parametrize("seq, ohe", [
+	('ACGTA', [
 		[1, 0, 0, 0, 1],
 		[0, 1, 0, 0, 0],
 		[0, 0, 1, 0, 0],
 		[0, 0, 0, 1, 0]
-	])
-	seq_ohe = one_hot_encode(seq)
-
-	assert seq_ohe.dtype == torch.int8
-	assert seq_ohe.shape == (4, 5)
-	assert torch.all(seq_ohe == ohe)
-
-	seq = 'CCGTC'
-	ohe = torch.tensor([
+	]),
+	('CCGTC', [
 		[0, 0, 0, 0, 0],
 		[1, 1, 0, 0, 1],
 		[0, 0, 1, 0, 0],
 		[0, 0, 0, 1, 0]
-	])
-	seq_ohe = one_hot_encode(seq)
-
-	assert seq_ohe.dtype == torch.int8
-	assert seq_ohe.shape == (4, 5)
-	assert torch.all(seq_ohe == ohe)
-
-
-	seq = 'AAAAA'
-	ohe = torch.tensor([
+	]),
+	('AAAAA', [
 		[1, 1, 1, 1, 1],
 		[0, 0, 0, 0, 0],
 		[0, 0, 0, 0, 0],
 		[0, 0, 0, 0, 0]
-	])
-	seq_ohe = one_hot_encode(seq)
-
-	assert seq_ohe.dtype == torch.int8
-	assert seq_ohe.shape == (4, 5)
-	assert torch.all(seq_ohe == ohe)
-
-
-def test_one_hot_encode_N():
-	seq = 'ACGNNTA'
-	ohe = torch.tensor([
+	]),
+	('ACGNNTA', [
 		[1, 0, 0, 0, 0, 0, 1],
 		[0, 1, 0, 0, 0, 0, 0],
 		[0, 0, 1, 0, 0, 0, 0],
 		[0, 0, 0, 0, 0, 1, 0]
+	]),
+	('NNNNN', [
+		[0, 0, 0, 0, 0],
+		[0, 0, 0, 0, 0],
+		[0, 0, 0, 0, 0],
+		[0, 0, 0, 0, 0]
 	])
+], ids=['ACGTA', 'CCGTC', 'AAAAA', 'ACGNNTA', 'NNNNN'])
+def test_one_hot_encode(seq, ohe):
 	seq_ohe = one_hot_encode(seq)
 
 	assert seq_ohe.dtype == torch.int8
-	assert seq_ohe.shape == (4, 7)
-	assert torch.all(seq_ohe == ohe)
-
-	seq = 'NNNNN'
-	ohe = torch.tensor([
-		[0, 0, 0, 0, 0],
-		[0, 0, 0, 0, 0],
-		[0, 0, 0, 0, 0],
-		[0, 0, 0, 0, 0]
-	])
-	seq_ohe = one_hot_encode(seq)
-
-	assert seq_ohe.dtype == torch.int8
-	assert seq_ohe.shape == (4, 5)
-	assert torch.all(seq_ohe == ohe)
-
-
-def test_one_hot_encode_dtype():
-	seq = 'ACGTA'
-	ohe = torch.tensor([
-		[1, 0, 0, 0, 1],
-		[0, 1, 0, 0, 0],
-		[0, 0, 1, 0, 0],
-		[0, 0, 0, 1, 0]
-	])
-	seq_ohe = one_hot_encode(seq, dtype=torch.float32)
-
-	assert seq_ohe.dtype == torch.float32
-	assert seq_ohe.shape == (4, 5)
-	assert torch.all(seq_ohe == ohe)
-
-
-def test_one_hot_encode_alphabet():
-	seq = 'ACGTA'
-	ohe = torch.tensor([
-		[1, 0, 0, 0, 1],
-		[0, 1, 0, 0, 0],
-		[0, 0, 1, 0, 0],
-		[0, 0, 0, 1, 0],
-		[0, 0, 0, 0, 0]
-	])
-	seq_ohe = one_hot_encode(seq, alphabet=['A', 'C', 'G', 'T', 'Z'])
-	
-	assert seq_ohe.dtype == torch.int8
-	assert seq_ohe.shape == (5, 5)
-	assert torch.all(seq_ohe == ohe)
-
-
-def test_one_hot_encode_ignore():
-	seq = 'ACGTA'
-	ohe = torch.tensor([
-		[1, 0, 0, 0, 1],
-		[0, 1, 0, 0, 0],
-		[0, 0, 1, 0, 0],
-		[0, 0, 0, 1, 0],
-		[0, 0, 0, 0, 0]
-	])
-	seq_ohe = one_hot_encode(seq, alphabet=['A', 'C', 'G', 'T', 'N'], ignore=[])
-	
-	assert seq_ohe.dtype == torch.int8
-	assert seq_ohe.shape == (5, 5)
-	assert torch.all(seq_ohe == ohe)
-
-
-def test_one_hot_encode_alphabet_tuple():
-	# The signature allows a tuple, which used to raise TypeError: encoding
-	# without a string argument.
-	seq = 'ACGTA'
-	ohe = torch.tensor([
-		[1, 0, 0, 0, 1],
-		[0, 1, 0, 0, 0],
-		[0, 0, 1, 0, 0],
-		[0, 0, 0, 1, 0],
-		[0, 0, 0, 0, 0]
-	])
-	seq_ohe = one_hot_encode(seq, alphabet=('A', 'C', 'G', 'T', 'Z'))
-
-	assert seq_ohe.dtype == torch.int8
-	assert seq_ohe.shape == (5, 5)
-	assert torch.all(seq_ohe == ohe)
-
-	seq_ohe = one_hot_encode(seq, alphabet='ACGTZ', ignore=('N',))
-	assert torch.all(seq_ohe == ohe)
+	assert seq_ohe.shape == (4, len(seq))
+	assert torch.all(seq_ohe == torch.tensor(ohe))
 
 
 def test_one_hot_encode_raises_alphabet():
@@ -518,31 +403,6 @@ def test_one_hot_encode_raises_alphabet():
 	])
 
 	assert_raises(ValueError, one_hot_encode, seq, ['A', 'C', 'G'])
-
-
-def test_one_hot_encode_raises_ignore():
-	seq = 'ACGTA'
-	ohe = torch.tensor([
-		[1, 0, 0, 0, 1],
-		[0, 1, 0, 0, 0],
-		[0, 0, 1, 0, 0],
-		[0, 0, 0, 1, 0],
-		[0, 0, 0, 0, 0]
-	])
-
-	assert_raises(ValueError, one_hot_encode, seq, ['A', 'C', 'G', 'T', 'N'])
-
-
-def test_one_hot_encode_lower_raises():
-	seq = 'AcgTA'
-	ohe = torch.tensor([
-		[1, 0, 0, 0, 1],
-		[0, 1, 0, 0, 0],
-		[0, 0, 1, 0, 0],
-		[0, 0, 0, 1, 0]
-	])
-
-	assert_raises(ValueError, one_hot_encode, seq)
 
 
 def _one_hot_reference(sequence, alphabet=('A', 'C', 'G', 'T'), ignore=('N',)):
@@ -645,17 +505,27 @@ def test_one_hot_encode_characters_round_trip():
 		alphabet=alphabet) == seq
 
 
-@pytest.mark.parametrize("alphabet", [
-	['A', 'C', 'G', 'T'],
-	('A', 'C', 'G', 'T'),
-	'ACGT',
-])
-def test_one_hot_encode_alphabet_containers(alphabet):
+@pytest.mark.parametrize("container", [list, tuple, str])
+def test_one_hot_encode_alphabet(container):
+	# A tuple used to raise TypeError: encoding without a string argument.
 	seq = 'ACGTNNTGCA'
-	X = one_hot_encode(seq, alphabet=alphabet)
+	X = one_hot_encode(seq, alphabet=container('ACGT'))
 
+	assert X.dtype == torch.int8
 	assert X.shape == (4, 10)
 	assert numpy.array_equal(X.numpy(), _one_hot_reference(seq))
+
+	X = one_hot_encode('ACGTA', alphabet=container('ACGTZ'))
+
+	assert X.dtype == torch.int8
+	assert X.shape == (5, 5)
+	assert torch.all(X == torch.tensor([
+		[1, 0, 0, 0, 1],
+		[0, 1, 0, 0, 0],
+		[0, 0, 1, 0, 0],
+		[0, 0, 0, 1, 0],
+		[0, 0, 0, 0, 0]
+	]))
 
 
 @pytest.mark.parametrize("ignore", [
@@ -998,14 +868,14 @@ def test_random_one_hot():
 	assert ohe.sum() == 18
 	assert_array_almost_equal(ohe, [
 		[[1, 0, 0, 1, 0, 0, 0, 0, 0],
-         [0, 0, 1, 0, 0, 0, 0, 0, 1],
-         [0, 0, 0, 0, 0, 0, 0, 0, 0],
-         [0, 1, 0, 0, 1, 1, 1, 1, 0]],
+		 [0, 0, 1, 0, 0, 0, 0, 0, 1],
+		 [0, 0, 0, 0, 0, 0, 0, 0, 0],
+		 [0, 1, 0, 0, 1, 1, 1, 1, 0]],
 
-        [[0, 0, 0, 1, 0, 0, 1, 1, 1],
-         [0, 1, 0, 0, 0, 0, 0, 0, 0],
-         [0, 0, 1, 0, 0, 1, 0, 0, 0],
-         [1, 0, 0, 0, 1, 0, 0, 0, 0]]])
+		[[0, 0, 0, 1, 0, 0, 1, 1, 1],
+		 [0, 1, 0, 0, 0, 0, 0, 0, 0],
+		 [0, 0, 1, 0, 0, 1, 0, 0, 0],
+		 [1, 0, 0, 0, 1, 0, 0, 0, 0]]])
 
 
 	ohe = random_one_hot((10, 20, 15), random_state=0)
@@ -1017,14 +887,10 @@ def test_random_one_hot():
 	assert ohe.sum() == 150
 
 
-def test_random_one_hot_raises_type():
-	assert_raises(ValueError, random_one_hot, [0, 3, 2])
-	assert_raises(ValueError, random_one_hot, 3)
-
-
-def test_random_one_hot_raises_shape():
-	assert_raises(ValueError, random_one_hot, (2, 3))
-	assert_raises(ValueError, random_one_hot, (3,))
+@pytest.mark.parametrize("shape", [[0, 3, 2], 3, (2, 3), (3,)],
+	ids=['list', 'int', 'two_axes', 'one_axis'])
+def test_random_one_hot_raises(shape):
+	assert_raises(ValueError, random_one_hot, shape)
 
 
 ###
@@ -1134,9 +1000,9 @@ def test_extract_signal(device):
 	
 	assert y.shape == (4, 1)
 	assert_array_almost_equal(y.cpu(), [[ 5.3088  ],
-                  [ 2.891628],
-                  [-0.253532],
-                  [-0.917093]])
+		[ 2.891628],
+		[-0.253532],
+		[-0.917093]])
 
 	assert y[0, 0] == X[0, :, 1:8].sum()
 	assert y[1, 0] == X[0, :, 9:14].sum()
@@ -1360,15 +1226,6 @@ def test_one_hot_encode_rows_matches_one_hot_encode(chunk_size):
 	assert X.dtype == numpy.int8
 	assert X.flags['C_CONTIGUOUS']
 	assert numpy.array_equal(X, X0)
-
-
-def test_one_hot_encode_rows_lower_case():
-	X = _one_hot_encode_rows(['acgtn', 'ACGTN', 'aCgTn'])
-
-	assert numpy.array_equal(X[0], X[1])
-	assert numpy.array_equal(X[0], X[2])
-	assert X[0, :, 4].tolist() == [0, 0, 0, 0]
-	assert X.sum() == 12
 
 
 def test_one_hot_encode_rows_ignore():
@@ -1760,12 +1617,16 @@ def test_packed_sequence_single_sequence():
 	assert_raises(TypeError, len, X_packed)
 
 
-@pytest.mark.parametrize("dtype", [torch.int8, torch.uint8, torch.int64,
-	torch.float16, torch.float32, torch.float64])
+@pytest.mark.parametrize("dtype", [torch.int8, torch.uint8, torch.int16,
+	torch.int32, torch.int64, torch.float16, torch.bfloat16, torch.float32,
+	torch.float64, torch.bool])
 def test_packed_sequence_dtypes(dtype):
 	X = _packed_one_hot((5, 4, 50))
 	X_packed = PackedSequence.from_one_hot(X.to(dtype))
-	assert torch.equal(X_packed.data, PackedSequence.from_one_hot(X).data)
+	X_ref = PackedSequence.from_one_hot(X)
+
+	assert torch.equal(X_packed.data, X_ref.data)
+	assert torch.equal(X_packed.n_runs, X_ref.n_runs)
 
 	X_decoded = X_packed.to_one_hot(dtype=dtype)
 	assert X_decoded.dtype == dtype
@@ -1818,18 +1679,6 @@ def test_packed_sequence_getitem(index):
 	assert torch.equal(X_index.to_one_hot(), X[index])
 	assert torch.equal(X_index.n_runs, PackedSequence.from_one_hot(
 		X[index]).n_runs)
-
-
-def test_packed_sequence_getitem_two_axes():
-	X = _packed_one_hot((4, 3, 4, 23))
-	X_packed = PackedSequence.from_one_hot(X)
-
-	Xi, rj = [0, 0, 1, 3, 3, 1], [2, 0, 1, 1, 2, 0]
-	assert torch.equal(X_packed[Xi, rj].to_one_hot(), X[Xi, rj])
-	assert torch.equal(X_packed[1].to_one_hot(), X[1])
-	assert torch.equal(X_packed[:, 1].to_one_hot(), X[:, 1])
-	assert torch.equal(X_packed[1:3, ::2].to_one_hot(), X[1:3, ::2])
-	assert torch.equal(X_packed[2, 1].to_one_hot(), X[2, 1])
 
 
 def test_packed_sequence_getitem_raises():
@@ -1979,18 +1828,6 @@ def test_packed_sequence_from_one_hot_raises_values(dtype, value):
 	assert_raises(ValueError, PackedSequence.from_one_hot, X)
 
 
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.bool,
-	torch.int16, torch.int32])
-def test_packed_sequence_from_one_hot_other_dtypes(dtype):
-	X = _packed_one_hot((5, 4, 37))
-	X_packed = PackedSequence.from_one_hot(X.to(dtype))
-	X_ref = PackedSequence.from_one_hot(X)
-
-	assert torch.equal(X_packed.data, X_ref.data)
-	assert torch.equal(X_packed.n_runs, X_ref.n_runs)
-	assert torch.equal(X_packed.to_one_hot(dtype=dtype), X.to(dtype))
-
-
 def test_packed_sequence_from_one_hot_layouts():
 	X = _packed_one_hot((6, 4, 40))
 
@@ -2021,8 +1858,9 @@ def test_packed_sequence_from_codes_dtypes(dtype):
 
 @pytest.mark.parametrize("index", [None, Ellipsis, (Ellipsis, 1), (1,
 	Ellipsis), -1, (-1, -2), (None, 2), (slice(None), [0, 2, 2]),
-	(slice(1, None), 0), ([3, 0], slice(None)), ([[0, 1], [3, 3]], [[1, 2],
-	[0, 0]]), "mask", "row_mask", (slice(0, 0),), ([],)])
+	(slice(1, None), 0), (slice(1, 3), slice(None, None, 2)), ([3, 0],
+	slice(None)), ([0, 0, 1, 3, 3, 1], [2, 0, 1, 1, 2, 0]), ([[0, 1], [3,
+	3]], [[1, 2], [0, 0]]), "mask", "row_mask", (slice(0, 0),), ([],)])
 def test_packed_sequence_getitem_forms(index):
 	X = _packed_one_hot((4, 3, 4, 23))
 	X[2, 1, :, 3:9] = 0
@@ -2289,27 +2127,17 @@ def test_random_one_hot_packed_chunks(chunk, monkeypatch):
 	monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
 	probs = numpy.random.RandomState(0).dirichlet(numpy.ones(4), size=10)
 
-	for kwargs in ({}, {"probs": probs}):
+	for kwargs in ({}, {"probs": [[0.5, 0.25, 0.125, 0.125]]},
+		{"probs": probs}):
 		X = random_one_hot((10, 4, 50), random_state=3, **kwargs)
 		X_packed = random_one_hot((10, 4, 50), random_state=3,
 			return_packed=True, **kwargs)
 		Y = PackedSequence.from_one_hot(X)
+		assert torch.equal(X_packed.to_one_hot(), X)
 		assert torch.equal(X_packed.data, Y.data)
 		assert torch.equal(X_packed.n_runs, Y.n_runs)
 
 	assert random_one_hot((0, 4, 50), return_packed=True).shape == (0, 4, 50)
-
-
-@pytest.mark.parametrize("probs", [None, [[0.5, 0.25, 0.125, 0.125]],
-	"per-sequence"])
-def test_random_one_hot_packed(probs):
-	if probs == "per-sequence":
-		probs = numpy.random.RandomState(0).dirichlet(numpy.ones(4), size=5)
-
-	X = random_one_hot((5, 4, 33), probs=probs, random_state=3)
-	X_packed = random_one_hot((5, 4, 33), probs=probs, random_state=3,
-		return_packed=True)
-	assert torch.equal(X_packed.to_one_hot(), X)
 
 	with pytest.raises(ValueError, match="four characters"):
 		random_one_hot((5, 3, 33), return_packed=True)
