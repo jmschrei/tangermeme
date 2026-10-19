@@ -113,54 +113,38 @@ def test_plot_logo_alphabet_custom():
 	assert (facecolors == [0, 0.5, 0]).all(axis=1).sum() == 20
 
 
-def test_plot_logo_color_per_position_name_list():
+@pytest.mark.parametrize("color, expected", [
+	(["red"] * 10 + ["blue"] * 10, numpy.concatenate([
+		numpy.tile([1.0, 0.0, 0.0, 1.0], (10, 1)),
+		numpy.tile([0.0, 0.0, 1.0, 1.0], (10, 1))])),
+	(numpy.tile([0.2, 0.4, 0.6, 1.0], (20, 1)),
+		numpy.tile([0.2, 0.4, 0.6, 1.0], (20, 1))),
+	(numpy.tile([0.2, 0.4, 0.6], (20, 1)),
+		numpy.tile([0.2, 0.4, 0.6, 1.0], (20, 1)))
+], ids=["name_list", "rgba_array", "rgb_without_alpha"])
+def test_plot_logo_color_per_position(color, expected):
 	X = one_hot_encode("ACGT" * 5).type(torch.float32)
-	colors = ["red"] * 10 + ["blue"] * 10
 
-	ax = plot_logo(X, color=colors)
+	ax = plot_logo(X, color=color)
 	facecolors = ax.collections[0].get_facecolors()
 
 	assert len(facecolors) == 20
-	numpy.testing.assert_array_almost_equal(facecolors[:10],
-		numpy.tile([1.0, 0.0, 0.0, 1.0], (10, 1)))
-	numpy.testing.assert_array_almost_equal(facecolors[10:],
-		numpy.tile([0.0, 0.0, 1.0, 1.0], (10, 1)))
-
-
-def test_plot_logo_color_per_position_rgba_array():
-	X = one_hot_encode("ACGT" * 5).type(torch.float32)
-	rgba = numpy.tile([0.2, 0.4, 0.6, 1.0], (20, 1))
-
-	ax = plot_logo(X, color=rgba)
-	facecolors = ax.collections[0].get_facecolors()
-
-	numpy.testing.assert_array_almost_equal(facecolors, rgba)
-
-
-def test_plot_logo_color_per_position_scalar_cmap():
-	X = one_hot_encode("ACGT" * 5).type(torch.float32)
-	values = numpy.linspace(0.0, 1.0, 20)
-
-	ax = plot_logo(X, color=values, color_cmap="viridis")
-	facecolors = ax.collections[0].get_facecolors()
-
-	cmap = plt.get_cmap("viridis")
-	norm = matplotlib.colors.Normalize(vmin=0.0, vmax=1.0)
-	expected = cmap(norm(values))
-
 	numpy.testing.assert_array_almost_equal(facecolors, expected)
 
 
-def test_plot_logo_color_per_position_scalar_vmin_vmax():
+@pytest.mark.parametrize("kwargs, vmin, vmax", [
+	({}, 0.0, 1.0),
+	({"color_vmin": -1.0, "color_vmax": 2.0}, -1.0, 2.0)
+], ids=["default", "vmin_vmax"])
+def test_plot_logo_color_per_position_scalar_cmap(kwargs, vmin, vmax):
 	X = one_hot_encode("ACGT" * 5).type(torch.float32)
 	values = numpy.linspace(0.0, 1.0, 20)
 
-	ax = plot_logo(X, color=values, color_cmap="viridis",
-		color_vmin=-1.0, color_vmax=2.0)
+	ax = plot_logo(X, color=values, color_cmap="viridis", **kwargs)
 	facecolors = ax.collections[0].get_facecolors()
 
 	cmap = plt.get_cmap("viridis")
-	norm = matplotlib.colors.Normalize(vmin=-1.0, vmax=2.0)
+	norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
 	expected = cmap(norm(values))
 
 	numpy.testing.assert_array_almost_equal(facecolors, expected)
@@ -220,17 +204,6 @@ def test_plot_logo_color_array_matching_alphabet_length_is_per_position():
 
 	facecolors = ax.collections[0].get_facecolors()
 	expected = numpy.array([matplotlib.colors.to_rgba(c) for c in colors])
-	numpy.testing.assert_array_almost_equal(facecolors, expected)
-
-
-def test_plot_logo_color_per_position_rgb_without_alpha():
-	X = one_hot_encode("ACGT" * 5).type(torch.float32)
-	rgb = numpy.tile([0.2, 0.4, 0.6], (20, 1))
-
-	ax = plot_logo(X, color=rgb)
-	facecolors = ax.collections[0].get_facecolors()
-
-	expected = numpy.tile([0.2, 0.4, 0.6, 1.0], (20, 1))
 	numpy.testing.assert_array_almost_equal(facecolors, expected)
 
 
@@ -565,113 +538,78 @@ def test_interactive_logo_respects_ylim(X_attr, annotations):
 	assert ax.get_ylim() == (-2, 2)
 
 
-def test_interactive_logo_default_tooltip_has_background(X_attr, annotations):
+@pytest.mark.parametrize("kwargs, background", [
+	({}, "background: rgba(255, 255, 255"),
+	({"tooltip_css": ".mpld3-tooltip { background: black; }"},
+		"background: black")
+], ids=["default", "custom"])
+def test_interactive_logo_tooltip_css(X_attr, annotations, kwargs, background):
 	mpld3 = pytest.importorskip("mpld3")
 	fig, ax = plt.subplots()
-	interactive_logo(X_attr, ax=ax, annotations=annotations)
+	interactive_logo(X_attr, ax=ax, annotations=annotations, **kwargs)
 
 	html = mpld3.fig_to_html(fig)
 	assert ".mpld3-tooltip" in html
-	assert "background: rgba(255, 255, 255" in html
+	assert background in html
+	if kwargs:
+		assert "background: rgba(255, 255, 255" not in html
 
 
-def test_interactive_logo_custom_tooltip_css_overrides(X_attr, annotations):
+@pytest.mark.parametrize("grid", [True, False])
+def test_interactive_logo_overrides_dark_rcparam_grid(X_attr, annotations,
+	grid, monkeypatch):
+	mpld3 = pytest.importorskip("mpld3")
+	# Simulate a style with a heavy default grid; the function should not
+	# inherit it -- the x-axis grid is cleared and the y-axis grid is light,
+	# or absent with grid=False. The default is grid=True.
+	monkeypatch.setitem(matplotlib.rcParams, "axes.grid", True)
+
+	fig, ax = plt.subplots()
+	interactive_logo(X_attr, ax=ax, annotations=annotations,
+		**({} if grid else {"grid": False}))
+
+	xgrid = ax.xaxis.get_gridlines()
+	ygrid = ax.yaxis.get_gridlines()
+	assert all(not line.get_visible() for line in xgrid)
+	assert all(line.get_visible() == grid for line in ygrid)
+
+	# mpld3 fails to apply the grid color to the gridline <line> elements, so
+	# the function injects a light stroke directly. Confirm the CSS is present
+	# only with the grid.
+	html = mpld3.fig_to_html(fig)
+	assert (".mpld3-ygrid .tick line" in html) == grid
+	if grid:
+		assert "stroke: #c4c4c4 !important" in html
+
+
+@pytest.mark.parametrize("despine", [True, False])
+def test_interactive_logo_despine(X_attr, annotations, despine):
 	mpld3 = pytest.importorskip("mpld3")
 	fig, ax = plt.subplots()
 	interactive_logo(X_attr, ax=ax, annotations=annotations,
-		tooltip_css=".mpld3-tooltip { background: black; }")
-
-	html = mpld3.fig_to_html(fig)
-	assert "background: black" in html
-	assert "background: rgba(255, 255, 255" not in html
-
-
-def test_interactive_logo_overrides_dark_rcparam_grid(X_attr, annotations,
-	monkeypatch):
-	mpld3 = pytest.importorskip("mpld3")
-	# Simulate a style with a heavy default grid; the function should not
-	# inherit it -- the x-axis grid is cleared and the y-axis grid is light.
-	monkeypatch.setitem(matplotlib.rcParams, "axes.grid", True)
-
-	fig, ax = plt.subplots()
-	interactive_logo(X_attr, ax=ax, annotations=annotations)
-
-	xgrid = ax.xaxis.get_gridlines()
-	ygrid = ax.yaxis.get_gridlines()
-	assert all(not line.get_visible() for line in xgrid)
-	assert all(line.get_visible() for line in ygrid)
-
-	# mpld3 fails to apply the grid color to the gridline <line> elements, so
-	# the function injects a light stroke directly. Confirm the CSS is present.
-	html = mpld3.fig_to_html(fig)
-	assert ".mpld3-ygrid .tick line" in html
-	assert "stroke: #c4c4c4 !important" in html
-
-
-def test_interactive_logo_grid_false_injects_no_grid_css(X_attr, annotations):
-	mpld3 = pytest.importorskip("mpld3")
-	fig, ax = plt.subplots()
-	interactive_logo(X_attr, ax=ax, annotations=annotations, grid=False)
-
-	html = mpld3.fig_to_html(fig)
-	assert ".mpld3-ygrid .tick line" not in html
-
-
-def test_interactive_logo_grid_false(X_attr, annotations, monkeypatch):
-	pytest.importorskip("mpld3")
-	monkeypatch.setitem(matplotlib.rcParams, "axes.grid", True)
-
-	fig, ax = plt.subplots()
-	interactive_logo(X_attr, ax=ax, annotations=annotations, grid=False)
-
-	xgrid = ax.xaxis.get_gridlines()
-	ygrid = ax.yaxis.get_gridlines()
-	assert all(not line.get_visible() for line in xgrid)
-	assert all(not line.get_visible() for line in ygrid)
-
-
-def test_interactive_logo_despine_default(X_attr, annotations):
-	mpld3 = pytest.importorskip("mpld3")
-	fig, ax = plt.subplots()
-	interactive_logo(X_attr, ax=ax, annotations=annotations)
+		**({} if despine else {"despine": False}))
 
 	# Left spine hidden on the matplotlib side; mpld3 axis lines hidden via CSS.
-	assert not ax.spines['left'].get_visible()
+	# The default is despine=True.
+	assert ax.spines['left'].get_visible() == (not despine)
 	html = mpld3.fig_to_html(fig)
-	assert ".mpld3-xaxis path" in html
-	assert "display: none !important" in html
+	assert (".mpld3-xaxis path" in html) == despine
+	if despine:
+		assert "display: none !important" in html
 
 
-def test_interactive_logo_despine_false_keeps_spines(X_attr, annotations):
-	mpld3 = pytest.importorskip("mpld3")
-	fig, ax = plt.subplots()
-	interactive_logo(X_attr, ax=ax, annotations=annotations, despine=False)
-
-	assert ax.spines['left'].get_visible()
-	html = mpld3.fig_to_html(fig)
-	assert ".mpld3-xaxis path" not in html
-
-
-def test_interactive_logo_box_linewidth_default_zero(X_attr, annotations):
+@pytest.mark.parametrize("kwargs, linewidth", [({}, 0),
+	({"box_linewidth": 2}, 2)], ids=["default", "positive"])
+def test_interactive_logo_box_linewidth(X_attr, annotations, kwargs,
+	linewidth):
 	pytest.importorskip("mpld3")
 	from matplotlib.collections import PatchCollection
 
 	fig, ax = plt.subplots()
-	interactive_logo(X_attr, ax=ax, annotations=annotations)
+	interactive_logo(X_attr, ax=ax, annotations=annotations, **kwargs)
 
 	pc = [c for c in ax.collections if isinstance(c, PatchCollection)][0]
-	assert numpy.allclose(pc.get_linewidth(), 0)
-
-
-def test_interactive_logo_box_linewidth_positive(X_attr, annotations):
-	pytest.importorskip("mpld3")
-	from matplotlib.collections import PatchCollection
-
-	fig, ax = plt.subplots()
-	interactive_logo(X_attr, ax=ax, annotations=annotations, box_linewidth=2)
-
-	pc = [c for c in ax.collections if isinstance(c, PatchCollection)][0]
-	assert numpy.allclose(pc.get_linewidth(), 2)
+	assert numpy.allclose(pc.get_linewidth(), linewidth)
 
 
 def test_interactive_logo_coordinates_have_commas_no_scientific():
