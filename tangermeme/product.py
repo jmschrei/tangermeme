@@ -39,7 +39,7 @@ def apply_pairwise(
 	func: Callable[..., Any],
 	model: torch.nn.Module,
 	X: torch.Tensor | PackedSequence,
-	args: Sequence[torch.Tensor] | None = None,
+	args: Sequence[torch.Tensor],
 	batch_size: int = 32,
 	device: str | torch.device | None = None,
 	additional_func_kwargs: dict | None = None,

@@ -240,6 +240,13 @@ def test_apply_pairwise_rejects_empty_args_entry(X, alpha):
 		apply_pairwise(predict, model, X[:5], args=(alpha[:0],))
 
 
+def test_apply_pairwise_requires_args(X):
+	# args is the axis X is paired with, so there is no call without it.
+	model = FlattenDense()
+	with pytest.raises(TypeError, match="args"):
+		apply_pairwise(predict, model, X[:5])
+
+
 def test_apply_product_rejects_empty_X(alpha):
 	model = FlattenDense()
 	X = torch.zeros(0, 4, 100, dtype=torch.float32)
