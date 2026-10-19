@@ -63,6 +63,11 @@ Packed sequences
 
 	- ``dinucleotide_shuffle`` returns its shuffles as a ``PackedSequence`` when given ``return_packed=True``, or when ``X`` is a ``PackedSequence``, for which ``return_packed=False`` returns them one-hot encoded in int8. Each shuffle is packed as it is drawn, so only the shuffled character indices of one sequence are held at a time. The shuffles are the same as those of the one-hot encoding, unknown characters included. Twenty shuffles of each of the 10,000 windows above, 1.69 GB as an int8 one-hot encoding, took the process to a peak of 8.7 GB returned one-hot and 1.4 GB returned packed, and 0.7 GB when ``X`` was packed too. On one thread they took 7.7 s one-hot and 6.5 s packed, and on eight threads 2.1 s and 1.1 s.
 
+ablate
+------
+
+	- ``ablate_annotations`` on a model with several outputs returns one tensor per output whatever the number of annotations. The list was built over the number of annotations instead of the number of outputs, so one annotation on a two-output model returned only the first output, and more annotations than outputs raised ``IndexError: list index out of range``.
+
 annotate
 --------
 
@@ -135,6 +140,8 @@ io
 
 	- ``one_hot_to_fasta`` writes a position whose column is all zeros, such as an unknown character from ``one_hot_encode``, as N, as it does for a ``PackedSequence``. It used to raise ``ValueError: At least one position in the PWM has multiple letters with the same probability`` on any sequence with one. A position whose largest value is tied between characters still raises that error, and every other sequence is written as before.
 
+	- ``one_hot_to_fasta`` takes a numpy array, as its signature says, and writes an all-zero column of one as N, as it does for a tensor. It raised ``TypeError`` through ``characters``.
+
 match
 -----
 
@@ -151,6 +158,11 @@ predict
 -------
 
 	- ``predict`` moves a batch of integers, such as an int8 one-hot encoding, to the device before casting it to ``dtype`` when ``dtype`` is a wider floating point type. It used to cast each batch first, which PyTorch does on the CPU, and then copy the float32 batch, four times the bytes of the int8 one. A cast of integers to a wider floating point type is exact, so the predictions are bit-identical to before on the CPU and on CUDA. Any other batch, such as float16 or float64, is still cast before it is moved, since a GPU can give a float NaN different bits than the CPU. The arguments in ``args`` are moved the same way, and so are the batches and arguments of ``saliency``, whose attributions are also bit-identical to before. With a model of eight dilated convolutional layers of 64 filters on an H200 GPU, and 10,000 int8 windows of 2,114bp, medians of paired runs in separate processes: ``predict`` took 0.257 s against 0.284 s with the default ``batch_size=32`` and 0.205 s against 0.222 s with ``batch_size=256``, faster in 8 of 8 pairs each; preparing one batch of 32 took 26 µs against 98 µs; and ``marginalize`` with ``batch_size=32``, which calls ``predict`` twice, took 0.84 s against 0.93 s, faster in 10 of 12 pairs. On the CPU, where moving a batch does nothing, the batch is cast as before, and the calls take the same time within the variation between runs.
+
+product
+-------
+
+	- ``apply_pairwise`` requires ``args``, as ``apply_product`` does. It defaulted to ``None``, with which every call raised ``TypeError: 'NoneType' object is not iterable`` from inside its batching loop, since ``X`` is paired with ``args``.
 
 saturation_mutagenesis
 ----------------------
@@ -203,6 +215,8 @@ utils
 
 	- The check that an input is one-hot encoded, which ``validate_input`` runs with ``ohe=True`` and most functions that take sequences run on them, compares every value with 0 and 1, rather than collecting the unique values with ``torch.unique``, which sorts all of ``X``. On 1,024 hg38 sequences of 2,114bp on one CPU thread, the check took 0.023 s against 0.20 s for float32 and 0.033 s against 0.11 s for int8, and on 10,000 sequences its peak memory fell from 1,603 MB to 223 MB. Functions that run the check on every call gain the most. On 512 sequences, ``ersatz.substitute``, ``insert`` and ``delete`` took 9 ms against 93 ms, and ``gc_content`` is 9x faster. With DeepSEA Beluga on a GPU, ``marginalize`` on 128 sequences took 0.024 s against 0.056 s, ``space`` over 10 spacings 0.041 s against 0.124 s, and ``deep_lift_shap`` on 8 sequences with 20 given references each 0.074 s against 0.096 s. Which real-valued inputs pass and which raise is unchanged, including those with NaN or infinite values, booleans, half precision and empty tensors. A complex tensor, for which ``torch.unique`` raised ``NotImplementedError``, now passes the check when ``allow_N=False``.
 
+	- ``characters`` takes a numpy array, as its signature says. It called ``.max(dim=0)`` on one and raised ``TypeError: _amax() got an unexpected keyword argument 'dim'``.
+
 variant_effect
 --------------
 
@@ -217,12 +231,14 @@ plot
 
 	- ``plot_logo`` applies ``ylim``. Its type hint and docstring describe a ``(lower, upper)`` pair, but it was read only when annotations were drawn, and then as a single number giving a symmetric range, so ``ylim=(lo, hi)`` on a logo without annotations did nothing and five logos meant to share an axis each got their own. A pair is now applied whether or not annotations are given, a single number ``y`` still means ``(-y, y)``, and the annotation spacing follows the range given.
 
+	- ``plot_logo`` draws characters other than A, C, G and T in gray under the default coloring. A nonzero row for any other character of ``alphabet``, such as N or an amino acid, raised ``KeyError``.
 
 marginalize
 -----------
 
 	- The docstrings of ``marginalize``, ``marginalize_annotations`` and ``space`` no longer refer to an ``args`` parameter these functions do not have; additional model inputs reach ``func`` through ``kwargs``, as ``args=`` for ``predict``.
 
+	- ``marginalize_annotations`` on a model with several outputs returns one tensor per output whatever the number of annotations. It built its list as ``ablate_annotations`` did, so one annotation on a two-output model returned only the first output, and more annotations than outputs raised ``IndexError: list index out of range``.
 
 Documentation
 -------------
