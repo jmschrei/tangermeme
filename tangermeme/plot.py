@@ -306,9 +306,6 @@ def plot_logo(
 	default_color = {char: default_color.get(char, [.5, .5, .5]) for char in
 		alphabet}
 
-	# `color` can be a per-character mapping (None/str/dict) or a per-position
-	# array-like. Resolve which case we are in here; the per-position colors are
-	# sliced alongside `X_attr` below and turned into RGBA after slicing.
 	position_colors = None
 	if color is None:
 		color = default_color
@@ -539,12 +536,8 @@ _DEFAULT_TOOLTIP_CSS = """
 """
 
 
-# mpld3 draws its own axis domain lines and tick marks in a near-black
-# `axiscolor` that ignores matplotlib spine visibility, so they cannot be
-# removed from the Python side. This CSS hides the axis paths (the "spines")
-# and tick marks while leaving the tick labels and the gridlines (which live
-# under the separate `mpld3-xgrid` / `mpld3-ygrid` classes) untouched. The
-# `!important` is needed to beat mpld3's id-prefixed rules regardless of order.
+# mpld3 draws its own axis lines and tick marks, ignoring matplotlib's spine
+# settings. `!important` beats mpld3's id-prefixed rules.
 _DESPINE_CSS = """
 .mpld3-xaxis path, .mpld3-yaxis path,
 .mpld3-xaxis .tick line, .mpld3-yaxis .tick line {
@@ -553,9 +546,8 @@ _DESPINE_CSS = """
 """
 
 
-# mpld3 sets the grid color on the `<g class="tick">` wrapper, but the gridline
-# `<line>` inside does not inherit it and renders black. Style the line elements
-# directly (with `!important` to beat mpld3's own rules) to get a light grid.
+# The gridline `<line>` does not inherit the color mpld3 sets on its
+# `<g class="tick">`, and renders black.
 _GRID_CSS = """
 .mpld3-xgrid .tick line, .mpld3-ygrid .tick line {
 	stroke: #c4c4c4 !important;
@@ -564,10 +556,6 @@ _GRID_CSS = """
 """
 
 
-# Columns whose tooltip label differs from the raw DataFrame column name. The
-# seqlet caller emits bare `attribution` / `p-value` columns; spell them out as
-# seqlet-specific so they are not confused with an annotation (e.g. TOMTOM)
-# p-value carried in a separate column.
 _TOOLTIP_COLUMN_LABELS = {
 	'attribution': 'seqlet attribution',
 	'p-value': 'seqlet p-value',
@@ -773,7 +761,6 @@ def interactive_logo(
 	if ax is None:
 		ax = plt.gca()
 
-	# Draw the logo glyphs by reusing plot_logo without its annotation tracks.
 	plot_logo(X_attr, ax=ax, color=color, color_cmap=color_cmap,
 		color_vmin=color_vmin, color_vmax=color_vmax, start=start, end=end,
 		alphabet=alphabet, min_height_pct=min_height_pct)
@@ -781,16 +768,12 @@ def interactive_logo(
 	if ylim is not None:
 		ax.set_ylim(ylim)
 
-	# mpld3 renders whatever grid the caller's matplotlib style specifies,
-	# which is often a heavy default; set it explicitly for a consistent look.
 	ax.grid(False)
 	if grid:
 		ax.set_axisbelow(True)
 		ax.grid(True, axis='y', color="#c4c4c4", linewidth=0.5)
 
-	# plot_logo already hides the top/right/bottom spines; hide the left one
-	# too for the despined look. The mpld3-side axis lines are handled by CSS
-	# injected alongside the tooltip below.
+	# plot_logo hides the other three spines.
 	if despine:
 		ax.spines['left'].set_visible(False)
 
@@ -825,8 +808,6 @@ def interactive_logo(
 		motif_start = int(row['start']) - view_start
 		motif_end = int(row['end']) - view_start
 
-		# Label by the `name` column when present, otherwise by the index among
-		# the annotations visible in the window.
 		label_text = str(row['name']) if has_name else str(i)
 
 		if isinstance(cmap, ListedColormap):
@@ -838,13 +819,9 @@ def interactive_logo(
 		width = (motif_end - motif_start) + 0.05
 		rects.append(Rectangle((x0, y0), width, height))
 		facecolors.append((*rgb, box_alpha))
-		# Darken the edge and label relative to the pastel fill so the box
-		# outline and label stand out against the translucent interior.
 		edgecolors.append((*tuple(0.7 * c for c in rgb), 1.0))
 
 		if label:
-			# Darker than the edge (0.7) so the on-top label reads clearly
-			# against the pastel fill.
 			text_color = tuple(0.4 * c for c in rgb)
 			ax.text(x0 + 0.25, y1 - 0.05 * height, label_text,
 				fontsize=label_fontsize, ha='left', va='top', color=text_color)
@@ -854,8 +831,7 @@ def interactive_logo(
 		for col in annotations_.columns:
 			if has_name and col == 'name':
 				continue
-			# Coordinates are raw counts -- show them with thousands separators
-			# and never in scientific notation, unlike scores / p-values.
+
 			if col in ('start', 'end'):
 				value = "{:,}".format(int(row[col]))
 			else:
@@ -864,8 +840,7 @@ def interactive_logo(
 				_TOOLTIP_COLUMN_LABELS.get(col, col), value))
 		labels.append("<br>".join(parts))
 
-	# zorder 0.6 places the boxes behind the logo glyphs (default zorder 1) so
-	# the letters render at full saturation, but above the grid (zorder 0.5).
+	# Behind the glyphs (zorder 1) and above the grid (zorder 0.5).
 	col = mc.PatchCollection(rects, facecolors=facecolors,
 		edgecolors=edgecolors, linewidths=box_linewidth, zorder=0.6)
 	ax.add_collection(col)
@@ -1064,10 +1039,8 @@ def plot_pwm(
 	the reverse complement, call this function a second time with
 	`pwm[::-1, ::-1]`.
 
-	The function no longer creates its own figure or calls `plt.show()`;
-	it draws on the provided `ax` (or `plt.gca()` if none is given) and
-	returns the axes used. This matches the convention used by
-	`plot_logo` and `plot_categorical_scatter`.
+	It draws on `ax`, or on `plt.gca()` if none is given, and returns the
+	axes.
 
 
 	Parameters

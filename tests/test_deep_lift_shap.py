@@ -408,9 +408,8 @@ def test_deep_lift_shap_local_dinucleotide_shuffle_references(device):
 	"""`local_dinucleotide_shuffle` satisfies the `references=` contract.
 
 	It is called with `n=1` and, when seeded, with `random_state=`, and has
-	to return `(batch, 1, *X.shape[1:])`. `bin_size` defaults to 1024 and
-	must be shorter than the sequence, so a window narrower than that needs
-	the argument bound first.
+	to return `(batch, 1, *X.shape[1:])`. The sequences are 2048bp because
+	the default `bin_size` of 1024 must be shorter than the sequence.
 	"""
 
 	torch.manual_seed(0)
@@ -421,9 +420,8 @@ def test_deep_lift_shap_local_dinucleotide_shuffle_references(device):
 		TorchSum()
 	)
 
-	# `TorchSum` reduces eight channels over 2044 positions, so the output,
-	# and with it the floating-point residual, is larger than the 100bp
-	# models' by about the same factor.
+	# `TorchSum` sums eight channels over 2044 positions, so the output, and
+	# with it the floating-point residual, is larger than the 100bp models'.
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
 		X_attr = deep_lift_shap(model, X_,
@@ -434,7 +432,6 @@ def test_deep_lift_shap_local_dinucleotide_shuffle_references(device):
 	assert X_attr.shape == X_.shape
 	assert X_attr.dtype == torch.float32
 
-	# Seeded, so a second call reproduces the first.
 	X_attr_ = deep_lift_shap(model, X_,
 		references=local_dinucleotide_shuffle, n_shuffles=2, device=device,
 		random_state=0)
@@ -451,10 +448,8 @@ def test_deep_lift_shap_local_dinucleotide_shuffle_bin_size(X, device):
 def test_deep_lift_shap_all_zeros_reference(X, device):
 	"""An all-zeros baseline has to work through both `references=` paths.
 
-	A reference tensor is validated and a reference callable's output is not,
-	so the tensor path used to reject the all-zeros baseline the callable
-	path ran without complaint. Values outside {0, 1} are still rejected,
-	which is checked below.
+	The tensor path used to reject it while the callable path, whose output
+	is not validated, accepted it.
 	"""
 
 	torch.manual_seed(0)
@@ -859,10 +854,8 @@ CONV_RELU_POOL_ATTR = [
 	 [-0.0000, -0.0806, -0.0000, -0.0000, -0.0000,  0.0403, -0.0000,  0.0000, -0.0000, -0.0000],
 	 [-0.0000, -0.0000, -0.0000,  0.0013, -0.0000, -0.0000, -0.0000, -0.1534, -0.2105, -0.0000]]]
 
-# Each entry is (layers, warning_threshold, X_attr[:2, :, :10]). The layers
-# are built under one seed, and a (cpu, cuda) threshold is loosened for the
-# cuda pass because fp32 residuals on CUDA are a few orders of magnitude
-# larger than on CPU.
+# Each entry is (layers, warning_threshold, X_attr[:2, :, :10]), with the
+# layers built under one seed. A tuple threshold is (cpu, cuda).
 SEQUENTIAL_MODELS = {
 	"linear": (lambda: [
 		torch.nn.Flatten(),
@@ -1170,12 +1163,10 @@ def _deep_lift_by_layer(model, X, references, device):
 	"""DeepLIFT through a Sequential one layer at a time, without hooks.
 
 	A ReLU takes the rescale rule. A max pool routes the change in each
-	window's max to the position that won the window in the observed input
-	and in the reference, and divides by the change in each position; where
-	that change is exactly zero it takes the ordinary gradient. Every other
-	layer is linear and passes the multipliers back through its gradient. The
-	gradient of a max pool adds up everything sent to one position, so it
-	does the routing, independently of `_unpool` and `max_unpool`.
+	window's max to the positions that won it in the observed input and in
+	the reference, and divides by each position's change, taking the
+	ordinary gradient where that is zero. The routing uses the pool's own
+	gradient, so this oracle is independent of `_unpool` and `max_unpool`.
 	"""
 
 	n, k = references.shape[:2]
@@ -1232,9 +1223,8 @@ MAX_POOL_1D = {
 		TorchSum()
 	], 100, 0, 20, 0),
 
-	# A stride that does not divide the length of the sequence: X is 100 long
-	# and the windows step by 3, so the final window ends at 97 and the last
-	# two positions fall outside every window.
+	# A stride of 3 does not divide 100: the final window ends at 97, so the
+	# last two positions fall outside every window.
 	"overlapping_max_pool_nondivisor_stride": (lambda: [
 		torch.nn.MaxPool1d(5, 3),
 		TorchSum()
@@ -1254,11 +1244,9 @@ MAX_POOL_1D = {
 		TorchSum()
 	], 100, 0, 20, 0),
 
-	# A dilated pool whose windows do not overlap: the span is
-	# dilation * (kernel_size - 1) + 1 = 3, which fits inside the stride of 3.
-	# `max_unpool1d` has no dilation argument and sizes its output as though
-	# there were none, so routing a dilated pool to it raised
-	# `ValueError: invalid output_size` on the true length of the input.
+	# Dilated but not overlapping: the span, dilation * (kernel_size - 1) + 1,
+	# is 3 and fits inside the stride of 3. Routing it to `max_unpool1d`, which
+	# has no dilation argument, raised `ValueError: invalid output_size`.
 	"dilated_max_pool": (lambda: [
 		torch.nn.MaxPool1d(2, 3, dilation=2),
 		TorchSum()
@@ -1284,10 +1272,9 @@ MAX_POOL_1D = {
 		TorchSum()
 	], 100, 0, 20, 0),
 
-	# Two stacked pools, neither overlapping, so this is not the overlap bug.
-	# The first pool's rule reads both halves of the gradient the second one
-	# hands back, so the second one has to give both halves the same value
-	# even where its denominator is zero and it falls back.
+	# Stacked pools that do not overlap. The first pool's rule reads both
+	# halves of the gradient the second returns, so the halves must agree even
+	# where the second's denominator is zero and it falls back.
 	"stacked_max_pool_zero_denominator": (lambda: [
 		torch.nn.Conv1d(4, 8, (5,), bias=False),
 		torch.nn.MaxPool1d(2),
@@ -1329,10 +1316,8 @@ def test_deep_lift_shap_max_pool_1d(X, device, layers, length, seed,
 	(2, None), ((3, 3), (3, 1)), ((2, 4), (2, 2)), ((3, 3), (1, 1)),
 ])
 def test_deep_lift_shap_max_pool_2d(X, device, kernel_size, stride):
-	# MaxPool2d is in the rule table and `_unpool` flattens both spatial axes
-	# to scatter into, which is a different index space from the 1D case.
-	# Where the windows overlap, one input position can win several windows on
-	# either axis, so the scatter-add has to accumulate across both.
+	# `_unpool` flattens both spatial axes to scatter into, and where windows
+	# overlap one position can win several windows on either axis.
 	torch.manual_seed(0)
 
 	model = torch.nn.Sequential(
@@ -1343,9 +1328,8 @@ def test_deep_lift_shap_max_pool_2d(X, device, kernel_size, stride):
 		SumAll()
 	)
 
-	# `SumAll` reduces four channels over 400 positions, so the output is a
-	# couple of orders of magnitude larger than the 1D models' and the
-	# floating-point residual scales with it.
+	# `SumAll` sums four channels over 400 positions, so the output and its
+	# residual are a couple of orders of magnitude larger than the 1D models'.
 	with warnings.catch_warnings():
 		warnings.simplefilter("error", category=RuntimeWarning)
 		X_attr, references = deep_lift_shap(model, X, device=device,
@@ -1357,10 +1341,8 @@ def test_deep_lift_shap_max_pool_2d(X, device, kernel_size, stride):
 
 
 def test_maxpool_rule_returns_the_same_multiplier_for_both_halves(device):
-	# The observed and the reference half carry one multiplier between them,
-	# and a pooling rule further up reads both. Where the denominator is
-	# exactly zero the rule substitutes something else, and that substitute
-	# has to agree across the halves too.
+	# A pooling rule further up reads both halves, so the substitute taken
+	# where the denominator is exactly zero has to agree across them too.
 	torch.manual_seed(0)
 
 	pool = torch.nn.MaxPool1d(2).to(device)
@@ -1490,7 +1472,6 @@ def test_captum_deep_lift_shap_return_references(X, references, device):
 	assert refs.shape == references.shape
 	assert_array_almost_equal(refs, references)
 
-	# The attributions are the same whether or not the references come back.
 	attr_only = _captum_deep_lift_shap(model, X, references=references,
 		return_references=False, device=device, random_state=0)
 
@@ -1527,11 +1508,8 @@ def test_captum_deep_lift_shap_args(X, references, device):
 ###
 # Tests for additional architectures.
 #
-# Models whose layers have no rule in `deep_lift_shap._NON_LINEAR_OPS` are
-# intentionally absent here. DLS would silently treat those layers as linear
-# and the rescale rule's convergence guarantee would not hold, so a regression
-# test against hardcoded values would be meaningless. Add a model here once its
-# layers gain a registered rule.
+# Models with a layer that has no registered rule are left out: DLS treats
+# that layer as linear, so hardcoded values for it would be meaningless.
 
 
 def test_deep_lift_shap_residual_conv(X, references, device):
@@ -1575,8 +1553,6 @@ def test_deep_lift_shap_conv2d_expand(X, references, device):
 
 
 def test_deep_lift_shap_layernorm_local_ig(X, references, device):
-	# fp32 attribution residuals on CUDA are a few orders of magnitude larger
-	# than on CPU, so the convergence threshold is loosened for the cuda pass.
 	threshold = 1e-4 if device == "cpu" else 1e-2
 	torch.manual_seed(0)
 	model = ConvLayerNorm(seq_len=X.shape[-1])
@@ -1604,12 +1580,9 @@ def test_deep_lift_shap_layernorm_local_ig(X, references, device):
 
 
 def test_deep_lift_shap_rmsnorm_local_ig(X, references, device):
-	# The analytic rule and the local-IG hook are NOT the same quantity, and the
-	# hardcoded values below differ from those in the test above for that reason.
-	# RMSNorm couples every output to every input in the normalized window, where
-	# the rescale secant and a path integral part ways; the two differ by 1.3e-2
-	# here and the gap does not shrink with more quadrature points. What both must
-	# satisfy is summation-to-delta, which is why the threshold is asserted.
+	# The local-IG hook and the analytic RMSNorm rule are different
+	# attributions, so these values differ from RULE_REGRESSION's by 1.3e-2,
+	# and more quadrature points do not close the gap.
 	threshold = 1e-4 if device == "cpu" else 1e-2
 	torch.manual_seed(0)
 	model = ConvRMSNorm(seq_len=X.shape[-1])
@@ -1639,9 +1612,8 @@ def test_deep_lift_shap_rmsnorm_local_ig(X, references, device):
 def test_deep_lift_shap_norm_completeness(X, references, device):
 	"""The DeepLIFT rules must satisfy summation-to-delta for both norm types.
 
-	This checks the property the hooks exist to preserve, independent of the
-	hard-coded attribution values above, and covers a non-identity gamma/beta
-	(which the default-initialized toy models leave as ones/zeros).
+	Covers a non-identity gamma and beta, which the toy models leave at
+	their defaults.
 	"""
 	for cls, seed in ((ConvLayerNorm, 0), (ConvRMSNorm, 1)):
 		torch.manual_seed(seed)
@@ -1770,8 +1742,6 @@ def test_deep_lift_shap_norm_without_affine(X, references, device, model_cls,
 
 
 def test_deep_lift_shap_softmax(X, references, device):
-	# fp32 attribution residuals on CUDA are a few orders of magnitude larger
-	# than on CPU, so the convergence threshold is loosened for the cuda pass.
 	threshold = 1e-4 if device == "cpu" else 1e-2
 	torch.manual_seed(0)
 
@@ -1799,17 +1769,9 @@ def test_deep_lift_shap_softmax(X, references, device):
 
 
 ###
-# Comprehensive coverage for the rules registered beyond the stock elementwise
-# activations: LayerNorm, RMSNorm, softmax, and the three bilinear
-# contractions, plus two user-defined ops that only attribute correctly once
-# they are handed to `additional_nonlinear_ops`.
-#
-# Every model routes through exactly one new rule and shares the same
-# `forward(X, alpha=0, beta=1)` signature, so a single parametrized matrix can
-# put all of them through the settings the stock models are tested against
-# above: convergence, batch size, shuffle count, example independence, seed,
-# an explicit reference tensor, hypothetical attributions, raw outputs, and
-# extra forward args.
+# The rules beyond the stock elementwise activations, and two user-defined ops
+# that need `additional_nonlinear_ops`. Each model goes through one rule and
+# takes `forward(X, alpha=0, beta=1)`, so one parametrized matrix covers all.
 ###
 
 
@@ -1835,7 +1797,7 @@ def _rule_model(model_cls, op, seed=0):
 	"""Build a rule model and the kwargs that register its op, if any.
 
 	The two user-defined ops are absent from the default table, so they have to
-	be passed in; the six built-in ones take an empty dict.
+	be passed in; the built-in ones take an empty dict.
 	"""
 
 	torch.manual_seed(seed)
@@ -1849,8 +1811,6 @@ def _rule_model(model_cls, op, seed=0):
 
 
 def _rule_threshold(device):
-	# fp32 attribution residuals on CUDA are a few orders of magnitude larger
-	# than on CPU, so the convergence threshold is loosened for the cuda pass.
 	return 1e-4 if device == "cpu" else 1e-2
 
 
@@ -1965,9 +1925,8 @@ def test_deep_lift_shap_rules_raw_outputs(X, references, device, model_cls, op):
 	X_hyp = hypothetical_attributions((mult_flat,), (X_flat,), (ref_flat,))[0]
 	X_hyp = X_hyp.reshape(n, k, *X.shape[1:]).mean(dim=1)
 
-	# Doing that projection by hand and averaging over references has to
-	# reproduce both cooked outputs, which pins the raw multipliers against the
-	# two paths that consume them.
+	# Projecting by hand and averaging over references has to reproduce both
+	# the hypothetical and the observed outputs.
 	X_attr_hyp = deep_lift_shap(model, X, references=references,
 		hypothetical=True, device=device, random_state=0, **kwargs)
 	X_attr = deep_lift_shap(model, X, references=references, device=device,
@@ -1979,8 +1938,6 @@ def test_deep_lift_shap_rules_raw_outputs(X, references, device, model_cls, op):
 	assert_array_almost_equal(X_hyp, X_attr_hyp.cpu(), 4)
 	assert_array_almost_equal(X_hyp * X, X_attr.cpu(), 4)
 
-	# Hypothetical attributions are dense; the observed ones are the
-	# hypothetical values gated by the one-hot input.
 	assert_array_almost_equal(X_attr_hyp * X.to(X_attr_hyp.device), X_attr, 4)
 
 
@@ -2141,10 +2098,8 @@ def test_deep_lift_shap_rules(X, references, device, model_cls, op):
 def test_deep_lift_shap_bilinear_matmul_matches_einsum(X, references, device):
 	"""The matmul and einsum branches of BilinearOp contract the same way.
 
-	ConvBilinearMatmul transposes its right operand and lets the op call
-	`torch.matmul`; ConvBilinearEinsum hands both operands over untransposed
-	and names the contraction. Same seed, same contraction, so the
-	attributions must agree.
+	ConvBilinearMatmul and ConvBilinearEinsum compute the same function and
+	are built from the same seed.
 	"""
 
 	torch.manual_seed(0)
@@ -2170,9 +2125,8 @@ def test_deep_lift_shap_custom_op_requires_registration(X, references, device,
 	model_cls, op):
 	"""An unregistered op is silently treated as linear.
 
-	That silence is the whole reason `additional_nonlinear_ops` exists, so both
-	sides are pinned here: without the rule the convergence delta blows past
-	the threshold, and with it summation-to-delta holds.
+	Without its rule the convergence delta exceeds the threshold; with it,
+	summation-to-delta holds.
 	"""
 
 	threshold = _rule_threshold(device)
@@ -2194,10 +2148,9 @@ def test_deep_lift_shap_custom_op_requires_registration(X, references, device,
 def test_deep_lift_shap_custom_bilinear_matches_builtin(X, references, device):
 	"""A registered user-defined bilinear op matches the built-in BilinearOp.
 
-	ConvCustomGate and ConvBilinear compute the same elementwise product and
-	are built from the same seed, so their parameters agree and the only
-	difference is whether `_bilinear` is reached through the default table or
-	through `additional_nonlinear_ops`.
+	ConvCustomGate and ConvBilinear are the same function under one seed,
+	differing only in whether `_bilinear` comes from the default table or
+	from `additional_nonlinear_ops`.
 	"""
 
 	torch.manual_seed(0)
@@ -2344,16 +2297,12 @@ def test_deep_lift_shap_multi_input_multi_output(X, references, device):
 
 
 ###
-# Activation sweep: confirm every entry in deep_lift_shap._NON_LINEAR_OPS that
-# is a pointwise activation actually receives the rescale rule when wired into
-# a residual block. GLU is excluded because it halves the channel count and
-# would not fit a same-shape residual stream, and ReLU, the default, is
-# `test_deep_lift_shap_residual_conv`.
+# Activation sweep: every pointwise activation in the rule table, through a
+# residual block. GLU halves the channel count and cannot fit the residual
+# stream; ReLU, the default, is `test_deep_lift_shap_residual_conv`.
 
 
-# Each entry is (activation_class, expected X_attr[0, :, :4]) so the sweep is
-# both a smoke test for hook registration and a regression test for the
-# numerical output through that activation.
+# Each entry is (activation_class, expected X_attr[0, :, :4]).
 _ACTIVATION_SWEEP = [
 	(torch.nn.ReLU6, [
 		[-0.0409, -0.0000, -0.0000, -0.0443],
@@ -2493,12 +2442,9 @@ def test_deep_lift_shap_only_warn(X, device):
 
 
 def test_deep_lift_shap_preserves_model_state(X, device):
-	# After deep_lift_shap returns the model should be back on its
-	# original device and in its original training mode, with no
-	# _NON_LINEAR_OPS attributes leaked onto its modules.
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
-	model.train()  # explicitly leave model in train mode
+	model.train()
 	orig_device = next(model.parameters()).device
 
 	deep_lift_shap(model, X[:4], n_shuffles=2, device=device, random_state=0)
@@ -2512,8 +2458,6 @@ def test_deep_lift_shap_preserves_model_state(X, device):
 
 
 def test_deep_lift_shap_cleans_up_hooks_on_exception(X, device):
-	# If the forward pass raises mid-loop, hooks and _NON_LINEAR_OPS
-	# attributes must still be cleaned up by the finally clause.
 	class Boom(torch.nn.Module):
 		def __init__(self):
 			super().__init__()
@@ -2575,11 +2519,9 @@ def test_deep_lift_shap_trailing_singleton_output(X, device, n_trailing,
 	"""Trailing output axes of length 1 are dropped.
 
 	A model ending in a global pool, such as `AdaptiveAvgPool1d(1)`, returns
-	`(batch_size, n_targets, 1)`. `model(X)[:, target]` used to keep the
-	trailing axis, and subtracting the per-pair input differences broadcast
-	the convergence deltas into a `(batch_size, batch_size)` matrix comparing
-	unrelated example-reference pairs, which raised spurious warnings (#106).
-	The attributions were not affected.
+	`(batch_size, n_targets, 1)`. The trailing axis used to broadcast the
+	convergence deltas into a `(batch_size, batch_size)` matrix and raise
+	spurious warnings (#106).
 	"""
 
 	torch.manual_seed(0)
@@ -2631,9 +2573,8 @@ def test_deep_lift_shap_multidimensional_output_raises(X, device, shape):
 	"""An output axis longer than 1 after the targets raises a ValueError.
 
 	A profile output, `(batch_size, n_targets, length)`, has no single value
-	per target to explain, so the model has to be wrapped to sum, slice or
-	weight the length axis. This used to raise a RuntimeError from
-	broadcasting inside the convergence check.
+	per target to explain. It used to raise a RuntimeError from broadcasting
+	inside the convergence check.
 	"""
 
 	torch.manual_seed(0)
@@ -2668,13 +2609,11 @@ def test_deep_lift_shap_return_references_named_tuple(X, device):
 	assert isinstance(result, AttributionReferencesResult)
 	assert isinstance(result, tuple)
 
-	# A references tensor that is passed in comes back unchanged.
 	refs = shuffle(X[:2], n=2, random_state=0)
 	result = deep_lift_shap(model, X[:2], references=refs,
 		return_references=True, device=device, random_state=0)
 	assert torch.equal(result.references, refs)
 
-	# When return_references=False the return is still a plain Tensor.
 	attr = deep_lift_shap(model, X[:2], n_shuffles=2,
 		return_references=False, device=device, random_state=0)
 	assert isinstance(attr, torch.Tensor)
@@ -2701,9 +2640,8 @@ def test_deep_lift_shap_clears_hook_caches_on_error(X, device):
 	torch.manual_seed(0)
 	model = ConvSoftmax(dim=0)
 
-	# The softmax rule rejects the batch axis, so it raises after `_b_hook` has
-	# put the cached activations on the module and the `finally` block that
-	# clears the hooks has to remove them.
+	# The softmax rule raises on the batch axis after `_b_hook` has put the
+	# cached activations on the module, so the `finally` block must remove them.
 	assert_raises(ValueError, deep_lift_shap, model, X[:2], n_shuffles=2,
 		device=device, random_state=0)
 
@@ -2715,9 +2653,8 @@ def test_deep_lift_shap_clears_hook_caches_on_error(X, device):
 def test_deep_lift_shap_softmax_channel_axis(X, references, device):
 	"""The softmax rule follows whichever axis the module normalizes over.
 
-	A softmax over the channel axis of an (N, C, L) tensor is an ordinary
-	thing to write for genomic data, and is the case the rule refused before
-	its reductions were moved off a hardcoded last axis.
+	The rule used to reduce over a hardcoded last axis and refused a softmax
+	over the channels of an (N, C, L) tensor.
 	"""
 
 	torch.manual_seed(0)
@@ -2763,14 +2700,11 @@ def test_deep_lift_shap_softmax_axes_agree(X, references, device):
 def test_deep_lift_shap_softmax_peaked_logits(X, references, device):
 	"""A peaked softmax still has to satisfy summation-to-delta.
 
-	The rule folds `delta_a / delta_x` and `delta_log(a) / delta_a` together
-	rather than evaluating each behind its own threshold, since their product
-	is `delta_log(a) / delta_x` and so is exactly one. Peaking the
-	distribution is what separates the two: it drives most of the
-	exponentials small enough that one threshold would trip while the other
-	does not. Any formulation that guards them independently fails here in a
-	way that is not floating point, so it does not go away in float64 and it
-	grows with the spread of the logits.
+	The product of `delta_a / delta_x` and `delta_log(a) / delta_a` is
+	exactly one, so the rule folds them together. Peaked logits make most
+	exponentials small enough that guarding each ratio with its own
+	threshold fails, by an error that is not floating point and so remains
+	in float64.
 	"""
 
 	torch.manual_seed(0)
@@ -2812,10 +2746,9 @@ def test_deep_lift_shap_glu_length_axis(X, references, device):
 
 
 def test_glu_rule_batch_axis_raises(device):
-	# DeepLIFT stacks each example with its reference along the batch axis,
-	# so gating over it would pair an example against its own reference. The
-	# rule is called directly because a model shaped to survive the halving
-	# would have to be built around the invalid layer.
+	# Gating over the batch axis would pair an example with its own reference.
+	# The rule is called directly because a model would have to be built to
+	# survive the halved batch.
 	torch.manual_seed(0)
 
 	glu = torch.nn.GLU(dim=0).to(device)
@@ -2833,10 +2766,8 @@ def test_glu_rule_batch_axis_raises(device):
 def test_deep_lift_shap_glu_matches_explicit_gate(X, references, device):
 	"""`_glu` must agree with the same gate written out of hookable modules.
 
-	`a * sigmoid(b)` built from `torch.nn.Sigmoid` and `BilinearOp` is the
-	same function attributed through two rules that were already covered, so
-	it is an independent check on the single closed-form rule rather than a
-	restatement of it.
+	`a * sigmoid(b)` built from `torch.nn.Sigmoid` and `BilinearOp` goes
+	through two other rules, so it is an independent check on `_glu`.
 	"""
 
 	class ExplicitGate(torch.nn.Module):
@@ -2882,13 +2813,7 @@ def test_deep_lift_shap_softmax_batch_axis_raises(X, references, device):
 
 
 def test_deep_lift_shap_multihead_attention(X, references, device):
-	"""Attention built from hookable modules satisfies summation-to-delta.
-
-	This is the case the LayerNorm, softmax, and bilinear rules exist to make
-	possible. Every non-linearity in the block is a module, so each one has a
-	rule and the convergence guarantee holds across the whole attention
-	block rather than only the parts outside it.
-	"""
+	"""Attention built from hookable modules satisfies summation-to-delta."""
 
 	torch.manual_seed(0)
 	model = MultiHeadAttention()
@@ -2917,13 +2842,9 @@ def test_deep_lift_shap_multihead_attention(X, references, device):
 def test_deep_lift_shap_transformer_functional_ops(X, references, device):
 	"""torch's own TransformerEncoderLayer is not fully attributable.
 
-	Its LayerNorms are modules and do get a rule, but MultiheadAttention
-	computes its softmax and both of its matmuls functionally, so there is no
-	module for a rule to attach to and those steps are silently treated as
-	linear. The convergence delta is the symptom, and it is asserted here so
-	the limitation is recorded rather than discovered. `MultiHeadAttention`
-	is the supported way to write the same block; if functional ops ever gain
-	support, this is the test to update.
+	MultiheadAttention computes its softmax and matmuls functionally, so they
+	get no rule and the convergence check fails. If functional ops gain
+	support, this test has to change.
 	"""
 
 	torch.manual_seed(0)
@@ -2938,11 +2859,8 @@ def test_deep_lift_shap_transformer_functional_ops(X, references, device):
 
 
 ###
-# Transformer blocks: the arrangement a user actually stacks, rather than the
-# attention operation on its own. Pre-norm and post-norm put the LayerNorm on
-# opposite sides of the residual add, a stack chains every rule through the
-# block below it, and the feedforward puts a GELU/SiLU between two attention
-# layers, so each is a different graph for the rules to work through.
+# Transformer blocks: pre-norm and post-norm, GELU and SiLU feedforwards,
+# stacks and a positional embedding, each a different graph for the rules.
 ###
 
 
@@ -3091,15 +3009,10 @@ MASK_PARAMS = pytest.mark.parametrize("mask_fn,value",
 def test_deep_lift_shap_attention_mask(X, references, device, mask_fn, value):
 	"""A saturated attention mask must not produce NaN attributions.
 
-	A masked logit is the same large negative number in the example and in the
-	reference, so its softmax weight underflows to exactly zero in both and the
-	rule's `1 / a_ref` fallback would be infinite. It is multiplied by a
-	multiplier that is zero at those positions, so the contribution is zero and
-	the fallback only has to be finite; leaving it infinite made the product
-	`0 * inf` and every attribution in the batch NaN.
-
-	The convergence check cannot catch this on its own, which is why finiteness
-	is asserted separately: `deltas > warning_threshold` is False for NaN.
+	A masked weight underflows to exactly zero in both the example and the
+	reference. A `1 / a_ref` fallback there used to give `0 * inf` and make
+	every attribution in the batch NaN. Finiteness is asserted separately
+	because `deltas > warning_threshold` is False for NaN.
 	"""
 
 	torch.manual_seed(0)
@@ -3152,9 +3065,8 @@ def test_deep_lift_shap_fully_masked_row(X, references, device):
 	"""A query attending to nothing is only attributable if the model is.
 
 	With a large finite mask the row softmaxes to a uniform distribution and
-	nothing underflows, so attribution works. With -inf, torch's own forward
-	pass returns NaN for that row, so the model is ill-posed before DeepLIFT is
-	involved and propagating NaN is the correct result rather than a defect.
+	attribution works. With -inf, torch's own forward pass returns NaN for
+	that row, so NaN attributions are the correct result.
 	"""
 
 	mask = torch.zeros(100, 100)
@@ -3189,11 +3101,8 @@ def test_deep_lift_shap_clears_hook_caches(X, device, model_cls, op):
 	deep_lift_shap(model, X[:2], n_shuffles=2, device=device, random_state=0,
 		**kwargs)
 
-	# The forward hooks cache a detached copy of each non-linearity's input
-	# and output, once per call of a module used more than once, and a
-	# bilinear op caches both of its operands. Those copies are as large as
-	# the activations themselves, so leaving them attached pins that much
-	# memory for the life of the model.
+	# Cached activations and operands left attached would pin memory as large
+	# as the activations for the life of the model.
 	for module in model.modules():
 		for name in CLEARED_ATTRIBUTES:
 			assert name not in module.__dict__
@@ -3202,10 +3111,8 @@ def test_deep_lift_shap_clears_hook_caches(X, device, model_cls, op):
 def test_deep_lift_shap_clears_bilinear_caches_on_error(X, device):
 	model, kwargs = _rule_model(ConvCustomGate, CustomGate)
 
-	# `target` is out of range for a one-output model, so the attribution loop
-	# raises and unwinds through the `finally` block that clears the hooks.
-	# CustomGate puts its operands on itself during the forward pass, so they
-	# are still there when it does.
+	# `target=5` is out of range for a one-output model, so the call raises
+	# after CustomGate's forward pass has cached its operands on itself.
 	assert_raises(IndexError, deep_lift_shap, model, X[:2], target=5,
 		n_shuffles=2, device=device, random_state=0, **kwargs)
 
@@ -3220,9 +3127,8 @@ def test_deep_lift_shap_preserves_user_attributes(X, device):
 
 	deep_lift_shap(model, X[:2], n_shuffles=2, device=device, random_state=0)
 
-	# Hooks are only registered on non-linearities, but the caches are cleared
-	# across every module, so attributes that merely share a name with them
-	# must survive the call.
+	# The caches are cleared across every module, so attributes that only
+	# share a name with them must survive the call.
 	assert model.input == "sequence"
 	assert model.output == 1
 	assert model.conv.input == "kernel"
@@ -3234,10 +3140,8 @@ def test_deep_lift_shap_preserves_user_attributes(X, device):
 
 
 ###
-# Attention pooling, the layer Enformer pools with. It is the first user of
-# these rules to change the length of what it is handed, and the softmax it
-# takes over each window can be applied to masked logits, so the rule has to
-# be right about activations the layer wrote outside of it.
+# Attention pooling, the layer Enformer pools with. It changes the length of
+# its input and can mask the logits before its softmax.
 ###
 
 
@@ -3282,11 +3186,8 @@ ATTENTION_POOL_REGRESSION = {
 def test_deep_lift_shap_attention_pool(X, references, device, kwargs, name):
 	"""Attention pooling written from hookable modules converges.
 
-	The softmax and the product are the two non-linearities in the layer, and
-	each has a rule only when it is a module, so the guarantee holds across
-	the pooling layer rather than only around it. `pool_size=3` does not
-	divide the length of 100, which sends the layer through its padded and
-	masked path.
+	`pool_size=3` does not divide the length of 100, which sends the layer
+	through its padded and masked path.
 	"""
 
 	torch.manual_seed(0)
@@ -3326,9 +3227,8 @@ def test_deep_lift_shap_attention_batch_size(X, references, device, model_cls):
 	X_attr2 = deep_lift_shap(model, X, references=references, batch_size=100000,
 		device=device, random_state=0)
 
-	# Attention, pooling and LayerNorm mix across the length axis but never
-	# across the batch, so the result must not depend on how the
-	# example-reference pairs are grouped into batches.
+	# Attention, pooling and LayerNorm mix along the length axis but never
+	# across the batch, so batching must not change the result.
 	assert_array_almost_equal(X_attr0, X_attr1, 4)
 	assert_array_almost_equal(X_attr0, X_attr2, 4)
 
@@ -3355,12 +3255,9 @@ def test_deep_lift_shap_attention_pool_functional_ops(X, references, device,
 	kwargs):
 	"""The form `enformer_pytorch` ships cannot be attributed as it stands.
 
-	Its softmax and its product are function calls, so there is no module for
-	either rule to attach to and both are silently treated as linear. The
-	convergence delta is the symptom, and it is asserted here so the
-	limitation is recorded rather than rediscovered. Swapping the softmax for
-	`torch.nn.Softmax` on its own does not fix it, since the product is the
-	second non-linearity; both have to become modules.
+	Its softmax and product are function calls that get no rule, so the
+	convergence check fails. Making only the softmax a module would not fix
+	it, since the product is the second non-linearity.
 	"""
 
 	torch.manual_seed(0)
@@ -3379,10 +3276,8 @@ def test_deep_lift_shap_attention_pool_integrated_gradients_op(X, references,
 	device, kwargs):
 	"""The functional form converges once the whole layer gets a rule.
 
-	`integrated_gradients_op` needs nothing of the operations inside the
-	module it is registered for, so it attributes the layer as shipped
-	without rewriting the softmax or the product. That is the route for a
-	model whose weights are tied to a published layer definition.
+	`integrated_gradients_op` needs no rule for the operations inside the
+	module it is registered for, so it attributes the layer as shipped.
 	"""
 
 	torch.manual_seed(0)
@@ -3401,11 +3296,9 @@ def test_deep_lift_shap_attention_pool_integrated_gradients_op(X, references,
 	X_attr_ = deep_lift_shap(ConvAttentionPool(**kwargs), X[:4],
 		references=references[:4], device=device, random_state=0)
 
-	# The path-integrated multiplier and the rescale rule are not the same
-	# attribution for a non-linear layer, so the two routes agree to within a
-	# fraction of the attribution scale rather than exactly. The gap does not
-	# shrink with K, which is what says it is the rules differing rather than
-	# the quadrature being coarse.
+	# The path integral and the rescale rule are different attributions of a
+	# non-linear layer, so they agree only to 3 decimals. The gap does not
+	# shrink with K, so it is not quadrature error.
 	assert_array_almost_equal(X_attr, X_attr_, 3)
 
 
@@ -3442,11 +3335,8 @@ def _captured_ops(entry_point, X):
 def test_deep_lift_shap_and_pisa_share_one_rule_table():
 	"""Both entry points must register the same rule for the same type.
 
-	They each attach a table to every module in the model and the hooks read
-	it from there, so a rule present in one table and missing from the other
-	would be correct through one entry point and silently treated as linear
-	through the other. Building the table in one place is what keeps them
-	from drifting; this is the check that they have not.
+	A rule missing from one table would be silently treated as linear
+	through that entry point.
 	"""
 
 	X_ = random_one_hot((2, 4, 100), random_state=0).type(torch.float32)
@@ -3528,9 +3418,8 @@ def test_disable_hooks_restores_on_exception():
 
 
 def test_disable_hooks_nested():
-	# The context restores the previous value rather than unconditionally
-	# re-enabling, so an inner exit must not re-enable hooks for an outer
-	# block that is still disabled.
+	# The context restores the previous value, so an inner exit must not
+	# re-enable hooks for an outer block that is still disabled.
 	with _disable_hooks():
 		assert _hooks_disabled() is True
 
@@ -3553,9 +3442,8 @@ def test_disable_hooks_stops_activation_caching():
 	with _disable_hooks():
 		_f_hook(module, (X,), X)
 
-	# `integrated_gradients_op` re-runs the module from inside its own backward
-	# hook. If the forward hook still fired there it would file that re-entrant
-	# call alongside the ones the backward pass is in the middle of reading.
+	# `integrated_gradients_op` re-runs the module inside its own backward hook,
+	# and that call must not be filed with the ones the backward pass reads.
 	assert module._caches == {}
 	assert module._fwd_counter == 0
 
@@ -3582,10 +3470,8 @@ def test_disable_hooks_stops_backward_rule():
 
 	assert called == []
 
-	# Returning None leaves the gradient untouched, which is what a disabled
-	# hook has to do; outside the block the registered rule runs again. The
-	# disabled call must also leave the tag alone, because the forward call it
-	# marks still has to be attributed.
+	# A disabled hook returns None, leaving the gradient untouched, and leaves
+	# `_bw_idx` for the forward call that still has to be attributed.
 	multipliers = _b_hook(module, grad_input, None)
 
 	assert called == [True]
@@ -3735,9 +3621,8 @@ def test_deep_lift_shap_shared_integrated_gradients_op(X, device):
 
 	X = X[:4, :, :15]
 
-	# The local-IG rule re-runs its module from inside its own backward hook.
-	# That inner pass must not file itself as another call of the module the
-	# outer pass is still unwinding.
+	# The local-IG rule re-runs the shared module inside its backward hook, and
+	# that pass must not count as another call of the module.
 	ops = {torch.nn.LayerNorm: integrated_gradients_op(K=4, name="layernorm")}
 	X_attr = deep_lift_shap(shared, X, target=6, n_shuffles=3, device=device,
 		random_state=0, additional_nonlinear_ops=ops)
@@ -3783,9 +3668,8 @@ def test_deep_lift_shap_autocast_bfloat16(X, references, device, rule):
 	model = AUTOCAST_MODELS[rule]()
 
 	# torch raises `hook 'hook' has changed the type of value` when a backward
-	# hook returns a gradient in a dtype other than the one it was handed, and
-	# a rule reading half-precision activations does not necessarily compute
-	# in half precision. Only the elementwise rule happened to.
+	# hook returns a dtype other than the one it was handed, and a rule given
+	# half-precision activations may compute in float32.
 	X_attr = deep_lift_shap(model, X[:4], references=references[:4],
 		device=device, dtype=torch.bfloat16, random_state=0,
 		warning_threshold=1e9)

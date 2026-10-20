@@ -216,7 +216,6 @@ def test_greedy_substitution_rejects_batch(motifs, device):
 
 
 def test_greedy_substitution_packed(X, motifs, device):
-	# A packed sequence gives the design of its one-hot encoding, packed.
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [[10]]

@@ -136,12 +136,9 @@ def _validate_input(
 			name, max_value), only_warn)
 	
 	if ohe:
-		# No trailing period; the clauses below extend the sentence.
 		msg = "{} must be one-hot encoded".format(name)
 
-		# Values must be a subset of {0, 1}, so an all-zero (all-N) input
-		# passes. Compared elementwise because `torch.unique` sorts all of X,
-		# which is roughly ten times slower on a large batch.
+		# Elementwise rather than with `torch.unique`, which sorts all of X.
 		if not torch.all((X == 0) | (X == 1)):
 			_warn_or_raise(ValueError, msg + ".", only_warn)
 
@@ -260,10 +257,6 @@ def validate_input(
 	value-range checks the library applies internally; with `only_warn=True`
 	you can get a non-raising mode that emits a `TangermemeWarning` instead.
 	`X` can be a PackedSequence, which is checked without reading its bytes.
-
-	The underscored `_validate_input` is retained as an alias for backward
-	compatibility with code (including tests and tutorials) that already
-	imports it.
 	"""
 
 	return _validate_input(
@@ -636,16 +629,14 @@ def _fast_one_hot_encode_pairs4(X_ohe, seq, pairs, begin, end):
 
 
 # The fewest bases one_hot_encode encodes two at a time. Below it the views
-# the pairs need cost more than they save: about 0.65 us per call, and the
-# two paths took the same time near 9,000 bases.
+# the pairs need cost more than they save.
 _ONE_HOT_PAIRS_MIN = 2**13
 
 # The fewest bases one_hot_encode splits across threads.
 _ONE_HOT_PARALLEL_MIN = 2**18
 
 
-# Without a signature this compiles on its first call rather than when
-# tangermeme is imported, as _fast_one_hot_encode_fasta_parallel does.
+# No signature, for the reason given at _fast_one_hot_encode_fasta_parallel.
 @numba.njit(parallel=True, cache=True)
 def _fast_one_hot_encode_pairs4_parallel(X_ohe, seq, pairs, n_chunks):
 	"""`_fast_one_hot_encode_pairs4` over every value, in `n_chunks` chunks.
@@ -761,13 +752,13 @@ def one_hot_encode(
 
 	ignore = ''.join(ignore)
 
-	# Anything but a str raises bytearray's TypeError here, before the
-	# alphabet is read, as it always has.
+	# A sequence that is not a str raises bytearray's TypeError before the
+	# alphabet is read.
 	e = "utf8"
 	if not isinstance(sequence, str):
 		bytearray(sequence, e)
 
-	# Only strings are cached; any other alphabet raises as it always has.
+	# Only a str alphabet is hashable for the cache.
 	if isinstance(alphabet, str):
 		one_hot_mapping, patterns, pairs = _one_hot_encode_mapping(alphabet,
 			ignore)
@@ -789,9 +780,8 @@ def one_hot_encode(
 		return PackedSequence.from_codes(torch.from_numpy(codes), tuple(
 			alphabet))
 
-	# With an ASCII alphabet and ignore list, a character that is not ASCII
-	# is in neither, so a sequence that is not ASCII raises the error of the
-	# byte-wise path, after the same UTF-8 encoding.
+	# A character that is not ASCII is in neither list, so it raises the
+	# byte-wise path's error, after the same UTF-8 encoding.
 	if patterns is not None:
 		try:
 			seq_bytes = sequence.encode('ascii')
@@ -835,8 +825,7 @@ def one_hot_encode(
 		one_hot_encoding = numpy.zeros((n, m), dtype=numpy.int8)
 		_fast_one_hot_encode(one_hot_encoding, seq_idxs, one_hot_mapping)
 
-	# Wrapping the transpose has the layout of transposing the wrapped array,
-	# stride (1, m), and .type() keeps it, and is the identity for int8.
+	# A transposed view, of stride (1, m), which .type() keeps.
 	one_hot_encoding = torch.from_numpy(one_hot_encoding.T)
 	if dtype is torch.int8:
 		return one_hot_encoding
@@ -926,8 +915,8 @@ def _fast_one_hot_encode_fasta(X_ohe, fasta, starts, offsets, line_bases,
 				if fasta[k] != 10 and fasta[k] != 13:
 					return -2
 
-		# An int8 minimum and unsigned indices: an int64 minimum and signed
-		# indices made this loop five times slower.
+		# An int64 minimum or signed indices make this loop several times
+		# slower.
 		low = numpy.int8(0)
 		j = 0
 		while j < length:
@@ -963,10 +952,8 @@ def _fast_one_hot_encode_fasta(X_ohe, fasta, starts, offsets, line_bases,
 	return first_invalid
 
 
-# Without a signature this compiles on its first call, which only
-# _one_hot_encode_fasta makes, always with the argument types of
-# _fast_one_hot_encode_fasta. With one, importing tangermeme loaded it and
-# started numba's thread pool, which slowed calls on one thread.
+# No signature, so that importing tangermeme does not load this and start
+# numba's thread pool, which slows calls on one thread.
 @numba.njit(parallel=True, cache=True)
 def _fast_one_hot_encode_fasta_parallel(X_ohe, fasta, starts, offsets,
 	line_bases, line_bytes, mapping):
@@ -2333,11 +2320,8 @@ def unchunk(
 	lengths: list or numpy.ndarray or torch.tensor, shape=(-1,)
 		The *original lengths* of the elements that were chunked. This is not
 		the number of chunks produced, which will be influenced by the overlap,
-		but the actual length in bp of the original sequences. Note: the
-		signature also lists `None` as the type, but the current
-		implementation calls `_validate_input(_cast_as_tensor(lengths), ...)`
-		which rejects `None`; a length tensor must be provided in practice.
-		Default is None.
+		but the actual length in bp of the original sequences. Required:
+		None raises a ValueError. Default is None.
 
 	overlap: int, optional
 		The number of bp overlap between adjacent chunks. Default is 0.
@@ -2345,9 +2329,8 @@ def unchunk(
 
 	Returns
 	-------
-	y: list of torch.Tensors or one torch.Tensor, shape=(n_outputs, -1)
-		A list of variable-length tensors if `lengths` is provided, otherwise
-		a single tensor.
+	y: list of torch.Tensors, shape=(n_outputs, -1)
+		One variable-length tensor per original sequence.
 	"""
 
 	X = _cast_as_tensor(X)

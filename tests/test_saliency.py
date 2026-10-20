@@ -84,9 +84,6 @@ def test_saliency(X, hypothetical, expected, device):
 
 
 def test_saliency_hypothetical_projects_to_observed(X, device):
-	# The projected attributions are exactly the hypothetical ones masked
-	# down to the characters that are actually present, which is the same
-	# relationship deep_lift_shap and saturation_mutagenesis have.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
 
@@ -100,10 +97,7 @@ def test_saliency_hypothetical_projects_to_observed(X, device):
 @pytest.mark.parametrize("gradient_correction", [False, True])
 def test_saliency_matches_closed_form_linear(gradient_correction,
 		hypothetical, device):
-	# For a single Linear layer the gradient of the output with respect to
-	# the input is exactly the weight matrix, independent of X, so the
-	# corrected gradient is the weight matrix minus its mean over the
-	# alphabet at each position.
+	# A single Linear layer's gradient is its weight matrix, whatever X is.
 	torch.manual_seed(1)
 	model = FlattenDense(seq_len=6, n_outputs=1)
 	X = random_one_hot((5, 4, 6), random_state=2).type(torch.float32)
@@ -122,8 +116,7 @@ def test_saliency_matches_closed_form_linear(gradient_correction,
 
 @pytest.mark.parametrize("gradient_correction", [False, True])
 def test_saliency_matches_autograd(gradient_correction, device):
-	# Ground truth from a plain torch.autograd.grad call, using a model with
-	# a nonlinearity so the gradient genuinely depends on X.
+	# ConvAvgDense has a nonlinearity, so its gradient depends on X.
 	torch.manual_seed(3)
 	model = ConvAvgDense(n_outputs=1).to(device)
 	model.eval()
@@ -142,8 +135,6 @@ def test_saliency_matches_autograd(gradient_correction, device):
 
 
 def test_saliency_zero_column(device):
-	# An all-zero ('N') column contributes nothing to grad * X, so its
-	# projected attribution is exactly zero at every character.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
 	X = random_one_hot((1, 4, 12), random_state=0).type(torch.float32)
@@ -156,8 +147,6 @@ def test_saliency_zero_column(device):
 
 @pytest.mark.parametrize("batch_size", [1, 3, 10000])
 def test_saliency_batch_size(X, batch_size, device):
-	# The per-example result must not depend on which other examples happen
-	# to share its batch.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
 	X = X[:16]
@@ -209,8 +198,6 @@ def test_saliency_func(X, device):
 
 
 def test_saliency_func_reduces_multi_output_model(X, device):
-	# ConvDense returns a tuple, which saliency cannot index; a `func` that
-	# selects one of the two tensors makes it usable.
 	torch.manual_seed(0)
 	model = ConvDense()
 
@@ -218,8 +205,7 @@ def test_saliency_func_reduces_multi_output_model(X, device):
 	assert X_attr.shape == X.shape
 
 	# The second output is a Linear layer over the flattened X, so the
-	# gradient of target 0 is the first row of its weights, which the default
-	# gradient correction centers over the alphabet.
+	# gradient of target 0 is the first row of its weights.
 	W = model.dense.weight[0].detach().reshape(4, 100)
 	assert_array_almost_equal(X_attr, (W - W.mean(dim=0)) * X, 5)
 
@@ -273,8 +259,8 @@ def test_saliency_dtype_string(X, device):
 
 def test_saliency_model_without_parameters(device):
 	# SumModel has no parameters to take a dtype from, so float32 is used.
-	# Its output c is the count of character c, so the gradient is one at c
-	# and zero elsewhere, and the corrected gradient is 0.75 and -0.25.
+	# Its output c counts character c, so its gradient is one at c only, and
+	# the corrected gradient is 0.75 and -0.25.
 	model = SumModel()
 	X = random_one_hot((3, 4, 10), random_state=0).type(torch.float32)
 
@@ -322,8 +308,6 @@ def test_saliency_within_no_grad(X, device):
 
 
 def test_saliency_raises_multi_output_model(X, device):
-	# Without a `func` to reduce it, a tuple-returning model cannot be
-	# indexed by `target`.
 	model = ConvDense()
 
 	with pytest.raises(ValueError, match="single tensor"):
@@ -331,9 +315,8 @@ def test_saliency_raises_multi_output_model(X, device):
 
 
 def test_saliency_raises_profile_output(X, device):
-	# Conv returns (batch, 12, length - 2). Indexing it by `target` would
-	# attribute the sum of a whole profile, so it raises instead, as
-	# deep_lift_shap does.
+	# Conv returns (batch, 12, length - 2); indexing it by `target` would
+	# attribute the sum of a whole profile.
 	model = Conv()
 
 	with pytest.raises(ValueError, match="saliency requires the model"):
@@ -375,8 +358,6 @@ def test_saliency_raises_bad_input(device):
 
 
 def test_saliency_marginalize(X, device):
-	# saliency satisfies the func= contract, so marginalize returns the
-	# attributions of X and of X with the motif substituted in.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
 	X = X[:4]
@@ -442,8 +423,6 @@ def test_saliency_substitution_effect(X, device):
 
 
 def test_saliency_apply_pairwise(X, device):
-	# FlattenDense(X, alpha, beta) scales its output by beta, so each paired
-	# (alpha, beta) gives the attributions of the sequence scaled by beta.
 	torch.manual_seed(0)
 	model = FlattenDense(n_outputs=1)
 	X = X[:3]
@@ -477,10 +456,8 @@ def test_saliency_apply_product(X, device):
 
 
 def test_saliency_gradient_correction_ignores_off_simplex(device):
-	# Adding the same weight to every character at a position changes the
-	# model only off the one-hot simplex, where every position sums to one.
-	# On one-hot input it adds a constant to the output, so the corrected
-	# attributions must not move, while the uncorrected ones do.
+	# Adding the same weight to every character at a position adds a constant
+	# to the output on one-hot input, so only the uncorrected attributions move.
 	torch.manual_seed(1)
 	model = FlattenDense(seq_len=6, n_outputs=1)
 	X = random_one_hot((5, 4, 6), random_state=2).type(torch.float32)
@@ -512,9 +489,7 @@ def test_saliency_gradient_correction_sums_to_zero(X, device):
 
 
 def test_saliency_linear_model_gradient_is_constant(device):
-	# A model with no nonlinearity has a constant Jacobian, so its
-	# hypothetical attributions do not depend on the sequence at all. This
-	# is what makes dependency_map diagonal for linear models.
+	# The constant gradient makes dependency_map diagonal for linear models.
 	torch.manual_seed(0)
 
 	for model in (FlattenDense(seq_len=15, n_outputs=1), LinearConv()):
@@ -573,9 +548,8 @@ def test_saliency_packed_16bit(X, dtype, cuda_device):
 @pytest.mark.parametrize("dtype", [torch.int8, torch.uint8, torch.bool,
 	torch.float16, torch.float64])
 def test_saliency_stored_dtype(X, dtype, args, device):
-	# Attributions of sequences and arguments stored in another dtype equal
-	# those of the same values given as float32. X is only upcast per batch,
-	# so an int8 encoding, which cannot itself require grad, has to work.
+	# X is only upcast per batch, so an int8 encoding, which cannot itself
+	# require grad, has to work.
 	torch.manual_seed(0)
 	model = FlattenDense()
 

@@ -71,15 +71,10 @@ def saliency(
 	need this step, because the former multiplies by differences between
 	one-hot sequences and the latter subtracts the mean across the alphabet.
 
-	Attributions are calculated for a whole batch at a time. The examples in a
-	batch do not interact during the forward pass, so a single `backward()`
-	call on the summed output yields the correct per-example gradient for
-	every example in the batch, and the result does not depend on how the
-	examples happen to be grouped into batches. As with `predict`, each batch
-	is moved to `device` and cast to `dtype` for the forward and backward
-	pass and moved back to the CPU afterwards, so `X` itself can be kept in a
-	memory-efficient dtype such as int8 even though gradients require floating
-	point.
+	As with `predict`, each batch is moved to `device` and cast to `dtype` for
+	the forward and backward pass and moved back to the CPU afterwards, so `X`
+	itself can be kept in a memory-efficient dtype such as int8. The result
+	does not depend on how the examples are grouped into batches.
 
 	NOTE: after `func` is applied, predictions MUST yield a
 	`(batch_size, n_targets)` tensor, even if n_targets is 1, optionally
@@ -198,11 +193,8 @@ def saliency(
 
 	use_autocast = _autocast_supported(device, dtype)
 
-	# Unlike `predict`, the output shape is known before the loop -- it is
-	# exactly the shape of X -- so the batches are written into a single
-	# preallocated tensor rather than concatenated afterwards. Attributions
-	# are input-sized, and for `dependency_map` this avoids copying a tensor
-	# as large as the whole substitution grid once per sequence.
+	# The output has the shape of X, so the batches are written into one
+	# preallocated tensor rather than concatenated.
 	X_attr = None
 	with _preserve_model_state(model, device):
 		batch_size = min(batch_size, X.shape[0])
@@ -222,9 +214,7 @@ def saliency(
 			else:
 				autocast_ctx = contextlib.nullcontext()
 
-			# The caller may be inside a torch.no_grad() block -- for instance
-			# when saliency is passed as the `func` of a perturbation function
-			# -- so grad has to be turned back on explicitly here.
+			# Perturbation functions call their `func` under torch.no_grad().
 			with torch.autograd.set_grad_enabled(True), autocast_ctx:
 				y_ = model(X_, *args_)
 

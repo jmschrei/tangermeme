@@ -440,9 +440,8 @@ def extract_matching_loci(
 		loci = loci.iloc[:, [0, 1, 2]].copy()
 		loci.columns = names
 
-	# Chromosome names must be strings so that they match the names used by
-	# pyfaidx/figwig. Otherwise, genomes whose chromosomes are named "1",
-	# "2", etc. get read in as integers by pandas and fail to match.
+	# pandas reads chromosomes named 1, 2, ... as integers, which do not
+	# match the names pyfaidx and figwig use.
 	loci['chrom'] = loci['chrom'].astype(str)
 
 	if chroms is not None:

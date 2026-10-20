@@ -64,8 +64,6 @@ def test_dependency_map(X, device):
 
 
 def test_dependency_map_float64(device):
-	# A float64 attribution function gives a float64 map, so the map can be
-	# checked against a float64 reference at full precision.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1).double()
 	X = random_one_hot((2, 4, 12), random_state=0).type(torch.float64)
@@ -79,8 +77,6 @@ def test_dependency_map_float64(device):
 
 
 def test_dependency_map_holds_model_on_device(cuda_device):
-	# The model is moved to the device once for the whole call, so every
-	# call to func finds it there, and it is moved back afterward.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
 	X = random_one_hot((2, 4, 12), random_state=0).type(torch.float32)
@@ -97,11 +93,9 @@ def test_dependency_map_holds_model_on_device(cuda_device):
 
 
 def test_dependency_map_receptive_field(X, device):
-	# The map is an average of absolute differences. ConvAvgDense is a
-	# single width-3 convolution, so substituting a base can only move the
-	# attribution of positions within one step of it, and its ReLU plus
-	# global pooling lets one position's gradient depend on another
-	# position's base, so off-diagonal entries must survive.
+	# The map averages absolute differences. The width-3 convolution limits a
+	# base's effect to attributions within two positions of it, and the ReLU
+	# makes some of those off the diagonal nonzero.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
 	dmap = dependency_map(model, X, device=device)
@@ -118,12 +112,8 @@ def test_dependency_map_receptive_field(X, device):
 
 @pytest.mark.parametrize("gradient_correction", [True, False])
 def test_dependency_map_matches_brute_force(gradient_correction, device):
-	# For each position, the column must be the mean absolute change in the
-	# summed attributions over exactly the substitutions that change a base.
-	# A position whose base is re-applied contributes an exact zero, so
-	# averaging over the three real substitutions rather than over all four
-	# characters is what the returned values are scaled by.
-	# `gradient_correction` is forwarded to `saliency` through kwargs.
+	# The mean is over the three substitutions that change the base, not over
+	# all four characters.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
 	model.eval()
@@ -179,9 +169,8 @@ def test_dependency_map_n_column_normalization(device):
 
 
 def test_dependency_map_diagonal_for_linear_models(device):
-	# A model with no nonlinearity has a constant Jacobian, so the
-	# attribution at position j cannot depend on the base at any other
-	# position. The map must be purely diagonal.
+	# A linear model has a constant Jacobian, so no attribution depends on the
+	# base at another position.
 	torch.manual_seed(0)
 	X = random_one_hot((2, 4, 15), random_state=0).type(torch.float32)
 
@@ -272,8 +261,6 @@ def _deep_lift_shap_fixed(model, X, args=None, **kwargs):
 @pytest.mark.parametrize("func", [_deep_lift_shap_fixed,
 	saturation_mutagenesis], ids=["deep_lift_shap", "saturation_mutagenesis"])
 def test_dependency_map_func_matches_brute_force(func, device):
-	# The same mean of absolute differences as with saliency, computed by
-	# substituting each base by hand and calling func on every copy.
 	torch.manual_seed(0)
 	model = ConvAvgDense(n_outputs=1)
 	model.eval()

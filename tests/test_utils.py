@@ -164,15 +164,11 @@ def test_validate_input_allow_N(device):
 
 
 def test_validate_input_all_zero_with_allow_N(device):
-	# An all-zero tensor represents a sequence where every position is
-	# unknown (N). With allow_N=True this is a valid one-hot encoding
-	# and must not be rejected. The previous len(unique(X)) == 2 check
-	# tripped on this case because unique returned just [0].
+	# An all-N sequence is valid with allow_N=True. It used to be rejected
+	# because unique(X) returned only [0].
 	X = torch.zeros(1, 4, 5, dtype=torch.int8).to(device)
 	_validate_input(X, "X", ohe=True, ohe_dim=1, allow_N=True)
 
-	# Without allow_N, every position must have exactly one 1; an all-N
-	# input must still raise.
 	assert_raises(ValueError, _validate_input, X, "X", ohe=True, ohe_dim=1)
 
 
@@ -240,14 +236,11 @@ def test_validate_input_ohe_noncontiguous(device):
 
 
 def test_public_validate_input_wrapper(device):
-	# The public validate_input forwards to the internal helper.
 	X = random_one_hot((2, 4, 10), random_state=0).to(device)
 	validate_input(X, "X", ohe=True, ohe_dim=1)
 
-	# Bad input raises as expected.
 	assert_raises(ValueError, validate_input, X + 0.5, "X", ohe=True)
 
-	# only_warn=True surfaces a TangermemeWarning instead of raising.
 	with pytest.warns(TangermemeWarning):
 		validate_input(X + 0.5, "X", ohe=True, only_warn=True)
 
@@ -653,11 +646,9 @@ def test_one_hot_encode_raises_ignore_in_alphabet_message(alphabet, ignore):
 ])
 @pytest.mark.parametrize("in_sequence", [False, True])
 def test_one_hot_encode_raises_non_ascii_alphabet(alphabet, in_sequence):
-	# Characters are looked up by their UTF-8 bytes, and each byte of a
-	# non-ASCII character in the alphabet took a column. A character after
-	# it was encoded one or more columns too far right, even when the
-	# non-ASCII character was not in the sequence, and one in the sequence
-	# wrote past the end of the encoding (#111).
+	# Each UTF-8 byte of a non-ASCII alphabet character used to take a column:
+	# later characters were encoded too far right, and the character itself,
+	# when in the sequence, wrote past the end of the encoding (#111).
 	char = [c for c in alphabet if not c.isascii()][0]
 	sequence = 'GCA' + char if in_sequence else 'GCA'
 	message = "Character {} in the alphabet is not ASCII".format(char)
@@ -680,11 +671,9 @@ def test_one_hot_encode_raises_non_ascii_alphabet(alphabet, in_sequence):
 	['A', 'C', 'G', 'T', 'Z']])
 @pytest.mark.parametrize("repeats", [0, 1, 5000])
 def test_one_hot_encode_raises_non_ascii_ignore(ignore, alphabet, repeats):
-	# Each byte of a non-ASCII character in `ignore` was skipped as a
-	# character of its own, so every character after it in the sequence was
-	# encoded one position further along for each extra byte, and the last
-	# ones past the end of the encoding. 5,000 of them aborted the
-	# interpreter with a corrupted heap (#111).
+	# Each UTF-8 byte of a non-ASCII character in `ignore` used to be skipped
+	# as a character, shifting later ones along and past the end of the
+	# encoding; 5,000 of them aborted with a corrupted heap (#111).
 	char = [c for c in ignore if not c.isascii()][0]
 	sequence = 'GCAT' + (char + 'ACGT') * repeats
 	message = "Character {} in the list of ignored characters is not ASCII"
@@ -696,8 +685,7 @@ def test_one_hot_encode_raises_non_ascii_ignore(ignore, alphabet, repeats):
 @pytest.mark.parametrize("sequence", [['A', 'C', 'G', 'T'],
 	('A', 'C', 'G', 'T'), b'ACGT'])
 def test_one_hot_encode_raises_not_str(sequence):
-	# Only a string is encoded. The docstring said a list was accepted, which
-	# has not been true since 0.2.2 (#111).
+	# Only a str is encoded, though the docstring once said a list was (#111).
 	with pytest.raises(TypeError):
 		one_hot_encode(sequence)
 
@@ -1040,7 +1028,6 @@ def test_random_one_hot_with_probs():
 		random_state=0)
 
 	assert X.shape == (100, 4, 200)
-	# every position is the first character
 	assert int(X[:, 0].sum()) == 100 * 200
 	assert int(X[:, 1:].sum()) == 0
 
@@ -1081,8 +1068,7 @@ def test_example_to_fasta_coords_window():
 
 	out = example_to_fasta_coords(example_df, loci_df, window=50)
 
-	# midpoint of (100, 200) is 150; window=50 centers at 150-25=125;
-	# example start=10 -> 135, end=20 -> 145.
+	# The window of 50 around the midpoint, 150, starts at 125.
 	assert int(out['start'].iloc[0]) == 135
 	assert int(out['end'].iloc[0]) == 145
 
@@ -1091,8 +1077,6 @@ def test_example_to_fasta_coords_window():
 
 
 def test_set_seed_is_deterministic():
-	# After calling set_seed with the same seed twice, all RNGs should
-	# produce identical sequences.
 	import random
 
 	set_seed(0)
@@ -1115,8 +1099,6 @@ def test_set_seed_is_deterministic():
 
 
 def test_gc_content_basic():
-	# Build a tensor where the first sequence is all-A (GC=0), the second
-	# all-G (GC=1), the third half C / half T (GC=0.5).
 	X = torch.zeros(3, 4, 4, dtype=torch.float32)
 	X[0, 0, :] = 1  # AAAA
 	X[1, 2, :] = 1  # GGGG
@@ -1137,7 +1119,6 @@ def test_gc_content_all_N_is_zero():
 
 
 def test_entropy_uniform_is_log2_4():
-	# A perfectly uniform PWM has entropy = log2(4) = 2 bits per position.
 	X = torch.full((1, 4, 3), 0.25)
 	H = entropy(X)
 	assert H.shape == (1, 3)
@@ -1329,8 +1310,6 @@ def test_one_hot_encode_rows_raises_non_ascii_alphabet():
 
 
 def test_one_hot_encode_rows_empty_strings():
-	# Strings of no characters give rows of no positions, as one_hot_encode
-	# does for each.
 	X = _one_hot_encode_rows(['', '', ''])
 	assert X.shape == (3, 4, 0)
 	assert X.dtype == numpy.int8
@@ -1339,7 +1318,6 @@ def test_one_hot_encode_rows_empty_strings():
 
 
 def test_one_hot_encode_rows_unequal_lengths():
-	# Rows of different lengths cannot be stacked, as before.
 	with pytest.raises(ValueError):
 		_one_hot_encode_rows(['ACGT', 'ACG'])
 
@@ -1363,9 +1341,8 @@ def _rows_with_unknown(n, length, unknown_rows, seed=0):
 
 @pytest.mark.parametrize("n_jobs, chunk_size", [(3, 7), (3, 1024), (1000, 7)])
 def test_one_hot_encode_rows_n_jobs(n_jobs, chunk_size):
-	# Enough rows for many blocks per chunk. Several threads give what one
-	# thread gives, and an n_jobs above NUMBA_NUM_THREADS is capped rather
-	# than raising.
+	# Enough rows for many blocks per chunk. An n_jobs above NUMBA_NUM_THREADS
+	# is capped rather than raising.
 	sequences = _rows_with_unknown(1000, 37, [])
 	X = _one_hot_encode_rows(sequences, chunk_size=chunk_size, n_jobs=n_jobs)
 
@@ -1391,8 +1368,7 @@ def test_one_hot_encode_rows_n_jobs_raises_unknown_character(n_jobs,
 def test_one_hot_encode_fasta_n_jobs_rows_first_unknown_row(n_jobs,
 	unknown_rows):
 	# Equal-length strings joined on one line, as _one_hot_encode_rows passes
-	# them. With unknown characters in several blocks of rows, encoded on
-	# several threads, the first such row is returned.
+	# them, with unknown characters in several blocks of rows.
 	sequences = _rows_with_unknown(1000, 37, unknown_rows)
 	mapping, _ = _one_hot_rows_mapping(['A', 'C', 'G', 'T'], ['N'])
 	seqs = numpy.frombuffer(''.join(sequences).encode('ascii'),
@@ -1474,8 +1450,7 @@ def test_one_hot_encode_fasta_n_jobs(n_jobs):
 	[100, 1500, 2900]])
 def test_one_hot_encode_fasta_n_jobs_first_unknown_row(n_jobs, positions):
 	# With unknown characters in the windows of one or several blocks of rows,
-	# encoded on several threads, the first row holding one is returned. The
-	# first such rows are 900, 962, 146 of five and 16 of 26.
+	# encoded on several threads, the first row holding one is returned.
 	rng = numpy.random.RandomState(1)
 	sequence = list(rng.choice(list('ACGTacgtN'), size=3000))
 	for position in positions:
@@ -1538,10 +1513,9 @@ def _packed_one_hot(shape, random_state=0):
 
 
 def test_packed_sequence_bytes():
-	# A=0, C=1, G=2 and T=3, the first position in the two highest bits:
-	# ACGT is 00 01 10 11 = 27, and the A after it is 00 then three positions
-	# of padding, 0. In ANNCT the Ns are stored as A: 00 00 00 01 = 1 and
-	# 11 000000 = 192, with one run of N over positions 1 and 2.
+	# Two bits per position, A=0 to T=3, the first in the highest bits: ACGT
+	# is 00011011 = 27 and A plus padding is 0. Ns are stored as A, so ANNC
+	# is 1 and T plus padding is 192, with one run of N over positions 1 and 2.
 	X = torch.stack([one_hot_encode('ACGTA'), one_hot_encode('ANNCT')])
 	X_packed = PackedSequence.from_one_hot(X)
 
@@ -2149,7 +2123,6 @@ def test_chunk_packed_raises_batch_axes():
 
 @pytest.mark.parametrize("return_packed", [False, True])
 def test_random_one_hot_random_state(return_packed):
-	# The same seed gives the same sequences and another seed others.
 	def draw(seed):
 		X = random_one_hot((5, 4, 40), random_state=seed,
 			return_packed=return_packed)

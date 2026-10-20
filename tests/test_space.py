@@ -743,10 +743,8 @@ def test_space_rejects_empty_X():
 
 
 def test_space_rejects_device_mismatch():
-	# A tensor motif on a different device from X used to fall through
-	# to a cryptic torch error from inside multisubstitute(). String motifs
-	# bypass the check (they're encoded on CPU inside substitute). We use
-	# `meta` so the test works without CUDA.
+	# This used to fail inside multisubstitute(). String motifs are encoded on
+	# the CPU and skip the check, and `meta` lets the test run without CUDA.
 	torch.manual_seed(0)
 	model = FlattenDense()
 	X = random_one_hot((2, 4, 100), random_state=0).type(torch.float32)

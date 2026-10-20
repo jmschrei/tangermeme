@@ -288,16 +288,13 @@ def test_pairwise_annotations_spacing(symmetric):
 
 
 def test_pairwise_annotations_spacing_at_max_distance():
-	# Two annotations whose gap equals max_distance exactly. The output
-	# tensor's last axis has size `max_distance`, so valid indices are
-	# 0..max_distance-1; a pair at distance == max_distance should be
-	# treated as "outside the window" rather than indexing past the end.
+	# A gap of exactly max_distance is one past the end of the distance axis,
+	# so the pair is left out rather than indexed past the end.
 	X = torch.tensor([
 		[0, 0, 0, 5],       # ends at 5
 		[0, 1, 105, 110],   # starts at 105 -> distance = 100
 	], dtype=torch.int64)
 
-	# Should not raise. Pair at exactly max_distance is excluded.
 	y = pairwise_annotations_spacing(X, max_distance=100)
 
 	assert y.shape == (2, 2, 100)
@@ -330,7 +327,6 @@ def test_pairwise_annotations_spacing_multi_example():
 
 
 def test_pairwise_annotations_spacing_dataframe_input():
-	# pandas.DataFrame should accept inputs equivalent to the tensor form.
 	X = torch.tensor([
 		[0, 0, 0, 5],
 		[0, 1, 10, 15],
@@ -450,7 +446,6 @@ def test_annotate_seqlets_few_threads():
 
 
 def test_annotate_seqlets_packed(X, gata_seqlets):
-	# A PackedSequence gives the annotations of its one-hot encoding.
 	idxs, pvals = annotate_seqlets(X, gata_seqlets, "tests/data/test.meme")
 	idxs_packed, pvals_packed = annotate_seqlets(PackedSequence.from_one_hot(X),
 		gata_seqlets, "tests/data/test.meme")

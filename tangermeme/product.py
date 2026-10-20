@@ -132,8 +132,7 @@ def apply_pairwise(
 	_check_one_batch_axis(X)
 	device = _resolve_device(device)
 	additional_func_kwargs = dict(additional_func_kwargs or {})
-	# Pass device as a string to downstream `func` to remain back-compatible
-	# with callables that haven't yet been updated to accept torch.device.
+	# A string, for funcs that do not accept a torch.device.
 	device_arg = str(device)
 
 	if len(X) == 0:
@@ -299,8 +298,7 @@ def apply_product(
 	_check_one_batch_axis(X)
 	device = _resolve_device(device)
 	additional_func_kwargs = dict(additional_func_kwargs or {})
-	# Pass device as a string to downstream `func` to remain back-compatible
-	# with callables that haven't yet been updated to accept torch.device.
+	# A string, for funcs that do not accept a torch.device.
 	device_arg = str(device)
 
 	if len(X) == 0:

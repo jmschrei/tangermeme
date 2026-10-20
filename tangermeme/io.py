@@ -185,9 +185,8 @@ def _interleave_loci(loci, chroms=None, summits=False):
 			raise ValueError("Provided loci must be a string or pandas " +
 				"DataFrame, or a list/tuple of those.")
 
-		# Chromosome names must be strings so that they match the names used by
-		# pyfaidx/figwig. Otherwise, genomes whose chromosomes are named
-		# "1", "2", etc. get read in as integers by pandas and fail to match.
+		# pandas reads chromosomes named 1, 2, ... as integers, which do not
+		# match the names pyfaidx and figwig use.
 		df['chrom'] = df['chrom'].astype(str)
 
 		# If using summits, correct the coordinates to be centered on them
@@ -223,10 +222,9 @@ def _kept_loci(loci, chrom_lengths, exclusion_zones, left, right):
 	A locus is kept when the union of its windows, `[mid - left, mid +
 	right)` around its middle `mid = start + (end - start) // 2`, fits on its
 	chromosome and does not overlap an excluded 100 bp chunk. Integer
-	coordinates are checked together as int64, which gives the values that
-	Python ints do while every coordinate and window is far inside its
-	range. Other coordinates, such as floats, are checked one locus at a time
-	with Python arithmetic, so that they raise or pass as they did before.
+	coordinates far inside the int64 range are checked together as int64.
+	Other coordinates, such as floats, are checked one locus at a time with
+	Python arithmetic.
 
 
 	Parameters
@@ -275,10 +273,9 @@ def _kept_loci(loci, chrom_lengths, exclusion_zones, left, right):
 		# Does it fall off the end of a chromosome?
 		keep = (mids - left >= 0) & (mids + right <= lengths)
 
-		# Does it overlap an excluded chunk? The chunks of every chromosome are
-		# placed end to end, so that one sorted array holds every excluded
-		# chunk, and the chunks [s, e) of a window hold one when fewer excluded
-		# chunks come before s than before e.
+		# Does it overlap an excluded chunk? The chromosomes' chunks are laid
+		# end to end in one sorted array, and a window's chunks [s, e) hold one
+		# when fewer excluded chunks come before s than before e.
 		if exclusion_zones is not None:
 			offsets = numpy.cumsum([0] + [len(exclusion_zones[name]) for name
 				in names], dtype=numpy.int64)
@@ -432,9 +429,7 @@ def _extract_locus_signal(signals, chrom, start, end):
 
 	values = []
 	for i, signal in enumerate(signals):
-		# A dict is zero-filled where it has no values, as a bigwig is: a
-		# missing chromosome gives zeros and a warning, and positions past
-		# the end of the array are zero, as past the end of a chromosome.
+		# A dict reads as zeros where it has no values, as a bigwig does.
 		if isinstance(signal, dict):
 			if chrom not in signal:
 				warnings.warn(f"{chrom} is not in the signal dictionary. "
@@ -614,10 +609,8 @@ def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 	return values
 
 
-# A memory map read by at least this many windows has its page table entries
-# dropped on up to n_jobs threads before it is closed. Closing drops them on
-# the calling thread alone, which took 34-45 ms for the 1.8 GB of hg38 pages
-# that the 167,750 windows of the main benchmark map.
+# The fewest windows for which `_close_map` drops a map's pages on several
+# threads.
 _UNMAP_MIN_WINDOWS = 2048
 
 # The map is split into this many chunks per thread, since the pages that
@@ -938,14 +931,10 @@ def extract_loci(
 		the values are one-hot encoded sequences of shape (len(alphabet),
 		chromosome length) as numpy arrays, memory maps, or torch tensors. A
 		fasta file opened from a path is closed before returning; a
-		pyfaidx.Fasta object is left open. The windows of a fasta file given
-		as a path are read from a memory map of the file, using the .fai index
-		that pyfaidx reads or builds. They are read through pyfaidx instead,
-		with the same result, when they cannot be read from the map, such as
-		for a compressed file or a window holding a byte that pyfaidx would
-		change, like a carriage return inside a line.
-		The keys of a dictionary are coerced to strings, and the
-		returned sequences have the dtype of its values.
+		pyfaidx.Fasta object is left open. A fasta file given as a path is
+		read through the .fai index that pyfaidx reads or builds. The keys of
+		a dictionary are coerced to strings, and the returned sequences have
+		the dtype of its values.
 
 	signals: list or None, optional
 		A list whose elements are each a path to a bigwig file, a bigwig file
@@ -956,8 +945,7 @@ def extract_loci(
 		zeros and a TangermemeWarning, positions past the end of the chromosome
 		or array give zeros, NaN values become zero, and infinities become the
 		largest finite float32 of the same sign. The bigwig files are read by
-		figwig on `n_jobs` threads, in one call for the kept loci, or in groups
-		of loci under `min_counts` and `max_counts`. Only local files are read,
+		figwig on `n_jobs` threads. Only local files are read,
 		so a URL raises a ValueError, and a file figwig does not read, such as
 		a bigBed or a bigwig with unsorted or overlapping intervals, raises
 		figwig's error. A bigwig opened with `pybigtools.open` is deprecated:
@@ -1134,9 +1122,7 @@ def extract_loci(
 	if signals is None:
 		out_width, out_extra = 0, 0
 
-	# Extract the length of each chromosome. Track whether we opened the
-	# fasta ourselves so we know whether we are allowed to close it on
-	# exit; a caller-provided pyfaidx.Fasta is theirs to manage.
+	# Extract the length of each chromosome
 	chrom_lengths = {}
 	opened_fasta = False
 	if isinstance(sequences, (str, os.PathLike)):
@@ -1171,9 +1157,8 @@ def extract_loci(
 	desc = "Loading Loci"
 	d = not verbose
 
-	# Each window is [mid - w//2, mid + w//2 + w%2), so an odd window reaches
-	# one base further right than left. The locus is kept only if the union
-	# of the windows fits on the chromosome.
+	# The union of the windows is [mid - left, mid + right); an odd window
+	# reaches one base further right than left.
 	left = max(in_width, out_width) + max_jitter
 	right = max(in_width + in_window % 2, out_width + out_extra) + max_jitter
 
@@ -1183,13 +1168,10 @@ def extract_loci(
 	out_start = out_width + max_jitter
 	out_length = out_window + 2 * max_jitter
 
-	# The counts are measured on groups of loci, so that the windows held at
-	# once stay small, first on the target alone and without warnings. Each
-	# locus is compared as a float32 scalar, as its sum is. Then every signal
-	# is read at each locus examined before n_loci loci are kept, which is
-	# where it was read one locus at a time, so that the warnings for
-	# chromosomes a signal does not have are the same, and the values at the
-	# kept loci are kept.
+	# Counts are measured on groups of loci so that the windows held stay
+	# small, on the target alone and without warnings, comparing each sum as
+	# a float32. Every signal is then read at the loci examined, which gives
+	# the warnings for chromosomes a signal lacks, and kept at the kept loci.
 	signals_ = None
 	if min_counts is not None or max_counts is not None:
 		keep, kept_values = [], []
@@ -1256,10 +1238,7 @@ def extract_loci(
 		in_signals_ = _extract_signals(in_signals, loci_chroms,
 			mids - in_width - max_jitter, in_window + 2 * max_jitter, n_jobs)
 
-	# Extract a window of sequence using the input size. The windows of a
-	# fasta opened from a path are read together, from a memory map of the
-	# file where they can be, and the windows of a pyfaidx.Fasta one at a
-	# time; both are one-hot encoded straight into one C-contiguous array.
+	# Extract a window of sequence using the input size
 	threads = _cpu_count() if n_jobs == -1 else int(n_jobs)
 	width = in_window + 2 * max_jitter
 
@@ -1295,9 +1274,8 @@ def extract_loci(
 			for c in range(0, len(mids), step):
 				windows_ = itertools.islice(windows, step)
 
-				# numpy.stack keeps the memory layout of its inputs, so a stack
-				# of slices of Fortran-ordered arrays is not contiguous by
-				# default.
+				# numpy.stack keeps its inputs' layout, so slices of
+				# Fortran-ordered arrays stack into a non-contiguous array.
 				if isinstance(sequences, dict):
 					seqs = numpy.ascontiguousarray(numpy.stack([sequences[
 						chrom][:, start:end] for chrom, start, end in windows_]))
@@ -1321,8 +1299,6 @@ def extract_loci(
 		y_return.append(torch.from_numpy(in_signals_))
 		
 	if return_mask:
-		# Loci after the n_loci cap was reached are not returned, so they are
-		# False.
 		kept_mask = numpy.zeros(len(loci), dtype=bool)
 		kept_mask[idxs] = True
 		y_return.append(torch.from_numpy(kept_mask))

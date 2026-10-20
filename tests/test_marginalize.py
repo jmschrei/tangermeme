@@ -340,9 +340,8 @@ def test_marginalize_raises_args(X, alpha, beta, device):
 
 
 def test_marginalize_rejects_device_mismatch():
-	# A motif on a different device from X previously crashed with a cryptic
-	# torch error from inside substitute(). Surface a clear ValueError up
-	# front. We use the `meta` device so the test works without CUDA.
+	# This used to fail inside substitute(). The `meta` device lets the test
+	# run without CUDA.
 	model = FlattenDense()
 	X = random_one_hot((2, 4, 100), random_state=0).type(torch.float32)
 	motif = torch.zeros(1, 4, 5, device='meta')
@@ -359,9 +358,8 @@ def test_marginalize_rejects_empty_X():
 
 
 def test_marginalize_accepts_N(X, device):
-	# `marginalize` validates X with allow_N, so the substitution it runs
-	# has to accept unknown characters too. Sequence extracted across an
-	# assembly gap is all-zeros there and used to raise from substitute().
+	# `marginalize` validates X with allow_N, so its substitution must accept
+	# unknown characters too. It used to raise from substitute().
 	model = FlattenDense()
 	X_n = torch.clone(X)
 	X_n[:, :, 10:14] = 0
@@ -770,11 +768,9 @@ def test_marginalize_func_saturation_mutagenesis(X, device):
 	assert y_after.shape == (4, 4, 100)
 	assert y_after.dtype == torch.float32
 
-	# y_before should match a direct saturation_mutagenesis on the unmodified X
 	y_direct = saturation_mutagenesis(model, X[:4], batch_size=8, device=device)
 	assert_array_almost_equal(y_before, y_direct, 4)
 
-	# The motif insertion should change the attribution somewhere
 	assert_raises(AssertionError, assert_array_almost_equal, y_before, y_after, 4)
 
 	assert_array_almost_equal(y_after[:2, :, 45:55], [

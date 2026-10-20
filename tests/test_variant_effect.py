@@ -133,9 +133,8 @@ def test_deletion_effect_summodel(X_del, substitutions, device):
 
 
 def test_deletion_effect_rejects_X_too_short():
-	# X.shape[-1] must exceed the max deletion count per example so the model
-	# is left with at least one position to consume. Previously this fell
-	# through to a cryptic empty-tensor / model crash.
+	# X must be longer than the most deletions in one example. This used to
+	# crash in the model on an empty tensor.
 	model = FlattenDense()
 	X = random_one_hot((2, 4, 5)).type(torch.float32)
 	deletions = torch.tensor([[0, 0], [0, 1], [0, 2], [0, 3], [0, 4]])
@@ -225,8 +224,7 @@ def test_insertion_effect_rejects_positions_outside_X():
 
 
 def test_substitution_effect_args(X, substitutions, device):
-	# args= should be threaded through to the model. FlattenDense's forward
-	# adds `alpha` to the output, so non-zero alpha shifts the predictions.
+	# FlattenDense adds `alpha` to its output.
 	torch.manual_seed(0)
 	model = FlattenDense()
 	alpha = torch.full((X.shape[0], 1), 2.0)
@@ -309,8 +307,6 @@ def test_deletion_effect_left(X_del, deletions, device):
 	y_left, y_var_left = deletion_effect(model, X_del, deletions,
 		left=True, device=device)
 
-	# y_before reflects which side was trimmed: right-trim uses [:100],
-	# left-trim uses [-100:].
 	assert_array_almost_equal(y_right, X_del[:, :, :100].sum(dim=-1))
 	assert_array_almost_equal(y_left, X_del[:, :, -100:].sum(dim=-1))
 
@@ -371,7 +367,6 @@ def test_substitution_effect_no_variant_for_example(X, device):
 	substitutions = torch.tensor([[0, 4, 1]])
 	y, y_var = substitution_effect(model, X, substitutions, device=device)
 
-	# example 0 differs, examples 1 and 2 are identical before/after
 	assert_array_almost_equal(y[1], y_var[1])
 	assert_array_almost_equal(y[2], y_var[2])
 	assert_raises(AssertionError, assert_array_almost_equal, y[0], y_var[0])
@@ -382,7 +377,6 @@ def test_substitution_effect_does_not_mutate_X(X, substitutions, device):
 	X_before = X.clone()
 	substitution_effect(model, X, substitutions, device=device)
 
-	# substitution_effect clones X internally, so the input is unchanged.
 	assert_array_almost_equal(X, X_before)
 
 
@@ -393,19 +387,16 @@ def test_substitution_effect_func_deep_lift_shap(X, substitutions, device):
 	y, y_var = substitution_effect(model, X, substitutions,
 		func=deep_lift_shap, n_shuffles=2, device=device, random_state=0)
 
-	# deep_lift_shap returns (B, alphabet, length) attributions
 	assert y.shape == (3, 4, 100)
 	assert y_var.shape == (3, 4, 100)
 	assert y.dtype == torch.float32
 	assert y_var.dtype == torch.float32
 
-	# y_before should match a direct deep_lift_shap on the unmodified X
 	y_direct = deep_lift_shap(model, X, n_shuffles=2, device=device,
 		random_state=0)
 	assert_array_almost_equal(y, y_direct, 4)
 
-	# The substituted version should differ at least at example 0 or 1
-	# (where the variants land).
+	# The variants land in examples 0 and 1.
 	assert_raises(AssertionError, assert_array_almost_equal, y, y_var, 4)
 
 	assert_array_almost_equal(y_var[:, :, :10], [
@@ -466,9 +457,7 @@ def test_variant_effect_returns_named_tuple():
 
 
 def test_substitution_effect_rejects_duplicate_positions():
-	# Two rows targeting the same (example, position) would each set a 1 in
-	# the same column, handing the model a multi-hot column rather than a
-	# one-hot one.
+	# Two rows at one (example, position) would make a multi-hot column.
 	model = SumModel()
 	X = random_one_hot((1, 4, 20), random_state=0)
 	substitutions = torch.tensor([[0, 5, 2], [0, 5, 0]])
@@ -478,7 +467,6 @@ def test_substitution_effect_rejects_duplicate_positions():
 
 
 def test_substitution_effect_allows_repeated_position_across_examples():
-	# The same position in two different examples is not a collision.
 	model = SumModel()
 	X = random_one_hot((2, 4, 20), random_state=0)
 	substitutions = torch.tensor([[0, 5, 2], [1, 5, 0]])

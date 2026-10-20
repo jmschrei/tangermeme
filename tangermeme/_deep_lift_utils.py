@@ -36,11 +36,8 @@ class _HookState:
 def _disable_hooks():
 	"""Temporarily make every DeepLIFT hook a no-op.
 
-	Restores the previous value on exit rather than unconditionally
-	re-enabling, so nesting works and an inner block leaving does not switch
-	the hooks back on for an outer block that is still disabled. The restore
-	sits in a `finally`, so a raising inner pass cannot leave every later
-	attribution silently un-hooked.
+	Restores the previous value on exit, including on a raise, so blocks
+	nest.
 
 
 	Returns
@@ -310,13 +307,9 @@ def _maxpool(module, grad_input, grad_output):
 		_, indices = pool_func(module.input, module.kernel_size, module.stride, 
 			module.padding, module.dilation, module.ceil_mode, True)
 
-		# `max_unpool` gets this wrong when the windows overlap, but it is
-		# one kernel where the scatter-add is a fill and a scatter, and that
-		# second launch is worth about 15% of a whole attribution on a
-		# pool-heavy model. The two give identical answers when no two
-		# windows can share a winner, so the scatter-add is used only where
-		# it is the one that is right. A dilated pool always takes the
-		# scatter-add; see `_is_dilated`.
+		# `max_unpool` is one kernel to the scatter-add's two and gives the
+		# same answer when no two windows share an input. It drops shares
+		# when they do, and can reject dilated pools (`_is_dilated`).
 		if _windows_overlap(module) or _is_dilated(module):
 			unpool_ = _unpool(grad_output[0] * delta_out, indices,
 				module.input.shape)
@@ -328,14 +321,10 @@ def _maxpool(module, grad_input, grad_output):
 
 	unpool_delta_ = unpool_delta + unpool_ref_delta
 
-	# A position only picks up routed change when it wins a window, and that
-	# change is bounded by the change in the position itself, so the quotient
-	# cannot blow up however small the denominator gets and only an exact zero
-	# needs guarding. Whatever is substituted there has to be a value the two
-	# halves agree on, because a pooling rule further up reads both of them;
-	# substituting `grad_input` whole, as this used to, does not, and that is
-	# enough to stop the pair summing to delta. The multiplier is the same for
-	# both halves, so it is built once at half width.
+	# A position's routed change is bounded by its own change, so only an
+	# exact zero needs a fallback. Both halves must take the same multiplier
+	# there, or the pair stops summing to delta in a pooling rule further up,
+	# so it is built once at half width.
 	idxs_ = delta_in_ == 0
 	denominator_ = delta_in_.masked_fill(idxs_, 1)
 
@@ -421,9 +410,7 @@ def _glu(module, grad_input, grad_output):
 	# m_{a -> y}, the sigmoid averaged over the two ends of the path.
 	mult_a = (s + s_ref) / 2
 
-	# m_{b -> y}, the same average of the other operand times the sigmoid's
-	# secant. Below the threshold the two logits are equal to within
-	# floating-point noise and the tangent at the reference is the limit.
+	# m_{b -> y}, the other operand's average times the sigmoid's secant.
 	delta_b = b - b_ref
 	ds_db = torch.where(delta_b.abs() > 1e-6, (s - s_ref) / delta_b,
 		s_ref * (1 - s_ref))
@@ -511,9 +498,8 @@ def _layer_normalization_helper(module, grad_input, grad_output,
 	x, x_ref = module.input.chunk(2)
 	n_norm_dims = len(module.normalized_shape)
 
-	# `torch.nn.RMSNorm.eps` defaults to None, which `F.rms_norm` interprets
-	# as the dtype's epsilon; mirror that here so the hook matches the forward
-	# pass it is correcting.
+	# `torch.nn.RMSNorm.eps` defaults to None, which `F.rms_norm` reads as the
+	# dtype's epsilon.
 	eps = module.eps if module.eps is not None else torch.finfo(x.dtype).eps
 	mu, v = _layer_normalization_stats(x, n_norm_dims, eps, norm_type)
 	mu_ref, v_ref = _layer_normalization_stats(x_ref, n_norm_dims, eps,
@@ -573,7 +559,6 @@ def _layer_normalization_terms(x, mu, v, x_ref, mu_ref, v_ref, n_norm_dims):
 	a = x if mu is None else x - mu
 	a_ref = x_ref if mu_ref is None else x_ref - mu_ref
 
-	# some additional terms
 	v_avg = (v + v_ref) / 2
 	a_sum = a + a_ref
 
@@ -649,10 +634,6 @@ def _rmsnorm(module, grad_input, grad_output):
 	A thin wrapper around `_layer_normalization_helper`, which carries the
 	derivation for both norm layers. RMSNorm skips the mean subtraction, so
 	the same expression is evaluated with a_i = x_i and without the mean term.
-
-	`torch.nn.RMSNorm.eps` defaults to None, which the forward pass reads as
-	the dtype's epsilon; the helper mirrors that so the rule matches the
-	forward pass it is correcting.
 
 
 	Parameters
@@ -827,10 +808,8 @@ def _softmax(module, grad_input, grad_output):
 			"DeepLIFT stacks each example with its reference along that axis, "
 			"so normalizing over it would mix the two.")
 
-	# Under autocast the activations can be half precision, which holds the
-	# differences divided below to about three digits and in which the 1e-6
-	# guards are below the resolution. The rule computes in at least float32;
-	# `_b_hook` casts the result back.
+	# Half precision cannot resolve the differences divided below or the 1e-6
+	# guards, so compute in at least float32; `_b_hook` casts back.
 	dtype = torch.promote_types(module.input.dtype, torch.float32)
 	x, x_ref = module.input.to(dtype).chunk(2, dim=0)
 	grad_out, grad_out_ref = grad_output[0].to(dtype).chunk(2, dim=0)
@@ -845,11 +824,9 @@ def _softmax(module, grad_input, grad_output):
 	a_ref = torch.exp(x_ref - c)
 	s = a.sum(dim=dim, keepdim=True)
 	s_ref = a_ref.sum(dim=dim, keepdim=True)
-	# Guard against s underflowing to exactly zero, which would make the
-	# reciprocal +inf and reach log(v) below as NaN. It takes a whole softmax
-	# window sitting ~88 (fp32) below the shared max c, so only a mask that
-	# differs between an example and its reference gets there. Such a row
-	# carries no attribution mass, so the clamped value itself does not matter.
+	# s underflows to zero, which makes log(v) below NaN, only when a mask
+	# differs between an example and its reference. Such a row carries no
+	# attribution, so the clamped value does not matter.
 	tiny = torch.finfo(s.dtype).tiny
 	v = s.clamp_min(tiny).reciprocal()
 	v_ref = s_ref.clamp_min(tiny).reciprocal()
@@ -886,8 +863,7 @@ def _softmax(module, grad_input, grad_output):
 	#  m_{v -> y_i} = (Δy_i / Δlog(y_i)) * (Δlog(v) / Δv)
 	mult_v_to_y = delta_y_over_delta_log_y * delta_log_v_over_delta_v
 
-	# Combine the a_i -> y_i path with the v -> y_i path. Also multiply by the upstream gradient (grad_out) to
-	# derive the downstream gradient (grad_in).
+	# Combine the a_i -> y_i and v -> y_i paths with the upstream gradient:
 	#
 	#     grad_in_j = grad_out_j * (Δy_j / Δlog(y_j))
 	#         - m_{x_j -> a_j} * sum_i grad_out_i
@@ -895,11 +871,10 @@ def _softmax(module, grad_input, grad_output):
 	#             * (Δy_i / Δlog(y_i))
 	#             * (Δlog(v) / Δv)
 	#
-	# The numerator path carries no factor of m_{x_j -> a_j}, because
-	# m_{x_j -> a_j} * (Δlog(a_j) / Δa_j) is Δlog(a_j) / Δx_j, which is one:
-	# log(a_j) is x_j - c, and the same c is subtracted from both sides.
-	# Guarding the two ratios separately instead fails on a peaked softmax,
-	# where Δa trips its threshold while Δx does not.
+	# The numerator path has no factor of m_{x_j -> a_j}: times
+	# Δlog(a_j) / Δa_j it is Δlog(a_j) / Δx_j, which is one. Guarding the two
+	# ratios separately instead fails on a peaked softmax, where Δa trips its
+	# threshold while Δx does not.
 	reciprocal_mult = -v * v_ref # reuse the clamped reciprocals
 	grad_in = (
 		grad_out * delta_y_over_delta_log_y
@@ -942,7 +917,6 @@ def _gauss_legendre(n_points):
 	"""
 
 	nodes, weights = leggauss(n_points)
-	# Map [-1, 1] onto [0, 1], the path z(t) = z0 + t * (z - z0) runs over.
 	alphas = (nodes + 1.0) / 2.0
 	weights = weights / 2.0
 	return alphas, weights

@@ -61,7 +61,6 @@ def test_greedy_marginalize(X_marg, motifs, device):
 
 
 def test_greedy_marginalize_packed(X_marg, motifs, device):
-	# Packed backgrounds give the design of their one-hot encoding, packed.
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [[10.0]]

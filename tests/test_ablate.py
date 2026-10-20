@@ -529,10 +529,8 @@ def test_ablate_raises_args(X, alpha, beta, kwargs):
 
 
 def test_ablate_accepts_N(X, device):
-	# `ablate` validates X with allow_N and then shuffles it, so the
-	# shuffle has to accept unknown characters too. Sequence extracted
-	# across an assembly gap is all-zeros there and used to raise from
-	# ersatz.shuffle().
+	# `ablate` validates X with allow_N and then shuffles it, so the shuffle
+	# must accept unknown characters. It used to raise from ersatz.shuffle().
 	torch.manual_seed(0)
 	model = FlattenDense()
 	X_n = torch.clone(X)
@@ -1074,7 +1072,6 @@ def test_ablate_func_saturation_mutagenesis(X, device):
 	assert y_after.shape == (4, 2, 4, 100)
 	assert y_after.dtype == torch.float32
 
-	# Parity check: y_before should match a direct saturation_mutagenesis call
 	y_direct = saturation_mutagenesis(model, X[:4], batch_size=8, device=device)
 	assert_array_almost_equal(y_before, y_direct, 4)
 
@@ -1114,9 +1111,8 @@ def test_ablate_func_saturation_mutagenesis(X, device):
 
 
 def test_ablate_rejects_args_device_mismatch():
-	# args on a different device from X used to fall through to a cryptic
-	# torch error from inside the model. Surface a clear ValueError up
-	# front. We use the `meta` device so the test works without CUDA.
+	# This used to fail inside the model. The `meta` device lets the test run
+	# without CUDA.
 	torch.manual_seed(0)
 	model = FlattenDense()
 	X = random_one_hot((2, 4, 100), random_state=0).type(torch.float32)
@@ -1164,8 +1160,6 @@ def test_ablate_accepts_16bit(X, dtype, cuda_device):
 
 
 def test_ablate_returns_named_tuple(X, device):
-	# AblateResult should support both positional unpacking and named
-	# field access.
 	from tangermeme.results import PerturbationResult
 
 	torch.manual_seed(0)
@@ -1174,16 +1168,13 @@ def test_ablate_returns_named_tuple(X, device):
 	result = ablate(model, X, start=10, end=20, n=2, device=device,
 		random_state=0)
 
-	# Positional / tuple-style unpacking still works.
 	y_before, y_after = result
 	assert torch.equal(y_before, result[0])
 	assert torch.equal(y_after, result[1])
 
-	# Attribute access works.
 	assert torch.equal(result.y_before, y_before)
 	assert torch.equal(result.y_after, y_after)
 
-	# Still a tuple subclass.
 	assert isinstance(result, tuple)
 	assert isinstance(result, PerturbationResult)
 

@@ -234,12 +234,10 @@ def beam_substitution(
 
 		tic = time.time()
 
-		# The heap keeps the `beam_size` candidates with the highest score
-		# (= lowest loss) seen this round. Entries are
-		# (score, counter, beam_idx, motif_idx, pos); the counter is a unique
-		# tiebreaker so the heap never compares the trailing fields, keeping
-		# selection deterministic. motif_idx == -1 means "keep this beam member
-		# unchanged", which lets the beam carry good sequences forward.
+		# A min-heap of this round's `beam_size` best candidates, as (score,
+		# counter, beam_idx, motif_idx, pos), score being the negated loss.
+		# The unique counter breaks ties before the other fields are compared.
+		# motif_idx == -1 keeps a beam member unchanged.
 		pq = []
 		counter = 0
 

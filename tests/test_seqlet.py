@@ -246,10 +246,6 @@ def test_recursive_seqlets_constant(value):
 @pytest.mark.parametrize("min_seqlet_len", [4, 6, 8])
 def test_recursive_seqlets_right_edge(min_seqlet_len):
 	"""The last min_seqlet_len positions used to be excluded from every seqlet.
-
-	A block at [990, 1000) was called as [988, 996) at min_seqlet_len=4 and
-	not called at all at min_seqlet_len=8, while identical blocks at the left
-	edge and in the middle were called in full.
 	"""
 
 	X = numpy.random.RandomState(0).normal(0, 0.01, size=(1, 1000))
@@ -277,9 +273,8 @@ def _assert_no_overlap(seqlets):
 def test_recursive_seqlets_min_seqlet_len_one(X_contrib):
 	"""With min_seqlet_len=1 every length-1 span used to get a p-value of 0.
 
-	The length-1 null was never filled in, so more than 12,500 of the 12,684
-	positions were called as length-1 seqlets. A single position is
-	significant only if fewer than 1% of positions score at least as high.
+	A single position is significant only if fewer than 1% of positions score
+	at least as high.
 	"""
 
 	seqlets = recursive_seqlets(X_contrib, min_seqlet_len=1)
@@ -319,9 +314,8 @@ def X_laplace():
 def test_recursive_seqlets_minimum_runs():
 	"""A run of values equal to the minimum used to be called with p = 0.
 
-	Rounding in the cumulative sum could put the span's sum just below
-	seqlet_len * X.min(), giving a bin index of -1 that wrapped around to the
-	end of the table. Here [31, 35) of example 0 is four values of -0.5.
+	Rounding in the cumulative sum could give such a span a bin index of -1.
+	Here [31, 35) of example 0 is four values of -0.5.
 	"""
 
 	X = numpy.clip(numpy.random.RandomState(89).normal(size=(2, 500)), -0.5,
@@ -355,9 +349,6 @@ def test_recursive_seqlets_minimum_mass():
 
 def test_recursive_seqlets_shorter_than_min_seqlet_len():
 	"""A sequence shorter than min_seqlet_len used to be indexed out of bounds.
-
-	The out-of-bounds write sometimes segfaulted and sometimes returned an
-	empty frame.
 	"""
 
 	X = numpy.random.RandomState(0).normal(size=(2, 3))
@@ -538,18 +529,16 @@ def test_recursive_seqlets_fdr_control_size(X_laplace, X_background):
 
 
 ###
-# A reference implementation of recursive_seqlets in numpy and plain Python,
-# compared with it on small random inputs. It is written from the docstring,
-# and from the code where the docstring is silent: the order in which spans of
-# one length are visited, and the arithmetic of the bins.
+# A numpy reference for recursive_seqlets, compared on small random inputs.
+# It follows the docstring, and the code where the docstring is silent: the
+# order of spans of one length and the arithmetic of the bins.
 
 
 _columns = ['example_idx', 'start', 'end', 'attribution', 'p-value']
 
 
 def _reference_bins(X, xmin, bin_width, n_bins):
-	"""The bin of each value, floor((x - xmin) / bin_width), with values below
-	the first bin or above the last placed in the end bins.
+	"""The bin of each value, with values outside the bins in the end bins.
 
 	The difference is taken in the dtype of X and divided in float64, which is
 	how recursive_seqlets bins float32 attributions.
@@ -632,10 +621,8 @@ def _reference_decode(spans, threshold, additional_flanks=0):
 	Examples in order, longest spans first, and within a length the spans in
 	order of their key, until a key reaches the threshold. A span is called
 	if none of its positions is in a seqlet already called and every one of
-	its sub-spans of at least min_seqlet_len is below the threshold. Each row
-	is (example, start, end, attribution, p-value): the flanks are added and
-	clipped to the sequence, the attribution is the exactly rounded sum of X
-	over the flanked span, and the p-value is that of the span on its own.
+	its sub-spans of at least min_seqlet_len is below the threshold. The
+	p-value of a row is that of the unflanked span on its own.
 	"""
 
 	X = spans['X']
@@ -663,14 +650,11 @@ def _reference_decode(spans, threshold, additional_flanks=0):
 def _assert_unambiguous(spans, thresholds, rtol=1e-9):
 	"""Check that the reference and the library must make the same calls.
 
-	The two sum the null in a different order, so a p-value may differ in its
-	last bits between them. The calls depend only on how p-values compare
-	with each other and with the threshold, so they agree when no p-value
-	below the threshold is within rtol of the threshold or of another
-	p-value, except where both must compute the same number: spans of one
-	length with the same binned sum share one p-value, and two binned sums
-	of one length have the same p-value when every sum between them has a
-	probability of exactly zero, because no draws add up to it.
+	The two sum the null in a different order, so p-values may differ in their
+	last bits. The calls agree when no p-value below the threshold is within
+	rtol of the threshold or of another p-value, except where both compute
+	the same number: spans of one length with the same binned sum, or two
+	binned sums of one length with only sums of probability zero between them.
 	"""
 
 	limit = max(thresholds) * (1 + 1e-6)
@@ -694,14 +678,10 @@ def _by_position(seqlets):
 def _assert_seqlets_equal(observed, rows):
 	"""Compare a frame from recursive_seqlets with rows from the reference.
 
-	Coordinates must match exactly. The p-value may differ by rounding in the
-	sums that build the null, and the attribution by rounding in a cumulative
-	sum, so both are compared within 1e-9, relative and absolute. The frames
-	are compared by position first, and then row by row: the expected frame
-	is the reference's rows, in the order they are called, ranked by the same
-	pandas sort as recursive_seqlets uses. That sort is not stable, so how
-	seqlets with equal p-values are ordered depends on the order they are
-	called in, and the comparison checks it.
+	Coordinates must match exactly, and p-values and attributions within 1e-9,
+	as both may differ by rounding. The frames are compared by position, and
+	then as ranked: the pandas sort by p-value is not stable, so ranking the
+	reference's rows in call order checks the order of ties too.
 	"""
 
 	expected = pandas.DataFrame(rows, columns=_columns)
@@ -763,9 +743,7 @@ _reference_shapes = [(1, 40), (3, 25), (5, 12), (2, 60), (4, 33), (6, 20),
 ])
 def test_recursive_seqlets_reference(min_seqlet_len, max_seqlet_len, n_bins,
 	additional_flanks, threshold, dtype):
-	"""recursive_seqlets matches the reference on eight random inputs. Each
-	case changes one setting from the first case, or min_seqlet_len and
-	max_seqlet_len together; the last case changes several.
+	"""recursive_seqlets matches the reference on eight random inputs.
 
 	max_seqlet_len=15 is longer than the examples of length 12, flanks of 7
 	are clipped at an end of the sequence for some seqlets and not others,
@@ -892,13 +870,11 @@ def test_recursive_seqlets_reference_default_settings(X_laplace):
 
 
 def test_recursive_seqlets_reference_float32_bins(X_laplace):
-	"""float32 attributions are binned with the difference from the smallest
-	value taken in float32 and divided in float64, and recursive_seqlets
-	matches the reference on an input built so that this matters.
+	"""recursive_seqlets matches the reference on float32 values at bin edges.
 
-	A tenth of the values are replaced by float32 numbers next to bin edges,
-	each of which would fall in another bin if the difference were taken in
-	float64. That would change the histogram, and so every p-value.
+	A tenth of the values are float32 numbers next to bin edges, each of which
+	would fall in another bin if the difference from the smallest value were
+	taken in float64 rather than float32, changing every p-value.
 	"""
 
 	X = X_laplace.astype(numpy.float32)
@@ -987,13 +963,10 @@ def test_recursive_seqlets_tie_lowest_start():
 	"""Of two overlapping spans with the same p-value, the one that starts
 	first is called.
 
-	Ones at [3, 8) in twenty positions: q = 5/20 = 1/4. With min_seqlet_len =
-	max_seqlet_len = 4, [3, 7) and [4, 8) both sum to 4, with p-value
-	q^4 = 1/256, and every other span sums to at most 3, with p-value at
-	least 4 q^3 (1 - q) + q^4 = 13/256 > 0.01. [3, 7) is called first and
-	[4, 8) overlaps it. 1/256 and every product in the null are exact in
-	floating point, so a threshold of exactly 1/256 calls nothing, because a
-	p-value must be below the threshold, and the next float above it calls
+	With q = 1/4, the fraction of ones, [3, 7) and [4, 8) have p-value
+	q^4 = 1/256 and every other span of length 4 at least 13/256 > 0.01. The
+	null is exact in floating point, so a threshold of exactly 1/256 calls
+	nothing, as a p-value must be below it, and the next float above it calls
 	[3, 7) again.
 	"""
 
@@ -1015,15 +988,11 @@ def test_recursive_seqlets_tie_lowest_start():
 def test_recursive_seqlets_longest_first():
 	"""A long span is called before the shorter spans inside it.
 
-	Ones at [4, 10) in twenty positions: q = 6/20 = 0.3. With min_seqlet_len=2,
-	max_seqlet_len=6 and a threshold of 0.1, a run of k ones has p-value
-	q^k <= q^2 = 0.09, so [4, 10) is called whole, with p-value q^6, and the
-	shorter runs inside it overlap it. Every other span of length 2 to 6 has
-	a sub-span 00, 01 or 10, with p-value at least 1 - (1 - q)^2 = 0.51.
-
-	The largest p-value inside [4, 10), q^2, is one product in float64, so
-	at a threshold of exactly 0.3 * 0.3 nothing is called, and at the next
-	float above it [4, 10) is.
+	With q = 0.3, the fraction of ones, a run of k ones has p-value
+	q^k <= q^2 = 0.09, and every other span contains 00, 01 or 10, at
+	1 - (1 - q)^2 = 0.51 or more. q^2 is one product in float64, so at a
+	threshold of exactly 0.3 * 0.3 nothing is called, and at the next float
+	above it [4, 10) is.
 	"""
 
 	X = numpy.zeros((1, 20))
@@ -1045,16 +1014,11 @@ def test_recursive_seqlets_triangle():
 	"""A span is called only if every sub-span, not only every prefix, is
 	below the threshold.
 
-	Ones at 4, 5, 6 and 8 in twenty positions: q = 4/20 = 0.2. With
-	min_seqlet_len=2, max_seqlet_len=5 and a threshold of 0.05:
-	P(S_2 >= 2) = q^2 = 0.04, P(S_3 >= 3) = q^3 = 0.008,
-	P(S_4 >= 3) = 4 q^3 (1 - q) + q^4 = 0.0272,
-	P(S_5 >= 4) = 5 q^4 (1 - q) + q^5 = 0.00672, and
-	P(S_3 >= 2) = 3 q^2 (1 - q) + q^3 = 0.104. [4, 9) = 11101 and
-	[4, 8) = 1110 have every prefix below 0.05, but contain [5, 8) = 110 at
-	0.104, so neither is called. [4, 7) = 111 is called, with p-value 0.008;
-	the spans 11 inside it overlap it, and every other span has a sub-span
-	00, 01 or 10, at 1 - (1 - q)^2 = 0.36 or more.
+	With q = 0.2, the fraction of ones, [4, 9) = 11101 and [4, 8) = 1110 have
+	every prefix below 0.05 (11 at 0.04, 111 at 0.008, 1110 at 0.0272, 11101 at
+	0.00672), but contain [5, 8) = 110 at 0.104, so neither is called.
+	[4, 7) = 111 is, and every other span contains 00, 01 or 10, at 0.36 or
+	more.
 	"""
 
 	X = numpy.zeros((1, 20))
@@ -1071,14 +1035,10 @@ def test_recursive_seqlets_triangle():
 def test_recursive_seqlets_triangle_strict():
 	"""Every sub-span must be strictly below the threshold.
 
-	Ones at 4, 5, 6, 8 and 15 in twenty positions: q = 5/20 = 1/4, and every
-	p-value here is exact in floating point. With min_seqlet_len=3 and
-	max_seqlet_len=5, [4, 9) = 11101 has prefixes at q^3 = 1/64,
-	P(S_4 >= 3) = 13/256 and P(S_5 >= 4) = 1/64, and contains [5, 8) = 110
-	and [6, 9) = 101 at P(S_3 >= 2) = 10/64 = 0.15625. At a threshold of
-	exactly 0.15625, neither [4, 9) nor [4, 8) is called, and [4, 7) = 111
-	is, with p-value 1/64. At the next float above it, [4, 9) is called,
-	with p-value 1/64.
+	With q = 1/4, the fraction of ones, every p-value here is exact.
+	[4, 9) = 11101 has prefixes at 1/64, 13/256 and 1/64, and contains 110 and
+	101 at 10/64 = 0.15625. At a threshold of exactly 0.15625, [4, 7) = 111 is
+	called instead, and at the next float above it, [4, 9) is.
 	"""
 
 	X = numpy.zeros((1, 20))
@@ -1097,13 +1057,11 @@ def test_recursive_seqlets_stricter_threshold():
 	"""A stricter threshold can call more seqlets, when a long span called at
 	a looser one covers two shorter ones.
 
-	Ones at 3, 5, 6, 8 and 10 in twenty positions: q = 5/20 = 1/4. With
-	min_seqlet_len=3 and max_seqlet_len=6, the largest p-value of a sub-span
-	of [3, 9) = 101101 is that of 0110, P(S_4 >= 2) = 67/256 = 0.26, so it
-	is called at a threshold of 0.3. At 0.2 it is not, nor is any other span
-	of length 5 or 6, since each contains 0110 or 1010, and [3, 7) = 1011,
-	whose sub-spans are at most P(S_3 >= 2) = 10/64, and [8, 11) = 101 are
-	called. The fdr table counts the same seqlets.
+	With q = 1/4, the fraction of ones, the largest p-value inside
+	[3, 9) = 101101 is that of 0110, 67/256 = 0.26, so it is called at 0.3. At
+	0.2, no span of length 5 or 6 is, since each contains 0110 or 1010, and
+	[3, 7) = 1011, with sub-spans at most 10/64, and [8, 11) = 101 are. The fdr
+	table counts the same.
 	"""
 
 	X = numpy.zeros((1, 20))
@@ -1164,10 +1122,8 @@ def test__recursive_seqlet_null_enumeration(n_bins):
 def test__recursive_seqlet_null_end_bins():
 	"""Values outside the bins are counted in the end bins.
 
-	With xmin=0, a bin width of 0.5 and three bins, -5 and 0 fall in bin 0,
-	0.5 in bin 1, and 1 and 7 in bin 2, so the histogram is (2, 1, 2) / 5.
-	P(S_1 >= s) is (5, 3, 2, 0) / 5. The distribution of S_2 is
-	(4, 4, 9, 4, 4) / 25, so P(S_2 >= s) is (25, 21, 17, 8, 4, 0) / 25.
+	-5 and 0 fall in bin 0, 0.5 in bin 1, and 1 and 7 in bin 2, so the
+	histogram is (2, 1, 2) / 5 and S_2 is distributed as (4, 4, 9, 4, 4) / 25.
 	"""
 
 	values = numpy.array([-5, 0, 0.5, 1, 7])
@@ -1184,9 +1140,6 @@ def test__recursive_seqlet_tables(X_laplace, dtype):
 	null at the default settings matches the reference within 1e-10. Both
 	sum non-negative terms, so rounding is relative to each entry, tails
 	included. A constant X has no bins.
-
-	The bin width is the range, the difference of the largest and smallest
-	values taken in the dtype of X, divided by n_bins - 1 in float64.
 	"""
 
 	X = X_laplace.astype(dtype)
@@ -1352,11 +1305,8 @@ def test_recursive_seqlets_inputs_unchanged(X_laplace, X_background):
 
 
 def test_recursive_seqlets_output_types(X_laplace, X_background):
-	"""Coordinates are int64 and attributions and p-values float64, for
-	float32 and float64 input. With return_fdr=True the result is a
-	RecursiveSeqletsResult, which unpacks as (seqlets, fdr); the fdr table
-	has float64 thresholds and estimates and int64 counts. Without it, the
-	same seqlets are returned as a frame."""
+	"""The dtypes of the output for float32 and float64 input, and the
+	RecursiveSeqletsResult given with return_fdr=True."""
 
 	int64, float64 = numpy.dtype('int64'), numpy.dtype('float64')
 	for dtype in (numpy.float64, numpy.float32):
@@ -1441,11 +1391,8 @@ def test__as_attributions():
 
 
 def _reference_fdr(X, X_control, min_seqlet_len, max_seqlet_len, n_bins):
-	"""The estimate at each of the 117 default thresholds, four per decade
-	from 0.1 to 1e-30, from the reference: the number of control seqlets plus
-	one, scaled to the number of positions in X, over the number of seqlets
-	called on X, and NaN where none are. The control is decoded against the
-	null and bins of X. Every threshold is decoded."""
+	"""The fdr table of the reference at the 117 default thresholds, with the
+	control decoded against the null and bins of X at every threshold."""
 
 	thresholds = 10.0 ** -(1 + numpy.arange(117) / 4)
 	spans = _reference_spans(X, min_seqlet_len, max_seqlet_len, n_bins)
@@ -1490,19 +1437,15 @@ def _control_inputs(name):
 	"float32"])
 def test_recursive_seqlets_control_reference(name, min_seqlet_len,
 	max_seqlet_len):
-	"""The fdr table matches the reference at every threshold, without
-	relying on calls stopping once neither input has a seqlet, and the
+	"""The fdr table matches the reference at every threshold, and the
 	seqlets are those the reference calls at the largest threshold whose
 	estimate is at or below target_fdr.
 
-	The control has a different number of examples and length than X
-	("shapes"), values beyond both ends of X, including a run below its
-	smallest value and a run above its largest ("range"), seqlets at
-	stricter thresholds than X ("stronger_control"), or float64 values with
-	float32 X ("float32"). Counts must match exactly; estimates are within
-	1e-12, for rounding in the scaling. target_fdr is set halfway between two
-	estimates of the reference near its median that differ by more than
-	rounding, so that some thresholds reach it and some do not.
+	The control differs from X in shape ("shapes"), has runs below and above
+	the range of X ("range"), has seqlets at stricter thresholds than X
+	("stronger_control"), or is float64 with float32 X ("float32").
+	target_fdr falls between two distinct estimates, so that some thresholds
+	reach it and some do not.
 	"""
 
 	X, X_control = _control_inputs(name)
@@ -1686,11 +1629,9 @@ def test_recursive_seqlets_control_ignores_threshold(X_laplace,
 
 
 def test_recursive_seqlets_control_flanks(X_laplace, X_background):
-	"""With a control, seqlets are called at the largest threshold whose
-	estimated false discovery rate is at or below target_fdr, as at that
-	threshold without one. Flanks do not change the fdr table, and the
-	seqlets returned with a control get them as at the chosen threshold
-	without one."""
+	"""The seqlets returned with a control, with or without flanks, are those
+	called at the chosen threshold without one, and flanks do not change the
+	fdr table."""
 
 	result = recursive_seqlets(X_laplace, X_control=X_background,
 		target_fdr=0.2, return_fdr=True)
@@ -1713,13 +1654,9 @@ def test_recursive_seqlets_control_dtype(X_laplace, X_background):
 	"""A control gives the same output, bit for bit, as the control cast to
 	the dtype of X first, and a tensor control the same as its array.
 
-	Only the last case can show whether the control is binned in the dtype
-	of X: a third or more of its values are moved to just above the lower
-	edge of their bin of X, at float64 values whose float32 roundings fall
-	in the bin below, so binning them in float64 would change their bins and
-	the fdr table. In the first case, values of a float64 control are rarely
-	that close to an edge, and in the second, casting float32 to float64 is
-	exact.
+	Only the last case shows that the control is binned in the dtype of X:
+	over 30% of its values sit just above a bin edge of X, where their
+	float32 roundings fall in the bin below.
 	"""
 
 	X32 = X_laplace.astype(numpy.float32)
