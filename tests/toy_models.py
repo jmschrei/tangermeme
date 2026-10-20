@@ -138,9 +138,8 @@ class SmallDeepSEA(torch.nn.Module):
 class ResidualConv(torch.nn.Module):
 	"""Residual block: act(conv1(X)) -> conv2 -> + X -> dense.
 
-	Channel count is kept at 4 throughout the residual stream so the skip add
-	is shape-compatible. The activation is a constructor argument so the same
-	class is reused for the activation sweep in test_deep_lift_shap.py.
+	The activation is a constructor argument so that the activation sweep in
+	test_deep_lift_shap.py can reuse the class.
 	"""
 
 	def __init__(self, seq_len=100, n_outputs=1, activation=torch.nn.ReLU):
@@ -176,10 +175,8 @@ class Transformer(torch.nn.Module):
 class ConvRuleSeq(torch.nn.Module):
 	"""conv -> one newly registered rule -> conv, keeping the length axis.
 
-	`pisa` attributes every output position separately, so it needs a model
-	that still has a length axis at its output rather than one that flattens
-	down to a scalar the way the models above do. `rule` selects which of the
-	operations added to the rule table sits in the middle.
+	The length axis is kept for `pisa`, which attributes each output position
+	separately. `rule` selects the operation in the middle.
 	"""
 
 	def __init__(self, rule="layernorm", seq_len=15, channels=8):
@@ -214,20 +211,18 @@ class ConvRuleSeq(torch.nn.Module):
 			h = self.op(h)
 
 		# `pisa` indexes the output as (example, position), so the channel axis
-		# is squeezed out the same way Conv1 does it.
+		# is squeezed out.
 		return self.out(h)[:, 0]
 
 
 class MultiHeadAttention(torch.nn.Module):
 	"""Multi-head self-attention built only from modules DeepLIFT can hook.
 
-	`torch.nn.MultiheadAttention` computes its softmax and both of its matmuls
-	functionally, so there is no module for a rule to attach to and the whole
-	attention block is silently treated as linear. Writing the same
-	computation with `BilinearOp` and `torch.nn.Softmax` puts every
-	non-linearity behind a module, which is what makes a transformer block
-	attributable. The scaling sits outside the op, as BilinearOp's contract
-	asks.
+	`torch.nn.MultiheadAttention` computes its softmax and both matmuls
+	functionally, so no rule can attach to them and the block is silently
+	treated as linear. Here each non-linearity is a `BilinearOp` or a
+	`torch.nn.Softmax`. The scaling sits outside the op, as BilinearOp's
+	contract asks.
 	"""
 
 	def __init__(self, seq_len=100, d_model=8, n_heads=2, n_outputs=1):
@@ -268,16 +263,11 @@ class MultiHeadAttention(torch.nn.Module):
 class TransformerBlock(torch.nn.Module):
 	"""A stackable transformer block built only from modules DeepLIFT can hook.
 
-	`MultiHeadAttention` is the attention operation on its own. This is the
-	block a user actually stacks around it: attention, a residual, two norms
-	and a feedforward with a non-linearity. The arrangement matters to the
-	rules rather than only to the model, because pre-norm and post-norm put
-	the LayerNorm on opposite sides of the residual add, so the norm rule sees
-	a different graph in each and `n_blocks` chains every rule through the
-	output of the block below it.
-
-	A learned positional embedding is a parameter added to the stream, which
-	is linear and needs no rule of its own; it is here to confirm that.
+	Attention, a residual, two norms and a feedforward with a non-linearity.
+	Pre-norm and post-norm put the LayerNorm on opposite sides of the residual
+	add, so the norm rule sees a different graph in each, and `n_blocks`
+	chains every rule through the block below it. The learned positional
+	embedding is linear and needs no rule; it is here to confirm that.
 
 
 	Parameters
@@ -369,7 +359,6 @@ class TransformerBlock(torch.nn.Module):
 		k = self._split(self.k[i](h))
 		v = self._split(self.v[i](h))
 
-		# The scaling sits outside the op, as BilinearOp's contract asks.
 		s = self.scores[i](q, k) / (self.head_dim ** 0.5)
 		if self.mask is not None:
 			s = s + self.mask
@@ -396,26 +385,18 @@ class TransformerBlock(torch.nn.Module):
 class AttentionPool(torch.nn.Module):
 	"""Attention pooling, the layer Enformer pools with.
 
-	Attention pooling takes a weighted average within each pool window rather
-	than the max or the mean: a 1x1 convolution scores the entries of the
-	window, a softmax turns those scores into weights, and the pooled value
-	is the window multiplied by its weights and summed. `enformer_pytorch`
-	writes both the softmax and the product as function calls, so neither has
-	a module for a rule to attach to and DeepLIFT silently treats a
-	non-linear layer as linear.
+	A 1x1 convolution scores the entries of each pool window, a softmax turns
+	the scores into weights, and the pooled value is the weighted sum.
+	`enformer_pytorch` writes the softmax and the product as function calls,
+	which leaves DeepLIFT no module to attach a rule to. `hookable=True` puts
+	them behind `torch.nn.Softmax` and `BilinearOp`; `hookable=False` keeps
+	the functional form, which `integrated_gradients_op` can still attribute
+	when registered for this class.
 
-	`hookable` selects between the two forms. When True the softmax sits
-	behind `torch.nn.Softmax` and the product behind `BilinearOp`, which is
-	what makes the layer attributable; when False the functional form is
-	reproduced, and with it the missing rules. The functional form can still
-	be attributed by registering this class with `integrated_gradients_op`,
-	which needs no rule for the operations inside it.
-
-	Unlike the rules' other users this layer changes the length of what it is
-	handed, and pads when the length is not a multiple of `pool_size`. The
-	padded entries are masked out of the softmax, which is the part of the
-	arrangement worth its own test, since the mask is applied outside the
-	softmax module and so has to be in the activations the rule reads.
+	When the length is not a multiple of `pool_size` the input is padded and
+	the padded entries are masked out of the softmax. The mask is applied
+	outside the softmax module, so it reaches the rule only through the
+	cached activations.
 
 
 	Parameters
@@ -438,8 +419,7 @@ class AttentionPool(torch.nn.Module):
 		self.hookable = hookable
 
 		# Enformer's initialization: a Dirac 1x1 convolution scaled by two, so
-		# that the layer begins as a soft maximum over each window instead of
-		# at an arbitrary set of weights.
+		# the layer starts as a soft maximum over each window.
 		self.logits = torch.nn.Conv2d(channels, channels, 1, bias=False)
 		torch.nn.init.dirac_(self.logits.weight)
 		with torch.no_grad():
@@ -585,10 +565,8 @@ class CustomSqrt(torch.nn.Module):
 class DilatedConv(torch.nn.Module):
 	"""Three Conv1d layers with dilation 1, 2, 4, padding='same'.
 
-	One `ReLU` is called after each convolution. `share=True` calls a single
-	instance three times, which is how the model is usually written and the
-	reason it exercises a module used more than once in a forward pass;
-	`share=False` spells the same function out with three instances.
+	`share=True` calls one `ReLU` instance after each convolution, a module
+	used more than once in a forward pass; `share=False` uses three.
 	"""
 
 	def __init__(self, seq_len=100, n_outputs=1, share=True):
@@ -662,12 +640,10 @@ class ConvRMSNorm(torch.nn.Module):
 class ConvGLU(torch.nn.Module):
 	"""conv -> GLU over a chosen axis -> dense.
 
-	A gated linear unit splits its input in half along `dim` and returns
-	`a * sigmoid(b)`, so unlike the elementwise activations it halves the
-	axis it gates over and couples two input positions into every output.
-	The rescale rule fits neither property; `_glu` carries the midpoint
-	product rule instead. `dim=1` gates over channels, which is how a
-	sequence model uses the layer, and `dim=-1` gates over length.
+	GLU returns `a * sigmoid(b)` over the two halves of `dim`, so it halves
+	that axis and couples two inputs into each output, which the rescale rule
+	cannot handle; `_glu` applies the midpoint product rule. `dim=1` gates
+	over channels, `dim=-1` over length.
 	"""
 
 	def __init__(self, seq_len=100, n_outputs=1, channels=8, dim=1):
@@ -690,14 +666,9 @@ class ConvGLU(torch.nn.Module):
 class ConvSoftmax(torch.nn.Module):
 	"""conv -> softmax over a chosen axis -> dense.
 
-	`dim` selects which axis is normalized: -1 for the length axis, 1 for the
-	channel axis. The rule is applied along whichever one the module carries,
-	so both are worth exercising.
-
-	`logit_scale` multiplies the logits before the softmax. Raising it peaks
-	the distribution, which drives most of the exponentials to values small
-	enough that the rule's guarded ratios have to be right about them; a
-	default of 1.0 leaves every other user of this model unchanged.
+	`dim` is -1 to normalize over length or 1 over channels. `logit_scale`
+	multiplies the logits; raising it peaks the distribution, driving most
+	exponentials small enough to reach the rule's guarded ratios.
 	"""
 
 	def __init__(self, seq_len=100, n_outputs=1, dim=-1, channels=8,
@@ -712,9 +683,8 @@ class ConvSoftmax(torch.nn.Module):
 	def forward(self, X, alpha=0, beta=1):
 		h = self.conv(X) * self.logit_scale
 
-		# A softmax over n entries leaves every weight near 1/n, which would push
-		# the attributions below what four decimal places can resolve, so the
-		# distribution is rescaled by the size of the axis it normalized.
+		# Weights near 1/n would put the attributions below the four decimal
+		# places the tests compare, so they are rescaled by n.
 		h = self.softmax(h) * h.shape[self.dim]
 		return self.dense(h.reshape(h.shape[0], -1)) * beta + alpha
 
@@ -886,12 +856,10 @@ class MultiInputMultiOutput(torch.nn.Module):
 class AttributeNameConv(torch.nn.Module):
 	"""conv -> relu -> dense, carrying plain attributes named like the caches.
 
-	The forward hooks cache activations on non-linear modules under those two
-	names, BilinearOp caches its operands under `left`/`right`, and
-	`_clear_hooks` is applied to every module in the model rather than only the
-	hooked ones. This model puts ordinary, non-tensor attributes of all four
-	names on modules that never get hooked, so that clearing the caches can be
-	checked not to take them along with it.
+	`_clear_hooks` removes tensors named `input`, `output`, `left` and `right`
+	from every module, hooked or not. This model puts non-tensor attributes
+	with those names on modules that are never hooked, to check that they
+	survive.
 	"""
 
 	def __init__(self, seq_len=100, n_outputs=1):
@@ -905,8 +873,6 @@ class AttributeNameConv(torch.nn.Module):
 		self.conv.input = "kernel"
 		self.conv.output = "logits"
 
-		# BilinearOp caches its two operands under these names, and those caches
-		# are cleared across every module too.
 		self.left = "5-prime"
 		self.right = "3-prime"
 		self.conv.left = "upstream"
@@ -920,13 +886,10 @@ class AttributeNameConv(torch.nn.Module):
 class SharedActivation(torch.nn.Module):
 	"""Two convolutions whose activation is one module called twice, or two.
 
-	A module called more than once in a forward pass sees a different input
-	and output each time, and a rule needs the pair belonging to the call the
-	backward pass is unwinding. The two convolutions change the number of
-	channels, so the two calls differ in shape as well as in value and pairing
-	them up wrongly cannot go unnoticed. `share=False` builds the same
-	function out of two instances, which is the answer the shared version has
-	to match.
+	Each call of a shared module has its own input and output, and a rule
+	needs the pair from the call the backward pass is unwinding. The
+	convolutions change the channel count, so the two calls also differ in
+	shape. `share=False` builds the same function from two instances.
 	"""
 
 	def __init__(self, share=True, seq_len=100, n_outputs=1):
@@ -970,10 +933,8 @@ class SharedPool(torch.nn.Module):
 class SharedBranch(torch.nn.Module):
 	"""One activation used on two parallel branches rather than in sequence.
 
-	The two calls are siblings in the graph instead of one being nested inside
-	the other, so the backward pass does not reach them along a single chain.
-	Pairing a call with its activations by position in the forward order, or
-	by the reverse of it, gets this model wrong.
+	The two calls are siblings rather than nested, so pairing a call with its
+	activations by forward order, or its reverse, gets this model wrong.
 	"""
 
 	def __init__(self, share=True, seq_len=100, n_outputs=1):
@@ -994,10 +955,8 @@ class SharedBranch(torch.nn.Module):
 class SharedRuleSeq(torch.nn.Module):
 	"""`ConvRuleSeq` with its operation applied twice, as one module or two.
 
-	Every rule reads activations cached by the forward hooks, and `BilinearOp`
-	caches its two operands itself, so each of them has to be given the values
-	from the right call. The length axis is kept so that `pisa` can use this
-	model as well as `deep_lift_shap`.
+	Each rule, and `BilinearOp`'s own operand cache, has to be given the
+	values from the right call. The length axis is kept for `pisa`.
 	"""
 
 	def __init__(self, rule="layernorm", share=True, seq_len=15, channels=8):
@@ -1027,10 +986,9 @@ class SharedRuleSeq(torch.nn.Module):
 		self.op1 = op()
 		self.op2 = self.op1 if share else op()
 
-		# LayerNorm and RMSNorm initialize to a weight of one and a bias of
-		# zero, which two separate instances share by accident. Moving them
-		# off the defaults is what makes the shared case a genuinely
-		# weight-shared layer rather than two parameterless ones.
+		# LayerNorm and RMSNorm start at a weight of one and a bias of zero,
+		# which separate instances share by accident; moving them off it makes
+		# the shared case genuinely weight-shared.
 		with torch.no_grad():
 			for parameter in self.op1.parameters():
 				parameter.normal_(mean=1.0, std=0.1)
@@ -1049,8 +1007,6 @@ class SharedRuleSeq(torch.nn.Module):
 			h = self.op1(h)
 			h = self.op2(self.mid(h))
 
-		# `pisa` indexes the output as (example, position), so the channel axis
-		# is squeezed out the same way ConvRuleSeq does it.
 		return self.out(h)[:, 0]
 
 

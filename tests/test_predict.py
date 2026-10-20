@@ -255,9 +255,7 @@ def test_predict_flattendense_16bit(X, device):
 
 
 ###
-# Tests for additional architectures (residual, attention, 2D conv, custom
-# autograd ops, dilated conv, normalization, multi-activation, dropout, and
-# multi-input/multi-output).
+# Tests for additional architectures.
 
 
 @pytest.mark.parametrize("model_factory, expected", [
@@ -362,17 +360,13 @@ def test_predict_multi_input_multi_output(X, alpha, beta, device):
 		[-0.0012, -0.0975,  0.1534],
 		[-0.1794, -0.3789, -0.0308]], 4)
 
-	# Batch invariance: running with a different batch size yields the same output.
 	y2 = predict(model, X, args=(alpha, beta), batch_size=64, device=device)
 	assert_array_almost_equal(y[0], y2[0], 4)
 	assert_array_almost_equal(y[1], y2[1], 4)
 
 
 ###
-# Low-precision (fp16, bf16) tests. CUDA only: torch.autocast does not support
-# these dtypes on CPU for most ops. Hardcoded expected values are captured from
-# fresh runs at each dtype, so these guard against future drift in either the
-# autocast path or the underlying GPU kernels.
+# Low-precision (fp16, bf16) tests, on CUDA only.
 
 
 @pytest.mark.parametrize("dtype, decimal", [(torch.float16, 3),
@@ -810,8 +804,6 @@ def test_to_device(source, dtype, device):
 @pytest.mark.parametrize("dtype", [torch.int8, torch.uint8, torch.bool,
 	torch.float16, torch.float64])
 def test_predict_stored_dtype(X, alpha, beta, dtype, device):
-	# Predictions from sequences and arguments stored in another dtype equal
-	# those from the same values given as float32.
 	torch.manual_seed(0)
 	model = MultiInputMultiOutput()
 

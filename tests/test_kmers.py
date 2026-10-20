@@ -171,7 +171,6 @@ def test_kmers_batched():
 	assert int(X_kmers[0].sum()) == 8
 	assert int(X_kmers[1].sum()) == 8
 
-	# The all-G sequence collapses to a single column counted 8 times.
 	assert int(X_kmers[1].max()) == 8
 	assert int((X_kmers[1] > 0).sum()) == 1
 
@@ -191,10 +190,8 @@ def test_kmers_scores_zero(X):
 @pytest.mark.parametrize("k, length", [(1, 60), (2, 60), (3, 60), (5, 60),
 	(7, 60), (7, 7)])
 def test_kmers_packed_codes(k, length, monkeypatch):
-	# The k-mers of a PackedSequence are read from its character indices,
-	# without decoding the one-hot encoding, and equal those of the one-hot
-	# encoding, with unknown characters at the start, the end and between,
-	# also when k is the length of the sequences.
+	# Read from the character indices without decoding, with unknown
+	# characters at the start, the end and between, and with k = length.
 	X = random_one_hot((6, 4, length), random_state=1)
 	X[0, :, :3] = 0
 	X[2, :, 4:6] = 0
@@ -222,8 +219,6 @@ def test_gapped_kmers_packed():
 
 @pytest.mark.parametrize("chunk", [1, 100, 10 ** 6])
 def test_kmers_packed_chunks(chunk, monkeypatch):
-	# Counting a chunk of sequences at a time gives the counts, and the
-	# score-weighted counts, of the one-hot encoding.
 	monkeypatch.setattr("tangermeme.utils._CHUNK_POSITIONS", chunk)
 	X = random_one_hot((7, 4, 40), random_state=2)
 	X[3, :, 5:9] = 0

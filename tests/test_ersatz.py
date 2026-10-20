@@ -1,4 +1,4 @@
-# test_io.py
+# test_ersatz.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import numba
@@ -280,9 +280,7 @@ def test_substitute_raise_ends(X):
 
 
 def test_substitute_X_with_N(X):
-	# Unknown characters in X are all-zero columns, as `one_hot_encode`
-	# produces for the characters in its `ignore` list. They are valid
-	# input and are left alone when the motif does not cover them.
+	# Unknown characters are left alone when the motif does not cover them.
 	X_n = torch.clone(X)
 	X_n[0, :, 10:14] = 0
 
@@ -364,8 +362,7 @@ def test_delete_raise_ends(X):
 
 
 def test_delete_X_with_N(X):
-	# Unknown characters are all-zero columns and survive the deletion
-	# when they fall outside the deleted portion.
+	# Unknown characters outside the deleted portion survive the deletion.
 	X_n = torch.clone(X)
 	X_n[0, :, 10:14] = 0
 
@@ -565,9 +562,8 @@ def test_randomize_raises_ends(X):
 
 
 def test_randomize_full_sequence(X):
-	# `end` is exclusive (matches Python slicing conventions used elsewhere
-	# in ersatz), so end == X.shape[-1] is the "randomize entire sequence"
-	# case and must not raise.
+	# `end` is exclusive, so end == X.shape[-1] randomizes the whole sequence
+	# and must not raise.
 	X_rand = randomize(X, start=0, end=X.shape[-1], random_state=0)
 	assert X_rand.shape == (1, 1, 4, X.shape[-1])
 	assert X_rand.sum() == X.sum()
@@ -1253,8 +1249,6 @@ def test_local_dinucleotide_shuffle(n_characters, n):
 	assert X_shuf.shape == (2, n, n_characters, 200)
 	assert X_shuf.dtype == X.dtype
 
-	# The output is still one-hot encoded and the per-sequence nucleotide
-	# composition is preserved because shuffling only permutes positions.
 	assert (X_shuf.sum(dim=2) == 1).all()
 	assert (X_shuf.sum(dim=-1) == X.sum(dim=-1).unsqueeze(1)).all()
 
@@ -1271,8 +1265,6 @@ def test_local_dinucleotide_shuffle_changes_sequence():
 	X_shuf = local_dinucleotide_shuffle(X, n=5, bin_size=64, min_bin_size=32,
 		random_state=0)
 
-	# Every shuffle should differ from the original somewhere, and the
-	# shuffles should not all be identical to each other.
 	for i in range(X.shape[0]):
 		for j in range(5):
 			assert (X_shuf[i, j] != X[i]).any()
@@ -1281,12 +1273,9 @@ def test_local_dinucleotide_shuffle_changes_sequence():
 
 
 def test_local_dinucleotide_shuffle_composition():
-	# Each bin is shuffled independently, so the dinucleotide composition is
-	# only conserved within a bin, not across bin boundaries, and a
-	# dinucleotide shuffle keeps the first and last character of the region
-	# it is applied to, so the bin endpoints are conserved too. Rather than
-	# guessing the cut points, check that *some* valid set of bins explains
-	# both in each shuffle: the first cut is the only random boundary choice.
+	# Each bin is shuffled on its own, keeping its dinucleotide counts and its
+	# first and last characters. The first cut is the only random boundary,
+	# so some choice of it must explain both in each shuffle.
 	seq_len, bin_size, min_bin_size = 200, 64, 32
 
 	X = random_one_hot((2, 4, seq_len), random_state=0)
@@ -1317,9 +1306,7 @@ def test_local_dinucleotide_shuffle_composition():
 
 
 def test_local_dinucleotide_shuffle_bin_layout_valid():
-	# Every bin the implementation can produce must be at least min_bin_size
-	# long and no longer than 2 * bin_size (the merge of the final two bins is
-	# the only way a bin exceeds bin_size).
+	# A bin exceeds bin_size only when the final two bins are merged.
 	import tangermeme.ersatz
 
 	seq_len, bin_size, min_bin_size = 200, 64, 32
@@ -1341,12 +1328,9 @@ def test_local_dinucleotide_shuffle_bin_layout_valid():
 
 
 def test_local_dinucleotide_shuffle_conserves_gc_profile():
-	# The reason this function exists: a whole-sequence dinucleotide shuffle
-	# conserves composition globally but flattens how it varies along the
-	# sequence, and a genomic window is rarely uniform. On a sequence whose two
-	# halves sit at ~0.80 and ~0.18 GC, 128 bp bins hold the GC profile of every
-	# 256 bp window to within 0.10, where a whole-sequence shuffle moves it by
-	# 0.42.
+	# A whole-sequence shuffle flattens how GC varies along a sequence. With
+	# halves at ~0.80 and ~0.18 GC, 128 bp bins keep each 256 bp window's GC
+	# within 0.10 of the original; a whole-sequence shuffle moves it by 0.42.
 	numpy.random.seed(0)
 	gc_rich = "".join(numpy.random.choice(list("ACGT"), 1024,
 		p=[.1, .4, .4, .1]))
@@ -1597,9 +1581,8 @@ def test_ersatz_raises_ohe_X(X, call):
 
 
 def test_ersatz_ops_preserve_cuda_device(cuda_device):
-	# All public ersatz ops should accept a CUDA-resident X and return a
-	# tensor on the same device. Previously dinucleotide_shuffle crashed
-	# in the internal .numpy() conversion.
+	# dinucleotide_shuffle used to crash on a CUDA tensor in its internal
+	# .numpy() conversion.
 	X = random_one_hot((2, 4, 100), random_state=0).type(
 		torch.float32).to(cuda_device)
 	motif = one_hot_encode("ACGT").unsqueeze(0).to(cuda_device)

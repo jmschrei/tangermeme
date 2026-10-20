@@ -260,11 +260,8 @@ def test_extract_matching_loci_edges(starts, ends, in_window, n_regions):
 
 
 def test_extract_matching_loci_bin_0_spillover(tmp_path):
-	# bin 0 (the lowest GC bin) previously couldn't receive spillover from
-	# a peak in a higher bin: the spillover loop guarded with `idx > 0`
-	# instead of `>= 0`. Construct a chromosome where the only available
-	# backgrounds are at GC=0 and the lone peak is at GC=1.0, so the
-	# matching algorithm has nowhere else to go.
+	# Bin 0, the lowest GC bin, used to get no spillover from higher bins.
+	# The only backgrounds here have GC 0 and the lone peak has GC 1.
 	fa_path = tmp_path / "tiny.fa"
 	fa_path.write_text(">chr1\n" + "A"*100 + "G"*10 + "A"*90 + "\n")
 
@@ -277,8 +274,6 @@ def test_extract_matching_loci_bin_0_spillover(tmp_path):
 	regions = extract_matching_loci(peaks, str(fa_path), in_window=10,
 		out_window=10, max_n_perc=1.0, random_state=0)
 
-	# Without the fix this returns zero rows; with the fix the peak finds
-	# a GC=0 background to match against.
 	assert regions.shape == (1, 3)
 
 
@@ -308,7 +303,6 @@ def test_extract_matching_loci_some_N():
 	assert X1[:, [1, 2]].sum() == 9
 
 
-# A max_n_perc of None leaves it at its default.
 @pytest.mark.parametrize("max_n_perc, chroms, starts, ends", [
 	(None, (), (), ()),
 	(1.1, ('chr4', 'chr4', 'chr4'), (70, 120, 140), (80, 130, 150))
@@ -372,10 +366,9 @@ def test_extract_matching_loci_chroms_none():
 
 
 ##
-# Signal from a bigWig. The bigWig's chr2 is shorter than the FASTA's, its
-# chr3 is absent, and chr6 has a NaN and an infinite interval. Expected
-# values are computed from the bases written, as float64 sums that skip the
-# bases without a value.
+# Signal from a bigWig whose chr2 is shorter than the FASTA's, chr3 absent,
+# and chr6 with a NaN and an infinite interval. Expected values are float64
+# sums of the bases written, skipping the bases without a value.
 ##
 
 
@@ -420,10 +413,9 @@ def _expected_counts(tracks, coords):
 
 
 def test_counts_from_coords(match_bigwig):
-	# The signal summed over each window: zero where there is none, the sum
-	# of the bases that exist where a window runs past the bigWig's end of a
-	# chromosome, NaN on a chromosome the bigWig lacks, and NaN values
-	# skipped. Windows of different widths, and of none, in one call.
+	# Covers windows without signal (0), past the bigWig's chromosome end,
+	# on a chromosome the bigWig lacks (NaN), over NaN values (skipped), and
+	# of different widths, including 0, in one call.
 	path, tracks = match_bigwig
 	rng = numpy.random.RandomState(1)
 
@@ -446,11 +438,9 @@ def test_counts_from_coords(match_bigwig):
 
 
 def test_counts_from_coords_past_chrom_end_bitwise(tmp_path):
-	# A long region past the end of a chromosome is summed over the bases
-	# before the end alone, so that the float64 sum adds the same values in
-	# the same order as a slice of the chromosome does. A float64 sum of
-	# float32 values is exact in any order unless they span more than about
-	# 2**29, so these span 24 orders of magnitude, with both signs.
+	# A region past the chromosome end sums the bases before the end, in the
+	# order a slice does. A float64 sum of float32 values is exact in any
+	# order unless they span more than about 2**29, as these values do.
 	import figwig
 
 	rng = numpy.random.RandomState(2)
@@ -498,9 +488,8 @@ def test_extract_and_filter_chrom_bigwig(match_bigwig, chrom, in_window,
 
 
 def test_extract_and_filter_chrom_bigwig_shorter_chrom(match_bigwig):
-	# The bigWig's chr2 is 150 bases and the FASTA's 211: the windows past
-	# 150 have no signal. This used to fail to broadcast the signal of the
-	# bigWig's 150 bases against the FASTA's windows.
+	# The bigWig's chr2 is 150 bases and the FASTA's 211, so the windows past
+	# 150 have no signal. This used to fail to broadcast.
 	path, tracks = match_bigwig
 	regions = _extract_and_filter_chrom("tests/data/test.fa", "chr2", 10, 4,
 		max_n_perc=1.0, bigwig=path, signal_threshold=0.0)
@@ -529,11 +518,9 @@ def test_extract_and_filter_chrom_bigwig_missing_chrom(match_bigwig):
 @pytest.mark.parametrize("in_window, out_window", [(10, 4), (20, 18)])
 def test_extract_matching_loci_bigwig_no_filter(tmp_path, in_window,
 	out_window):
-	# With 1.0 at every base, the loci's counts are out_window, so a large
-	# signal_beta puts the threshold above every window's signal, and the
-	# loci drawn are those drawn without a bigWig. With pybigtools 0.2.5,
-	# every locus's count was NaN, so the threshold was NaN and no loci were
-	# returned.
+	# With 1.0 at every base, a large signal_beta puts the threshold above
+	# every window's signal, so the loci match those drawn without a bigWig.
+	# With pybigtools 0.2.5 every count was NaN and no loci were returned.
 	import figwig
 
 	sizes = {'chr1': 284, 'chr2': 211, 'chr4': 240, 'chr6': 80}

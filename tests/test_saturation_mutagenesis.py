@@ -335,11 +335,8 @@ def test_saturation_mutagenesis_identity_recovers_y0(X0, kwargs, device):
 	y0, y_hat = saturation_mutagenesis(model, X0, raw_outputs=True,
 		device=device, **kwargs)
 
-	# For each (example, position), the substitution that keeps the original
-	# base is an identity edit. Its forward pass is skipped and the slot is
-	# filled directly from y0, so it must equal y0 *exactly* (not just to
-	# float tolerance) -- this guards the identity-skipping optimization. The
-	# window exercises the windowed alignment of the identity mask.
+	# Identity edits are filled from y0 rather than predicted, so they must
+	# equal y0 exactly, also when the window offsets the identity mask.
 	for i in range(X0.shape[0]):
 		for pos in range(end - start):
 			orig_base = int(X0[i, :, start + pos].argmax())
@@ -349,10 +346,8 @@ def test_saturation_mutagenesis_identity_recovers_y0(X0, kwargs, device):
 @pytest.mark.parametrize("pos, bases", [(50, []), (30, [1, 2])],
 	ids=["all_zero", "multi_hot"])
 def test_saturation_mutagenesis_irregular_column(pos, bases, device):
-	# An all-zero column (an `N`) or a multi-hot column has no identity
-	# substitution, so all four edits at that position must be genuinely
-	# predicted -- not skipped and filled from y0. Validate against brute-force
-	# per-substitution predictions.
+	# An all-zero (N) or multi-hot column has no identity edit, so all four of
+	# its edits must be predicted rather than filled from y0.
 	torch.manual_seed(0)
 	X = random_one_hot((1, 4, 100), random_state=0).float()
 	X[0, :, pos] = 0
@@ -372,10 +367,7 @@ def test_saturation_mutagenesis_irregular_column(pos, bases, device):
 
 
 def test_saturation_mutagenesis_matches_bruteforce(device):
-	# Full validation of the vectorized edit construction: every (base,
-	# position) slot of y_hat must equal an explicit prediction of that single
-	# substitution. Identity slots reduce to the reference (== y0) and are
-	# covered too. A small sequence keeps the brute-force loop cheap.
+	# Checks the vectorized edit construction one slot at a time.
 	torch.manual_seed(0)
 	X = random_one_hot((1, 4, 12), random_state=0).float()
 	model = FlattenDense(seq_len=12, n_outputs=1)
@@ -393,10 +385,8 @@ def test_saturation_mutagenesis_matches_bruteforce(device):
 
 
 def test_saturation_mutagenesis_bruteforce_windowed_with_N(device):
-	# Combines the trickiest pieces of the construction: a start/end window
-	# (so edit positions are offset) containing an all-zero `N` column (so the
-	# kept-edit count varies within the window). Every slot must match an
-	# explicit substitution at the absolute position.
+	# The window offsets the edit positions, and its N column varies the number
+	# of edits kept per position.
 	torch.manual_seed(0)
 	X = random_one_hot((1, 4, 20), random_state=0).float()
 	X[0, :, 8] = 0                      # N column inside the window
@@ -441,7 +431,6 @@ def test_saturation_mutagenesis_raw_outputs_named_tuple(device):
 	assert isinstance(result, SaturationMutagenesisRawResult)
 	assert isinstance(result, tuple)
 
-	# When raw_outputs=False the return is still a plain Tensor.
 	attr = saturation_mutagenesis(model, X, raw_outputs=False, device=device)
 	assert isinstance(attr, torch.Tensor)
 
@@ -453,8 +442,7 @@ class _DenseHead(torch.nn.Module):
 	"""Single-tensor model sharing the dense head of a ConvDense instance.
 
 	Used to cross-check the multi-tensor reshape branch in
-	`saturation_mutagenesis`: the second (dense) output of `ConvDense` must
-	match this standalone model exactly when both are run through ISM.
+	`saturation_mutagenesis` against ConvDense's second output.
 	"""
 
 	def __init__(self, src):
@@ -466,7 +454,6 @@ class _DenseHead(torch.nn.Module):
 
 
 def test_saturation_mutagenesis_multi_output(device):
-	# Exercises the list/tuple-output reshape branch end-to-end.
 	torch.manual_seed(0)
 	X = random_one_hot((2, 4, 100), random_state=0).float()
 
@@ -481,8 +468,7 @@ def test_saturation_mutagenesis_multi_output(device):
 	assert y_hat[0].shape == (2, 4, 100, 12, 98)
 	assert y_hat[1].shape == (2, 4, 100, 3)
 
-	# The dense head must equal the same head run as a single-tensor model.
-	# This catches the alphabet/position axis scrambling the old reshape had.
+	# Catches the reshape scrambling the alphabet and position axes.
 	y0_s, y_hat_s = saturation_mutagenesis(_DenseHead(model), X,
 		raw_outputs=True, device=device)
 	assert_array_almost_equal(y_hat[1], y_hat_s, 4)
@@ -497,8 +483,7 @@ def test_saturation_mutagenesis_multi_output(device):
 
 
 def test_saturation_mutagenesis_multi_output_start_end(device):
-	# Regression: the multi-tensor reshape previously hardcoded the full
-	# length and raised when start>0 / end<length.
+	# The multi-tensor reshape used to raise when start > 0 or end < length.
 	torch.manual_seed(0)
 	X = random_one_hot((2, 4, 100), random_state=0).float()
 
@@ -509,7 +494,6 @@ def test_saturation_mutagenesis_multi_output_start_end(device):
 	assert y_hat[0].shape == (2, 4, 10, 12, 98)
 	assert y_hat[1].shape == (2, 4, 10, 3)
 
-	# Cross-check the dense head against the equivalent single-tensor model.
 	y0_s, y_hat_s = saturation_mutagenesis(_DenseHead(model), X, start=50,
 		end=60, raw_outputs=True, device=device)
 	assert_array_almost_equal(y_hat[1], y_hat_s, 4)
@@ -525,12 +509,10 @@ def test_attribution_score_target_slice():
 	attr1 = _attribution_score(y0, y_hat, 1)
 
 	assert attr_slice.shape == (1, 4, 10)
-	# A slice averages over the selected targets, matching the int-target mean.
 	assert_array_almost_equal(attr_slice, (attr0 + attr1) / 2, 4)
 
 
 def test_saturation_mutagenesis_dtype_arg(X0, device):
-	# Explicitly passing dtype should match the default (model dtype) path.
 	torch.manual_seed(0)
 	model = SmallDeepSEA(1)
 
@@ -553,10 +535,8 @@ def test_saturation_mutagenesis_args_batch_mismatch(X0):
 @pytest.mark.parametrize("start, end", [(0, 0), (0, 105), (-3, 8), (8, 3)],
 	ids=["empty", "end_past_length", "negative_start", "start_after_end"])
 def test_saturation_mutagenesis_raises_bad_start_end(X0, start, end):
-	# A degenerate span (no positions to perturb), an end beyond the sequence
-	# length (100), a negative start (never remapped, unlike end) and an
-	# inverted span would perturb nothing or index outside the sequence when
-	# building the edits; each must be rejected up front.
+	# X0 has length 100. A negative end is remapped from the end of the
+	# sequence, but a negative start is not.
 	model = SmallDeepSEA(1)
 	with pytest.raises(ValueError, match="0 <= start < end <= length"):
 		saturation_mutagenesis(model, X0, start=start, end=end,
@@ -566,9 +546,8 @@ def test_saturation_mutagenesis_raises_bad_start_end(X0, start, end):
 @pytest.mark.parametrize("dtype", [torch.int8, torch.float64, torch.int32,
 	torch.bool], ids=["int8", "float64", "int32", "bool"])
 def test_saturation_mutagenesis_input_dtypes(X0, dtype, device):
-	# X is coerced to int8 internally, so a hard one-hot in any integer-valued
-	# encoding -- int8, float64, int32, or bool -- must give identical results
-	# to the float32 input.
+	# X is cast to int8 internally, so any encoding of a hard one-hot must give
+	# identical results.
 	torch.manual_seed(0)
 	model = SmallDeepSEA(1)
 
@@ -577,11 +556,8 @@ def test_saturation_mutagenesis_input_dtypes(X0, dtype, device):
 	assert torch.equal(X_attr, X_attr_cast)
 
 
-# Low-precision (fp16, bf16) autocast tests. CUDA only: torch.autocast does not
-# support these dtypes on CPU for most ops. The dtype is forwarded to `predict`,
-# so these guard the forwarding rather than re-deriving attribution magnitudes
-# (which are sub-1e-3 differences dominated by fp16 rounding noise). We assert
-# the prediction dtype, finiteness, and the precision-robust identity invariant.
+# Attributions are not compared at low precision: their sub-1e-3 values are
+# dominated by fp16 rounding noise.
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16],
@@ -605,11 +581,8 @@ def test_saturation_mutagenesis_low_precision(X0, dtype, cuda_device):
 
 
 def test_saturation_mutagenesis_args_applied_per_example(X0, device):
-	# FlattenDense adds a per-example alpha. Because ISM is a difference, the
-	# arg must shift the reference and every perturbation of example i by
-	# exactly alpha[i] -- a wrong index (e.g. alpha[0] for all) would break
-	# this -- and the resulting attribution must be invariant to the additive
-	# shift.
+	# FlattenDense adds alpha to its output, so alpha[i] must shift y0 and every
+	# edit of example i, which leaves the attributions unchanged.
 	torch.manual_seed(0)
 	model = FlattenDense(seq_len=100, n_outputs=1)
 	alpha = torch.randn(2, 1)
@@ -631,7 +604,6 @@ def test_saturation_mutagenesis_args_applied_per_example(X0, device):
 
 
 def test_saturation_mutagenesis_batch_size_invariance(X0, device):
-	# Results must not depend on how perturbations are batched.
 	torch.manual_seed(0)
 	model = SmallDeepSEA(1)
 
@@ -644,7 +616,6 @@ def test_saturation_mutagenesis_batch_size_invariance(X0, device):
 
 
 def test_saturation_mutagenesis_length_one(device):
-	# A single-position sequence is a valid degenerate input.
 	torch.manual_seed(0)
 	X = random_one_hot((2, 4, 1), random_state=0).float()
 	model = FlattenDense(seq_len=1, n_outputs=1)
@@ -668,8 +639,7 @@ def test_saturation_mutagenesis_length_one(device):
 
 
 def test_saturation_mutagenesis_multi_output_requires_raw(X0, device):
-	# Attribution aggregation assumes a single output tensor; a tuple-output
-	# model must fail fast with a clear message instead of an opaque error.
+	# Attributions are computed only for a single output tensor.
 	model = ConvDense(n_outputs=3)
 	with pytest.raises(ValueError, match="raw_outputs=True is required"):
 		saturation_mutagenesis(model, X0, device=device)
@@ -688,8 +658,6 @@ def test_saturation_mutagenesis_func_selects_head(X0, device):
 
 
 def test_saturation_mutagenesis_func_collapses_multi_output(X0, device):
-	# func can reduce a multi-output model to a single tensor, making the
-	# attribution path valid again.
 	torch.manual_seed(0)
 	model = ConvDense(n_outputs=3)
 
@@ -701,8 +669,7 @@ def test_saturation_mutagenesis_func_collapses_multi_output(X0, device):
 
 
 def test_saturation_mutagenesis_warns_on_non_integer_input(device):
-	# Soft / scaled one-hot inputs are truncated by the int8 cast; the user
-	# must be warned rather than silently getting zeros.
+	# The int8 cast would truncate these values to zero.
 	torch.manual_seed(0)
 	X = random_one_hot((2, 4, 100), random_state=0).float()
 	model = SmallDeepSEA(1)
@@ -712,8 +679,6 @@ def test_saturation_mutagenesis_warns_on_non_integer_input(device):
 
 
 def test_saturation_mutagenesis_skips_identity_forward_passes(X0, device):
-	# Identity substitutions are not run through the model: only the 3 true
-	# edits per position are predicted, plus one reference pass for y0.
 	class _Counter(torch.nn.Module):
 		def __init__(self, model):
 			super(_Counter, self).__init__()
@@ -919,8 +884,6 @@ def test_saturation_mutagenesis_fast_args(X0, device, force_fast):
 
 def test_saturation_mutagenesis_fast_irregular_columns(X0, device,
 	force_fast):
-	# An all-zero (N) column and a multi-hot column have no identity edit,
-	# so all four of their edits are run.
 	torch.manual_seed(0)
 	X = X0.clone()
 	X[0, :, 0] = 0

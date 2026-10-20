@@ -64,7 +64,6 @@ def test_plot_logo_smoke_random_attributions(X_attr):
 
 
 def test_plot_logo_numpy_input(X_attr):
-	# A numpy array draws the same logo as the same values in a tensor.
 	ax = plot_logo(X_attr.numpy())
 	_, ax_tensor = plt.subplots()
 	plot_logo(X_attr, ax=ax_tensor)
@@ -80,7 +79,6 @@ def test_plot_logo_numpy_input(X_attr):
 
 
 def test_plot_logo_start_end_slicing(X_attr):
-	# start and end draw the same logo as slicing the attributions first.
 	ax = plot_logo(X_attr, start=10, end=40)
 	_, ax_slice = plt.subplots()
 	plot_logo(X_attr[:, 10:40], ax=ax_slice)
@@ -263,7 +261,6 @@ def test_base_path_cache():
 	verts0, codes0 = _base_path('A')
 	verts1, codes1 = _base_path('A')
 
-	# lru_cache returns the same arrays
 	assert verts0 is verts1
 	assert codes0 is codes1
 
@@ -321,8 +318,7 @@ def test_place_new_box_does_not_mutate_input():
 	# step until it overlaps no box in the list.
 	height = 5.0
 
-	# Empty box_list path: should still return a (shifted) result without
-	# mutating the input.
+	# Empty box_list path.
 	new_box, steps = place_new_box(box, [])
 	assert (box.x0, box.y0, box.x1, box.y1) == original, \
 		"place_new_box mutated the caller's box on the empty path"
@@ -372,11 +368,9 @@ def test_plot_categorical_scatter_respects_ax():
 		[0.0, 0.0, 0.0, 1.0, 0.5],
 	])
 
-	# Create a user-owned figure with two axes; pass the second one in.
 	fig, (ax1, ax2) = plt.subplots(2, 1)
 	returned = plot_categorical_scatter(X, ax=ax2)
 
-	# The function should draw on ax2 (the one we passed), not ax1.
 	assert returned is ax2, "function did not return the passed ax"
 	assert len(ax2.collections) > 0, "expected scatter on ax2"
 	assert len(ax1.collections) == 0, "ax1 should be untouched"
@@ -399,18 +393,14 @@ def test_plot_categorical_scatter_defaults_to_gca():
 
 
 def test_plot_pwm_respects_ax():
-	# plot_pwm should draw on the provided ax and return it, rather than
-	# creating its own figure or calling plt.show().
 	pwm = numpy.full((4, 6), 0.25)
 
 	fig, (ax1, ax2) = plt.subplots(2, 1)
 	returned = plot_pwm(pwm, ax=ax2)
 
 	assert returned is ax2, "plot_pwm did not return the passed ax"
-	# Something should have been drawn on ax2; the IC is zero for a
-	# uniform PWM but plot_logo still sets axis labels.
+	# A uniform PWM has zero IC, but plot_logo still sets the axis labels.
 	assert ax2.get_ylabel() == "Information Content (Bits)"
-	# ax1 should be untouched.
 	assert ax1.get_ylabel() == ""
 
 
@@ -436,22 +426,20 @@ def test_plot_pwm_does_not_call_show(monkeypatch):
 
 
 def test_plot_attributions_uses_provided_func():
-	# plot_attributions previously hard-coded a call to deep_lift_shap
-	# and ignored the `func=` kwarg. Verify the kwarg is now honored.
+	# func used to be ignored in favor of a hard-coded deep_lift_shap.
 	from tangermeme.plot import plot_attributions
 
 	calls = []
 
 	def fake_attribute(model, X, **kwargs):
 		calls.append((model, tuple(X.shape)))
-		# Return something the size of X so plot_logo can render it.
 		return X * 0.0
 
 	from tests.toy_models import FlattenDense
 	torch.manual_seed(0)
 	model = FlattenDense()
 	X = torch.zeros(1, 4, 20)
-	X[0, 0] = 1.0  # all-A so plot_logo doesn't error
+	X[0, 0] = 1.0
 
 	axs, X_attrs = plot_attributions(model, X, func=fake_attribute)
 
@@ -623,9 +611,8 @@ def test_interactive_logo_tooltip_css(X_attr, annotations, kwargs, background):
 def test_interactive_logo_overrides_dark_rcparam_grid(X_attr, annotations,
 	grid, monkeypatch):
 	mpld3 = pytest.importorskip("mpld3")
-	# Simulate a style with a heavy default grid; the function should not
-	# inherit it -- the x-axis grid is cleared and the y-axis grid is light,
-	# or absent with grid=False. The default is grid=True.
+	# Under a style with a default grid, the x grid is cleared and the y grid
+	# is drawn only with grid, which defaults to True.
 	monkeypatch.setitem(matplotlib.rcParams, "axes.grid", True)
 
 	fig, ax = plt.subplots()
@@ -637,9 +624,8 @@ def test_interactive_logo_overrides_dark_rcparam_grid(X_attr, annotations,
 	assert all(not line.get_visible() for line in xgrid)
 	assert all(line.get_visible() == grid for line in ygrid)
 
-	# mpld3 fails to apply the grid color to the gridline <line> elements, so
-	# the function injects a light stroke directly. Confirm the CSS is present
-	# only with the grid.
+	# mpld3 does not apply the grid color to gridlines, so the function
+	# injects a light stroke as CSS when the grid is drawn.
 	html = mpld3.fig_to_html(fig)
 	assert (".mpld3-ygrid .tick line" in html) == grid
 	if grid:
@@ -729,7 +715,6 @@ def test_interactive_logo_label_false_draws_no_corner_text(X_attr, annotations):
 	fig, ax = plt.subplots()
 	interactive_logo(X_attr, ax=ax, annotations=annotations, label=False)
 
-	# No corner labels drawn, but the hover tooltip is unaffected.
 	assert len(ax.texts) == 0
 	html = mpld3.fig_to_html(fig)
 	assert "htmltooltip" in html
@@ -737,8 +722,6 @@ def test_interactive_logo_label_false_draws_no_corner_text(X_attr, annotations):
 
 
 def test_plot_attributions_packed():
-	# A PackedSequence is passed on to func and gives the attributions of its
-	# one-hot encoding.
 	from tangermeme.plot import plot_attributions
 	from tangermeme.utils import PackedSequence
 	from tangermeme.utils import random_one_hot

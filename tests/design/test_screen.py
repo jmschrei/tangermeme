@@ -176,8 +176,6 @@ def test_screen_raises(device):
 
 
 def test_screen_packed(device):
-	# Drawing packed sequences gives the screen of their one-hot encoding,
-	# packed.
 	import functools
 	from tangermeme.utils import PackedSequence
 

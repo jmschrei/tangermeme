@@ -436,11 +436,8 @@ def test_pisa_args(X, device):
 	assert_array_almost_equal(X_attr0, X_attr1)
 	assert_raises(AssertionError, assert_array_almost_equal, X_attr0, X_attr2)
 
-	# Regression values reflect args (alpha, beta) being threaded
-	# through every shuffle iteration. Prior to the fix in pisa.py for
-	# the _args generator-exhaustion and the n_outputs probe, args were
-	# silently dropped after iter 0, so the previously-pinned values
-	# captured the buggy behavior.
+	# Pinned with args reaching every shuffle; they were once dropped after
+	# the first.
 	assert_array_almost_equal(X_attr2[:2, :, :10], [
 		[[ 0.0000,  0.0000, -0.0000, -0.0205, -0.0000,  0.0000,  0.0000,
            0.0000, -0.0000,  0.0000],
@@ -463,11 +460,8 @@ def test_pisa_args(X, device):
 
 
 def test_pisa_args_preserved_across_shuffles(X, device):
-	# pisa rebinds `_args` to a generator-from-itself on every shuffle
-	# iteration, which exhausts after the first batch. Any model whose
-	# forward requires the extra arg (no default) then raises TypeError
-	# on iter >= 1. Verify the args are still threaded through on every
-	# shuffle.
+	# Args used to be dropped after the first shuffle, so a forward that
+	# requires one raised TypeError; n_shuffles=2 reaches the second shuffle.
 
 	class RequiresArg(torch.nn.Module):
 		def __init__(self):
@@ -475,30 +469,23 @@ def test_pisa_args_preserved_across_shuffles(X, device):
 			self.dense = torch.nn.Linear(100 * 4, 1)
 
 		def forward(self, X, alpha):
-			# `alpha` has no default; calling forward without it raises
-			# TypeError.
 			return self.dense(X.reshape(X.shape[0], -1)) + alpha
 
 	torch.manual_seed(0)
 	model = RequiresArg()
 	alpha = torch.randn(X.shape[0], 1)
 
-	# n_shuffles=2 is enough to trigger the second iteration where _args
-	# has been exhausted.
 	X_attr = pisa(model, X, args=(alpha,), n_shuffles=2, device=device,
 		random_state=0)
 
-	# pisa output shape: (n_examples, n_outputs, alphabet, length).
 	assert X_attr.shape == (X.shape[0], 1, X.shape[1], X.shape[2])
 
 
 def test_pisa_args_batch_axis(X, references, device):
 	"""Each argument reaches the model with the batch axis of `X_`.
 
-	`pisa` used to pass `a[i]`, which drops the batch axis, and concatenate it
-	with itself, which then doubled the feature axis. An argument of shape
-	`(n, 3)` reached the model as `(6,)`, so a model adding it to a
-	`(batch_size, 3)` output raised a RuntimeError.
+	An argument of shape `(n, 3)` used to reach the model as `(6,)`, so a
+	model adding it to a `(batch_size, 3)` output raised a RuntimeError.
 	"""
 
 	torch.manual_seed(0)
@@ -538,12 +525,10 @@ def test_pisa_args_one_dimensional(X, references, device):
 
 
 def test_pisa_preserves_model_state(X, device):
-	# After pisa returns the model should be back on its original device
-	# and in its original training mode, with no _NON_LINEAR_OPS attributes
-	# or hook handles leaked onto its modules. Its ReLUs and pools get hooks.
+	# SmallDeepSEA's ReLUs and pools get hooks, which must not outlive the call.
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
-	model.train()  # explicitly leave model in train mode
+	model.train()
 	orig_device = next(model.parameters()).device
 
 	pisa(model, X, n_shuffles=2, device=device, random_state=0)
@@ -560,8 +545,6 @@ def test_pisa_preserves_model_state(X, device):
 
 
 def test_pisa_cleans_up_hooks_on_exception(X, device):
-	# If the forward pass raises mid-loop, hooks and _NON_LINEAR_OPS
-	# attributes must still be cleaned up by the finally clause.
 	class Boom(torch.nn.Module):
 		def __init__(self):
 			super().__init__()
@@ -684,10 +667,9 @@ def test_pisa_trailing_singleton_output(X, device, n_trailing, capsys):
 def test_pisa_multidimensional_output_raises(X, device, shape):
 	"""An output axis longer than 1 after the outputs raises a ValueError.
 
-	`n_outputs` used to be read from the last axis while the outputs were
-	indexed on the second, so a profile `(batch_size, n_tasks, length)`
-	raised an IndexError or, with at least as many tasks as positions, was
-	attributed for the wrong outputs.
+	A profile `(batch_size, n_tasks, length)` used to raise an IndexError or,
+	with at least as many tasks as positions, be attributed for the wrong
+	outputs.
 	"""
 
 	torch.manual_seed(0)
@@ -747,9 +729,7 @@ class TorchSum(torch.nn.Module):
 			return torch.sum(X, dim=(-1, -2)).unsqueeze(-1)
 
 
-# Each model is built from its layers after the seed is set. fp32
-# attribution residuals on CUDA are a few orders of magnitude larger than on
-# CPU, so the padded convolution's threshold is loosened for the cuda pass.
+# Each model is built from its layers after the seed is set.
 SEQUENTIAL_MODELS = [
 	(lambda: [torch.nn.Flatten(), torch.nn.Linear(400, 5), torch.nn.ReLU(),
 		TorchSum()], 1e-5),
@@ -852,8 +832,6 @@ def test_pisa_hypothetical_vs_projection_equivalence(X, device):
 	X_attr_hyp = pisa(model, X, n_shuffles=3, device=device,
 		random_state=0, hypothetical=True)
 
-	# For one-hot X, projecting the hypothetical attributions by X should
-	# recover the non-hypothetical attributions.
 	manual = X_attr_hyp * X.unsqueeze(1)
 	assert_array_almost_equal(X_attr_proj, manual, 4)
 
@@ -882,7 +860,6 @@ def test_pisa_return_references_named_tuple(X, device):
 	assert isinstance(result, AttributionReferencesResult)
 	assert isinstance(result, tuple)
 
-	# When return_references=False the return is still a plain Tensor.
 	attr = pisa(model, X, n_shuffles=2, return_references=False,
 		device=device, random_state=0)
 	assert isinstance(attr, torch.Tensor)
@@ -901,9 +878,7 @@ def test_pisa_verbose(X, device):
 
 
 ###
-# Basic coverage for the rules `pisa` registers alongside `deep_lift_shap`.
-# The rule table is duplicated in this module, so a rule can be correct there
-# and missing here.
+# The DeepLIFT rules, run through `pisa`.
 ###
 
 
@@ -988,10 +963,9 @@ def test_pisa_rules_batch_size(X, device, rule):
 	torch.manual_seed(0)
 	model = ConvRuleSeq(rule=rule, seq_len=12)
 
-	# batch_size=1 runs one output position per pass, so the window is kept
-	# short and the shuffle count at one to stay inside the runtime budget. A
-	# shorter window than this makes dinucleotide_shuffle raise for lack of
-	# distinct shuffles.
+	# batch_size=1 runs one output position per pass, so the window is short
+	# and n_shuffles=1. A shorter window leaves dinucleotide_shuffle too few
+	# distinct shuffles and it raises.
 	X = X[:, :, :12]
 
 	# `pisa` batches over output positions rather than examples, so the rules
@@ -1011,10 +985,8 @@ def test_pisa_rules_batch_size(X, device, rule):
 def test_pisa_transformer_block(X, device, pre_norm):
 	"""The rules must also compose through `pisa`, not only one at a time.
 
-	`ConvRuleSeq` puts one rule in a model; a transformer block chains all
-	four through each other, and `pisa` batches over output positions rather
-	than over examples, so the composition is a separate path from the one
-	`deep_lift_shap` exercises.
+	`ConvRuleSeq` puts one rule in a model; a transformer block chains four
+	of them through each other.
 	"""
 
 	torch.manual_seed(0)
@@ -1033,7 +1005,6 @@ def test_pisa_transformer_block(X, device, pre_norm):
 	assert X_attr.dtype == torch.float32
 
 	if pre_norm:
-		# First example, first two output positions, first four positions.
 		assert_array_almost_equal(X_attr[0, :2, :, :4], [
 		[[ 0.0000, -0.0000, -0.0000, -0.0733],
 		 [ 0.0000, -0.0000, -0.0210,  0.0000],
@@ -1071,7 +1042,6 @@ def test_pisa_integrated_gradients_op(X, device, batch_size):
 	assert X_attr.shape == (2, 10, 4, 12)
 	assert X_attr.dtype == torch.float32
 
-	# Every grouping of the output positions has to give the same answer.
 	X_attr_ = pisa(model, X, device=device, n_shuffles=1, random_state=0,
 		batch_size=2, additional_nonlinear_ops=ops)
 	assert_array_almost_equal(X_attr, X_attr_, 4)
@@ -1102,8 +1072,7 @@ def test_pisa_clears_bilinear_caches(X, device):
 
 	pisa(model, X[:1], n_shuffles=2, device=device, random_state=0)
 
-	# `pisa` registers BilinearOp in its own rule table, so the two cached
-	# operands must not outlive the call here either.
+	# The two operands BilinearOp caches must not outlive the call either.
 	for module in model.modules():
 		assert "left" not in module.__dict__
 		assert "right" not in module.__dict__
@@ -1137,11 +1106,8 @@ def test_pisa_shared_rules_batch_size(X, device, rule):
 	model = SharedRuleSeq(rule=rule, share=True, seq_len=12)
 	X = X[:1, :, :12]
 
-	# `pisa` takes one backward pass per block of output positions over a
-	# single forward graph, so the activations a reused module caches have to
-	# survive every pass rather than only the first. When they did not, the
-	# rule was skipped from the second block on and the answer depended on
-	# how the output positions happened to be grouped.
+	# The activations a reused module caches must survive every backward pass,
+	# not only the first; when they did not, the answer depended on batch_size.
 	X_attr0 = pisa(model, X, device=device, n_shuffles=1, random_state=0,
 		batch_size=1)
 	X_attr1 = pisa(model, X, device=device, n_shuffles=1, random_state=0,

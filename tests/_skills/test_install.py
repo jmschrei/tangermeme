@@ -19,12 +19,7 @@ from tangermeme._skills.install import install_skill
 
 
 def _ref_mentions(text):
-	"""Return the basenames of every backticked reference path in `text`.
-
-	The skill writes cross-references as backticked paths, ``references/x.md``,
-	rather than as Markdown links, because nothing that reads a skill renders
-	Markdown and a link spends twice the characters on the same path.
-	"""
+	"""Return the basenames of every backticked reference path in `text`."""
 
 	return [m.split("/")[-1]
 		for m in re.findall(r'`(references/[\w.-]+\.md)`', text)]
@@ -61,8 +56,7 @@ def test_skill_frontmatter():
 
 	assert fields.get("name") == "tangermeme"
 	# 1024 is the spec maximum for a description, and the limit enforced by
-	# skill-creator's quick_validate.py. This asserted 1536 until 2026-09-10,
-	# so a description between the two passed here and failed validation.
+	# skill-creator's quick_validate.py.
 	assert 0 < len(fields.get("description", "")) <= 1024
 
 
@@ -165,7 +159,7 @@ def test_install_excludes_checkpoints_and_pycache(tmp_path, monkeypatch):
 
 
 def test_default_dest_is_under_home_and_isolated(tmp_path, monkeypatch):
-	# Patch home so the default-destination path never touches the real ~/.claude.
+	# So that the default destination is never the real ~/.claude.
 	monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
 	result = install_skill()
@@ -196,7 +190,6 @@ def test_main_dest(tmp_path, capsys):
 
 
 def test_main_existing_dest(tmp_path, capsys):
-	# A second install to the same place is an error unless --force is given.
 	dest = tmp_path / "tangermeme"
 	assert install_mod.main(["--dest", str(dest)]) == 0
 	capsys.readouterr()

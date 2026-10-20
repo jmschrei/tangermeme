@@ -65,7 +65,6 @@ def test_beam_substitution(X, motifs, device):
 
 
 def test_beam_substitution_equals_greedy(X, motifs, device):
-	# A beam of width 1 is exactly the greedy substitution search.
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [[10]]
@@ -89,7 +88,6 @@ def test_beam_substitution_n_best(X, motifs, device):
 	assert X_hat.shape == (3, 4, 100)
 	assert X_hat.dtype == torch.int8
 
-	# Returned sequences are distinct and ranked from lowest to highest loss.
 	y_hat = predict(model, X_hat, device=device)
 	losses = ((torch.tensor([[10.0]]) - y_hat) ** 2).sum(dim=1)
 	assert (losses[:-1] <= losses[1:]).all()
@@ -114,9 +112,8 @@ def test_beam_substitution_max_iter_default(X, motifs, device):
 
 
 def test_beam_substitution_not_worse_than_greedy(X, motifs, device):
-	# The core promise: a wider beam carries the single best edit forward at
-	# every round, so its final loss can never exceed that of beam_size=1
-	# (which is greedy_substitution).
+	# A wider beam carries the single best edit forward at every round, so its
+	# final loss cannot exceed that of beam_size=1.
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = torch.tensor([[10.0]])
@@ -133,8 +130,7 @@ def test_beam_substitution_not_worse_than_greedy(X, motifs, device):
 
 
 def test_beam_substitution_no_y(X, device):
-	# With y=None the objective is to maximize the model output, so the design
-	# must not decrease it relative to the starting sequence.
+	# With y=None the objective is to maximize the model output.
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 
@@ -176,7 +172,6 @@ def test_beam_substitution_rejects_batch(motifs, device):
 
 
 def test_beam_substitution_packed(X, motifs, device):
-	# A packed sequence gives the design of its one-hot encoding, packed.
 	torch.manual_seed(0)
 	model = SmallDeepSEA()
 	y = [[10]]

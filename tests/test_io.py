@@ -194,9 +194,8 @@ def loci_signal():
 
 @pytest.fixture
 def dict_signal():
-	# One value per base of each chromosome in tests/data/test.fa: the
-	# coordinate plus 10000 times the chromosome's index, so any extracted
-	# window can be checked by arithmetic. Every value is exact in float32.
+	# Each value is its coordinate plus 10000 times the chromosome's index in
+	# tests/data/test.fa, so any extracted window can be checked exactly.
 	lengths = {'chr1': 284, 'chr2': 211, 'chr3': 126, 'chr4': 240,
 		'chr5': 160, 'chr6': 80, 'chr7': 2000}
 
@@ -206,8 +205,7 @@ def dict_signal():
 
 @pytest.fixture
 def dict_sequences():
-	# tests/data/test.fa one-hot encoded, as C-contiguous int8 numpy arrays of
-	# shape (4, length). chr5 has a Z, which is left as an all-zero column.
+	# chr5 has a Z, which is left as an all-zero column.
 	fasta = pyfaidx.Fasta("tests/data/test.fa")
 
 	return {chrom: numpy.ascontiguousarray(one_hot_encode(
@@ -435,8 +433,6 @@ def test_load_signals_dict():
 
 
 def test_load_signals_bbiread():
-	# A bigWig the caller already opened with pybigtools is used as is, and is
-	# deprecated.
 	bw = pybigtools.open("tests/data/test.bw")
 	with pytest.warns(FutureWarning, match="pybigtools"):
 		signals = _load_signals([bw])
@@ -455,9 +451,8 @@ def test_load_signals_mixed():
 
 
 def test_load_signals_raises_not_list():
-	# A single filename or dict used to be iterated over, so each character
-	# or chromosome name was opened as a bigWig, which failed with "Invalid
-	# file type".
+	# A bare filename or dict used to be iterated over, opening each
+	# character or key as a bigWig.
 	for signals in ("tests/data/test.bw", {'chr1': numpy.zeros(6)}):
 		with pytest.raises(ValueError, match="must be a list or tuple"):
 			_load_signals(signals)
@@ -486,9 +481,8 @@ def bigbed(tmp_path):
 
 
 def test_load_signals_raises_bigbed(bigbed):
-	# figwig refuses a bigBed path. pybigtools opens a bigBed, and reading
-	# values from one used to panic, raising a pyo3 PanicException, which is
-	# not an Exception.
+	# Reading values from a bigBed opened with pybigtools used to panic with a
+	# pyo3 PanicException, which is not an Exception.
 	with pytest.raises(ValueError, match="bigBed"):
 		_load_signals(["tests/data/test.bw", bigbed])
 
@@ -505,15 +499,12 @@ def test_extract_loci_raises_bigbed(bigbed, which):
 
 
 def test_load_signals_empty_dict():
-	# A dict without chromosomes is a signal that has none of them; it used to
-	# raise an IndexError.
+	# An empty dict has no chromosomes; it used to raise IndexError.
 	assert _load_signals([{}]) == [{}]
 
 
 @pytest.mark.parametrize("which", ["signals", "in_signals"])
 def test_extract_loci_empty_dict_signal(which):
-	# Every locus is zero and warns once, as a chromosome missing from a dict
-	# does.
 	kwargs = {which: [{}], "in_window": 8, "out_window": 10}
 	with warnings.catch_warnings(record=True) as record:
 		warnings.simplefilter("always")
@@ -544,8 +535,6 @@ def test_extract_loci_empty_dict_signal_counts():
 
 
 def test_load_signals_figwig():
-	# Paths, pathlib.Paths and figwig readers become figwig readers, the
-	# readers passed as they are, and dicts pass through.
 	reader = figwig.BigWigReader("tests/data/test2.bw")
 	signals = _load_signals(["tests/data/test.bw",
 		pathlib.Path("tests/data/test3.bw"), reader, {'chr1': numpy.zeros(5)}])
@@ -563,7 +552,6 @@ def test_load_signals_raises_url():
 
 
 def test_load_signals_raises_figwig_errors():
-	# A missing file and a file that is not a bigWig raise figwig's errors.
 	with pytest.raises(FileNotFoundError):
 		_load_signals(["tests/data/missing.bw"])
 
@@ -827,9 +815,8 @@ def test_extract_loci_seq(loci_seqs, out_window):
 
 
 def test_extract_loci_n_loci_mask_covers_every_locus(loci_seqs):
-	# The mask has one entry per input locus. Stopping at n_loci used to leave
-	# it only as long as the loci examined, so indexing the loci with it
-	# raised.
+	# The mask has one entry per input locus. Stopping at n_loci used to cut
+	# it to the loci examined.
 	loci = "tests/data/test.bed"
 	fasta = "tests/data/test.fa"
 
@@ -852,7 +839,6 @@ def test_extract_loci_n_loci_mask_covers_every_locus(loci_seqs):
 	X_all = extract_loci(loci, fasta, in_window=10)
 	assert_array_almost_equal(X, X_all[mask])
 
-	# A cap larger than the number of loci returns them all.
 	X, mask = extract_loci(loci, fasta, in_window=10, n_loci=50,
 		return_mask=True)
 
@@ -913,12 +899,8 @@ def test_extract_loci_seq_jitter(loci_seqs):
 
 
 def test_extract_loci_keeps_locus_ending_at_chrom_length():
-	# A locus whose extracted window ends exactly at chrom_length is valid
-	# (end is exclusive); previously dropped by `end >= chrom_lengths[chrom]`.
-	# chr2 in tests/data/test.fa is 211bp long; with in_window=10 and
-	# max_jitter=0 the extracted window is [mid-5, mid+5), so mid=206 yields
-	# a window of [201, 211), which fits exactly. A window of [202, 212)
-	# (mid=207) genuinely runs off the end and should still be dropped.
+	# chr2 is 211 bp long, so the window [201, 211) ends at its end and is
+	# kept (it used to be dropped), and [202, 212) runs off it.
 	loci = pandas.DataFrame({
 		'chrom': ['chr2', 'chr2'],
 		'start': [201, 202],
@@ -928,18 +910,14 @@ def test_extract_loci_keeps_locus_ending_at_chrom_length():
 
 	X, mask = extract_loci(loci, fasta, in_window=10, return_mask=True)
 
-	# The boundary locus is kept; the one that overruns is dropped.
 	assert mask.tolist() == [True, False]
 	assert X.shape == (1, 4, 10)
 
 
 def test_extract_loci_odd_in_window_at_chrom_end():
-	# An odd window is [mid - w//2, mid + w//2 + 1). The chromosome-end check
-	# used to leave out the extra base, so a window running one base past the
-	# end was kept and came back one base short, and stacking it with a full
-	# window raised "all input arrays must have the same shape". chr2 is 211
-	# bp long; with in_window=11 the windows are [100, 111), [200, 211) and
-	# [201, 212), and the last one overruns.
+	# An odd window is [mid - w//2, mid + w//2 + 1). On chr2, 211 bp long,
+	# [201, 212) runs one base off the end; the end check used to miss the
+	# extra base and keep it, one base short.
 	loci = pandas.DataFrame({
 		'chrom': ['chr2', 'chr2', 'chr2'],
 		'start': [100, 200, 201],
@@ -1111,8 +1089,7 @@ def test_extract_loci_exclusion_lists_multiple(tmp_path):
 
 
 def test_extract_loci_exclusion_lists_chrom_not_in_sequences():
-	# A genome-wide exclusion list names chromosomes that a FASTA of a subset
-	# of the genome lacks. Those regions cannot overlap any locus, so they are
+	# Regions on chromosomes the FASTA lacks, as in a genome-wide list, are
 	# skipped; they used to raise KeyError.
 	exclusion = pandas.DataFrame({0: ['chrM', 'chr1', 'chrUn_KI270302v1'],
 		1: [0, 10, 5], 2: [100, 30, 50]})
@@ -1128,10 +1105,9 @@ def test_extract_loci_exclusion_lists_chrom_not_in_sequences():
 
 
 def test_extract_loci_exclusion_lists_end_exclusive():
-	# Loci are removed when their window shares a 100 bp chunk with an
-	# exclusion region. Ends are exclusive, so a region or a window ending at
-	# a multiple of 100 does not reach into the next chunk; both used to.
-	# chr7 is 2000 bp and in_window=10 makes each window equal to its locus.
+	# Loci are removed when their window shares a 100 bp chunk with a region.
+	# A region or window ending at a multiple of 100 does not reach the next
+	# chunk; both used to. in_window=10 makes each window equal to its locus.
 	loci = pandas.DataFrame({
 		'chrom': ['chr7'] * 6,
 		'start': [85, 90, 95, 195, 200, 305],
@@ -1232,8 +1208,7 @@ def test_extract_loci_seq_raises_sequences():
 
 @pytest.mark.parametrize("n_loci", [0, -1])
 def test_extract_loci_raises_n_loci(n_loci):
-	# n_loci=0 used to return every locus, since the cap was only checked
-	# after a locus had been kept, and a negative cap was never reached.
+	# n_loci=0 used to return every locus, and a negative cap was never reached.
 	with pytest.raises(ValueError, match="n_loci must be at least 1"):
 		extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
 			n_loci=n_loci)
@@ -1242,8 +1217,7 @@ def test_extract_loci_raises_n_loci(n_loci):
 @pytest.mark.parametrize("kwargs", [{'min_counts': 1}, {'max_counts': 1},
 	{'min_counts': 0, 'max_counts': 1}])
 def test_extract_loci_raises_counts_without_signals(kwargs):
-	# The counts are measured on signals, so without them the thresholds used
-	# to be ignored.
+	# Without signals the thresholds used to be ignored.
 	with pytest.raises(ValueError, match="signals must be provided"):
 		extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
 			**kwargs)
@@ -1347,16 +1321,11 @@ def test_extract_loci_target_idx_negative():
 
 
 def test_extract_loci_does_not_close_user_provided_fasta():
-	# When the caller passes a pre-opened pyfaidx.Fasta, extract_loci
-	# must not close it; the caller still owns the object and needs to
-	# keep using it after the call.
 	fasta = pyfaidx.Fasta("tests/data/test.fa")
 
 	extract_loci("tests/data/test.bed", fasta, in_window=10)
 
-	# Accessing a key after the call should still work. Pre-fix this
-	# raises ValueError("I/O operation on closed file") from the
-	# underlying mmap inside pyfaidx.
+	# This used to raise ValueError: I/O operation on closed file.
 	_ = str(fasta[list(fasta.keys())[0]])
 
 
@@ -1394,9 +1363,8 @@ def test_extract_loci_pathlike(tmp_path):
 @pytest.mark.parametrize("kwargs", [{}, {'as_raw': True},
 	{'sequence_always_upper': True}])
 def test_extract_loci_pre_opened_fasta(loci2_seqs, kwargs):
-	# A pre-opened Fasta gives the same sequences as its filename. With
-	# as_raw=True pyfaidx returns strings rather than Sequence objects, which
-	# used to raise AttributeError: 'str' object has no attribute 'seq'.
+	# With as_raw=True pyfaidx returns strings rather than Sequence objects,
+	# which used to raise AttributeError.
 	fasta = pyfaidx.Fasta("tests/data/test.fa", **kwargs)
 
 	X = extract_loci("tests/data/test2.bed", fasta, in_window=10)
@@ -1407,9 +1375,8 @@ def test_extract_loci_pre_opened_fasta(loci2_seqs, kwargs):
 
 @pytest.mark.parametrize("layout", ["fasta", "C", "F"])
 def test_extract_loci_contiguous(dict_sequences, loci_seqs, loci_signal, layout):
-	# Every returned tensor is C-contiguous. X used to keep the layout of the
-	# transposed view one_hot_encode returns, strides (4 * L, 1, 4), and so did
-	# X from a dict of Fortran-ordered arrays.
+	# X used to keep the strides of the transposed view one_hot_encode
+	# returns, or of a dict of Fortran-ordered arrays.
 	if layout == "fasta":
 		sequences = "tests/data/test.fa"
 	elif layout == "C":
@@ -1507,7 +1474,6 @@ def test_extract_loci_min_max_counts(min_counts, max_counts, target_idx, n,
 	assert y.dtype == torch.float32
 	assert_array_almost_equal([abs(y).sum()], [y_sum], 4)
 
-	# Both thresholds are inclusive.
 	counts = y[:, target_idx].sum(axis=-1)
 	if min_counts is not None:
 		assert all(counts >= min_counts)
@@ -1565,9 +1531,8 @@ def test_extract_loci_controls(loci_signal):
 
 
 def test_extract_loci_in_signals_only(loci_signal):
-	# Without signals no output window is extracted, so out_window must not
-	# decide which loci fit. It used to: the default out_window of 1000 ran
-	# every locus off these short chromosomes.
+	# Without signals out_window must not decide which loci fit; its default
+	# of 1000 used to run every locus off these short chromosomes.
 	loci = "tests/data/test.bed"
 	controls = ["tests/data/test.bw", "tests/data/test2.bw"]
 	fasta = "tests/data/test.fa"
@@ -1586,9 +1551,8 @@ def test_extract_loci_in_signals_only(loci_signal):
 
 
 def test_extract_loci_dict_signals_missing_chrom_and_short(dict_signal):
-	# A dict signal missing a chromosome, or with an array shorter than the
-	# FASTA's chromosome, used to raise KeyError or a shape mismatch in
-	# numpy.stack. Both are now zero-filled, as for a bigWig.
+	# A chromosome missing from a dict signal, or an array shorter than the
+	# FASTA's, is zero-filled; they used to raise KeyError or fail to stack.
 	del dict_signal['chr1']
 	dict_signal['chr2'] = dict_signal['chr2'][:205]
 
@@ -1614,10 +1578,8 @@ def test_extract_loci_dict_signals_missing_chrom_and_short(dict_signal):
 @pytest.mark.parametrize("max_jitter", [0, 3])
 def test_extract_loci_window_coordinates(dict_sequences, dict_signal,
 	in_window, out_window, max_jitter):
-	# Each value of dict_signal is its own coordinate plus a per-chromosome
-	# offset, so the extracted signals give the exact bases of every window:
-	# [mid - w//2 - j, mid + w//2 + w%2 + j) with mid = start + (end-start)//2,
-	# here for loci of odd and even length and a one-base locus.
+	# dict_signal gives the exact bases of each window, for loci of odd and
+	# even length and a one-base locus.
 	loci = pandas.DataFrame({'chrom': ['chr7', 'chr7', 'chr1', 'chr7'],
 		'start': [100, 300, 50, 1001], 'end': [120, 331, 51, 1002]})
 	offsets = {'chr1': 0, 'chr7': 60000}
@@ -1648,9 +1610,8 @@ def test_extract_loci_window_coordinates(dict_sequences, dict_signal,
 
 
 def test_extract_loci_window_at_chrom_start():
-	# A window starting at base 0 fits and one starting at -1 does not. The
-	# window checked is the union of the input and output windows, jitter
-	# included.
+	# A window starting at base 0 fits and one at -1 does not. The window
+	# checked is the union of the input and output windows, jitter included.
 	# The third locus, [50, 60), fits in every case.
 	fasta = "tests/data/test.fa"
 	loci = pandas.DataFrame({'chrom': ['chr1', 'chr1', 'chr1'],
@@ -1745,9 +1706,8 @@ def test_extract_loci_order(dict_signal):
 ])
 def test_extract_loci_counts_thresholds(dict_signal, min_counts, max_counts,
 	kept):
-	# With out_window=4 the window around mid m on chr1 sums to
-	# (m-2) + (m-1) + m + (m+1) = 4m - 2, so the mids 20, 50 and 80 sum to
-	# 78, 198 and 318. Both thresholds are inclusive.
+	# With out_window=4 the window around mid m on chr1 sums to 4m - 2, so the
+	# mids 20, 50 and 80 sum to 78, 198 and 318. Both thresholds are inclusive.
 	loci = pandas.DataFrame({0: ['chr1'] * 3, 1: [15, 45, 75],
 		2: [25, 55, 85]})
 
@@ -1789,10 +1749,8 @@ def test_extract_loci_counts_target_idx(dict_signal):
 
 
 def test_extract_loci_exclusion_uses_union_window():
-	# The exclusion check covers the union of the windows, jitter included.
-	# [100, 200) covers the chunk 100-199; the locus's in-window [205, 215)
-	# does not reach it, but widened by a jitter of 10, or an out_window of
-	# 30, it does.
+	# [100, 200) covers the chunk 100-199, which the window [205, 215) does not
+	# reach until widened by a jitter of 10 or an out_window of 30.
 	loci = pandas.DataFrame({0: ['chr7'], 1: [205], 2: [215]})
 	exclusion = pandas.DataFrame({0: ['chr7'], 1: [100], 2: [200]})
 	fasta = "tests/data/test.fa"
@@ -1810,9 +1768,8 @@ def test_extract_loci_exclusion_uses_union_window():
 
 
 def test_extract_loci_bigwig_missing_chrom_warns():
-	# test3.bw only has chr1, so the two chr2 loci warn and are zero-filled.
-	# figwig's own warning about the missing chromosome is replaced by
-	# tangermeme's, so the two chr2 loci give two warnings and no others.
+	# test3.bw only has chr1. figwig's own warning for the missing chromosome
+	# is replaced by tangermeme's, one per chr2 locus.
 	with warnings.catch_warnings(record=True) as record:
 		warnings.simplefilter("always")
 		_, y = extract_loci("tests/data/test.bed", "tests/data/test.fa",
@@ -1844,8 +1801,6 @@ def test_extract_loci_reads_bigwig_paths_with_figwig(monkeypatch, kwargs):
 		paths[::-1], n_jobs=3, **kwargs)
 	assert len(calls) > 0 and set(calls) == {3}
 
-	# The same bigWigs opened with pybigtools, which is deprecated, give the
-	# same values.
 	bws = [pybigtools.open(path) for path in paths]
 	with pytest.warns(FutureWarning, match="pybigtools"):
 		expected = extract_loci("tests/data/test.bed", "tests/data/test.fa",
@@ -1871,9 +1826,8 @@ def test_extract_loci_reads_bigwig_paths_with_figwig(monkeypatch, kwargs):
 ])
 def test_extract_loci_counts_warn_once_per_examined_locus(signals, kwargs,
 	windows):
-	# Under min_counts, every signal warns once at each locus examined before
-	# n_loci loci are kept, for chromosomes it does not have, as it did when
-	# the signals were read one locus at a time. test3.bw only has chr1.
+	# Under min_counts, each signal warns once per examined locus on a
+	# chromosome it lacks. test3.bw only has chr1.
 	with warnings.catch_warnings(record=True) as record:
 		warnings.simplefilter("always")
 		extract_loci("tests/data/test.bed", "tests/data/test.fa", signals,
@@ -2059,8 +2013,7 @@ def test_extract_loci_does_not_modify_inputs(dict_sequences, dict_signal):
 
 def test_extract_loci_return_structure():
 	# One output is returned bare; more come back as a list in the order X,
-	# signals, in_signals, mask. The shapes differ, so each element can be
-	# identified: 1 signal of out_window 6 and 2 in_signals of in_window 10.
+	# signals, in_signals, mask, each with a distinct shape.
 	loci = "tests/data/test.bed"
 	fasta = "tests/data/test.fa"
 	bw = ["tests/data/test.bw"]
@@ -2145,9 +2098,7 @@ def test_extract_loci_tuples(loci_seqs, loci2_seqs):
 
 
 def test_extract_loci_dict_sequences(dict_sequences, loci_seqs, tmp_path):
-	# A dict of one-hot arrays gives the sequences of the FASTA it was made
-	# from, in the dtype of its arrays: numpy arrays, memory maps and torch
-	# tensors alike.
+	# X takes the dtype of the dict's arrays.
 	X = extract_loci("tests/data/test.bed", dict_sequences, in_window=10)
 	assert X.dtype == torch.int8
 	assert_array_almost_equal(X, loci_seqs)
@@ -2207,12 +2158,9 @@ def test_extract_loci_closes_fasta_it_opens(monkeypatch):
 ###
 
 
-# The comparison below runs extract_loci and a reference implementation on a
-# random genome over a grid of settings and requires identical outputs. The
-# reference is written for clarity rather than speed and shares no code with
-# tangermeme.io. It phrases each rule differently from the implementation: a
-# window is a start and a length, and the 100 bp chunks a region touches are
-# the chunks of the bases it covers.
+# extract_loci must equal a reference implementation that shares no code
+# with tangermeme.io and phrases each rule differently: a window is a start
+# and a length, and a region touches the chunks of the bases it covers.
 
 REFERENCE_CHROMS = {'chr1': 1500, 'chr2': 777, 'chrX': 2301, '3': 450}
 
@@ -2313,10 +2261,8 @@ def _reference_extract_loci(loci, genome, signals, in_signals, in_window,
 
 @pytest.fixture(scope="module")
 def reference_genome(tmp_path_factory):
-	# Random sequence with a soft-masked run and an assembly gap on every
-	# chromosome, three tracks of integer-valued signal so that sums are exact
-	# in any order of summation, with NaN at bases that have no value and the
-	# second track lacking chrX, and three tables of loci with summits.
+	# A soft-masked run and an assembly gap on every chromosome. Signal values
+	# are integers so that sums are exact in any order of summation.
 	rng = numpy.random.RandomState(0)
 	path = tmp_path_factory.mktemp("reference_genome")
 
@@ -2371,10 +2317,9 @@ def reference_genome(tmp_path_factory):
 		tracks.append(track)
 		bigwigs.append(filename)
 
-	# The same tracks in layouts that pybigtools does not write, so that each
-	# kind of section is read against the reference: varStep sections,
-	# fixedStep sections over each run of bases with values, and bedGraph
-	# sections without compression.
+	# The same tracks as varStep, fixedStep and uncompressed bedGraph
+	# sections, which pybigtools does not write, to read each kind against the
+	# reference.
 	layouts = {"varstep": [], "fixedstep": [], "uncompressed": []}
 	for t, track in enumerate(tracks):
 		chroms = {chrom: REFERENCE_CHROMS[chrom] for chrom in sorted(track)}
@@ -2467,9 +2412,7 @@ def test_extract_loci_matches_reference(reference_genome, source, mode,
 @pytest.mark.parametrize("filters", ["none", "counts_target_idx", "combined"])
 def test_extract_loci_reference_layouts(reference_genome, monkeypatch, source,
 	filters):
-	# The reference tracks written as varStep, fixedStep and uncompressed
-	# bedGraph sections, which pybigtools does not write, give the reference's
-	# values, and are read by figwig without falling back to pybigtools.
+	# figwig reads every layout without error, giving the reference's values.
 	errors = []
 	read_bigwig = figwig.read_bigwig
 
@@ -2535,9 +2478,8 @@ def _check_against_reference(data, sequences, signal_source, mode, in_window,
 
 
 def test_extract_loci_reference_grid_is_informative(reference_genome):
-	# The comparison above only means something if, on the random genome,
-	# every filter keeps some loci and drops others. Checked for the windows
-	# (7, 5, 3), whose output window with jitter is 11 bases wide.
+	# Every filter keeps some loci and drops others on the random genome, for
+	# the windows (7, 5, 3), whose output window with jitter is 11 bases wide.
 	data = reference_genome
 	args = (data['loci'], data['genome'], data['tracks'][:2],
 		data['tracks'][2:], 7, 5, 3)
@@ -2748,7 +2690,7 @@ def test_one_hot_to_fasta_N_only_all_zero(tmp_path):
 
 def test_one_hot_to_fasta_bfloat16_raises(tmp_path):
 	# characters cannot read bfloat16, so a bfloat16 sequence with an N or a
-	# tie raises the ValueError that characters raised on it, as before.
+	# tie raises the ValueError that characters raises on it.
 	X = one_hot_encode('ACGTNACGT').unsqueeze(0).type(torch.bfloat16)
 	assert_raises(ValueError, one_hot_to_fasta, X, str(tmp_path / "out.fa"))
 
@@ -2798,9 +2740,8 @@ BED_HEADERS = {
 @pytest.mark.parametrize("header, compressed", [("track", False),
 	("browser", False), ("column_names", False), ("tenx", True)])
 def test_interleave_loci_skips_bed_header_lines(tmp_path, header, compressed):
-	# The rows of a file with a header are those of the file without it, with
-	# integer coordinates. A track line used to raise a TypeError on string
-	# arithmetic, and # lines left the coordinates as floats.
+	# A track line used to raise a TypeError on string arithmetic, and # lines
+	# left the coordinates as floats.
 	import gzip
 
 	rows = "chr1\t10\t30\nchr2\t25\t55\nchr2\t35\t65\n"
@@ -2841,11 +2782,9 @@ def test_extract_loci_bed_header_lines(tmp_path):
 
 
 ##
-# bigWig layouts that reach tangermeme's own handling: a chromosome shorter
-# than the FASTA's, infinities and NaN, a chromosome absent from the file or
-# without data, and malformed files. Each must give what a dict of the values
-# written into it gives, and what the same file opened with pybigtools gives,
-# which is read one locus at a time; or raise, where figwig does not read it.
+# bigWig layouts that reach tangermeme's own handling, each of which gives
+# what a dict of its values gives and what pybigtools gives, or raises where
+# figwig does not read it.
 ##
 
 
@@ -3081,9 +3020,8 @@ def test_extract_loci_chromosome_naming_mismatch(tmp_path, direction):
 	{'max_counts': 12.0, 'target_idx': -2, 'n_loci': 2, 'return_mask': True},
 	{'min_counts': 0.0, 'target_idx': 3, 'max_jitter': 2}])
 def test_extract_loci_mixed_signal_kinds(dict_signal, kwargs):
-	# A path, a pathlib.Path, a figwig reader and a dict in one call, in
-	# signals and in_signals, give what the same signals give when every
-	# bigWig is opened with pybigtools, which are read one locus at a time.
+	# A path, a pathlib.Path, a figwig reader and a dict give what the same
+	# signals give when every bigWig is opened with pybigtools.
 	def signals(opened):
 		if opened:
 			return [pybigtools.open("tests/data/test{}.bw".format(k)) for k in
@@ -3121,13 +3059,9 @@ def test_extract_loci_in_signals_missing_chrom_warns_in_input_windows():
 
 
 ###
-# A fasta opened from a path is read through its .fai index from a memory map
-# of the file. These tests check that each window equals what pyfaidx returns
-# for it: across line ends of every width and kind, at both ends of every
-# record, and at the end of a file that lacks a final line end. When the
-# bytes are not what pyfaidx would return unchanged, or the file cannot be
-# mapped, pyfaidx reads the windows instead, so the output or the error is
-# the one a pyfaidx.Fasta object gives.
+# A fasta path is read through its .fai index from a memory map, and each
+# window must equal what pyfaidx returns. When the bytes are not what pyfaidx
+# would return unchanged, or the file cannot be mapped, pyfaidx reads them.
 ###
 
 
@@ -3231,7 +3165,7 @@ def test_extract_loci_fasta_crlf_index(tmp_path):
 
 
 def test_extract_loci_fasta_builds_missing_index(tmp_path):
-	# pyfaidx builds a missing .fai when the file is opened, as before.
+	# pyfaidx builds a missing .fai when the file is opened.
 	genome = _fasta_genome(2)
 	path = tmp_path / "genome.fa"
 	_write_fasta(str(path), genome, 7)
@@ -3298,7 +3232,7 @@ def test_extract_loci_fasta_uses_memory_map(tmp_path):
 
 
 def test_extract_loci_fasta_irregular_lines_raises(tmp_path):
-	# pyfaidx rejects lines of unequal length inside a record, as before.
+	# pyfaidx rejects lines of unequal length inside a record.
 	path = str(tmp_path / "genome.fa")
 	with open(path, "w") as handle:
 		handle.write(">chr1\nACGTACGT\nACG\nACGTACGT\nACGT\n")
@@ -3349,12 +3283,9 @@ def test_extract_loci_fasta_bytes_pyfaidx_changes(tmp_path, line, in_window):
 ], ids=["whole_first", "split_first", "overlap_whole_first",
 	"overlap_split_first"])
 def test_extract_loci_fasta_error_order(tmp_path, mids, ignore, error, match):
-	# The window around base 9 holds the two bytes of an é, which pyfaidx
-	# decodes to a character in neither the alphabet nor `ignore`, and the
-	# window around base 11 holds only its second byte, which pyfaidx cannot
-	# decode. The error is the one that reading and encoding each window in
-	# turn gives, as extract_loci did one locus at a time: that of the first
-	# window, from a path and from a pyfaidx.Fasta object.
+	# The window around base 9 holds both bytes of an é, which is in neither
+	# the alphabet nor `ignore`; the window around base 11 holds only its
+	# second byte, which cannot be decoded. The first window's error is raised.
 	path = str(tmp_path / "genome.fa")
 	with open(path, "wb") as handle:
 		handle.write(b">chr1\nACGTAC\nACG" + "é".encode('utf8') + b"A\nACGTAC\n"
@@ -3524,11 +3455,9 @@ def test_read_fasta_windows_names(monkeypatch, mapped):
 
 @pytest.mark.parametrize("cause", ["index", "negative_start", "mmap_fails"])
 def test_read_fasta_windows_mmap_declines(tmp_path, monkeypatch, cause):
-	# The memory map is not read, and the windows go to pyfaidx, when the
+	# The memory map is declined, leaving the windows to pyfaidx, when the
 	# index gives fewer bytes than bases per line, a window starts before its
-	# record, or the file cannot be mapped. extract_loci then gives what a
-	# pyfaidx.Fasta object gives, here the error for windows of different
-	# lengths that the bad index leads pyfaidx to return.
+	# record, or the file cannot be mapped.
 	genome = {'chr1': 'ACGTAC' * 4}
 	path = str(tmp_path / "genome.fa")
 	_write_fasta(path, genome, 6)
@@ -3599,8 +3528,6 @@ def test_extract_loci_n_jobs_encoding(tmp_path, n_jobs):
 
 
 def test_extract_loci_n_jobs_signals_and_mask():
-	# With signals, in_signals and a mask, the outputs are those of one
-	# thread.
 	loci = pandas.concat([pandas.read_csv("tests/data/test.bed", sep="\t",
 		header=None)] * 40)
 
@@ -3705,9 +3632,6 @@ def test_cpu_count(monkeypatch):
 	dict(n_jobs=-1),
 ], ids=["no_signals", "signals", "count_filter", "fasta_object", "all_cpus"])
 def test_extract_loci_n_jobs_reaches_encoder(monkeypatch, kwargs):
-	# n_jobs reaches the encoder with or without signals and a count filter,
-	# and from a pyfaidx.Fasta object, and -1 is the number of CPUs this
-	# process may run on.
 	encoder = tangermeme.utils._one_hot_encode_fasta
 	calls = []
 
@@ -3796,9 +3720,8 @@ def _unmap_genome(tmp_path, name, bad=False):
 @pytest.mark.parametrize("n_jobs", [2, 8])
 def test_extract_loci_unmap_threads(tmp_path, monkeypatch, n_jobs):
 	# A map read by at least _UNMAP_MIN_WINDOWS windows has its pages dropped
-	# with madvise(MADV_DONTNEED) in page-aligned chunks that cover the whole
-	# file, on up to n_jobs threads, before it is closed. The output is the
-	# one n_jobs=1 gives, and the file is unmapped on return.
+	# with madvise(MADV_DONTNEED) in page-aligned chunks covering the whole
+	# file, on up to n_jobs threads, before it is closed.
 	import mmap
 	import threading
 
@@ -3829,9 +3752,7 @@ def test_extract_loci_unmap_threads(tmp_path, monkeypatch, n_jobs):
 
 @_linux_only
 def test_extract_loci_unmap_threads_on_error(tmp_path, monkeypatch):
-	# The pages are dropped and the map closed when the encoder finds a
-	# character that is in neither the alphabet nor `ignore`, and the error
-	# is the one n_jobs=1 raises.
+	# The pages are dropped and the map closed when the encoder raises.
 	genome, path, loci = _unmap_genome(tmp_path, "genome_madvise_bad.fa",
 		bad=True)
 
@@ -3973,9 +3894,8 @@ def _non_finite_rows(n, width):
 @pytest.mark.parametrize("n_jobs", [1, 3])
 @pytest.mark.parametrize("block_size", [1, 2**20])
 def test_nan_to_num_rows_threads_match_numpy(monkeypatch, n_jobs, block_size):
-	# Every block is replaced as numpy.nan_to_num replaces it, bit for bit,
-	# on any number of threads: NaN of any sign or payload becomes +0.0, an
-	# infinity the largest finite float32 of its sign, and -0.0 is kept.
+	# Bit for bit as numpy.nan_to_num, on any number of threads: NaN of any
+	# sign or payload becomes +0.0, and -0.0 is kept.
 	monkeypatch.setattr(tangermeme.io, "_NAN_TO_NUM_MIN_BLOCKS", 1)
 	monkeypatch.setattr(tangermeme.io, "ThreadPoolExecutor", _RecordingPool)
 	monkeypatch.setattr(_RecordingPool, "sizes", [])
@@ -4020,11 +3940,8 @@ def test_nan_to_num_rows_empty():
 
 @pytest.mark.parametrize("n_jobs", [2, -1])
 def test_extract_loci_nan_and_inf_threads(tmp_path, monkeypatch, n_jobs):
-	# extract_loci passes n_jobs, with -1 as the number of CPUs, to
-	# _nan_to_num_rows for signals and in_signals, and the threaded
-	# replacement, in blocks of one row each, gives the bytes that one thread
-	# gives. chr1 is 50 bp in the bigWig but 284 bp in test.fa, so positions
-	# past base 50 are read as NaN.
+	# n_jobs reaches _nan_to_num_rows for signals and in_signals. chr1 is 50 bp
+	# in the bigWig but 284 bp in test.fa, so bases past 50 are read as NaN.
 	path = str(tmp_path / "inf.bw")
 	write_raw_bigwig(path, {'chr1': 50, 'chr2': 211}, [('chr1', 1, 0, 0,
 		[(0, 10, 1.0), (10, 12, numpy.inf), (12, 14, -numpy.inf),
@@ -4187,7 +4104,6 @@ def test_extract_loci_packed_chunks_bounded(reader, chunk, n_rows,
 
 
 def test_extract_loci_packed_alphabet():
-	# The packed windows are labelled with the alphabet they were encoded in.
 	alphabet = list("TGCA")
 	X = extract_loci("tests/data/test.bed", "tests/data/test.fa", in_window=10,
 		alphabet=alphabet)

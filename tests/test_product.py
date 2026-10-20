@@ -1,4 +1,4 @@
-# test_predict.py
+# test_product.py
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 import numpy
@@ -221,8 +221,7 @@ def test_apply_pairwise_predict_convdense_alpha(X, alpha, device):
 
 
 def test_apply_pairwise_rejects_mismatched_args_lengths(X, alpha, beta):
-	# apply_pairwise pairs entries in args index-wise; mismatched lengths
-	# previously silently truncated to the shorter via zip(*args).
+	# Mismatched lengths used to be truncated to the shorter one silently.
 	model = FlattenDense()
 
 	with pytest.raises(ValueError, match="same length"):
@@ -836,7 +835,7 @@ def test_apply_product_batch_size_non_divisible(X, alpha, beta, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 
-	# 4 * 3 * 5 = 60 combinations
+	# 4 * 3 * 5 = 60 combinations, so the last batch of 7 holds 4
 	y0 = apply_product(predict, model, X[:4], args=(alpha[:3], beta[:5]),
 		batch_size=7, device=device)
 	y1 = apply_product(predict, model, X[:4], args=(alpha[:3], beta[:5]),
@@ -853,7 +852,6 @@ def test_apply_pairwise_deep_lift_shap(X, alpha, device):
 	y = apply_pairwise(deep_lift_shap, model, X[:3], args=(alpha[:3],),
 		n_shuffles=2, device=device, random_state=0)
 
-	# pairwise over 3 X and 3 alpha = 9 calls; each returns (1, 4, 100)
 	assert y.shape == (3, 3, 4, 100)
 	assert y.dtype == torch.float32
 
@@ -880,8 +878,7 @@ def test_apply_product_ablate(X, alpha, device):
 	torch.manual_seed(0)
 	model = FlattenDense()
 
-	# ablate returns a tuple (y_before, y_after); apply_product's multi-output
-	# branch handles this and returns a list of two stacked tensors.
+	# ablate returns two tensors, so apply_product returns a list of two.
 	result = apply_product(ablate, model, X[:3], args=(alpha[:3],),
 		start=10, end=20, n=2, batch_size=8, device=device, random_state=0)
 
@@ -889,7 +886,6 @@ def test_apply_product_ablate(X, alpha, device):
 	assert len(result) == 2
 
 	y_before, y_after = result
-	# 3 X * 3 alpha = 9 calls; per call: y_before=(1, 3), y_after=(1, 2, 3)
 	assert y_before.shape == (3, 3, 3)
 	assert y_before.dtype == torch.float32
 	assert_array_almost_equal(y_before, predict(model, X[:3],
@@ -912,7 +908,6 @@ def test_apply_product_saturation_mutagenesis(X, alpha, device):
 	y = apply_product(saturation_mutagenesis, model, X[:3], args=(alpha[:3],),
 		batch_size=8, device=device)
 
-	# 3 X * 3 alpha = 9 calls; each returns an SM attribution of shape (1, 4, 100)
 	assert y.shape == (3, 3, 4, 100)
 	assert y.dtype == torch.float32
 
