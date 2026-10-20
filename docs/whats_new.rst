@@ -6,8 +6,8 @@ Release History
 ===============
 
 
-Unreleased
-==========
+Version 1.6.0
+=============
 
 Packed sequences
 ----------------
