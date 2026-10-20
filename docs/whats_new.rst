@@ -9,349 +9,182 @@ Release History
 Unreleased
 ==========
 
-Claude Code skill
------------------
-
-	- The skill is rewritten from eight challenge runs and a no-skill quiz: fresh agents without the skill did one analysis each with pre-registered expectations, and every lesson that a fresh agent already predicted was dropped or cut to one line, while every wrong expectation and every step that took more than one attempt was kept. It is 58 KB where it was 110 KB, and the common attribution task loads about 3,000 tokens where it loaded 8,700.
-
-	- ``references/deep_lift_shap.md`` is split: the call, its defaults, references, memory and output stay there, and the audit of unhooked operations, the three fix routes, the attention-pooling example and the limitations move to ``references/deep_lift_shap-unhooked-ops.md``, routed by symptom (a convergence warning, a transformer, a functional softmax or product). The audit code moves out of the prose into ``scripts/audit_deeplift.py``, which also measures summation-to-delta relative to the output scale: the library's warning threshold is absolute, and in a challenge run a model whose outputs were of order 1e-3 was 30% wrong with no warning.
-
-	- New files: ``references/pisa.md`` (``pisa`` had one router bullet), ``references/ersatz.md`` (the editing primitives, ``PackedSequence``, ``one_hot_encode``, ``characters``, ``reverse_complement``), and ``references/dependency_map.md`` trimmed to what the quiz respondents did not know. ``references/comparing-models.md`` and ``references/notebook-walkthrough.md`` are removed: both of the first file's library facts (shared references, models kept on the CPU) were handled unprompted in the replicate-models run, and the end-to-end run made none of the mistakes the walkthrough guarded against.
-
-	- Lessons the runs produced, now in the skill: the seed fixes the references and not the kernels, so GPU attributions repeat only to about 1e-6 unless the cuDNN deterministic flags are set; ``deep_lift_shap`` memory follows ``batch_size`` times the activation graph, not parameter count (3.7 GB for a 197 KB cherimoya at ``batch_size=64``); ``recursive_seqlets`` with ``X_control`` can return an empty frame on a composition-driven model, so inspect the FDR table and fall back to ``threshold``; ``count_annotations`` wraps at 256 rather than saturating; ``plot_logo`` reads ``ylim`` only with annotations and as a scalar; ``randomize`` casts a Python ``probs`` list to float32 and numpy then rejects hg38 base frequencies; ``reverse_complement`` returns the wrong shape on a batch without raising; ``characters`` needs ``allow_N=True`` for an unknown character; ``insertion_effect`` applies rows at one position in reverse order; ``space`` re-centers the arrangement per spacing; NamedTuple results come back as lists through ``apply_pairwise``; the design functions have no reach-a-value stop rule and a one-sided loss makes ``beam_substitution`` rank tied rows in insertion order. A VCF-to-window recipe, ``extract_matching_loci``, ``example_to_fasta_coords``, ``chunk``/``unchunk`` and ``one_hot_to_fasta`` are named where they were missing.
-
-	- Corrected: ``references/motif-effects.md`` told the reader to shrink the attributed window with ``additional_func_kwargs={'start': ..., 'end': ...}``, arguments ``deep_lift_shap`` does not have; ``references/annotate.md`` said ``count_annotations`` saturates at 255 (it wraps), and its sentence on redundant databases contradicted itself; the pre-1.5.0 bug history is one line.
-
-	- ``references/io-loci.md`` follows the ``extract_loci`` changes below: a locus on a chromosome missing from the FASTA, and an empty result, raise ``ValueError``; the mask has one entry per locus under ``n_loci``; the count thresholds are inclusive and require ``signals``; exclusion regions are matched by 100bp chunk and ignored on chromosomes the FASTA lacks; and it gives the bounds of an odd window and says that ``out_window`` is unused without ``signals``.
-
-	- The variant-effect reference no longer says that ``insertion_effect`` applies insertions one at a time in a loop, which stopped being true when the function was rewritten below. It says instead what happens to several insertions at one position: all are made, with the last one given ending up first.
-
-	- ``references/model-wrapping.md`` gives the output shape ``deep_lift_shap`` and ``pisa`` accept, following the changes below: both read their outputs from axis 1, trailing axes of length 1 are dropped, and any other axis after it raises ``ValueError``.
-
-	- ``SKILL.md`` no longer says that ``model(X)`` returns a tensor with layout ``(batch, channels, length)``, which is the layout of ``X``. It says that ``deep_lift_shap`` and ``pisa`` need ``(batch, n_outputs)``.
-
-	- The ersatz notes in ``SKILL.md`` and ``references/motif-effects.md`` no longer say that ``dinucleotide_shuffle`` rejects unknown characters outright; they give ``allow_N=True`` as the way to shuffle them. The third footgun in ``references/deep_lift_shap.md`` gains the route for attributing a sequence that contains them, ``only_warn=True`` with ``references=partial(dinucleotide_shuffle, allow_N=True)``.
-
-	- ``references/io-loci.md`` gives ``extract_loci``'s new ``n_jobs`` keyword and says to pass bigWigs as paths, or figwig readers, since those opened with ``pybigtools.open`` are deprecated and read one locus at a time; that URLs are not read; and that the track, browser and ``#`` lines of a BED file are skipped.
-
-	- ``references/io-loci.md`` says that ``n_jobs`` also sets the threads that read and encode the windows of a FASTA path, to pass ``n_jobs=1`` inside processes that already run in parallel, and to pass the FASTA as a path rather than a ``pyfaidx.Fasta``, with the timings of both. Its timing of a bigWig opened with pybigtools follows the change below.
-
-	- ``SKILL.md`` gives ``one_hot_encode``'s new ``n_jobs`` keyword, and that more than one thread helped only for sequences of about 8Mbp or more.
-
-	- ``references/saturation_mutagenesis.md`` describes ``fast=True``, the new default: which operations it computes over windows, that jobs under thirty seconds skip it, that it is checked against ``fast=False`` and falls back with a warning, and which models gain from it. It no longer says that ISM over a window is bit-identical to slicing ISM over the whole sequence, which holds only up to rounding with ``fast=True``. The ISM row of the router table in ``SKILL.md`` names the default.
-
-	- ``references/deep_lift_shap.md`` gives the seeds ``deep_lift_shap`` draws its references with, ``random_state + k`` for reference ``k`` of every example, and how to precompute the same references with ``dinucleotide_shuffle``, whose ``random_state`` now takes one seed per sequence.
-
-	- ``SKILL.md`` describes ``PackedSequence``: how to make one, that every function that takes one-hot sequences as ``X`` takes one, which outputs come back packed, and that a ``func`` you write receives int8 one-hot sequences. ``references/func-pattern.md``, ``references/deep_lift_shap.md`` and ``references/io-loci.md`` give the packed path of ``func=``, of ``references=`` and of ``extract_loci``, and ``SKILL.md`` gives ``dinucleotide_shuffle``'s new ``n_jobs``.
-
-	- ``references/seqlets.md`` no longer says never to set ``min_seqlet_len`` to 1, advice that dates from ``recursive_seqlets`` calling nearly every position at that value (fixed below). It says instead that a value of 1 requires every position of a seqlet to pass the threshold on its own.
-
-	- ``references/seqlets.md`` describes the ``p-value`` column as a ranking score rather than an error rate, drops the advice that large runs often use ``threshold=0.001``, and gives a recipe for choosing the threshold with ``X_control`` on several dinucleotide shuffles. It replaces the advice to call negative seqlets on ``attr_sums.abs()`` with negating the attributions.
-
-	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
-
 Packed sequences
 ----------------
 
-	- ``tangermeme.utils.PackedSequence`` holds sequences over an alphabet of four characters at two bits a position, sixteen times less than an int8 one-hot encoding. Unknown characters are kept as runs, so sequences with an assembly gap pack too. It is built with ``PackedSequence.from_one_hot`` or ``PackedSequence.from_codes``, from tensors on any device, and keeps its bytes on the CPU; ``to_one_hot`` and ``to_codes`` decode it on any device, moving only the packed bytes and runs there. It can have several batch axes, such as a sequence and its shuffles; indexing them as a tensor would be indexed returns a ``PackedSequence``, so part of a large set is decoded without the rest. ``save`` writes it to a directory of ``.npy`` files, also where a memory-mapped copy was loaded from, and ``load`` reads it back, memory-mapping the bytes with ``mmap=True``. Soft encodings and PWMs cannot be packed. Packing and decoding run in numba. On 10,000 windows of 2,114bp around K562 ATAC-seq peak summits, on the CPU, ``from_one_hot`` took 8 ms, ``to_one_hot`` took 12 ms in int8 and 49 ms in float32, and decoding them 64 at a time into float32 took 6 ms, against 2 ms to slice and cast an int8 one-hot encoding.
+	- ``tangermeme.utils.PackedSequence`` holds sequences over a four-character alphabet at two bits a position, sixteen times less than an int8 one-hot encoding, with unknown characters kept as runs. It is built with ``from_one_hot`` or ``from_codes``, keeps its bytes on the CPU, and decodes with ``to_one_hot`` or ``to_codes`` on any device. Indexing its batch axes returns a ``PackedSequence``, so part of a large set is decoded without the rest. ``save`` and ``load`` write and read a directory of ``.npy`` files, with ``mmap=True`` to memory-map the bytes. Soft encodings and PWMs cannot be packed.
 
-	- Every function that takes one-hot encoded sequences as ``X`` takes a ``PackedSequence`` and returns what it returns for the one-hot encoding: ``predict``, ``deep_lift_shap``, ``pisa``, ``saliency``, ``saturation_mutagenesis``, ``dependency_map``, ``marginalize``, ``ablate`` and ``space`` and their ``_annotations`` variants, the three ``variant_effect`` functions, ``apply_pairwise`` and ``apply_product``, the four design functions, every function in ``ersatz``, ``kmers``, ``gapped_kmers``, ``gc_content``, ``characters``, ``reverse_complement``, ``chunk``, ``annotate_seqlets``, ``plot_attributions`` and ``one_hot_to_fasta``. Functions that take PWMs, attributions or predictions instead, such as ``entropy``, ``information_content``, ``pwm_consensus`` and ``unchunk``, do not take one. ``validate_input`` checks one without reading its bytes. A ``PackedSequence`` with more than one batch axis, such as sequences and their shuffles, fails where the matching 4-D one-hot tensor fails, with a ``ValueError`` in the functions that edit, write or annotate sequences, rather than being edited or written along the wrong axis. Functions that make sequences return them packed for a packed ``X``: ``ersatz``, the references of ``deep_lift_shap`` and ``pisa``, and the designs. Predictions and attributions are tensors as before. The functions in ``ersatz`` take ``return_packed``, to pack the result of a one-hot ``X`` or to decode that of a packed one, and ``deep_lift_shap`` and ``pisa`` take packed ``references``. They return their references packed when ``references`` is packed, or when ``X`` is and the references are one-hot; references from a callable that are not one-hot come back as a tensor. A function given as ``func`` or ``shuffle_fn`` receives packed sequences only when it is one of tangermeme's functions that take them, also inside ``functools.partial``; any other, such as one you write, receives their int8 one-hot encoding. ``predict``, ``pisa`` and ``saliency`` decode a batch at a time on the device, so only the packed bytes are moved to it, and ``deep_lift_shap`` decodes each batch of sequences on the CPU and its packed references on the device; ``saturation_mutagenesis``, ``dependency_map`` and the two design functions that edit one sequence decode it at the start. ``kmers``, ``gc_content``, ``reverse_complement`` and ``one_hot_to_fasta`` work from the character indices a chunk of sequences at a time, and ``annotate_seqlets`` and ``marginalize_annotations`` decode only the positions they use.
+	- Every function that takes one-hot sequences as ``X`` takes a ``PackedSequence`` and returns what it returns for the one-hot encoding. Functions that make sequences return them packed for a packed ``X``: ``ersatz``, the references of ``deep_lift_shap`` and ``pisa``, and the designs. The ``ersatz`` functions take ``return_packed``, and ``deep_lift_shap`` and ``pisa`` take packed ``references``. A ``func`` or ``shuffle_fn`` receives packed sequences only when it is a tangermeme function that takes them, also inside ``functools.partial``; a function you write receives their int8 one-hot encoding. A ``PackedSequence`` with more than one batch axis fails where the matching 4-D tensor fails.
 
-	- ``extract_loci``, ``one_hot_encode`` and ``random_one_hot`` take ``return_packed``. ``extract_loci`` reads the windows of a FASTA path, a ``pyfaidx.Fasta`` or a dictionary a chunk at a time and packs each chunk before reading the next, so the one-hot encoding of all of them is never held. ``one_hot_encode`` and ``random_one_hot`` pack the character indices without building the one-hot encoding. All three need an alphabet of four characters.
+	- ``extract_loci``, ``one_hot_encode`` and ``random_one_hot`` take ``return_packed`` and pack without building the whole one-hot encoding; ``extract_loci`` reads and packs a chunk of windows at a time. All three need an alphabet of four characters.
 
-	- The copies that functions make of packed sequences are packed too, so they take less memory, and less time where building them took much of the call. With a model of eight dilated convolutional layers of 64 filters, on an H200 GPU and on the CPU with 4 threads, and the windows above, a packed ``X`` against an int8 one-hot ``X`` gave these medians of three processes: ``marginalize`` on 10,000 windows took 0.42 s against 0.73 s, with a process peak of 1.0 GB against 1.8 GB; ``ablate`` with 20 shuffles of each of 1,000 windows took 0.45 s against 0.56 s, and 0.9 GB against 1.2 GB; ``deep_lift_shap`` on 512 windows given 20 references each took 1.30 s against 1.54 s, and 1.1 GB against 1.9 GB; on the CPU, ``substitute`` on 10,000 windows took 4 ms against 188 ms, and 0.6 GB against 1.4 GB, and ``shuffle`` with 20 shuffles of 200bp of each took 0.13 s against 0.51 s, and 0.8 GB against 3.9 GB. ``predict`` on 10,000 windows took 0.206 s against 0.205 s, and ``deep_lift_shap`` with its default references on 256 windows took 1.36 s against 1.29 s. The one-hot times of ``predict``, ``marginalize`` and ``ablate`` include the change to ``predict`` below. Apart from that change, with one-hot sequences each of these calls took the time it took before these changes, within the variation between runs.
-
-	- ``dinucleotide_shuffle`` returns its shuffles as a ``PackedSequence`` when given ``return_packed=True``, or when ``X`` is a ``PackedSequence``, for which ``return_packed=False`` returns them one-hot encoded in int8. Each shuffle is packed as it is drawn, so only the shuffled character indices of one sequence are held at a time. The shuffles are the same as those of the one-hot encoding, unknown characters included. Twenty shuffles of each of the 10,000 windows above, 1.69 GB as an int8 one-hot encoding, took the process to a peak of 8.7 GB returned one-hot and 1.4 GB returned packed, and 0.7 GB when ``X`` was packed too. On one thread they took 7.7 s one-hot and 6.5 s packed, and on eight threads 2.1 s and 1.1 s.
-
-ablate
-------
-
-	- ``ablate_annotations`` on a model with several outputs returns one tensor per output whatever the number of annotations. The list was built over the number of annotations instead of the number of outputs, so one annotation on a two-output model returned only the first output, and more annotations than outputs raised ``IndexError: list index out of range``.
-
-annotate
---------
-
-	- ``annotate_seqlets`` runs TOMTOM on 4 threads by default, where it used every core, so that one call does not take a whole shared machine. The count is capped by numba's ``NUMBA_NUM_THREADS``, so the default also works where numba allows fewer than 4 threads. Pass ``n_jobs=-1`` for every core as before. The annotations are the same for every value. With 8 cores, on 2,000 seqlets and 500 motifs, a call took 1.58 s against 0.91 s, with a peak of 672 MB against 810 MB.
-
-deep_lift_shap
---------------
-
-	- The softmax rule of ``deep_lift_shap`` and ``pisa`` computes in float32 when the activations are half precision, as they are under ``dtype=torch.bfloat16`` or ``torch.float16``, and casts its multipliers back. In bf16 it divided differences held to about three digits, and its 1e-6 guards were below bf16's resolution, so on ConvSoftmax, whose attributions reach 0.062, the bf16 attributions differed from float32 by up to 0.021 on the CPU and 0.030 on CUDA. They now differ by at most 2.7e-4, and models built on the rule gain too: a two-block transformer went from 1.6e-2 to 1.6e-3 on the CPU. Float32 and float64 activations take the same path as before.
-
-	- ``deep_lift_shap`` warns when the mean convergence delta of a batch exceeds 1% of the mean absolute output difference, whatever ``warning_threshold`` is. The threshold is absolute, so a model whose outputs are small could violate summation-to-delta by a large fraction in silence: the shipped form of the attention-pooling toy model with its outputs scaled to 1e-4 attributed with no warning and a relative error of 0.30. The docstring of ``warning_threshold`` says that it is absolute, and the docstring of ``random_state`` says what the seed fixes: the references, with reference ``k`` seeded ``random_state + k``, and not the kernels, so two calls on a GPU can differ at the 1e-8 to 1e-5 level unless ``torch.backends.cudnn.deterministic`` is set.
-
-	- ``deep_lift_shap`` drops trailing output axes of length 1, so a model that returns ``(batch_size, n_targets, 1)``, such as one ending in ``AdaptiveAvgPool1d(1)``, gets correct convergence deltas. ``model(X)[:, target]`` used to keep the trailing axis, and subtracting the ``(batch_size,)`` input differences from it broadcast the deltas into a ``(batch_size, batch_size)`` matrix that compared unrelated example-reference pairs. On two small convolutional models whose outputs change under shuffling, attributing 8 sequences of 100bp with 20 shuffles each raised "Convergence deltas too high" on every batch, with reported deltas as large as ``0.34`` where the true ones were below ``1e-7``. The attributions were not affected, since the gradient is taken of the sum of the outputs either way. Any other axis after the targets, such as the length axis of a profile, now raises a ``ValueError`` that names the shape and says to wrap the model. Such outputs usually raised a ``RuntimeError`` from the broadcast, or, for ``(batch_size, n_targets, length, 1)``, returned attributions of the summed profile with meaningless deltas and no error. The docstring of ``target`` now says that it indexes the second axis of the predictions, not the last. Thanks @avantikalal!
-
-	- With a ``random_state`` and the default references, ``deep_lift_shap`` draws each batch's references in one call to ``dinucleotide_shuffle``, passing every example-reference pair the seed it was given before, ``random_state + k`` for reference ``k``. It used to call the shuffle once per pair. The references and attributions are unchanged. On 16 sequences of 2,114bp with 20 shuffles each, on an H200 GPU, a call took 27 ms against 117 ms with a small convolutional model and 34 ms against 122 ms with one that has GELUs and layer normalizations. Without a ``random_state``, where the shuffle was already one call per batch, the faster shuffle below took the same calls to 27 ms and 34 ms, from 109 ms and 116 ms. With references given as a tensor, the times are unchanged. Prompted by jmschrei/cherimoya#103. Thanks @emattei!
-
-	- The arithmetic of the rescale rule, which ``_nonlinear`` applies to activations, and of the normalization rule of ``_layernorm`` and ``_rmsnorm`` moves into four private functions, ``_rescale``, ``_layer_normalization_stats``, ``_layer_normalization_terms`` and ``_layer_normalization_grad``, which the hooks call with the same expressions in the same order. Their gradients are bit-identical. The functions take an example and its references as tensors that broadcast against each other, and the normalization's statistics as inputs, so that code computing DeepLIFT multipliers without hooks, such as an engine that keeps one copy of each example for all of its references and the statistics of its forward pass, can apply the same rules rather than a copy of them.
-
-ersatz
-------
-
-	- ``randomize`` accepts a ``probs`` row that sums to 1 in float64 whatever it is given as. It cast a Python list with ``torch.tensor``, which makes float32, and then handed the rows to numpy's draw, which rejected ``[[0.295, 0.205, 0.205, 0.295]]`` with ``ValueError: probabilities do not sum to 1`` although the four numbers sum to 1, while ``random_one_hot`` accepted the same list. The rows are now cast to float64, checked to sum to 1 within 1e-6, and renormalized to sum to exactly 1, so a float32 tensor is accepted too.
-
-	- ``dinucleotide_shuffle`` accepts unknown characters, encoded as all-zero columns, when given ``allow_N=True``. Each is shuffled as a fifth character, so every shuffle keeps the number of unknown characters and the count of every dinucleotide, including those that contain one, and a contiguous run of them such as an assembly gap stays one run but moves with the shuffle. Passing the flag on to validation alone would not have been enough: the transition matrix is built from ``X.argmax(axis=0)``, which reads an all-zero column as the first character of the alphabet, so every unknown character would have been shuffled as an ``A`` and come out as one. A 30bp gap in a 300bp sequence then raised the ``AA`` count from 23 to 53. The default, ``allow_N=False``, keeps rejecting unknown characters, and the shuffles of a sequence without any are unchanged. Thanks @Al-Murphy!
-
-	- ``dinucleotide_shuffle`` shuffles every sequence of a call in one numba call, which releases the GIL. It used to call the kernel once per sequence and build each sequence's transition table in Python around the call. The shuffles are bit-identical, for seeds beyond 32 bits, unknown characters, ``start`` and ``end``, and ``n=0`` included. On 64 sequences of 2,114bp on the CPU, one shuffle of each took 2.9 ms against 17.1 ms, and twenty of each 52 ms against 71 ms. ``_dinucleotide_shuffle``, which gReLU imports, keeps its signature and output. It now calls ``dinucleotide_shuffle``, so it raises a ``ValueError`` on input that is not one-hot, which it used to accept.
-
-	- ``dinucleotide_shuffle`` takes one ``random_state`` per sequence, as a list, array or tensor of integers, as well as a single integer. Sequence ``i`` is then shuffled as ``dinucleotide_shuffle(X[i:i+1], random_state=random_state[i])`` would shuffle it, whatever else is in the batch, which is how ``deep_lift_shap`` seeds its references.
-
-	- ``dinucleotide_shuffle`` takes ``n_jobs``, 1 by default, or -1 for one thread per thread numba allows, capped by numba's ``NUMBA_NUM_THREADS``, and splits the sequences across that many threads. A call that shuffles fewer than 4,096 positions in all, the sequences times the shuffles times the length of the region, runs on one thread, since starting the threads took longer than they saved: two sequences of 100bp took 77 µs on four threads against 54 µs on one. Each sequence seeds the generator of the thread it runs on, so the shuffles are the same for every value. The check for positions that every shuffle keeps is made only under ``verbose`` or for more than one shuffle, where it can warn or raise, so a call shuffling two sequences of 100bp once took 45.8 µs against 50.5 µs before, and ``local_dinucleotide_shuffle``, which shuffles each bin that way, took 366 ms against 381 ms on 200 sequences of 2,114bp with ``n=10``. Under numba's OpenMP threading layer, used when TBB is not installed, a process that has run the threads cannot fork worker processes afterwards, which is why the default stays at one thread. On 64 sequences of 2,114bp on the CPU, twenty shuffles of each took 21 ms with ``n_jobs=4`` and 17 ms with ``n_jobs=8``, against 53 ms with one thread. On 10,000 windows of 2,114bp around K562 ATAC-seq peak summits, twenty shuffles of each took 2.1 s against 7.7 s, or 1.1 s returned as a ``PackedSequence``, below.
-
-	- ``dinucleotide_shuffle`` raised a ``RuntimeError`` from taking the maximum of an empty tensor on a region of one or two characters. Such a region keeps both of its ends, so its only shuffle is itself: one shuffle now returns it, and more than one raises the ``ValueError`` for identical shuffles.
-
-io
---
-
-	- ``extract_loci`` reads bigWigs given as local paths with figwig, which reads every kept locus in one call on the new ``n_jobs`` threads, 4 by default. It used to read each locus through pybigtools inside its loop. The loci are now found first, by the window, exclusion, count and ``n_loci`` rules, and the signals read after them. On the 167,750 training peaks and negatives of ENCODE ATAC-seq experiment ENCSR123WME, with hg38 and the bigWigs on tmpfs and 8 threads, a call with one bigWig took 3.65 s against 7.79 s, and one with two bigWigs in ``signals`` and one in ``in_signals`` took 4.77 s against 17.78 s. The returned tensors are identical. Most of the remaining time went to reading and one-hot encoding the FASTA, which the next entry speeds up. A dictionary is read one locus at a time, as before. Under ``min_counts`` and ``max_counts`` the loci are read in groups. The warnings for chromosomes a signal does not have are the same, except in a call that raises partway through the loci, such as at a character not in ``alphabet``, where the signals of the loci after that one have been read and may have warned. figwig is a new dependency.
-
-	- ``extract_loci`` reads the windows of a FASTA file given as a path from a memory map of the file, through its ``.fai``, and one-hot encodes them with numba on ``n_jobs`` threads straight into the returned array. It used to read each window with pyfaidx and encode it alone. The checks of which loci fit on their chromosomes and miss the exclusion regions are made for every locus at once with numpy, and NaN and infinities in the values figwig reads are replaced in blocks on ``n_jobs`` threads, skipping blocks that are all finite. On the 167,750 loci above, at 8 threads, a call with one bigWig takes 0.35 s against 3.64 s, and a call without signals 0.09 s against 3.25 s. The windows of a ``pyfaidx.Fasta`` are still read one at a time but are encoded together, and the same call with one takes 1.19 s against 3.62 s. The outputs, errors and warnings are unchanged: on 11,039 calls, over the FASTA and bigWig files of our test-data collection and 21 FASTA files written to cover line widths, ``\r\n`` line ends, soft-masking, IUPAC codes, many contigs and bytes that pyfaidx changes, this version and the previous one gave the same results. A FASTA that is compressed, or one whose windows hold bytes that pyfaidx changes, such as a carriage return inside a line, is read through pyfaidx, as before. ``n_jobs`` also sets these threads, and the encoding threads are capped by numba's ``NUMBA_NUM_THREADS``. With ``verbose=True``, the progress bar of a FASTA path fills in one step. The first call in a new environment compiles numba kernels, which takes about 2.5 s, once. These changes come from #107, without its bigWig reader, which figwig replaced.
-
-	- bigWigs are read with figwig alone, and pybigtools is no longer a dependency. Remote bigWigs are not read: a URL in ``signals`` or ``in_signals`` raises a ``ValueError`` that says to download the file first, where pybigtools used to stream it. A file that figwig does not read, such as a bigWig whose intervals overlap or whose data blocks are unsorted, raises figwig's ``ValueError``, where pybigtools used to read it; none of the 188 public bigWig files we tested is such a file. A missing file raises ``FileNotFoundError``. ``extract_loci`` accepts bigWigs opened with ``figwig.BigWigReader`` in ``signals`` and ``in_signals``.
-
-	- bigWigs opened with ``pybigtools.open`` and given in ``signals`` or ``in_signals`` are deprecated. They are still read, one locus at a time, with a ``FutureWarning``, and will not be accepted from tangermeme 1.9.0. Pass their paths, or the bigWigs opened with ``figwig.BigWigReader``, instead.
-
-	- A bigBed given in ``signals`` or ``in_signals``, as a path or opened with ``pybigtools.open``, raises a ``ValueError`` that names it. pybigtools opens bigBed files as well as bigWigs, and reading values from one panicked in Rust, which reached Python as pyo3's ``PanicException``. That derives from ``BaseException``, so ``except Exception`` did not catch it. Where it did not panic, the coverage it gave, the number of intervals over each base, was often wrong: on 9,000 windows around the intervals of four bigBed files, pybigtools 0.2.5 panicked at 933 and gave the wrong coverage at 1,480.
-
-	- A dictionary signal without any chromosomes gives zeros and a ``TangermemeWarning`` at each locus, as a chromosome missing from a dictionary does. It raised an ``IndexError``.
-
-	- The track and browser lines of a BED file given as ``loci``, and its lines that start with ``#``, are skipped. A track line raised ``TypeError: unsupported operand type(s) for -: 'str' and 'str'``. ``#`` lines, such as those that open a 10x Genomics peaks file, left the coordinates as floats, which raised a ``TypeError`` where the windows were read. And since pandas takes the number of columns from the first line, a header line shorter than ten columns made it read every summit as NaN.
-
-	- ``extract_loci`` no longer keeps a locus whose odd window runs one base off the end of its chromosome. A window of size ``w`` is ``[mid - w // 2, mid + w // 2 + w % 2)``, but the chromosome-end check left out the ``w % 2``, so such a window passed the check and came back one base short. With other loci alongside it, stacking raised ``ValueError: all input arrays must have the same shape``; alone, it was returned short. This affected an odd ``in_window``, and an odd ``out_window`` with bigWig or dict signals. A bigWig signal did not crash, since pybigtools pads past the end of a chromosome with NaN, but it kept the locus with a zero at the missing base.
-
-	- The mask returned by ``extract_loci(return_mask=True)`` now has one entry per locus when ``n_loci`` is set. Loci after the cap was reached are ``False``. The mask used to stop at the last locus examined, so indexing the loci with it, as the docstring describes, raised an ``IndexError``.
-
-	- ``exclusion_lists`` treats the ends of regions and windows as exclusive. A region or window ending at a multiple of 100 used to reach into the next 100bp chunk, so the region ``chr7 100 200`` also removed loci whose windows lay entirely in ``chr7 200 299``. A region with ``end <= start`` covers no base, where it used to mark the chunk containing its start. Regions on chromosomes that are not in ``sequences`` are skipped rather than raising ``KeyError``, so a genome-wide exclusion list, such as one naming ``chrM`` or unplaced contigs, can be used with a FASTA of part of the genome. Some loci that were removed before are now kept.
-
-	- With ``in_signals`` but no ``signals``, ``out_window`` no longer decides which loci fit on their chromosomes. No output window is extracted in that case, but whenever ``out_window`` exceeded ``in_window`` it still dropped loci within ``out_window // 2`` of a chromosome end; with the default ``out_window=1000``, that was every locus on a chromosome shorter than 1kbp.
-
-	- ``extract_loci`` raises a ``ValueError`` that names the chromosomes when a locus is on a chromosome that is not in ``sequences``, which used to be a bare ``KeyError``. The usual cause is a naming mismatch such as ``chr1`` against ``1``; when the chromosome is absent from the FASTA, ``chroms`` keeps only the loci on chromosomes it has. It also raises a ``ValueError`` saying why loci are removed when none remain after filtering, which used to fail inside ``numpy.stack`` with ``need at least one array to stack``.
-
-	- ``extract_loci`` validates its thresholds. ``min_counts`` or ``max_counts`` without ``signals`` raises a ``ValueError``; they used to be silently ignored. A ``target_idx`` outside the range of ``signals`` raises a ``ValueError`` rather than an ``IndexError``. ``n_loci`` below 1 raises a ``ValueError``; ``n_loci=0`` used to return every locus. Both thresholds are inclusive, as before, and the docstrings of ``min_counts`` and ``max_counts`` now say that the counts are those of ``signals[target_idx]`` rather than of every signal.
-
-	- Dictionary signals are zero-filled the way bigWigs are. A chromosome missing from the dictionary gives zeros and a ``TangermemeWarning``, where it raised ``KeyError``, and an array shorter than its chromosome in ``sequences`` is padded with zeros rather than coming back short.
-
-	- ``extract_loci`` accepts a ``pathlib.Path`` or other ``os.PathLike`` wherever it accepts a filename, in ``loci``, ``sequences``, ``signals``, ``in_signals`` and ``exclusion_lists``. It accepts bigWigs already opened with ``pybigtools.open`` in ``signals`` and ``in_signals``, and leaves them open, though these are deprecated (above). It reads a ``pyfaidx.Fasta`` opened with ``as_raw=True``, which returns strings and used to raise ``AttributeError: 'str' object has no attribute 'seq'``. The keys of dictionary ``sequences`` and signals are coerced to strings, like the chromosome names of the loci, so integer keys work.
-
-	- A bare filename or dictionary passed as ``signals`` or ``in_signals`` raises a ``ValueError`` asking for a list. It used to be iterated over, opening each character or chromosome name as a bigWig, and fail with ``Invalid file type``.
-
-	- The sequences returned by ``extract_loci`` are C-contiguous. They used to keep the layout of the transposed view that ``one_hot_encode`` returns, with strides ``(4 * L, 1, 4)``, so ``.view`` raised a ``RuntimeError`` on them. The values are unchanged.
-
-	- ``extract_loci``'s return annotation is ``torch.Tensor | list[torch.Tensor]``, which is what it returns: the sequences alone, or a list of the sequences followed by the signals, the input signals and the mask that were asked for. It was annotated as ``tuple``.
-
-	- ``one_hot_to_fasta`` writes a position whose column is all zeros, such as an unknown character from ``one_hot_encode``, as N, as it does for a ``PackedSequence``. It used to raise ``ValueError: At least one position in the PWM has multiple letters with the same probability`` on any sequence with one. A position whose largest value is tied between characters still raises that error, and every other sequence is written as before.
-
-	- ``one_hot_to_fasta`` takes a numpy array, as its signature says, and writes an all-zero column of one as N, as it does for a tensor. It raised ``TypeError`` through ``characters``.
-
-match
------
-
-	- ``extract_matching_loci`` with a ``bigwig`` returns loci again. The signal over each locus asked pybigtools for ``summary="sum"``, which pybigtools 0.2.5 does not have, so every locus's signal was NaN, the threshold was NaN, and no loci were returned, whatever ``signal_beta`` was. The bigWig is now read with figwig and each region summed as float64. On 288,176 regions of 184 public bigWigs, these sums equal pybigtools 0.3's ``summary="sum"`` at all but 36, which differ from it by at most 2.2e-16 of their value. A chromosome whose length in the bigWig differs from its length in the FASTA used to raise a broadcasting ``ValueError``; the bases past the end of the bigWig's chromosome now have no signal. A chromosome that the bigWig lacks used to raise pybigtools' ``KeyError``, and now gives no background loci.
-
-pisa
-----
-
-	- ``pisa`` reads ``n_outputs`` from axis 1 of the model's output, the axis it indexes the outputs on, rather than from the last axis. A model that returns ``(batch_size, n_outputs, 1)``, such as one ending in ``AdaptiveAvgPool1d(1)``, used to be attributed for its first output only, with no error. Trailing axes of length 1 are now dropped, as in ``deep_lift_shap``, and any other axis after the outputs raises a ``ValueError``. The Notes section said that a profile model returning ``(batch, n_tasks, length)`` would be attributed over ``length``, which never worked: such models raised an ``IndexError`` when they had fewer tasks than positions, and otherwise could run without error while attributing the wrong outputs. The Notes now say to wrap such a model to return ``(batch, length)`` for one task. Thanks @avantikalal!
-
-	- ``pisa`` passes each of ``args`` to the model with a batch axis that matches the sequences. It used to take ``a[i]``, which drops the batch axis, and concatenate it with itself, which then doubled the feature axis, so an argument of shape ``(n, d)`` reached the model as ``(2 * d,)``. A model that added such an argument to a ``(batch, d)`` output raised a ``RuntimeError`` for ``d > 1``, and so did one that concatenated it to its input, although ``deep_lift_shap`` ran both. An argument of shape ``(n,)`` raised ``RuntimeError: zero-dimensional tensor (at position 0) cannot be concatenated`` and now works. Arguments of shape ``(n, 1)``, which broadcast to the same values either way, give the same attributions as before.
-
-predict
--------
-
-	- ``predict`` moves a batch of integers, such as an int8 one-hot encoding, to the device before casting it to ``dtype`` when ``dtype`` is a wider floating point type. It used to cast each batch first, which PyTorch does on the CPU, and then copy the float32 batch, four times the bytes of the int8 one. A cast of integers to a wider floating point type is exact, so the predictions are bit-identical to before on the CPU and on CUDA. Any other batch, such as float16 or float64, is still cast before it is moved, since a GPU can give a float NaN different bits than the CPU. The arguments in ``args`` are moved the same way, and so are the batches and arguments of ``saliency``, whose attributions are also bit-identical to before. With a model of eight dilated convolutional layers of 64 filters on an H200 GPU, and 10,000 int8 windows of 2,114bp, medians of paired runs in separate processes: ``predict`` took 0.257 s against 0.284 s with the default ``batch_size=32`` and 0.205 s against 0.222 s with ``batch_size=256``, faster in 8 of 8 pairs each; preparing one batch of 32 took 26 µs against 98 µs; and ``marginalize`` with ``batch_size=32``, which calls ``predict`` twice, took 0.84 s against 0.93 s, faster in 10 of 12 pairs. On the CPU, where moving a batch does nothing, the batch is cast as before, and the calls take the same time within the variation between runs.
-
-product
--------
-
-	- ``apply_pairwise`` requires ``args``, as ``apply_product`` does. It defaulted to ``None``, with which every call raised ``TypeError: 'NoneType' object is not iterable`` from inside its batching loop, since ``X`` is paired with ``args``.
-
-saturation_mutagenesis
-----------------------
-
-	- ``saturation_mutagenesis`` computes the predictions for the edited sequences with fastISM (Nair et al., Bioinformatics 2022) through the new ``fast`` keyword, ``True`` by default. A single-base edit changes only the positions of each convolutional layer whose receptive field covers it, so the model is captured with ``torch.export``, the activations of each original sequence are cached, and for each edit the convolutions, pooling, constant padding, cropping, flips, elementwise operations and operations over the channel axis are computed only over the positions the edit can change. Any other operation, such as a dense layer over the flattened sequence, a mean or a normalization over the length, or attention, is computed at full length on the cached activations with those positions written in. On a GPU with ``batch_size=256``, ISM of 16 sequences of 2,114bp through the count head of a ChromBPNet accessibility model took 13.4 s against 31.1 s, and on the CPU with the default ``batch_size=32``, ISM of the central 200bp of 10 Beluga inputs took 8.4 s against 35.0 s. A model that pools or normalizes over the whole length early gains little: LegNet's first squeeze-excitation block averages over the length, so only three of its 26 convolutions are computed over windows. The results match ``fast=False`` up to floating-point rounding: over the same models, the largest difference relative to the largest output was 9e-16 in float64 and 9e-6 in float32 on the CPU, and 3e-4 in float32 (TF32 convolutions), 9e-4 in float16 and 7e-3 in bfloat16 on CUDA. With ``fast=False`` the outputs are identical to the previous version's.
-
-	- The first batch of edits is computed with ``fast=False`` and timed, and a job that would take under thirty seconds at that rate continues with ``fast=False`` without capturing the model, since capturing and checking it can take several seconds. Otherwise, the fast path is checked against ``fast=False`` on one batch of edits from the first example, including both ends of the edited span, and timed against it. When the model cannot be captured, for instance because its Python control flow depends on the values it computes, when it has forward hooks registered, when the two differ by more than rounding, or when the fast path is slower, a ``TangermemeWarning`` gives the reason and the call continues with ``fast=False``. On a GPU the fast path runs many small operations per batch, so it gains more from a larger ``batch_size`` than ``fast=False`` does, and at the default of 32 it is often not faster. Pass ``fast=False`` to skip the attempt.
-
-	- With ``fast=True``, the model stays on ``device`` for the whole call, where ``fast=False`` moves it there and back for each sequence, so a job that runs with ``fast=False`` because it is too short can still be faster: ISM of 16 Beluga sequences on a GPU, with the model starting on the CPU, took 5.8 s against 8.1 s.
-
-seqlet
-------
-
-	- ``recursive_seqlets`` returns an empty frame with the dtypes of a full one, int64 coordinates and float64 scores, when ``X_control`` leaves no threshold at or below ``target_fdr``. The frame was built from no rows and so had object columns, which downstream code that summed or sorted the columns crashed on.
-
-	- ``recursive_seqlets`` gives each span the p-value its docstring describes: the probability that a span of that length, drawn position by position from the histogram of all binned attributions, has a sum of bins at least as large. It used to bin the span's continuous sum, which can lie up to ``seqlet_len - 1`` bins above the sum of its binned values, and look that up in a table that held P(S > i) + P(S = 0) rather than P(S >= i). Where most positions sit at the minimum, P(S = 0) dominated the table: ten-position blocks of ones on a background of exact zeros were not called at all, because every span of four had P(S = 0) = 0.97^4 = 0.89. Rounding in the continuous sum could also put a run of values equal to the minimum one bin below zero, which wrapped to the end of the table and called the run with a p-value of 0.
-
-	- The ``p-value`` column of ``recursive_seqlets`` is the p-value of the called span alone, as the docstring says, and the seqlets are sorted by it. It used to be the largest p-value over the span's prefixes from ``min_seqlet_len`` up, the quantity the recursive property is checked against, so seqlets were ranked by their weakest prefix: on the attributions in the test suite, the seqlet with the largest attribution was reported at 4.5e-3 rather than 1.9e-12.
-
-	- ``recursive_seqlets`` calls seqlets that end at the last position of a sequence. Spans starting ``min_seqlet_len`` positions from the end were given a p-value of 1, so no seqlet could cover the last ``min_seqlet_len`` positions, and the masking of a called seqlet and ``additional_flanks`` both stopped one position short of the end. A block of ten high values at the end of a 1,000bp sequence was called as positions 988 to 996 with ``min_seqlet_len=4`` and not called with ``min_seqlet_len=8``, while the same block elsewhere was called in full.
-
-	- ``recursive_seqlets`` with ``min_seqlet_len=1`` calls a single position only when it is significant on its own. The null distribution for spans of length 1 was never filled in, so every length-1 span had a p-value of 0 and nearly every position was called: more than 12,500 of the 12,684 positions of the test attributions. A seqlet ending at the last position could also be called a second time as an overlapping length-1 seqlet.
-
-	- ``recursive_seqlets`` returns an empty frame for a constant input, where every span of a given length has the same sum and none can be significant, and for sequences shorter than ``min_seqlet_len``. The first raised ``ZeroDivisionError`` from a bin width of zero. The second wrote past the end of an array, which sometimes crashed the interpreter and sometimes returned an empty frame.
-
-	- Together, these change the calls on real attributions modestly and leave the run time unchanged. On count-head DeepLIFT/SHAP attributions of 1,000 summit-centred 2,114bp peaks each, at the default threshold, 94% (CTCF ChIP-seq, BPNet), 92% (GATA2 ChIP-seq, BPNet) and 89% (ATAC-seq, ChromBPNet) of the seqlets now called are the same spans as before, every one overlaps a seqlet called before, and 0.4% to 3% fewer are called. A call took 0.29 s against 0.29 s (CTCF) and 0.49 s against 0.51 s (ATAC-seq) on one CPU thread.
-
-	- ``recursive_seqlets`` can choose its threshold from control attributions. Given ``X_control``, such as the attributions of several dinucleotide shuffles of each sequence concatenated, it calls seqlets on the control with the same null distributions and bins as on ``X`` at 117 thresholds from 0.1 to 1e-30, estimates the false discovery rate at each as the number of control seqlets plus one, scaled to the size of ``X``, over the number called on ``X``, and calls seqlets at the largest threshold whose estimate is at or below ``target_fdr``, 0.1 by default. ``threshold`` is then ignored. The one added to the control count keeps a strict threshold at which a few seqlets are called on ``X`` and, by chance, none on the control from passing as an estimate of zero. If no threshold reaches the target, a ``TangermemeWarning`` gives the lowest estimate reached and no seqlets are returned. ``return_fdr=True`` returns a ``RecursiveSeqletsResult`` of the seqlets and the estimate at every threshold. Without ``X_control``, the calls are unchanged. A p-value threshold has no stated error rate, because the p-values treat positions as independent while attributions are correlated along the sequence: on count-head DeepLIFT/SHAP attributions of 1,000 peaks from each of seven models (ChromBPNet ATAC-seq, gReLU DNase-seq, BPNet CTCF, GATA2, JUNB and MAX ChIP-seq, and ProCapNet PRO-cap), an estimated 31% (CTCF) to 82% (PRO-cap) of the seqlets called at the default ``threshold=0.01`` were no more frequent than on dinucleotide-shuffled copies of the same peaks.
-
-	- The ``recursive_seqlets`` docstring says that its p-values rank spans rather than give error rates, and why, so that ``threshold=0.01`` does not mean that 1% of the calls are false, and it describes choosing the threshold with ``X_control``. For negative seqlets, it says to run on the negated attributions and drop those that overlap a positive seqlet. Running on the absolute values, as it used to suggest, pools both tails into one null, so negative seqlets weaker than the positive ones are never significant.
-
-	- ``recursive_seqlets`` raises a ``ValueError`` for a ``threshold`` that is NaN or above 1. It used to never return: its decoder stops at the first p-value at or above the threshold, and no p-value is NaN or above 1, so ``threshold=numpy.nan``, ``1.5`` or ``numpy.inf`` looped until the process was killed. A threshold of 1 is still accepted, and one of 0 or below still calls no seqlets.
-
-	- ``recursive_seqlets`` is faster on both of its paths, and its outputs are bitwise identical, row order included. With ``X_control``, it used to run its decoder on ``X`` and on ``X_control`` at every threshold it evaluated, up to 117, and each run binned every row again, rebuilt its p-value matrix, and took a new argmin over every start of a length for each span it visited, writing ones over the columns of each seqlet it called. Each row is now binned and its p-value matrix built once, every threshold is decoded in one pass over the row from the loosest to the strictest, keeping only the counts, and a row stops at the first threshold at which it has no seqlet. Both decoders gather the spans below the threshold and sort them once by p-value and start, and skip a span that overlaps a seqlet already called. When ``min_seqlet_len`` is at least 1 and the null distributions hold no NaN, they build only the p-values of spans that can still pass the threshold. The null distributions are built a block of outputs at a time, over the nonzero bins of the histogram. On DeepLIFT/SHAP attributions of 1,000 GM12878 ATAC-seq peaks of 2,114bp from a Cherimoya model, on one CPU thread, a call without a control took 0.0147 s against 0.427 s, and one with the attributions of two dinucleotide shuffles of each peak as the control took 0.102 s against 18.2 s. Compiling the numba kernels, once per environment, takes longer: a first call on each path took 7.0 s against 2.8 s.
-
-utils
------
-
-	- ``reverse_complement`` raises a ``ValueError`` on a batched tensor. It takes one one-hot encoded sequence, ``(alphabet_size, length)``, and permutes the first axis to complement it; given ``(N, A, L)`` it permuted the batch axis and returned a tensor of the wrong shape, ``(4, 4, 100)`` for ``(8, 4, 100)``, with no error. The docstring said so in a note at its end. Reverse complement a batch with ``torch.stack([reverse_complement(x) for x in X])``, or pass a ``PackedSequence``, which keeps its batch axes.
-
-	- ``one_hot_encode`` is faster, most of all for an alphabet of four ASCII characters such as the default. Its byte lookup table is built once per alphabet and ignore list rather than on every call, and the result is wrapped as the transpose of a numpy array rather than transposed in torch, with ``.type`` skipped for int8. For four ASCII characters, the sequence is copied with ``str.encode('ascii')`` rather than into a UTF-8 ``bytearray``, and each base's row is written as one 32-bit value, two bases at a time from 8,192 bases on, into an array that is not zeroed first. An unknown character is caught through the same lookup. On upper-cased hg38, each in a fresh process on one thread, a 10bp call took 1.36 us against 4.14 us, a 2,114bp window 2.45 us against 6.66 us, a 2Mbp region 0.24 ms against 2.02 ms, and chr1 0.12 s against 0.38 s. A 20-letter protein alphabet gains only on short calls: 300 amino acids took 2.44 us against 5.80 us. The returned values, dtypes and strides, and the errors raised, are unchanged, on 88 configurations of input, dtype and thread count and on every sequence of hg38. A sequence with many unknown characters uses more memory than before: the array was zero-filled, and the pages of rows with no 1 were never written, while every row is now written. An all-N 10Mbp sequence peaked at 38 MiB against 10 MiB, and chr1 at 1,177 MiB against 1,111 MiB. The first call in a new environment compiles more numba kernels: importing ``tangermeme.utils`` and encoding 10bp took 0.70 s against 0.48 s, once.
-
-	- ``one_hot_encode`` takes ``n_jobs``, 1 by default, or -1 for one thread per CPU, capped by numba's ``NUMBA_NUM_THREADS``. A sequence of 262,144 characters or more, in an alphabet of four ASCII characters, is encoded in one chunk per thread. On the machine measured, one thread was faster than 2 to 16 threads for 2Mbp and 4Mbp, at 0.24 ms against 0.37-0.49 ms for 2Mbp, and threads were faster from 8Mbp, at 1.7-2.4 ms against 2.6 ms. chr1 took 0.08 s at 8 threads against 0.12 s at one. The result does not depend on ``n_jobs``. The first call that uses threads compiles one more kernel: importing and encoding 1Mbp at 8 threads took 1.07 s against 0.51 s, once.
-
-	- ``one_hot_encode`` accepts a tuple ``alphabet``, which its signature already allowed and which raised ``TypeError: encoding without a string argument``. Its docstring no longer lists a set, whose characters have no order, and says that a character in neither ``alphabet`` nor ``ignore`` raises a ``ValueError`` rather than being ignored.
-
-	- ``one_hot_encode`` raises a ``ValueError`` when a character in ``alphabet`` or ``ignore`` is not ASCII. Since 0.2.2, characters have been looked up by their UTF-8 bytes, and each byte of such a character was treated as a character of its own. In ``alphabet``, every later character was encoded one column further right for each extra byte, whether or not the non-ASCII character was in the sequence. Where such a character was in the sequence, every later character was encoded one position further along for each extra byte. Characters moved past the end of the encoding were written out of bounds, and encoding ``'ACGTé' * 5000`` with ``ignore=['N', 'é']`` aborted Python with ``malloc(): corrupted top size``. A non-ASCII character at the end of ``alphabet``, or in ``ignore``, that is not in the sequence moved nothing and gave the right encoding, and it now raises as well. ``extract_loci`` reading a FASTA file, and the ``ersatz`` functions given a string motif, raise the same error for such an ``alphabet`` or ``ignore``. A non-ASCII character in the sequence, with ``alphabet`` and ``ignore`` ASCII, still raises the ``ValueError`` for a character in neither. The check runs only when the lookup tables for an ``alphabet`` and ``ignore`` are built. The tables are cached, so a call that reuses them runs the same code as before (#111).
-
-	- The docstring of ``one_hot_encode`` no longer says that the sequence can be a list, and its type hint no longer allows one. A list has raised ``TypeError: encoding without a string argument`` since 0.2.2, and still does (#111).
-
-	- The check that an input is one-hot encoded, which ``validate_input`` runs with ``ohe=True`` and most functions that take sequences run on them, compares every value with 0 and 1, rather than collecting the unique values with ``torch.unique``, which sorts all of ``X``. On 1,024 hg38 sequences of 2,114bp on one CPU thread, the check took 0.023 s against 0.20 s for float32 and 0.033 s against 0.11 s for int8, and on 10,000 sequences its peak memory fell from 1,603 MB to 223 MB. Functions that run the check on every call gain the most. On 512 sequences, ``ersatz.substitute``, ``insert`` and ``delete`` took 9 ms against 93 ms, and ``gc_content`` is 9x faster. With DeepSEA Beluga on a GPU, ``marginalize`` on 128 sequences took 0.024 s against 0.056 s, ``space`` over 10 spacings 0.041 s against 0.124 s, and ``deep_lift_shap`` on 8 sequences with 20 given references each 0.074 s against 0.096 s. Which real-valued inputs pass and which raise is unchanged, including those with NaN or infinite values, booleans, half precision and empty tensors. A complex tensor, for which ``torch.unique`` raised ``NotImplementedError``, now passes the check when ``allow_N=False``.
-
-	- ``characters`` takes a numpy array, as its signature says. It called ``.max(dim=0)`` on one and raised ``TypeError: _amax() got an unexpected keyword argument 'dim'``.
-
-variant_effect
---------------
-
-	- The docstring of ``insertion_effect`` gives the encoding of a multi-base insertion: rows at one position, which are inserted in reverse of the order given, so the last row given ends up first. It said to pass rows at adjacent positions, which interleaves the inserted characters with the original ones; a 14 bp insertion encoded that way came out as its characters alternating with the sequence's. The order rule was in a source comment only. A test covers the documented encoding on both ``left`` settings.
-
-	- ``deletion_effect`` no longer keeps a deleted position that sits next to the positions trimmed off to bring every example to the same length. The trimmed flank was found by counting from the trimmed end until enough undeleted positions had been passed, and a deleted position inside that count was marked as both deleted and trimmed, two marks that summed to a value read as kept. When that left the examples with different lengths the call raised ``RuntimeError: shape '[n, 4, -1]' is invalid for input of size ...``; when every example was affected alike the deletion was silently not applied, as with a single deletion at the last position under ``left=False`` or at the first under ``left=True``. Only positions that are not themselves deleted are now counted as flank.
-
-	- ``insertion_effect`` and ``deletion_effect`` build their edited sequences with a numba kernel that works out which position of the original sequence each output position comes from, followed by a single ``torch.gather``. ``insertion_effect`` previously looped over the examples in Python and called ``ersatz.insert`` once per insertion, re-validating the whole sequence each time, and ``deletion_effect`` selected positions through a boolean mask repeated over every channel. With DeepSEA Beluga on a GPU and 1,000 examples of 2,000 bp, building the sequences took 0.15 s for one insertion per example, 1.2 s for ten, and 0.04 s for one deletion, against 0.07 s for one forward pass; it now takes 2-3 ms, so each function costs about its two forward passes. The edited sequences, their dtypes, and the predictions made from them are unchanged. ``insertion_effect`` now accepts ``X`` on a GPU, where it previously raised a device mismatch. It no longer checks that the examples receiving insertions are one-hot encoded, which it did only as a side effect of calling ``ersatz.insert``, and which ``substitution_effect`` and ``deletion_effect`` never did. Several insertions at one position are placed in reverse of the order given, as before; for an example with more than 16 insertions that order had depended on torch's unstable sort, and no longer does.
-
-plot
-----
-
-	- ``plot_logo`` applies ``ylim``. Its type hint and docstring describe a ``(lower, upper)`` pair, but it was read only when annotations were drawn, and then as a single number giving a symmetric range, so ``ylim=(lo, hi)`` on a logo without annotations did nothing and five logos meant to share an axis each got their own. A pair is now applied whether or not annotations are given, a single number ``y`` still means ``(-y, y)``, and the annotation spacing follows the range given.
-
-	- ``plot_logo`` draws characters other than A, C, G and T in gray under the default coloring. A nonzero row for any other character of ``alphabet``, such as N or an amino acid, raised ``KeyError``.
-
-marginalize
------------
-
-	- The docstrings of ``marginalize``, ``marginalize_annotations`` and ``space`` no longer refer to an ``args`` parameter these functions do not have; additional model inputs reach ``func`` through ``kwargs``, as ``args=`` for ``predict``.
-
-	- ``marginalize_annotations`` on a model with several outputs returns one tensor per output whatever the number of annotations. It built its list as ``ablate_annotations`` did, so one annotation on a two-output model returned only the first output, and more annotations than outputs raised ``IndexError: list index out of range``.
-
-Documentation
--------------
-
-	- A new how-to, How To: Hold Sequences Packed, shows how to make packed sequences, pass them to tangermeme functions in place of one-hot encodings, get packed sequences back, and save and load them.
-
-	- The ``alphabet`` parameters of ``insert``, ``substitute``, ``multisubstitute``, ``marginalize``, ``space``, ``greedy_substitution``, ``beam_substitution`` and ``greedy_marginalize`` no longer say that characters outside the alphabet are ignored. A character of a string motif that is not in the alphabet raises a ``ValueError`` in each of them. The exceptions are the characters in ``ignore`` for ``substitute`` and ``multisubstitute``, and ``N`` for ``marginalize``, ``space`` and the three design functions; ``insert`` has none and rejects an ``N`` too. These parameters, and those of ``characters`` and ``one_hot_to_fasta``, no longer list a set, whose characters have no order and which ``characters`` cannot index. The design functions no longer say that ``alphabet`` goes unused for a one-hot encoded motif, since they take motifs only as strings, and ``marginalize`` and ``space`` say that the length of ``alphabet`` is checked against ``X`` either way.
-
-	- The first ``dinucleotide_shuffle`` example in the README printed two shuffles that ``dinucleotide_shuffle(seq, random_state=0)`` does not return. It now shows the two it does.
-
-	- The README is rewritten. It links the paper in Nature Methods and gives its citation, opens with an image of a workflow map of every public function that links to an interactive version, and adds a Speed section comparing one-hot encoding, saturation mutagenesis and DeepLIFT/SHAP with other packages, giving the machine, versions and settings of each measurement. The Usage examples form one walkthrough that defines a small model, run as written, and show their printed output, and they gain sections on ``extract_loci``, PISA, ``local_dinucleotide_shuffle``, the other design methods and plotting. The roadmap is removed, the note that FIMO and Tomtom moved to memesuite-lite is now part of a Related Packages section, and the ``interactive`` extra is listed. The ``space`` example passed ``spacing=10``, which raises ``ValueError: spacing has shape torch.Size([]) but must have shape (-1, 1)``; it now passes a tensor with one row per spacing.
-
-	- Comments and docstrings are trimmed to what the code does not already say. Comments that restated the code or its docstring, described earlier behavior or gave timings are removed, and the long comments in ``recursive_seqlets``, the DeepLIFT rules and ``extract_loci`` are condensed. Among the public docstrings, ``validate_input`` no longer calls ``_validate_input`` an alias kept for compatibility, ``plot_pwm`` no longer describes what it used to do, ``unchunk`` says that ``lengths`` is required and that it returns a list, ``tfmodisco_seqlets`` says that it returns a dataframe, and ``extract_loci``, ``saliency`` and ``dinucleotide_shuffle`` drop sentences on their internals that do not change what they return.
-
+	- Packed inputs cut memory, and time where copying sequences took much of a call. On 10,000 windows of 2,114bp, ``marginalize`` peaked at 1.0 GB against 1.8 GB for an int8 one-hot ``X``, and twenty dinucleotide shuffles of each peaked at 1.4 GB returned packed against 8.7 GB returned one-hot. Calls on one-hot inputs are no slower than before.
 
 saliency
 --------
 
-	- Adds ``tangermeme.saliency.saliency``, input-times-gradient
-	  attribution. It answers the same question as ``deep_lift_shap`` and
-	  ``saturation_mutagenesis`` -- which nucleotides drive this prediction
-	  -- for the cost of one backward pass, at the price of the linearity
-	  assumption: the gradient is the tangent to the model at the observed
-	  sequence, so it saturates and says nothing about finite substitutions.
-	  Use it when there are far more sequences than the other two methods can
-	  afford, or when an op in the model has no DeepLIFT rule registered.
-	  Returns ``(-1, len(alphabet), length)`` signed attributions and takes
-	  ``hypothetical``, so it is interchangeable with ``deep_lift_shap`` and
-	  ``saturation_mutagenesis`` and plots directly with ``plot_logo``. It
-	  satisfies the ``func=`` contract and can be passed to ``ablate``,
-	  ``marginalize``, ``space``, and the ``variant_effect`` functions.
-	  Thanks @cyborgdnx!
-	- ``saliency`` subtracts the mean gradient across the alphabet at each
-	  position before projecting it onto the sequence, following Majdandzic
-	  et al. (Genome Biology 2023). A one-hot sequence lies on a simplex, and
-	  the component of the gradient that points off it describes inputs the
-	  model never saw, which adds noise to the attributions. On Beluga, for
-	  targets 214 and 267 at 25 hg38 loci (24 random cCREs and the Tutorial
-	  A6 locus), the correction raised the Pearson correlation between
-	  saliency and ``deep_lift_shap`` over the central 100bp at 22 of 25 loci
-	  for both targets, by 0.026 in median r. ``deep_lift_shap`` and
-	  ``saturation_mutagenesis`` already remove this component. Pass
-	  ``gradient_correction=False`` for the uncorrected input times
-	  gradient. ``dependency_map`` uses the corrected values by default.
-	- ``saliency`` reads one value per target from the model's output, as
-	  ``deep_lift_shap`` does: trailing axes of length 1 are dropped, and
-	  any other axis after the targets, such as the length axis of a
-	  profile, raises a ``ValueError`` rather than having ``target``
-	  attribute the sum of a whole profile. Pass a ``func`` that reduces the
-	  profile, or wrap the model.
+	- Adds ``tangermeme.saliency.saliency``, input-times-gradient attribution: the question ``deep_lift_shap`` and ``saturation_mutagenesis`` answer, for the cost of one backward pass, at the price of a linear approximation that saturates. It returns ``(-1, len(alphabet), length)`` attributions, takes ``hypothetical``, and satisfies the ``func=`` contract of ``ablate``, ``marginalize``, ``space`` and the ``variant_effect`` functions. Thanks @cyborgdnx!
+
+	- ``saliency`` subtracts the mean gradient across the alphabet at each position, following Majdandzic et al. (Genome Biology 2023), which removes the component pointing off the one-hot simplex. On Beluga at 25 hg38 loci it raised the correlation with ``deep_lift_shap`` at 22 of 25 loci. Pass ``gradient_correction=False`` for the uncorrected values.
+
+	- ``saliency`` reads one value per target from the model's output, as ``deep_lift_shap`` does: trailing axes of length 1 are dropped, and any other axis after the targets raises a ``ValueError``.
 
 dependency_map
 --------------
 
-	- Adds ``tangermeme.dependency_map.dependency_map``, which substitutes
-	  every base at every position and records how far each substitution
-	  moves the attributions across the whole sequence. A model that treats
-	  positions independently yields a purely diagonal map, so off-diagonal
-	  structure is direct evidence of epistasis the model has learned:
-	  cooperative motif pairs appear as blocks, and the flanks a motif
-	  depends on appear as stripes. ``func=`` selects the attribution method
-	  and defaults to ``saliency``; ``deep_lift_shap`` and
-	  ``saturation_mutagenesis`` both satisfy the same contract and can be
-	  passed in when their accuracy is worth the cost. ``start`` and ``end``
-	  restrict which positions are substituted, following the same
-	  convention as ``saturation_mutagenesis``, since substituting every
-	  position of a full-length locus is rarely what you want. Dependency
-	  maps were introduced by Tomaz da Silva et al. (Nature Genetics 2025)
-	  for genomic language models; this adapts them to attributions,
-	  averages over the substitutions at a position rather than taking the
-	  largest, and puts the substituted position on the columns. Thanks
-	  @cyborgdnx!
-	- Substitutions that re-apply the base already present are skipped
-	  rather than computed, because their attributions are unchanged and
-	  their difference is exactly zero, and each position is averaged over
-	  only the substitutions that actually changed it. This removes a
-	  quarter of the passes for DNA and puts a position holding an ``N``,
-	  which has four real substitutions rather than three, on the same scale
-	  as every other position.
-	- Note that the diagonal is not comparable to the rest of the map: it is
-	  the direct effect of a substitution on its own attribution, is
-	  non-zero even for a linear model, and is typically several times
-	  larger than the off-diagonal entries. Mask it before plotting.
-	- ``device`` is forwarded to ``func``, and the model is moved there once
-	  for the whole call, so the two calls to ``func`` per sequence do not
-	  each move it. The model's original device and training mode are
-	  restored afterward. The map is float64 when ``func`` returns float64,
-	  and float32 otherwise, including for half-precision attributions.
-	- An attribution function that draws random references, as
-	  ``deep_lift_shap`` does by default, draws new ones for every
-	  substituted copy, so the map also contains the change of references.
-	  On the Tutorial B8 sequence, holding three shuffles of the original
-	  sequence fixed lowered the cross-motif value from 0.0607 to 0.0152
-	  and the background from 0.0129 to 0.0029. The docstring, the skill and
-	  Tutorial B8 hold the references fixed with a wrapper.
+	- Adds ``tangermeme.dependency_map.dependency_map``, which substitutes every base at every position and records how far each substitution moves the attributions across the sequence. Off-diagonal structure is evidence of epistasis the model has learned: cooperative motif pairs appear as blocks. ``func=`` selects the attribution method, ``saliency`` by default, and ``start`` and ``end`` restrict the substituted positions. Dependency maps were introduced by Tomaz da Silva et al. (Nature Genetics 2025) for genomic language models; this adapts them to attributions, averages over the substitutions at a position rather than taking the largest, and puts the substituted position on the columns. Thanks @cyborgdnx!
 
+	- Substitutions that re-apply the base already present are skipped, a quarter of the passes for DNA, and each position is averaged over the substitutions that changed it, so a position holding an ``N`` is on the same scale as the rest. The diagonal is the direct effect of a substitution on its own attribution and is not comparable to the rest of the map; mask it before plotting.
+
+	- The model is moved to ``device`` once per call and restored afterward. The map is float64 when ``func`` returns float64 and float32 otherwise. An attribution function that draws random references, as ``deep_lift_shap`` does by default, draws new ones for every substituted copy, so the docstring, the skill and Tutorial B8 hold them fixed with a wrapper.
+
+ablate
+------
+
+	- ``ablate_annotations`` on a model with several outputs returns one tensor per output. It built its list over the annotations instead, so one annotation on a two-output model returned only the first output, and more annotations than outputs raised ``IndexError``.
+
+annotate
+--------
+
+	- ``annotate_seqlets`` runs TOMTOM on 4 threads by default, capped by numba's ``NUMBA_NUM_THREADS``, where it used every core. Pass ``n_jobs=-1`` for every core. The annotations do not depend on it.
+
+deep_lift_shap
+--------------
+
+	- ``deep_lift_shap`` drops trailing output axes of length 1, so a model returning ``(batch_size, n_targets, 1)``, such as one ending in ``AdaptiveAvgPool1d(1)``, gets correct convergence deltas. The trailing axis broadcast the deltas into a ``(batch_size, batch_size)`` matrix and raised spurious "Convergence deltas too high" warnings; the attributions were not affected. Any other axis after the targets, such as a profile's length axis, raises a ``ValueError`` saying to wrap the model. Thanks @avantikalal!
+
+	- ``deep_lift_shap`` also warns when the mean convergence delta of a batch exceeds 1% of the mean absolute output difference, since the absolute ``warning_threshold`` let a model with small outputs be 30% wrong in silence. The ``random_state`` docstring says that the seed fixes the references, reference ``k`` drawn with ``random_state + k``, but not the GPU kernels.
+
+	- The softmax rule of ``deep_lift_shap`` and ``pisa`` computes in float32 when the activations are half precision. Under bf16, on a softmax model, its attributions differed from float32 by up to 0.03; they now differ by at most 2.7e-4.
+
+	- With a ``random_state`` and the default references, ``deep_lift_shap`` draws each batch's references in one call to ``dinucleotide_shuffle``, with the same seeds as before, so the references and attributions are unchanged. On 16 sequences of 2,114bp a call took 27 ms against 117 ms. Prompted by jmschrei/cherimoya#103. Thanks @emattei!
+
+	- The arithmetic of the rescale and normalization rules moves into private functions, ``_rescale``, ``_layer_normalization_stats``, ``_layer_normalization_terms`` and ``_layer_normalization_grad``, that take broadcasting tensors, so code computing DeepLIFT multipliers without hooks can apply the same rules. The gradients are bit-identical.
+
+ersatz
+------
+
+	- ``dinucleotide_shuffle`` accepts unknown characters, encoded as all-zero columns, with ``allow_N=True``. Each is shuffled as a fifth character, so every shuffle keeps the number of unknown characters and the count of every dinucleotide, and an assembly gap stays one run. The default, ``allow_N=False``, still rejects them. Thanks @Al-Murphy!
+
+	- ``dinucleotide_shuffle`` shuffles a whole batch in one numba call that releases the GIL, with bit-identical shuffles; one shuffle of each of 64 sequences of 2,114bp took 2.9 ms against 17.1 ms. It takes ``n_jobs``, 1 by default, with the same shuffles for every value; the default stays at one thread because, under numba's OpenMP layer, a process that has run threads cannot fork workers afterwards. It takes one ``random_state`` per sequence, so that sequence ``i`` is shuffled as it would be alone. ``_dinucleotide_shuffle``, which gReLU imports, keeps its signature and output but now raises a ``ValueError`` on input that is not one-hot.
+
+	- ``dinucleotide_shuffle`` on a region of one or two characters returns the region, its only shuffle, for one shuffle and raises the ``ValueError`` for identical shuffles for more. It raised a ``RuntimeError``.
+
+	- ``randomize`` casts ``probs`` to float64 and renormalizes rows that sum to 1 within 1e-6. A Python list was cast to float32, after which numpy rejected rows such as hg38's base frequencies as not summing to 1.
+
+io
+--
+
+	- ``extract_loci`` reads bigWigs with figwig, in one call on the new ``n_jobs`` threads, 4 by default, and reads the windows of a FASTA path from a memory map through its ``.fai``, encoding them with numba. On 167,750 loci with one bigWig, a call took 0.35 s where it took 7.8 s, with identical outputs, errors and warnings. A compressed FASTA, or a window holding bytes that pyfaidx changes, is read through pyfaidx as before. The FASTA changes come from #107. figwig is a new dependency and pybigtools no longer is.
+
+	- A URL in ``signals`` or ``in_signals`` raises a ``ValueError`` saying to download the file, a bigWig figwig does not read, such as one with overlapping intervals, raises figwig's error, and a bigBed raises a ``ValueError`` that names it; pybigtools panicked on bigBed files with an exception that ``except Exception`` does not catch. bigWigs opened with ``pybigtools.open`` are deprecated: they are read one locus at a time with a ``FutureWarning`` until tangermeme 1.9.0.
+
+	- The track, browser and ``#`` lines of a BED file are skipped. They raised a ``TypeError``, or left the coordinates as floats or the summits as NaN.
+
+	- Window fixes: a locus whose odd window runs one base off the end of its chromosome is dropped, where it came back one base short and broke stacking; without ``signals``, ``out_window`` no longer drops loci near chromosome ends; and the mask from ``return_mask=True`` has one entry per locus when ``n_loci`` is set, where it was too short to index the loci with. ``exclusion_lists`` treats ends as exclusive, so ``chr7 100 200`` no longer removes loci in ``chr7 200 299``, and skips regions on chromosomes that are not in ``sequences`` rather than raising ``KeyError``.
+
+	- Clearer errors: a ``ValueError`` names the chromosomes of loci missing from ``sequences``, where a bare ``KeyError`` was raised, and says why loci were removed when none remain. ``min_counts`` or ``max_counts`` without ``signals``, an out-of-range ``target_idx``, ``n_loci`` below 1, and a bare filename or dictionary as ``signals`` raise a ``ValueError``; the thresholds were ignored, and ``n_loci=0`` returned every locus.
+
+	- ``extract_loci`` accepts ``os.PathLike`` paths, a ``pyfaidx.Fasta`` opened with ``as_raw=True``, and dictionaries with integer keys. Dictionary signals are zero-filled as bigWigs are, with a ``TangermemeWarning`` for a missing chromosome, where they raised or came back short. The returned sequences are C-contiguous, and the return annotation is ``torch.Tensor | list[torch.Tensor]``.
+
+	- ``one_hot_to_fasta`` writes an all-zero column as N and takes numpy arrays. It raised ``ValueError`` on the first and ``TypeError`` on the second.
+
+match
+-----
+
+	- ``extract_matching_loci`` with a ``bigwig`` returns loci again. It asked pybigtools 0.2.5 for a summary it does not have, so every signal was NaN and no loci were returned. The bigWig is now read with figwig and summed in float64, and chromosomes that the bigWig lacks, or whose length differs from the FASTA's, no longer raise.
+
+pisa
+----
+
+	- ``pisa`` reads ``n_outputs`` from axis 1 of the model's output, the axis it indexes, rather than the last. A model returning ``(batch_size, n_outputs, 1)`` was attributed for its first output only, with no error. Trailing axes of length 1 are dropped, as in ``deep_lift_shap``, and any other axis after the outputs raises a ``ValueError``; the Notes no longer claim that profile models are supported. Thanks @avantikalal!
+
+	- ``pisa`` passes each of ``args`` with a batch axis matching the sequences. It dropped the batch axis and doubled the feature axis, so a model that added an argument of shape ``(n, d)`` to its output raised a ``RuntimeError`` for ``d > 1``, and an argument of shape ``(n,)`` always raised one.
+
+predict
+-------
+
+	- ``predict`` and ``saliency`` move an integer batch, such as an int8 one-hot encoding, to the device before casting it to a wider float type, copying a quarter of the bytes. The outputs are bit-identical. On an H200 GPU, ``predict`` on 10,000 windows took 0.257 s against 0.284 s.
+
+product
+-------
+
+	- ``apply_pairwise`` requires ``args``, as ``apply_product`` does. Its default of ``None`` raised ``TypeError`` on every call.
+
+saturation_mutagenesis
+----------------------
+
+	- ``saturation_mutagenesis`` computes the edited predictions with fastISM (Nair et al., Bioinformatics 2022) through the new ``fast`` keyword, ``True`` by default. The model is captured with ``torch.export``, and for each edit the convolutions, pooling and elementwise operations are computed only over the positions the edit can change; other operations, such as dense layers or attention, run at full length on the cached activations. On a GPU, ISM of 16 sequences through a ChromBPNet count head took 13.4 s against 31.1 s, and on the CPU, 10 Beluga inputs took 8.4 s against 35.0 s. Results match ``fast=False`` up to floating-point rounding, and ``fast=False`` matches the previous version exactly.
+
+	- A job that ``fast=False`` would finish in under thirty seconds skips the fast path. Otherwise the fast path is checked against ``fast=False`` on one batch of edits, and when the model cannot be captured, the two differ, or the fast path is slower, a ``TangermemeWarning`` gives the reason and the call continues with ``fast=False``. On a GPU the fast path gains more from a larger ``batch_size``. Pass ``fast=False`` to skip the attempt.
+
+seqlet
+------
+
+	- ``recursive_seqlets`` gives each span the p-value its docstring describes, the probability of a sum of bins at least as large under the null, and reports the span's own p-value rather than the largest over its prefixes. It binned the span's continuous sum and looked it up in a table of P(S > i) + P(S = 0), so where most positions sat at the minimum nothing was called, and a run at the minimum could get a p-value of 0.
+
+	- Edge cases: seqlets can end at the last position of a sequence, where the last ``min_seqlet_len`` positions were excluded; ``min_seqlet_len=1`` calls a position only when it is significant on its own, where it called nearly every position; a constant input or a sequence shorter than ``min_seqlet_len`` returns an empty frame, where it raised or wrote out of bounds; and a ``threshold`` that is NaN or above 1 raises a ``ValueError``, where it looped forever. On real attributions, 89% to 94% of the seqlets called are the same spans as before.
+
+	- ``recursive_seqlets`` can choose its threshold from control attributions, such as those of dinucleotide shuffles. Given ``X_control``, it estimates the false discovery rate at 117 thresholds from the seqlets called on the control and calls seqlets at the largest threshold whose estimate is at or below ``target_fdr``, 0.1 by default; ``return_fdr=True`` also returns the estimates. A p-value threshold has no stated error rate: on attributions from seven models, 31% to 82% of the seqlets called at ``threshold=0.01`` were no more frequent than on shuffled copies. When no threshold reaches the target, a ``TangermemeWarning`` is given and the empty frame has the dtypes of a full one.
+
+	- The docstring says that the p-values rank spans rather than give error rates, and that negative seqlets come from the negated attributions; running on absolute values, as it suggested, pools both tails, so weaker negative seqlets are never significant.
+
+	- ``recursive_seqlets`` is faster, with bitwise-identical output. On 1,000 peaks of 2,114bp, a call took 0.015 s against 0.43 s without a control and 0.10 s against 18.2 s with one. Compiling the numba kernels, once per environment, takes 7.0 s against 2.8 s.
+
+utils
+-----
+
+	- ``one_hot_encode`` is faster, most of all for four ASCII characters such as the default: a 2,114bp window took 2.45 µs against 6.66 µs, and chr1 0.12 s against 0.38 s, with identical outputs and errors. A sequence of mostly unknown characters now uses more memory, since every row is written. It takes ``n_jobs``, which helped only from about 8Mbp.
+
+	- ``one_hot_encode`` raises a ``ValueError`` for a non-ASCII character in ``alphabet`` or ``ignore``. Each byte of such a character was treated as a character of its own, which shifted the encoding and could write out of bounds and abort Python. Its docstring no longer says that a list sequence is accepted (#111). It accepts a tuple ``alphabet``, which raised a ``TypeError``.
+
+	- The one-hot check of ``validate_input`` and the functions that take sequences compares values with 0 and 1 rather than sorting all of ``X`` with ``torch.unique``. It took 0.023 s against 0.20 s on 1,024 sequences, and peak memory on 10,000 fell from 1.6 GB to 0.2 GB. Which inputs pass is unchanged.
+
+	- ``reverse_complement`` raises a ``ValueError`` on a batched tensor, which it permuted along the batch axis and returned in the wrong shape. ``characters`` takes a numpy array, on which it raised ``TypeError``.
+
+variant_effect
+--------------
+
+	- ``deletion_effect`` no longer drops a deletion that sits next to the trimmed flank. It raised a ``RuntimeError`` when that left examples of different lengths, and otherwise silently did not apply the deletion.
+
+	- ``insertion_effect`` and ``deletion_effect`` build their edited sequences with a numba kernel and one ``torch.gather``, so each costs about its two forward passes: ten insertions per example on 1,000 examples took 2-3 ms to build against 1.2 s. The outputs are unchanged, and ``insertion_effect`` accepts ``X`` on a GPU. Several insertions at one position are placed in reverse of the order given, and the docstring now gives this as the encoding of a multi-base insertion, where it said to use adjacent positions, which interleaves the inserted characters with the sequence.
+
+plot
+----
+
+	- ``plot_logo`` applies a ``(lower, upper)`` ``ylim`` with or without annotations; it read ``ylim`` only with annotations, as one number. It draws characters other than A, C, G and T in gray under the default coloring, where they raised ``KeyError``.
+
+marginalize
+-----------
+
+	- ``marginalize_annotations`` on a model with several outputs returns one tensor per output, fixed as in ``ablate_annotations``. The docstrings of ``marginalize``, ``marginalize_annotations`` and ``space`` no longer mention an ``args`` parameter; model inputs reach ``func`` through ``kwargs``.
+
+Documentation
+-------------
+
+	- A new how-to, How To: Hold Sequences Packed, shows how to make, use, save and load packed sequences.
+
+	- The README is rewritten. It links the paper in Nature Methods with its citation, opens with a workflow map of every public function, compares speed with other packages, and walks through one example model, with new sections on ``extract_loci``, PISA, ``local_dinucleotide_shuffle``, the design methods and plotting. Its ``dinucleotide_shuffle`` example printed shuffles the call does not return, and its ``space`` example raised a ``ValueError``; both are fixed.
+
+	- The ``alphabet`` parameters of the ``ersatz``, ``marginalize``, ``space`` and design functions say that a character of a string motif outside the alphabet raises a ``ValueError``, rather than being ignored, and no longer list a set.
+
+	- Comments and docstrings in the library are trimmed to what the code does not already say, and several docstrings that were wrong are corrected: ``validate_input``, ``plot_pwm``, ``unchunk`` and ``tfmodisco_seqlets``.
+
+Claude Code skill
+-----------------
+
+	- The skill is rewritten from eight challenge runs and a no-skill quiz, keeping what fresh agents got wrong: it is 58 KB where it was 110 KB, and the common attribution task loads about 3,000 tokens where it loaded 8,700. The audit of unhooked operations moves to ``references/deep_lift_shap-unhooked-ops.md`` and ``scripts/audit_deeplift.py``, which also checks summation-to-delta relative to the output scale. New references cover ``pisa``, the ``ersatz`` primitives and ``dependency_map``.
+
+	- New lessons from the runs include: GPU attributions repeat only to about 1e-6 unless cuDNN is deterministic; ``deep_lift_shap`` memory follows ``batch_size`` times the activation graph; ``recursive_seqlets`` with ``X_control`` can return an empty frame; ``count_annotations`` wraps at 256; and ``reverse_complement`` returned the wrong shape on a batch. Corrected: ``deep_lift_shap`` has no ``start`` or ``end`` to pass through ``additional_func_kwargs``, and ``model(X)`` must return ``(batch, n_outputs)``, not ``(batch, channels, length)``.
+
+	- The references follow this release's library changes: ``PackedSequence``, ``fast=True`` in ISM, ``extract_loci``'s figwig reader, ``n_jobs`` and errors, ``dinucleotide_shuffle``'s ``allow_N``, per-sequence seeds and ``n_jobs``, the output shapes ``deep_lift_shap`` and ``pisa`` accept, and choosing a seqlet threshold with ``X_control``.
+
+	- If you installed the skill with ``tangermeme-install-skills``, re-run it with ``--force`` to pick up the corrections.
 
 Testing
 -------
 
-	- Tests that could not fail are fixed or removed. In each case the fixed test was shown to fail with the property it guards broken. Several passed whatever the code did: the signal-threshold test of the background search asserted inside a loop over an empty result; ``test_saturation_mutagenesis_ordering`` compared at a tolerance above every attribution it compared; ``test_deep_lift_shap_random_state`` passed on a shape mismatch; ``test_pisa_n_shuffles`` and three pisa warning checks called ``deep_lift_shap``; the deep_lift_shap cleanup-on-error tests raised before any hook ran; several ersatz error tests raised from a different check than the one they named; two beam search tests passed when no search step ran; and the greedy ``reverse_complement`` test never set ``reverse_complement=True``.
-
-	- Tests that checked pandas, figwig, torch or the toy models rather than tangermeme are removed or rewritten, as are cases that compared a call with itself, such as a batch size above the number of sequences or ``n_jobs=1`` against ``n_jobs=1``, and ``device`` parameters on tests that raise before anything is moved.
-
-	- Tests that never ran now do: the check of the error raised for a block-gzip FASTA without BioPython, which was skipped whenever BioPython was installed and now hides it through ``sys.modules``; the install-skills console script, through in-process calls of ``main()``; and the four skipped cases of the ``PackedSequence.from_one_hot`` value check. ``test_deep_lift_shap_subclassed_op`` is a strict xfail instead of a skip.
-
-	- Tests that another test fully covers are removed, and tests that differ only in an input or a parameter are merged into parametrized tests, keeping every assertion of the tests they replace. Each removal was checked with a break of the library that both the removed test and the test covering it catch. Among the removals are fifteen older ``recursive_seqlets`` tests that the brute-force reference tests cover, and among the merges the single-model tables of ``deep_lift_shap``, ``pisa`` and ``predict``. The suite loses 256 test functions, 104 collected cases and 2,935 lines.
-
-	- Tests that checked only a shape, that an axis came back, or that two results differed now check values, each against the strongest reference available and each shown to fail with the property it guards broken. Among them: the max-pool rules of ``deep_lift_shap`` against DeepLIFT computed one layer at a time through torch's own max-pool gradient; ``pisa`` on single-output models against ``deep_lift_shap``; ``gapped_kmers`` against a brute-force enumeration; ``recursive_seqlets`` on real attributions against the brute-force reference; ``one_hot_encode`` against the reference at the boundary of its two-bases-at-a-time path and at even lengths beyond it, where every length tested before was odd; and ``plot_logo``, ``plot_pwm`` and the glyph helpers by what they draw. ``read_vcf`` on a gzipped file, ``one_hot_to_fasta`` in append mode, ``additional_func_kwargs`` in ``apply_pairwise`` and ``apply_product``, a non-contiguous control in ``recursive_seqlets``, and unknown characters in packed deletion, insertion and reference inputs are tested for the first time.
-
-	- Comments and docstrings in the tests are trimmed in the same way as those in the library: comments that restated an assertion or the test's name, narratives of fixed bugs longer than a clause, and explanations repeated within a file are removed, and the full-line comments go from 1,634 to 1,232. Comments that had become wrong are corrected: ``pisa`` no longer keeps a copy of the rule table of its own, ``test_dependency_map_receptive_field`` reaches two positions rather than one, and the ``cuda_device`` fixture no longer says that torch supports fp16 and bf16 autocast only on the GPU. ``test_ersatz.py`` and ``test_product.py`` were headed with the names of other files.
+	- Tests that could not fail, or never ran, are fixed, each shown to fail with the property it guards broken; tests that another test fully covers are removed and near-duplicates parametrized, losing 256 test functions and 2,935 lines; and tests that checked only shapes now check values against independent references. Comments in the tests are trimmed as in the library.
 
 
 Version 1.5.0
