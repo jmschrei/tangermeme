@@ -18,6 +18,8 @@ io
 
 	- tangermeme requires figwig 0.3.2 or later, the first release with ``FigWigReader(path, tracks=...)`` and ``read(absent="zero")``.
 
+	- The test of a bigWig whose data blocks are out of order in its index expects ``extract_loci`` to read the values written, as figwig does from 0.2.0, where it expected a ``ValueError``. pybigtools 0.2.5 reads other values from that file, so the test compares figwig with the values written alone.
+
 Version 1.6.0
 =============
 

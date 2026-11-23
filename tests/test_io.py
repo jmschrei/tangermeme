@@ -2814,7 +2814,13 @@ LAYOUTS = ["short_chrom", "special_values", "absent_chrom",
 	"chrom_without_data", "zero_length", "overlapping", "unsorted_blocks"]
 
 # The layouts figwig raises for, at least for windows across the defect.
-FIGWIG_RAISES = ("overlapping", "unsorted_blocks")
+FIGWIG_RAISES = ("overlapping",)
+
+# The layouts pybigtools reads with other values than the file holds, so
+# figwig is checked against the values written alone. pybigtools 0.2 gives
+# wrong values for a chromosome whose data blocks are out of order in the
+# index, which figwig reads since 0.2.0.
+PYBIGTOOLS_DIFFERS = ("unsorted_blocks",)
 
 
 def _layout(name, rng):
@@ -2946,13 +2952,19 @@ def test_extract_loci_bigwig_layouts(layout_bigwigs, layout_loci, monkeypatch,
 
 	assert len(calls) > 0 and errors == []
 
-	expected, expected_messages = _layout_call(layout_loci,
-		pybigtools.open(filename), config)
-	assert messages == expected_messages
-	for tensor, expected_tensor in zip(result, expected):
-		assert tensor.dtype == expected_tensor.dtype
-		assert tensor.is_contiguous()
-		assert tensor.numpy().tobytes() == expected_tensor.numpy().tobytes()
+	if layout in PYBIGTOOLS_DIFFERS:
+		# Every chromosome of the loci is in the file, so nothing warns.
+		assert messages == []
+		for tensor in result:
+			assert tensor.is_contiguous()
+	else:
+		expected, expected_messages = _layout_call(layout_loci,
+			pybigtools.open(filename), config)
+		assert messages == expected_messages
+		for tensor, expected_tensor in zip(result, expected):
+			assert tensor.dtype == expected_tensor.dtype
+			assert tensor.is_contiguous()
+			assert tensor.numpy().tobytes() == expected_tensor.numpy().tobytes()
 
 	if values is not None:
 		track = {chrom: v for chrom, v in values.items() if chrom in
