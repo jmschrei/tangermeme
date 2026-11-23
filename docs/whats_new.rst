@@ -16,7 +16,7 @@ io
 
 	- ``target_idx`` indexes the channels of the returned signals, which is the index into ``signals`` when every signal gives one channel, as every signal did before. With a figwig file in ``signals``, it counts the file's tracks.
 
-	- tangermeme requires figwig 0.4.0 or later, the first release with ``FigWigReader(path, tracks=...)`` and ``read(absent="zero")``.
+	- tangermeme requires figwig 0.3.2 or later, the first release with ``FigWigReader(path, tracks=...)`` and ``read(absent="zero")``.
 
 Version 1.6.0
 =============
