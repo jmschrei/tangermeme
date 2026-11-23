@@ -208,7 +208,7 @@ print(shuf.shape)
 
 #### Loading Data
 
-`tangermeme.io` reads the formats you need to get sequences and signal into a model. `extract_loci` takes a BED file of loci (here, peaks), a FASTA file of the genome, and optionally bigWig files of signal, and returns one-hot encoded sequences centered on each locus along with the signal over a window of each. It reads the FASTA through a memory map and the bigWigs with [figwig](https://github.com/jmschrei/figwig), both on `n_jobs` threads.
+`tangermeme.io` reads the formats you need to get sequences and signal into a model. `extract_loci` takes a BED file of loci (here, peaks), a FASTA file of the genome, and optionally bigWig files of signal, or figwig files that hold many tracks each, and returns one-hot encoded sequences centered on each locus along with the signal over a window of each. It reads the FASTA through a memory map and the bigWig and figwig files with [figwig](https://github.com/jmschrei/figwig), both on `n_jobs` threads.
 
 ```python
 from tangermeme.io import extract_loci
@@ -512,7 +512,7 @@ print(y_before.shape, y_after.shape)
 - [memesuite-lite](https://github.com/jmschrei/memesuite-lite): implementations of FIMO and Tomtom that do not require PyTorch. The command-line FIMO and Tomtom tools that used to ship with tangermeme now live there, with expanded functionality.
 - [bpnet-lite](https://github.com/jmschrei/bpnet-lite): a minimal implementation of BPNet and ChromBPNet, whose models produced several of the figures and timings above.
 - [ledidi](https://github.com/jmschrei/ledidi): gradient-based design of minimal edits to a sequence so that a model predicts a desired output.
-- [figwig](https://github.com/jmschrei/figwig): a fast, multithreaded reader and writer of bigWig files, which `extract_loci` uses.
+- [figwig](https://github.com/jmschrei/figwig): a fast, multithreaded reader and writer of bigWig files and of its own figwig files of many tracks, which `extract_loci` uses.
 
 ## Citation
 

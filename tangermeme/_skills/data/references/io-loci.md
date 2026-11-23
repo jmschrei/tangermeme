@@ -6,10 +6,10 @@
 extract_loci(
 	loci,                 # BED/narrowPeak path (track, browser, # lines skipped), DataFrame, or a list of them
 	sequences,            # FASTA path (fastest), pyfaidx.Fasta, or {chrom: tensor}
-	signals=None,         # list of bigWig paths or figwig.BigWigReader -> y; a bare path raises
-	in_signals=None,      # list of bigWigs -> X_in (controls)
+	signals=None,         # list of bigWig/figwig (.fw) paths, figwig readers, or dicts -> y; a bare path raises
+	in_signals=None,      # the same -> X_in (controls)
 	chroms=None, in_window=2114, out_window=1000, max_jitter=0,
-	min_counts=None, max_counts=None, target_idx=0,   # inclusive, on signals[target_idx]; need signals
+	min_counts=None, max_counts=None, target_idx=0,   # inclusive, on channel target_idx of y; need signals
 	n_loci=None, summits=False, alphabet=['A','C','G','T'], ignore=['N'],
 	exclusion_lists=None, # BED path, DataFrame, or list
 	return_mask=False, verbose=False, n_jobs=4, return_packed=False,
@@ -18,9 +18,18 @@ extract_loci(
 
 **The return count follows the arguments.** `X` alone comes back as a bare
 int8 tensor `(n, 4, in_window)`; otherwise a list in the order `X`, `y`
-`(n, n_signals, out_window)` if `signals`, `X_in` if `in_signals`, `mask` if
+`(n, channels, out_window)` if `signals`, `X_in` if `in_signals`, `mask` if
 `return_mask`. Unpack to match what you asked for. Leave `X` int8: every
 function except `pisa` upcasts per batch.
+
+**A figwig file gives a channel per track.** A `.fw` path (told apart by its
+first bytes, not the extension) gives every track in the file's order; to
+take some tracks or reorder them, pass
+`figwig.FigWigReader(path, tracks=["atac.+", "atac.-"])` or
+`tracks={"assay": "ATAC-seq"}`. Other signals give one channel each, so
+`target_idx` counts tracks: with `[ctl.bw, k562.fw]` of two tracks,
+`target_idx=2` is the figwig file's second track. A chromosome the file
+lacks gives zeros and a `TangermemeWarning` per locus, as with a bigWig.
 
 - Rows are dropped, so `n` is not `len(loci)`: windows past a chromosome
   end, chromosomes not in `chroms`, counts outside the thresholds, a 100 bp
