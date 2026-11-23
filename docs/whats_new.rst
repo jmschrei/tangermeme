@@ -6,6 +6,20 @@ Release History
 ===============
 
 
+Unreleased
+==========
+
+io
+--
+
+	- ``extract_loci`` takes figwig files (``.fw``) in ``signals`` and ``in_signals``, as paths or as ``figwig.FigWigReader`` objects, each giving a channel per track. A reader opened with ``figwig.FigWigReader(path, tracks=[...])`` gives the tracks it holds, in its order, so a few tracks of a file of many are read without the rest. A file of many tracks had to be converted to a bigWig per track first. A path is told to be a figwig file by its first bytes, and a locus on a chromosome the file does not have is zero with a ``TangermemeWarning``, as for a bigWig.
+
+	- ``target_idx`` indexes the channels of the returned signals, which is the index into ``signals`` when every signal gives one channel, as every signal did before. With a figwig file in ``signals``, it counts the file's tracks.
+
+	- tangermeme requires figwig 0.3.2 or later, the first release with ``FigWigReader(path, tracks=...)`` and ``read(absent="zero")``.
+
+	- The test of a bigWig whose data blocks are out of order in its index expects ``extract_loci`` to read the values written, as figwig does from 0.2.0, where it expected a ``ValueError``. pybigtools 0.2.5 reads other values from that file, so the test compares figwig with the values written alone.
+
 Version 1.6.0
 =============
 

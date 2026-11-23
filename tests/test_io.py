@@ -2814,7 +2814,13 @@ LAYOUTS = ["short_chrom", "special_values", "absent_chrom",
 	"chrom_without_data", "zero_length", "overlapping", "unsorted_blocks"]
 
 # The layouts figwig raises for, at least for windows across the defect.
-FIGWIG_RAISES = ("overlapping", "unsorted_blocks")
+FIGWIG_RAISES = ("overlapping",)
+
+# The layouts pybigtools reads with other values than the file holds, so
+# figwig is checked against the values written alone. pybigtools 0.2 gives
+# wrong values for a chromosome whose data blocks are out of order in the
+# index, which figwig reads since 0.2.0.
+PYBIGTOOLS_DIFFERS = ("unsorted_blocks",)
 
 
 def _layout(name, rng):
@@ -2946,13 +2952,19 @@ def test_extract_loci_bigwig_layouts(layout_bigwigs, layout_loci, monkeypatch,
 
 	assert len(calls) > 0 and errors == []
 
-	expected, expected_messages = _layout_call(layout_loci,
-		pybigtools.open(filename), config)
-	assert messages == expected_messages
-	for tensor, expected_tensor in zip(result, expected):
-		assert tensor.dtype == expected_tensor.dtype
-		assert tensor.is_contiguous()
-		assert tensor.numpy().tobytes() == expected_tensor.numpy().tobytes()
+	if layout in PYBIGTOOLS_DIFFERS:
+		# Every chromosome of the loci is in the file, so nothing warns.
+		assert messages == []
+		for tensor in result:
+			assert tensor.is_contiguous()
+	else:
+		expected, expected_messages = _layout_call(layout_loci,
+			pybigtools.open(filename), config)
+		assert messages == expected_messages
+		for tensor, expected_tensor in zip(result, expected):
+			assert tensor.dtype == expected_tensor.dtype
+			assert tensor.is_contiguous()
+			assert tensor.numpy().tobytes() == expected_tensor.numpy().tobytes()
 
 	if values is not None:
 		track = {chrom: v for chrom, v in values.items() if chrom in
@@ -4112,3 +4124,202 @@ def test_extract_loci_packed_alphabet():
 
 	assert X_packed.alphabet == tuple(alphabet)
 	assert torch.equal(X_packed.to_one_hot(), X)
+
+
+##
+
+
+def _write_figwig(path, bigwigs, names):
+	# The bigWigs as the tracks of one figwig file, on the chromosomes of the
+	# first, with NaN where a bigWig has no interval.
+	readers = [figwig.BigWigReader(bigwig) for bigwig in bigwigs]
+	chrom_sizes = readers[0].chrom_sizes
+	tracks = [{'name': name, 'dtype': 'float32', 'source': bigwig}
+		for name, bigwig in zip(names, bigwigs)]
+	with figwig.FigWigWriter(path, chrom_sizes, tracks, tile=64) as writer:
+		for chrom, length in chrom_sizes.items():
+			values = numpy.stack([reader.read(chrom, [0], length,
+				missing=numpy.nan)[0] for reader in readers])
+			writer.write(chrom, [0], values[None])
+	return path
+
+
+@pytest.fixture(scope="module")
+def fw_paths(tmp_path_factory):
+	# both.fw holds test.bw and test2.bw, and chr1.fw holds test3.bw, which
+	# has only chr1.
+	path = tmp_path_factory.mktemp("figwig")
+	bigwigs = ["tests/data/test.bw", "tests/data/test2.bw"]
+	return {
+		'both': _write_figwig(str(path / "both.fw"), bigwigs, ['test', 'test2']),
+		'chr1': _write_figwig(str(path / "chr1.fw"), ["tests/data/test3.bw"],
+			['test3']),
+	}
+
+
+def test_load_signals_figwig_files(fw_paths):
+	reader = figwig.FigWigReader(fw_paths['both'])
+	held = figwig.FigWigReader(fw_paths['both'], tracks=['test2'])
+	signals = _load_signals([fw_paths['both'], pathlib.Path(fw_paths['chr1']),
+		reader, held, "tests/data/test.bw"])
+
+	assert isinstance(signals[0], figwig.FigWigReader)
+	assert isinstance(signals[1], figwig.FigWigReader)
+	assert [track['name'] for track in signals[1].tracks] == ['test3']
+	assert signals[2] is reader
+	assert signals[3] is held
+	assert isinstance(signals[4], figwig.BigWigReader)
+
+	# A figwig file is told apart by its first bytes, not its extension.
+	assert isinstance(_load_signals([_write_figwig(str(pathlib.Path(
+		fw_paths['both']).parent / "named.bw"), ["tests/data/test.bw"],
+		['test'])])[0], figwig.FigWigReader)
+
+
+def test_extract_signals_figwig_file(fw_paths):
+	paths = ["tests/data/test.bw", "tests/data/test2.bw"]
+	expected = _extract_signals(_load_signals(paths), SIGNAL_CHROMS,
+		SIGNAL_STARTS, 8, 2)
+
+	values = _extract_signals(_load_signals([fw_paths['both']]), SIGNAL_CHROMS,
+		SIGNAL_STARTS, 8, 2)
+
+	assert values.dtype == numpy.float32
+	assert values.shape == (6, 2, 8)
+	assert values.flags.c_contiguous
+	assert values.tobytes() == expected.tobytes()
+
+	# A reader of some tracks gives those, in its order.
+	held = figwig.FigWigReader(fw_paths['both'], tracks=['test2', 'test'])
+	values = _extract_signals([held], SIGNAL_CHROMS, SIGNAL_STARTS, 8, 1)
+	assert values.tobytes() == expected[:, ::-1].copy().tobytes()
+
+
+def test_extract_signals_figwig_channels(fw_paths, dict_signal):
+	# Each figwig file gives a channel per track, between the channels of
+	# the signals before and after it.
+	signals = [dict_signal, figwig.FigWigReader(fw_paths['both']),
+		"tests/data/test3.bw", figwig.FigWigReader(fw_paths['both'],
+		tracks=['test2'])]
+	with warnings.catch_warnings():
+		warnings.simplefilter("ignore", TangermemeWarning)
+		values = _extract_signals(_load_signals(signals), SIGNAL_CHROMS,
+			SIGNAL_STARTS, 8, 2)
+		alone = [_extract_signals(_load_signals([signal]), SIGNAL_CHROMS,
+			SIGNAL_STARTS, 8, 2) for signal in signals]
+
+	assert values.shape == (6, 5, 8)
+	assert values.flags.c_contiguous
+	assert values.tobytes() == numpy.concatenate(alone, axis=1).tobytes()
+
+
+def test_extract_signals_figwig_missing_chrom_warns(fw_paths):
+	# chr1.fw only has chr1: each window elsewhere is zero and warns, as a
+	# bigWig without the chromosome does.
+	with warnings.catch_warnings(record=True) as record:
+		warnings.simplefilter("always")
+		values = _extract_signals(_load_signals([fw_paths['chr1']]),
+			SIGNAL_CHROMS, SIGNAL_STARTS, 8, 2)
+
+	with warnings.catch_warnings(record=True) as bigwig_record:
+		warnings.simplefilter("always")
+		expected = _extract_signals(_load_signals(["tests/data/test3.bw"]),
+			SIGNAL_CHROMS, SIGNAL_STARTS, 8, 2)
+
+	assert values.tobytes() == expected.tobytes()
+	assert (values[SIGNAL_CHROMS != 'chr1'] == 0).all()
+	assert [w.category for w in record] == [TangermemeWarning] * 3
+	assert sorted(str(w.message) for w in record) == sorted(str(
+		w.message).replace("bigwig", "figwig") for w in bigwig_record)
+
+	with warnings.catch_warnings(record=True) as record:
+		warnings.simplefilter("always")
+		_extract_signals(_load_signals([fw_paths['chr1']]), SIGNAL_CHROMS,
+			SIGNAL_STARTS, 8, 2, warn=False)
+	assert record == []
+
+
+def test_extract_signals_figwig_nan_and_past_end(tmp_path):
+	# NaN and values past a chromosome's end are zero, as for a bigWig, and
+	# integer tracks read as float32. A figwig file holds no infinities.
+	path = str(tmp_path / "special.fw")
+	values = numpy.array([[1.5, numpy.nan, -3.0, 4.0, 2.0, 0.0]],
+		dtype=numpy.float32)
+	tracks = [{'name': 'special', 'dtype': 'float32'}, {'name': 'counts',
+		'dtype': 'uint16'}]
+	with figwig.FigWigWriter(path, {'chr1': 6}, tracks) as writer:
+		writer.write('chr1', [0], numpy.stack([values, numpy.array([[3, 0, 1,
+			65535, 0, 7]], dtype=numpy.float32)], axis=1))
+
+	got = _extract_signals(_load_signals([path]), numpy.array(['chr1', 'chr1']),
+		numpy.array([0, 3]), 6, 1)
+
+	assert got.dtype == numpy.float32
+	assert got[0, 0].tolist() == [1.5, 0.0, -3.0, 4.0, 2.0, 0.0]
+	assert got[0, 1].tolist() == [3, 0, 1, 65535, 0, 7]
+	assert got[1, 0].tolist() == [4.0, 2.0, 0.0, 0.0, 0.0, 0.0]
+	assert got[1, 1].tolist() == [65535, 0, 7, 0, 0, 0]
+
+
+@pytest.mark.parametrize("kwargs", [{}, {'max_jitter': 3, 'in_window': 7,
+	'out_window': 5}, {'min_counts': 10.0, 'return_mask': True},
+	{'max_counts': 12.0, 'target_idx': 1, 'n_loci': 2, 'return_mask': True},
+	{'min_counts': 1.0, 'target_idx': -1}, {'n_jobs': -1}])
+def test_extract_loci_figwig(fw_paths, kwargs):
+	# A figwig file of test.bw and test2.bw gives what the two bigWigs give,
+	# as signals and as in_signals, and target_idx counts its tracks.
+	kwargs = {'in_window': 8, 'out_window': 10, **kwargs}
+	paths = ["tests/data/test.bw", "tests/data/test2.bw"]
+	expected = extract_loci("tests/data/test.bed", "tests/data/test.fa", paths,
+		paths, **kwargs)
+
+	for fw in (fw_paths['both'], figwig.FigWigReader(fw_paths['both'])):
+		result = extract_loci("tests/data/test.bed", "tests/data/test.fa", [fw],
+			[fw], **kwargs)
+
+		assert len(result) == len(expected)
+		for tensor, expected_tensor in zip(result, expected):
+			assert tensor.dtype == expected_tensor.dtype
+			assert tensor.is_contiguous()
+			assert torch.equal(tensor, expected_tensor)
+
+
+@pytest.mark.parametrize("target_idx", [0, 1, 2, -1, -3])
+def test_extract_loci_figwig_target_idx(fw_paths, target_idx):
+	# target_idx indexes the channels: test3.bw is channel 0 and the figwig
+	# file's two tracks are channels 1 and 2, as if each were a bigWig.
+	kwargs = {'in_window': 8, 'out_window': 10, 'min_counts': 5.0,
+		'target_idx': target_idx, 'return_mask': True}
+	with warnings.catch_warnings():
+		warnings.simplefilter("ignore", TangermemeWarning)
+		expected = extract_loci("tests/data/test.bed", "tests/data/test.fa", [
+			"tests/data/test3.bw", "tests/data/test.bw", "tests/data/test2.bw"],
+			**kwargs)
+		result = extract_loci("tests/data/test.bed", "tests/data/test.fa", [
+			"tests/data/test3.bw", fw_paths['both']], **kwargs)
+
+	assert result[1].shape[1] == 3
+	for tensor, expected_tensor in zip(result, expected):
+		assert torch.equal(tensor, expected_tensor)
+
+
+@pytest.mark.parametrize("target_idx", [2, -3])
+def test_extract_loci_figwig_raises_target_idx(fw_paths, target_idx):
+	with pytest.raises(ValueError, match="target_idx {} is out of range for 2 "
+			"signal channels".format(target_idx)):
+		extract_loci("tests/data/test.bed", "tests/data/test.fa",
+			[fw_paths['both']], in_window=10, out_window=10, min_counts=1,
+			target_idx=target_idx)
+
+
+def test_extract_loci_figwig_held_tracks(fw_paths):
+	# A reader of one track of the file gives one channel, the same as that
+	# track's bigWig.
+	held = figwig.FigWigReader(fw_paths['both'], tracks=['test2'])
+	X, y = extract_loci("tests/data/test.bed", "tests/data/test.fa", [held],
+		in_window=8, out_window=10)
+	_, expected = extract_loci("tests/data/test.bed", "tests/data/test.fa",
+		["tests/data/test2.bw"], in_window=8, out_window=10)
+
+	assert y.shape == (5, 1, 10)
+	assert torch.equal(y, expected)

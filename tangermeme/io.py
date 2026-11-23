@@ -319,27 +319,29 @@ def _load_signals(signals):
 	"""An internal function for loading signals.
 
 	The passed in signals must be a list but each element can be a string or
-	os.PathLike, which is interpreted as the filename of a bigwig file to open
-	with figwig, a bigwig file already opened with `figwig.BigWigReader`,
-	which is used as is, or a dictionary where the keys are chromosome names
-	and the values are numpy arrays of values across the chromosome. The keys
-	of a dictionary are coerced to strings so that they match the chromosome
-	names of the loci. A bigwig file opened with `pybigtools.open` is used as
-	is, with a FutureWarning, until tangermeme 1.9.0.
+	os.PathLike, which is interpreted as the filename of a bigwig file or a
+	figwig file to open with figwig, told apart by the first bytes of the
+	file, a bigwig file already opened with `figwig.BigWigReader` or a figwig
+	file already opened with `figwig.FigWigReader`, which are used as is, or a
+	dictionary where the keys are chromosome names and the values are numpy
+	arrays of values across the chromosome. The keys of a dictionary are
+	coerced to strings so that they match the chromosome names of the loci.
+	A bigwig file opened with `pybigtools.open` is used as is, with a
+	FutureWarning, until tangermeme 1.9.0.
 
 
 	Parameters
 	----------
-	signals: list of strings, figwig.BigWigReader objects, or dicts, or None
-		A list of filenames of bigwig files, opened bigwig files, or
-		dictionaries of numpy arrays.
+	signals: list of strings, figwig readers, or dicts, or None
+		A list of filenames of bigwig or figwig files, opened bigwig or figwig
+		files, or dictionaries of numpy arrays.
 
 
 	Returns
 	-------
 	_signals: list
-		A list of figwig.BigWigReader objects, bigwig files opened with
-		pybigtools, or dictionaries of numpy arrays.
+		A list of figwig.BigWigReader objects, figwig.FigWigReader objects,
+		bigwig files opened with pybigtools, or dictionaries of numpy arrays.
 	"""
 
 	if signals is None:
@@ -358,8 +360,11 @@ def _load_signals(signals):
 					"read from local paths only; download it first.".format(i,
 					path))
 
-			signal = figwig.BigWigReader(path)
-		elif isinstance(signal, figwig.BigWigReader):
+			if figwig.is_figwig(path):
+				signal = figwig.FigWigReader(path)
+			else:
+				signal = figwig.BigWigReader(path)
+		elif isinstance(signal, (figwig.BigWigReader, figwig.FigWigReader)):
 			pass
 		elif type(signal).__module__ == "pybigtools":
 			warnings.warn("Signal {} is a bigwig opened with pybigtools, which "
@@ -374,7 +379,8 @@ def _load_signals(signals):
 					"a bigBed file opened with pybigtools.".format(i))
 		elif not isinstance(signal, dict):
 			raise ValueError("Signals must either be filenames, bigWigs " +
-				"opened with figwig.BigWigReader, or dictionaries.")
+				"opened with figwig.BigWigReader, figwig files opened with " +
+				"figwig.FigWigReader, or dictionaries.")
 		elif len(signal) > 0 and not isinstance(next(iter(signal.values())),
 				numpy.ndarray):
 			raise ValueError("Values in dictionaries must be numpy.ndarrays.")
@@ -384,6 +390,33 @@ def _load_signals(signals):
 		_signals.append(signal)
 
 	return _signals
+
+
+def _signal_channels(signals):
+	"""The number of channels each signal gives: one per track for a figwig
+	file, which is every track a `figwig.FigWigReader` holds, and one for any
+	other signal."""
+
+	return [len(signal.tracks) if isinstance(signal, figwig.FigWigReader) else 1
+		for signal in signals]
+
+
+def _target_signal(signals, target_idx):
+	"""The signal that gives channel `target_idx` of `signals`, alone: the
+	signal itself, or, for a channel of a figwig file, a reader of that one
+	track."""
+
+	n_channels = _signal_channels(signals)
+	ends = numpy.cumsum(n_channels)
+	channel = target_idx % int(ends[-1])
+	i = int(numpy.searchsorted(ends, channel, side='right'))
+	signal = signals[i]
+	if isinstance(signal, figwig.FigWigReader):
+		track = signal.tracks[channel - int(ends[i]) + n_channels[i]]
+		signal = figwig.FigWigReader(signal.path, verify=signal.verify,
+			tracks=[track['name']])
+
+	return signal
 
 
 def _extract_locus_signal(signals, chrom, start, end):
@@ -532,16 +565,19 @@ def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 	"""An internal function for extracting signal from many loci.
 
 	The bigWigs opened with figwig are read together in one call on `n_jobs`
-	threads, and dicts and bigWigs opened with pybigtools one locus at a time
-	by `_extract_locus_signal`. A locus on a chromosome that a bigWig does not
-	have is zero and gives a TangermemeWarning, as it does in
-	`_extract_locus_signal`. A file that figwig does not read, such as one
-	with a corrupt data block, raises figwig's ValueError.
+	threads, each figwig file in one call of its own on `n_jobs` threads, and
+	dicts and bigWigs opened with pybigtools one locus at a time by
+	`_extract_locus_signal`. A figwig file gives a channel for each track its
+	reader holds, in the reader's order, and every other signal gives one. A
+	locus on a chromosome that a bigWig or figwig file does not have is zero
+	and gives a TangermemeWarning, as it does in `_extract_locus_signal`. A
+	file that figwig does not read, such as one with a corrupt data block,
+	raises figwig's ValueError.
 
 
 	Parameters
 	----------
-	signals: list of figwig.BigWigReader, pybigtools bigwigs or dicts
+	signals: list of figwig readers, pybigtools bigwigs or dicts
 		A list of signals as returned by `_load_signals`.
 
 	chroms: numpy.ndarray of str, shape=(n,)
@@ -563,8 +599,9 @@ def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 
 	Returns
 	-------
-	values: numpy.ndarray, dtype=float32, shape=(n, len(signals), width)
-		The extracted signal at each locus from each of the signals.
+	values: numpy.ndarray, dtype=float32, shape=(n, channels, width)
+		The extracted signal at each locus from each of the signals, the
+		channels of each signal one after another in the order of `signals`.
 	"""
 
 	if not warn:
@@ -572,8 +609,13 @@ def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 			warnings.simplefilter("ignore", TangermemeWarning)
 			return _extract_signals(signals, chroms, starts, width, n_jobs)
 
+	threads = _cpu_count() if n_jobs == -1 else int(n_jobs)
+	n_channels = _signal_channels(signals)
+	firsts = numpy.cumsum([0] + n_channels[:-1])
 	readers = [j for j, signal in enumerate(signals)
 		if isinstance(signal, figwig.BigWigReader)]
+	files = [j for j, signal in enumerate(signals)
+		if isinstance(signal, figwig.FigWigReader)]
 
 	if len(readers) > 0:
 		with warnings.catch_warnings():
@@ -582,31 +624,51 @@ def _extract_signals(signals, chroms, starts, width, n_jobs, warn=True):
 			figwig_values = figwig.read_bigwig([signals[j] for j in readers],
 				chroms, starts, width, n_jobs=n_jobs)
 
-		_nan_to_num_rows(figwig_values, n_jobs=_cpu_count() if n_jobs == -1
-			else int(n_jobs))
+		_nan_to_num_rows(figwig_values, n_jobs=threads)
 
+	# A figwig file read alone is read into the array returned.
 	if len(readers) == len(signals):
 		values = figwig_values
+	elif len(files) == len(signals) == 1:
+		values = _read_figwig(signals[0], chroms, starts, width, n_jobs,
+			threads)
 	else:
-		values = numpy.empty((len(starts), len(signals), width),
+		values = numpy.empty((len(starts), sum(n_channels), width),
 			dtype=numpy.float32)
 		if len(readers) > 0:
-			values[:, readers] = figwig_values
+			values[:, firsts[readers]] = figwig_values
 
-	for j in readers:
+		for j in files:
+			values[:, firsts[j]:firsts[j] + n_channels[j]] = _read_figwig(
+				signals[j], chroms, starts, width, n_jobs, threads)
+
+	for j in sorted(readers + files):
+		kind = "bigwig" if j in readers else "figwig"
 		absent = ~numpy.isin(chroms, list(signals[j].chrom_sizes))
 		for i in numpy.nonzero(absent)[0]:
 			warnings.warn(f"{chroms[i]} {starts[i]} {starts[i] + width} not "
-				"valid bigwig indexes. Using zeros instead.", TangermemeWarning,
+				f"valid {kind} indexes. Using zeros instead.", TangermemeWarning,
 				stacklevel=2)
 
-	others = [j for j in range(len(signals)) if j not in readers]
+	others = [j for j in range(len(signals)) if j not in readers and j not in
+		files]
 	if len(others) > 0:
 		for i, (chrom, start) in enumerate(zip(chroms, starts.tolist())):
-			values[i, others] = _extract_locus_signal([signals[j] for j in
-				others], str(chrom), start, start + width)
+			values[i, firsts[others]] = _extract_locus_signal([signals[j] for j
+				in others], str(chrom), start, start + width)
 
 	return values
+
+
+def _read_figwig(reader, chroms, starts, width, n_jobs, threads):
+	"""An internal function for reading the windows of every track a figwig
+	file's reader holds, as float32 of shape (n, tracks, width): zero on a
+	chromosome the file does not have, and zero for NaN values and past a
+	chromosome's end, where figwig gives NaN, as for a bigwig."""
+
+	values = reader.read(chroms, starts, width, dtype=numpy.float32,
+		n_jobs=n_jobs, absent='zero')
+	return _nan_to_num_rows(values, n_jobs=threads)
 
 
 # The fewest windows for which `_close_map` drops a map's pages on several
@@ -937,15 +999,22 @@ def extract_loci(
 		the dtype of its values.
 
 	signals: list or None, optional
-		A list whose elements are each a path to a bigwig file, a bigwig file
-		already opened with `figwig.BigWigReader`, or a dictionary where the
-		keys are chromosomes and the values are numpy arrays or memory maps of
-		the signal across each chromosome. The keys of a dictionary are coerced
-		to strings. A chromosome missing from a bigwig or a dictionary gives
-		zeros and a TangermemeWarning, positions past the end of the chromosome
-		or array give zeros, NaN values become zero, and infinities become the
-		largest finite float32 of the same sign. The bigwig files are read by
-		figwig on `n_jobs` threads. Only local files are read,
+		A list whose elements are each a path to a bigwig file or a figwig
+		file (.fw), a bigwig file already opened with `figwig.BigWigReader`, a
+		figwig file already opened with `figwig.FigWigReader`, or a dictionary
+		where the keys are chromosomes and the values are numpy arrays or
+		memory maps of the signal across each chromosome. A figwig file gives
+		one channel for each of its tracks, in the file's order; to use some
+		of its tracks, or another order, pass `figwig.FigWigReader(path,
+		tracks=[...])`, which gives a channel for each track it holds. Every
+		other element gives one channel. The keys of a dictionary are coerced
+		to strings. A chromosome missing from a bigwig, a figwig file or a
+		dictionary gives zeros and a TangermemeWarning, positions past the end
+		of the chromosome or array give zeros, NaN values become zero, and
+		infinities become the largest finite float32 of the same sign. The
+		bigwig and figwig files are read by figwig on `n_jobs` threads, and
+		a path is told to be a figwig file by its first bytes rather than its
+		extension. Only local files are read,
 		so a URL raises a ValueError, and a file figwig does not read, such as
 		a bigBed or a bigwig with unsorted or overlapping intervals, raises
 		figwig's error. A bigwig opened with `pybigtools.open` is deprecated:
@@ -977,21 +1046,24 @@ def extract_loci(
 
 	min_counts: float or None, optional
 		The minimum number of counts, summed across the output window of
-		`signals[target_idx]`, needed to be kept. A locus with exactly this
-		many counts is kept. Requires `signals`. If None, no minimum. Default
-		is None.
+		signal channel `target_idx`, needed to be kept. A locus with exactly
+		this many counts is kept. Requires `signals`. If None, no minimum.
+		Default is None.
 
 	max_counts: float or None, optional
 		The maximum number of counts, summed across the output window of
-		`signals[target_idx]`, needed to be kept. A locus with exactly this
-		many counts is kept. Requires `signals`. If None, no maximum. Default
-		is None.
+		signal channel `target_idx`, needed to be kept. A locus with exactly
+		this many counts is kept. Requires `signals`. If None, no maximum.
+		Default is None.
 
 	target_idx: int, optional
-		When specifying `min_counts` or `max_counts`, the index into `signals`
-		of the single signal to use when determining if a region has a number
-		of counts in that range. Negative values index from the end, and a
-		value out of range raises a ValueError. Default is 0.
+		When specifying `min_counts` or `max_counts`, the index of the single
+		signal channel to use when determining if a region has a number of
+		counts in that range: the index into the second dimension of the
+		returned signals, which is the index into `signals` when each of them
+		gives one channel, and counts each track of a figwig file. Negative
+		values index from the end, and a value out of range raises a
+		ValueError. Default is 0.
 
 	n_loci: int or None, optional
 		A cap on the number of loci to return, which must be at least 1. Note
@@ -1062,17 +1134,19 @@ def extract_loci(
 		dtype int8, or of the dtype of the values of `sequences` when it is a
 		dictionary, or as a PackedSequence under `return_packed`.
 
-	signals: torch.tensor, shape=(n, len(signals), out_window+2*max_jitter)
+	signals: torch.tensor, shape=(n, channels, out_window+2*max_jitter)
 		The extracted signals where the first dimension is in the same order
 		as loci in the locus file after optional filtering by chromosome and
-		the second dimension is in the same order as the list of signal files.
-		If no signal files are given, this is not returned.
+		the second dimension is in the same order as the list of signal files,
+		with a channel for each track of a figwig file and one for each other
+		signal. If no signal files are given, this is not returned.
 
-	in_signals: torch.tensor, shape=(n, len(in_signals), in_window+2*max_jitter)
+	in_signals: torch.tensor, shape=(n, channels, in_window+2*max_jitter)
 		The extracted in signals where the first dimension is in the same order
 		as loci in the locus file after optional filtering by chromosome and
-		the second dimension is in the same order as the list of in signal files.
-		If no in signal files are given, this is not returned.
+		the second dimension is in the same order as the list of in signal files,
+		with channels as for `signals`. If no in signal files are given, this
+		is not returned.
 
 	kept_mask: torch.tensor, shape=(n0,), dtype=bool
 		A boolean vector of length equal to the number of peaks remaining after
@@ -1113,9 +1187,10 @@ def extract_loci(
 			raise ValueError("min_counts and max_counts are measured on " +
 				"signals, so signals must be provided.")
 
-		if not -len(signals) <= target_idx < len(signals):
-			raise ValueError("target_idx {} is out of range for {} signals."
-				.format(target_idx, len(signals)))
+		n_channels = sum(_signal_channels(signals))
+		if not -n_channels <= target_idx < n_channels:
+			raise ValueError("target_idx {} is out of range for {} signal "
+				"channels.".format(target_idx, n_channels))
 
 	in_width, out_width = in_window // 2, out_window // 2
 	out_extra = out_window % 2
@@ -1174,11 +1249,12 @@ def extract_loci(
 	# the warnings for chromosomes a signal lacks, and kept at the kept loci.
 	signals_ = None
 	if min_counts is not None or max_counts is not None:
+		target = _target_signal(signals, target_idx)
 		keep, kept_values = [], []
 		size = max(1, _COUNT_VALUES // out_length)
 		for c in range(0, len(idxs), size):
 			starts = mids[c:c+size] - out_start
-			counts = _extract_signals([signals[target_idx]],
+			counts = _extract_signals([target],
 				loci_chroms[c:c+size], starts, out_length, n_jobs,
 				warn=False)[:, 0].sum(axis=1)
 
@@ -1207,8 +1283,8 @@ def extract_loci(
 		idxs, mids, loci_chroms = idxs[keep], mids[keep], loci_chroms[keep]
 
 		# Copied group by group, so that the values are not held twice.
-		signals_ = numpy.empty((len(keep), len(signals), out_length),
-			dtype=numpy.float32)
+		signals_ = numpy.empty((len(keep), sum(_signal_channels(signals)),
+			out_length), dtype=numpy.float32)
 		k = 0
 		while kept_values:
 			values = kept_values.pop(0)
